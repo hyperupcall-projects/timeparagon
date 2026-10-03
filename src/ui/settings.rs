@@ -1,0 +1,512 @@
+//! The settings pane, including the timer-hits-zero menu.
+
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
+};
+use iced::{Center, Element, Fill, Length};
+
+use crate::app::{Message, Screen, State};
+use crate::audio::Tone;
+use crate::config;
+
+use super::layout::Metrics;
+
+/// Room left for the scrollbar, which is drawn over the content rather than
+/// beside it. Without this the right edge of every control sits underneath
+/// it, which at 200px means visibly clipped labels.
+const SCROLLBAR_GUTTER: f32 = 14.0;
+
+pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let content = match state.main_tab() {
+        Screen::Calendar => column![
+            heading("Google Calendar", metrics),
+            calendar(state, metrics),
+        ],
+        _ => column![
+            heading("Appearance", metrics),
+            appearance(state, metrics),
+            heading("When time is up", metrics),
+            notification(state, metrics),
+            sound(state, metrics),
+            flash(state, metrics),
+        ],
+    }
+    .spacing(metrics.spacing * 1.5)
+    .padding(iced::Padding {
+        right: SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    })
+    .width(Fill);
+
+    column![
+        row![
+            text("Settings").size(metrics.label() + 3.0).width(Fill),
+            button(text("Done").size(metrics.label()))
+                .on_press(Message::ScreenSelected(state.main_tab()))
+                .style(button::primary),
+        ]
+        .align_y(Center),
+        scrollable(content).height(Fill).width(Fill),
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
+    .into()
+}
+
+fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
+    text(label).size(metrics.label() + 1.0).into()
+}
+
+/// A labelled row that stacks vertically once there is no room for two
+/// columns, which is what keeps every control reachable at 200px.
+///
+/// The label is owned rather than borrowed because most callers build it
+/// from the value they are showing.
+fn field<'a>(
+    label: impl Into<String>,
+    control: Element<'a, Message>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let caption = text(label.into()).size(metrics.label());
+
+    if metrics.breakpoint.is_compact() {
+        column![caption, control].spacing(2.0).width(Fill).into()
+    } else {
+        row![caption.width(Length::FillPortion(2)), control]
+            .spacing(metrics.spacing)
+            .align_y(Center)
+            .into()
+    }
+}
+
+/// A chooser that survives a narrow window.
+///
+/// Dropdown overlays need more width than they have in compact mode, so there
+/// the control becomes a button that cycles to the next option on each tap.
+fn choice<'a, T>(
+    label: &'a str,
+    options: Vec<T>,
+    selected: Option<T>,
+    on_select: impl Fn(T) -> Message + 'a,
+    metrics: &Metrics,
+) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+{
+    if metrics.breakpoint.is_compact() {
+        let shown = selected
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "-".to_owned());
+
+        let next = next_option(&options, selected.as_ref());
+
+        let control = button(text(shown).size(metrics.label()).center().width(Fill)).width(Fill);
+
+        let control = match next {
+            Some(value) => control.on_press(on_select(value)),
+            None => control,
+        };
+
+        field(label, control.style(button::secondary).into(), metrics)
+    } else {
+        field(
+            label,
+            pick_list(options, selected, on_select)
+                .text_size(metrics.label())
+                .width(Fill)
+                .into(),
+            metrics,
+        )
+    }
+}
+
+/// The option after `selected`, wrapping around at the end.
+fn next_option<T: PartialEq + Clone>(options: &[T], selected: Option<&T>) -> Option<T> {
+    if options.is_empty() {
+        return None;
+    }
+
+    let index = selected
+        .and_then(|current| options.iter().position(|option| option == current))
+        .map_or(0, |index| (index + 1) % options.len());
+
+    options.get(index).cloned()
+}
+
+fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let theme = choice(
+        "Theme",
+        state.catalog.names(),
+        Some(state.config.appearance.theme.clone()),
+        Message::ThemeSelected,
+        metrics,
+    );
+
+    column![
+        theme,
+        switch(
+            "Follow system light/dark",
+            state.config.appearance.follow_system,
+            Message::FollowSystemToggled,
+            metrics,
+        ),
+        switch(
+            "Always on top",
+            state.config.window.always_on_top,
+            Message::AlwaysOnTopToggled,
+            metrics,
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .into()
+}
+
+fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.calendar;
+    let connected = state.calendar.is_signed_in();
+
+    let mut section = column![
+        field(
+            "OAuth client ID",
+            text_input("Desktop client ID", &settings.client_id)
+                .on_input(Message::GoogleClientIdChanged)
+                .size(metrics.label())
+                .into(),
+            metrics,
+        ),
+        field(
+            "Client secret",
+            text_input("optional", &settings.client_secret)
+                .on_input(Message::GoogleClientSecretChanged)
+                .secure(true)
+                .size(metrics.label())
+                .into(),
+            metrics,
+        ),
+        text("Create a Desktop OAuth client in Google Cloud, enable the Calendar API and the Tasks API, and allow http://127.0.0.1 as a redirect. Reconnect after enabling Tasks so they can be read and ticked off.")
+            .size((metrics.label() - 1.0).max(10.0))
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing);
+
+    let action = if connected {
+        let mut disconnect = button(text("Disconnect").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(button::secondary);
+        if !state.calendar.is_busy() {
+            disconnect = disconnect.on_press(Message::GoogleDisconnectRequested);
+        }
+        disconnect
+    } else {
+        let mut connect = button(text("Connect Google Calendar").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(button::primary);
+        if !state.calendar.is_busy() {
+            connect = connect.on_press(Message::GoogleConnectRequested);
+        }
+        connect
+    };
+
+    section = section.push(switch(
+        "Show Google Tasks",
+        settings.show_tasks,
+        Message::ShowTasksToggled,
+        metrics,
+    ));
+
+    section = section.push(action);
+
+    if let Some(error) = &state.calendar.error {
+        section = section.push(text(error.clone()).size(metrics.label()).style(text::danger));
+    } else {
+        section = section.push(
+            text(state.calendar.status_line())
+                .size(metrics.label())
+                .style(text::secondary),
+        );
+    }
+
+    section = section.push(field(
+        sync_label(settings.sync_minutes),
+        slider(
+            config::CalendarSettings::MIN_SYNC_MINUTES..=config::CalendarSettings::MAX_SYNC_MINUTES,
+            settings.sync_minutes.clamp(
+                config::CalendarSettings::MIN_SYNC_MINUTES,
+                config::CalendarSettings::MAX_SYNC_MINUTES,
+            ),
+            Message::CalendarSyncMinutesChanged,
+        )
+        .into(),
+        metrics,
+    ));
+
+    indent(section.into(), metrics)
+}
+
+fn sync_label(minutes: u32) -> String {
+    match minutes {
+        1 => "Sync every minute".to_owned(),
+        n => format!("Sync every {n} minutes"),
+    }
+}
+
+fn notification<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.alarm.notification;
+
+    let mut section = column![switch(
+        "Show a notification",
+        settings.enabled,
+        Message::NotificationToggled,
+        metrics,
+    )]
+    .spacing(metrics.spacing);
+
+    if settings.enabled {
+        section = section.push(field(
+            "Text",
+            text_input("Time's up", &settings.summary)
+                .on_input(Message::NotificationSummaryChanged)
+                .size(metrics.label())
+                .into(),
+            metrics,
+        ));
+
+        section = section.push(choice(
+            "Urgency",
+            config::Urgency::ALL.to_vec(),
+            Some(settings.urgency),
+            Message::NotificationUrgencySelected,
+            metrics,
+        ));
+
+        section = section.push(switch(
+            "Bring the window forward",
+            state.config.alarm.raise_window,
+            Message::RaiseWindowToggled,
+            metrics,
+        ));
+    }
+
+    indent(section.into(), metrics)
+}
+
+fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.alarm.sound;
+
+    let mut section = column![switch(
+        "Play a sound",
+        settings.enabled,
+        Message::SoundToggled,
+        metrics,
+    )]
+    .spacing(metrics.spacing);
+
+    if let Some(error) = &state.audio_error {
+        // The sound section stays switched on: the setting is still valid,
+        // it just cannot be honored on this machine right now.
+        section = section.push(
+            text(format!("Sound unavailable - {error}"))
+                .size(metrics.label())
+                .style(text::danger),
+        );
+    }
+
+    if settings.enabled {
+        let selected = match &settings.choice {
+            config::SoundChoice::Builtin(tone) => Some(*tone),
+            config::SoundChoice::Custom { .. } => None,
+        };
+
+        section = section.push(choice(
+            "Sound",
+            Tone::ALL.to_vec(),
+            selected,
+            Message::ToneSelected,
+            metrics,
+        ));
+
+        if let config::SoundChoice::Custom { .. } = &settings.choice {
+            section = section.push(
+                text(format!("Using {}", settings.choice))
+                    .size(metrics.label())
+                    .width(Fill),
+            );
+        }
+
+        let preview = button(text("Preview").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(button::secondary);
+
+        // No point offering a preview we already know cannot be played.
+        let preview = if state.audio.status().is_unavailable() {
+            preview
+        } else {
+            preview.on_press(Message::PreviewRequested)
+        };
+
+        section = section.push(
+            row![
+                button(text("Choose file...").size(metrics.label()).center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::SoundFileRequested)
+                    .style(button::secondary),
+                preview,
+            ]
+            .spacing(metrics.spacing),
+        );
+
+        section = section.push(field(
+            format!("Volume {}%", settings.volume),
+            slider(0..=100_u8, settings.volume, Message::VolumeChanged).into(),
+            metrics,
+        ));
+
+        section = section.push(field(
+            repeat_label(settings.repeats),
+            slider(0..=9_u8, settings.repeats, Message::RepeatsChanged).into(),
+            metrics,
+        ));
+    }
+
+    indent(section.into(), metrics)
+}
+
+fn repeat_label(repeats: u8) -> String {
+    match repeats {
+        0 => "Repeat until dismissed".to_owned(),
+        1 => "Play once".to_owned(),
+        count => format!("Play {count} times"),
+    }
+}
+
+fn flash<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.alarm.flash;
+
+    let mut section = column![switch(
+        "Flash the screen",
+        settings.enabled,
+        Message::FlashToggled,
+        metrics,
+    )]
+    .spacing(metrics.spacing);
+
+    if settings.enabled {
+        section = section.push(field(
+            format!("Strength {}%", (settings.peak() * 100.0).round()),
+            slider(0.05..=0.8_f32, settings.peak(), Message::FlashOpacityChanged)
+                .step(0.05_f32)
+                .into(),
+            metrics,
+        ));
+
+        section = section.push(field(
+            format!("Pulses {}", settings.pulses.max(1)),
+            slider(1..=5_u8, settings.pulses.max(1), Message::FlashPulsesChanged).into(),
+            metrics,
+        ));
+
+        section = section.push(switch(
+            "Let clicks pass through",
+            settings.passthrough,
+            Message::FlashPassthroughToggled,
+            metrics,
+        ));
+
+        section = section.push(field(
+            countdown_label(settings.final_countdown_secs),
+            slider(
+                0..=10_u8,
+                settings.final_countdown_secs,
+                Message::FinalCountdownChanged,
+            )
+            .into(),
+            metrics,
+        ));
+
+        section = section.push(
+            text("The flash rate is capped at 3 per second.")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+
+    indent(section.into(), metrics)
+}
+
+fn countdown_label(seconds: u8) -> String {
+    if seconds == 0 {
+        "No countdown warning".to_owned()
+    } else {
+        format!("Pulse the window for the last {seconds}s")
+    }
+}
+
+fn switch<'a>(
+    label: &'a str,
+    value: bool,
+    on_toggle: impl Fn(bool) -> Message + 'a,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    toggler(value)
+        .label(label)
+        .text_size(metrics.label())
+        .on_toggle(on_toggle)
+        .width(Fill)
+        .into()
+}
+
+/// Indents a subsection so the sliders visibly belong to their toggle.
+fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> Element<'a, Message> {
+    container(content)
+        .padding(iced::Padding {
+            left: if metrics.breakpoint.is_compact() { 0.0 } else { 6.0 },
+            ..iced::Padding::ZERO
+        })
+        .width(Fill)
+        .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cycling_wraps_around_the_options() {
+        let options = vec!["a", "b", "c"];
+
+        assert_eq!(next_option(&options, Some(&"a")), Some("b"));
+        assert_eq!(next_option(&options, Some(&"c")), Some("a"));
+    }
+
+    #[test]
+    fn cycling_from_nothing_selects_the_first_option() {
+        let options = vec!["a", "b"];
+
+        assert_eq!(next_option(&options, None), Some("a"));
+    }
+
+    #[test]
+    fn cycling_an_empty_list_selects_nothing() {
+        assert_eq!(next_option::<&str>(&[], None), None);
+    }
+
+    #[test]
+    fn repeat_labels_read_naturally() {
+        assert_eq!(repeat_label(0), "Repeat until dismissed");
+        assert_eq!(repeat_label(1), "Play once");
+        assert_eq!(repeat_label(3), "Play 3 times");
+    }
+
+    #[test]
+    fn the_countdown_label_explains_being_switched_off() {
+        assert_eq!(countdown_label(0), "No countdown warning");
+        assert_eq!(countdown_label(5), "Pulse the window for the last 5s");
+    }
+
+    #[test]
+    fn sync_labels_read_naturally() {
+        assert_eq!(sync_label(1), "Sync every minute");
+        assert_eq!(sync_label(15), "Sync every 15 minutes");
+    }
+}

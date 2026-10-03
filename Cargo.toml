@@ -1,0 +1,61 @@
+[package]
+name = "timetracker"
+version = "0.1.0"
+edition = "2024"
+description = "A low-resource timer that stays usable at 200px wide"
+license = "MIT"
+
+[dependencies]
+base64 = { version = "0.22.1", default-features = false, features = ["alloc", "std"] }
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+directories = "6.0.0"
+env_logger = "0.11.11"
+getrandom = { version = "0.3.3", default-features = false, features = ["std"] }
+iced = { version = "0.14", default-features = false, features = [
+    "tiny-skia",
+    "wayland",
+    "x11",
+    "crisp",
+    "lazy",
+    "tokio",
+    "canvas",
+    # Needed for the pointer-tracking widget that decides whether the details
+    # card opens above or below the event that was clicked.
+    "advanced",
+] }
+log = "0.4.34"
+notify-rust = "4.18.0"
+pipewire = { version = "0.10.1", optional = true }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rodio = { version = "0.22.2", default-features = false, features = ["symphonia-all"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = { version = "0.10.9", default-features = false }
+toml = "1.1.6"
+ureq = { version = "2.12.1", default-features = false, features = ["tls", "json"] }
+urlencoding = "2.1.3"
+
+[features]
+default = ["pipewire-audio", "wgpu"]
+
+# Native PipeWire playback. Needs libpipewire-0.3-dev, libspa-0.2-dev and clang
+# at build time. Without it the app still runs; the sound section of the alarm
+# menu reports that audio is unavailable.
+pipewire-audio = ["dep:pipewire"]
+
+# The GPU renderer, on by default: text and clipping go through the GPU's
+# glyph atlas and scissor rects, which keeps scrolling smooth on a busy day.
+# Remove it from `default` to ship the software-only tiny-skia build instead
+# (smaller binary, no GPU memory). iced still falls back to tiny-skia on its
+# own when no adapter is available.
+wgpu = ["iced/wgpu"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+iced_test = "0.14"
