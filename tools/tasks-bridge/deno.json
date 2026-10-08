@@ -1,0 +1,17 @@
+{
+  "name": "tasks-bridge",
+  "version": "0.1.0",
+  "exports": "./main.ts",
+  "nodeModulesDir": "auto",
+  "compilerOptions": {
+    "lib": ["deno.ns", "dom", "dom.iterable", "esnext"]
+  },
+  "tasks": {
+    "signin": "deno run --allow-run --allow-read --allow-write --allow-env --allow-sys=homedir,osRelease,uid main.ts signin",
+    "status": "deno run --allow-run --allow-read --allow-write --allow-env --allow-sys=homedir,osRelease,uid main.ts status",
+    "dump": "deno run --allow-run --allow-read --allow-write --allow-env --allow-sys=homedir,osRelease,uid main.ts dump",
+    "fetch": "deno run --allow-run --allow-read --allow-write --allow-env --allow-sys=homedir,osRelease,uid main.ts fetch",
+    "selftest": "deno run --allow-run --allow-read --allow-write --allow-env --allow-sys=homedir,osRelease,uid main.ts selftest",
+    "compile": "deno compile --allow-run --allow-read --allow-write --allow-env --allow-sys=homedir,osRelease,uid --output tasks-bridge main.ts"
+  }
+}

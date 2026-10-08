@@ -2,6 +2,7 @@
 //! should not have to know about.
 
 pub mod api;
+pub mod bridge;
 pub mod colors;
 pub mod layout;
 pub mod oauth;
@@ -302,7 +303,12 @@ pub fn connect(client_id: String, client_secret: String) -> Result<oauth::Tokens
 pub fn sync_today(client_id: &str, client_secret: &str, disabled: &[String]) -> Result<Snapshot, String> {
     let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::fetch_today(&tokens.access_token, disabled)
+    let mut snapshot = api::fetch_today(&tokens.access_token, disabled)?;
+    // Tasks come back as all-day chips because the API has no time for them.
+    // If the browser helper is installed and signed in, the scheduled ones get
+    // their real time here.
+    bridge::promote_task_times(&mut snapshot);
+    Ok(snapshot)
 }
 
 pub fn disconnect() {
