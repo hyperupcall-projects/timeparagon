@@ -7,7 +7,7 @@ pub mod colors;
 pub mod layout;
 pub mod oauth;
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, Local, Months, NaiveDate, Timelike};
 use iced::Color;
 
 use crate::config::CalendarSettings;
@@ -122,6 +122,14 @@ pub struct Store {
     pub details_below: bool,
     /// The task list whose color picker is open, by calendar id.
     pub color_editor: Option<String>,
+    /// Whether the month picker is showing over the day view.
+    pub month_open: bool,
+    /// The first day of the month the picker is showing.
+    pub month: NaiveDate,
+    /// Whether the day in view should follow the real today. Cleared once the
+    /// user navigates to another day, so a boundary rollover does not yank them
+    /// back to today.
+    pub follow_today: bool,
 }
 
 impl Store {
@@ -131,6 +139,7 @@ impl Store {
         } else {
             Connection::SignedOut
         };
+        let day = day_at(Local::now(), day_end_hour);
 
         Self {
             connection,
@@ -138,13 +147,16 @@ impl Store {
             menu_open: false,
             calendars: Vec::new(),
             events: Vec::new(),
-            day: day_at(Local::now(), day_end_hour),
+            day,
             last_sync: None,
             error: None,
             hour_height: DEFAULT_HOUR_HEIGHT,
             open_event: None,
             details_below: false,
             color_editor: None,
+            month_open: false,
+            month: first_of_month(day),
+            follow_today: true,
         }
     }
 
@@ -163,7 +175,25 @@ impl Store {
             open_event: None,
             details_below: false,
             color_editor: None,
+            month_open: false,
+            month: first_of_month(snapshot.day),
+            // A snapshot is pinned to the day it was fetched for, so it does
+            // not follow the clock until the user asks it to.
+            follow_today: false,
         }
+    }
+
+    /// Moves the day in view, dropping the events that belonged to the old one.
+    ///
+    /// The day grid draws whatever events are loaded, so leaving the previous
+    /// day's events in place would paint them onto the new day until the sync
+    /// comes back. `today` is the real day the clock is on, used to decide
+    /// whether the view keeps following it.
+    pub fn set_day(&mut self, day: NaiveDate, today: NaiveDate) {
+        self.day = day;
+        self.events.clear();
+        self.open_event = None;
+        self.follow_today = day == today;
     }
 
     /// Grows or shrinks the hour rows. `factor` above 1 spreads the day out.
@@ -325,16 +355,19 @@ pub fn connect(client_id: String, client_secret: String) -> Result<oauth::Tokens
     Ok(tokens)
 }
 
-/// Pulls today's calendars and events, refreshing the access token if needed.
-pub fn sync_today(
+/// Pulls the calendars and the events of `day`, refreshing the access token if
+/// needed. The day's window ends at `day_end_hour`, so a day that ends at 3am
+/// still includes the small hours of the next morning.
+pub fn sync_day(
     client_id: &str,
     client_secret: &str,
     disabled: &[String],
+    day: NaiveDate,
     day_end_hour: u32,
 ) -> Result<Snapshot, String> {
     let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let mut snapshot = api::fetch_today(&tokens.access_token, disabled, day_end_hour)?;
+    let mut snapshot = api::fetch_day(&tokens.access_token, disabled, day, day_end_hour)?;
     // Tasks come back as all-day chips because the API has no time for them.
     // If the browser helper is installed and signed in, the scheduled ones get
     // their real time here.
@@ -397,7 +430,7 @@ fn weekday_short(day: NaiveDate) -> &'static str {
     }
 }
 
-fn month_short(month: u32) -> &'static str {
+pub fn month_short(month: u32) -> &'static str {
     match month {
         1 => "Jan",
         2 => "Feb",
@@ -412,6 +445,59 @@ fn month_short(month: u32) -> &'static str {
         11 => "Nov",
         _ => "Dec",
     }
+}
+
+fn month_long(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
+    }
+}
+
+/// The month a date belongs to, as its first day.
+pub fn first_of_month(day: NaiveDate) -> NaiveDate {
+    day.with_day(1).unwrap_or(day)
+}
+
+/// The month picker's title, e.g. "October 2026".
+pub fn month_heading(month: NaiveDate) -> String {
+    format!("{} {}", month_long(month.month()), month.year())
+}
+
+/// The single-letter weekday labels for the month grid, Monday first.
+pub const WEEKDAY_INITIALS: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
+
+/// The days laid out in a month grid, Monday first and padded to whole weeks.
+///
+/// The leading and trailing days belong to the neighbouring months so every
+/// row is full; the caller dims them.
+pub fn month_grid(month: NaiveDate) -> Vec<NaiveDate> {
+    let first = first_of_month(month);
+    let lead = first.weekday().num_days_from_monday() as i64;
+    let start = first - chrono::Duration::days(lead);
+    let cells = lead + days_in_month(first) as i64;
+    let weeks = (cells + 6) / 7;
+
+    (0..weeks * 7)
+        .map(|offset| start + chrono::Duration::days(offset))
+        .collect()
+}
+
+/// How many days the month containing `month` has.
+fn days_in_month(month: NaiveDate) -> u32 {
+    let first = first_of_month(month);
+    let next = first.checked_add_months(Months::new(1)).unwrap_or(first);
+    (next - first).num_days() as u32
 }
 
 /// Sample day used by tests and screenshot generation, so the Cal tab can be
@@ -649,5 +735,61 @@ mod tests {
         assert_eq!(store.hour_height, MIN_HOUR_HEIGHT);
         store.zoom(0.0);
         assert_eq!(store.hour_height, MIN_HOUR_HEIGHT);
+    }
+
+    #[test]
+    fn the_month_grid_starts_on_a_monday_and_covers_the_whole_month() {
+        // October 2026 starts on a Thursday and has 31 days.
+        let month = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let grid = month_grid(month);
+
+        assert_eq!(grid.len() % 7, 0, "the grid has to be whole weeks");
+        assert_eq!(grid[0].weekday(), chrono::Weekday::Mon);
+        assert_eq!(grid[0], NaiveDate::from_ymd_opt(2026, 9, 28).unwrap());
+        assert_eq!(grid.last().unwrap(), &NaiveDate::from_ymd_opt(2026, 11, 1).unwrap());
+
+        // Every day of the month is present exactly once.
+        for day in 1..=31 {
+            let date = NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
+            assert_eq!(grid.iter().filter(|d| **d == date).count(), 1);
+        }
+    }
+
+    #[test]
+    fn the_month_grid_is_only_as_tall_as_it_has_to_be() {
+        // February 2027 starts on a Monday and has 28 days: exactly four weeks.
+        let month = NaiveDate::from_ymd_opt(2027, 2, 1).unwrap();
+        assert_eq!(month_grid(month).len(), 28);
+
+        // August 2026 starts on a Saturday and has 31 days, so it needs six.
+        let month = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        assert_eq!(month_grid(month).len(), 42);
+    }
+
+    #[test]
+    fn the_month_heading_spells_the_month_and_year() {
+        let month = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        assert_eq!(month_heading(month), "October 2026");
+        assert_eq!(
+            first_of_month(NaiveDate::from_ymd_opt(2026, 10, 17).unwrap()),
+            month
+        );
+    }
+
+    #[test]
+    fn moving_the_day_drops_the_events_that_belonged_to_the_old_one() {
+        let mut store = Store::with_snapshot(sample_snapshot());
+        let today = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        assert!(!store.events.is_empty());
+
+        let next = today.succ_opt().unwrap();
+        store.set_day(next, today);
+
+        assert_eq!(store.day, next);
+        assert!(store.events.is_empty(), "the old day's events must not linger");
+        assert!(!store.follow_today, "a moved day no longer follows today");
+
+        store.set_day(today, today);
+        assert!(store.follow_today, "back on today, the view follows it again");
     }
 }

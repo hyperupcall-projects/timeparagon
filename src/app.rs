@@ -189,6 +189,14 @@ pub enum Message {
     /// `anchor` is the pixel row under the pointer, measured from the top of
     /// the day grid, so the zoom can keep that row still under the mouse.
     CalendarZoomed { factor: f32, anchor: f32 },
+    /// Move the day in view by a number of days, positive or negative.
+    CalendarDayShift(i64),
+    /// Jump the day in view to a specific date, from the month picker.
+    CalendarDaySelected(chrono::NaiveDate),
+    /// Open or close the month picker.
+    CalendarMonthToggled,
+    /// Move the month picker by a number of months, positive or negative.
+    CalendarMonthShift(i32),
 }
 
 /// The parts of a play request that survive the trip through rendering.
@@ -599,6 +607,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::CalendarSyncRequested => sync_calendar(state),
 
         Message::CalendarSynced(Ok(snapshot)) => {
+            // The user may have stepped to another day while this was in
+            // flight. The events are for the day they left, so drop them and
+            // fetch the day now in view rather than snapping the view back.
+            if snapshot.day != state.calendar.day {
+                state.calendar.sync = SyncState::Idle;
+                return sync_calendar(state);
+            }
+
             state.calendar.apply_snapshot(snapshot);
             state.calendar.apply_task_colors(&state.config.calendar);
             Task::none()
@@ -765,9 +781,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.config.calendar.day_end_hour =
                 hour.min(config::CalendarSettings::MAX_DAY_END_HOUR);
             // The day's window moved, so the day in view and the events that
-            // belong to it may have changed too.
-            state.calendar.day =
-                calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            // belong to it may have changed too. This also puts the view back
+            // on today if the user had navigated away.
+            let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            state.calendar.set_day(day, day);
             let save = queue_save(state);
             Task::batch([save, sync_calendar(state)])
         }
@@ -786,6 +803,46 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // scroll has to follow it by the same amount.
             let delta = crate::ui::calendar::zoom_scroll_delta(anchor, before, after);
             crate::ui::calendar::scroll_by(delta)
+        }
+
+        Message::CalendarDayShift(days) => {
+            let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            let day = state.calendar.day + chrono::Duration::days(days);
+            state.calendar.set_day(day, today);
+            state.calendar.menu_open = false;
+            state.calendar.month_open = false;
+            sync_calendar(state)
+        }
+
+        Message::CalendarDaySelected(day) => {
+            let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            state.calendar.set_day(day, today);
+            state.calendar.month_open = false;
+            sync_calendar(state)
+        }
+
+        Message::CalendarMonthToggled => {
+            state.calendar.month_open = !state.calendar.month_open;
+            // The picker opens on the month of the day in view, and the menu
+            // gets out of its way.
+            if state.calendar.month_open {
+                state.calendar.month = calendar::first_of_month(state.calendar.day);
+                state.calendar.menu_open = false;
+            }
+            Task::none()
+        }
+
+        Message::CalendarMonthShift(months) => {
+            let step = chrono::Months::new(months.unsigned_abs());
+            let shifted = if months >= 0 {
+                state.calendar.month.checked_add_months(step)
+            } else {
+                state.calendar.month.checked_sub_months(step)
+            };
+            if let Some(month) = shifted {
+                state.calendar.month = month;
+            }
+            Task::none()
         }
     }
 }
@@ -1029,10 +1086,17 @@ fn queue_save(state: &mut State) -> Task<Message> {
 /// The day ends at the configured hour, not at midnight, so a 3am boundary
 /// keeps the small hours on the day that is ending. When the boundary passes,
 /// the events in hand are for the wrong day and have to be pulled again.
+///
+/// Only the day that is following today rolls over; once the user has navigated
+/// to another day, the boundary passing must not pull them back to today.
 fn refresh_day(state: &mut State) -> Task<Message> {
+    if !state.calendar.follow_today {
+        return Task::none();
+    }
+
     let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
     if day != state.calendar.day {
-        state.calendar.day = day;
+        state.calendar.set_day(day, day);
         return sync_calendar(state);
     }
     Task::none()
@@ -1049,10 +1113,13 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     let client_id = state.config.calendar.client_id.clone();
     let client_secret = state.config.calendar.client_secret.clone();
     let disabled = state.config.calendar.disabled.clone();
+    let day = state.calendar.day;
     let day_end_hour = state.config.calendar.day_start_hour();
 
-    blocking::run(move || calendar::sync_today(&client_id, &client_secret, &disabled, day_end_hour))
-        .map(Message::CalendarSynced)
+    blocking::run(move || {
+        calendar::sync_day(&client_id, &client_secret, &disabled, day, day_end_hour)
+    })
+    .map(Message::CalendarSynced)
 }
 
 fn level(always_on_top: bool) -> window::Level {
@@ -1261,5 +1328,94 @@ mod tests {
 
         assert_eq!(state.calendar.open_event.as_deref(), Some("lunch"));
         assert!(!state.calendar.details_below);
+    }
+
+    #[test]
+    fn stepping_the_day_moves_the_view_and_drops_the_old_events() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let start = state.calendar.day;
+
+        let _ = update(&mut state, Message::CalendarDayShift(1));
+
+        assert_eq!(state.calendar.day, start.succ_opt().unwrap());
+        assert!(
+            state.calendar.events.is_empty(),
+            "the old day's events must not paint onto the new day"
+        );
+        assert!(!state.calendar.follow_today);
+    }
+
+    #[test]
+    fn selecting_today_makes_the_view_follow_it_again() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+        state.calendar.day = today;
+        state.calendar.follow_today = false;
+
+        let _ = update(&mut state, Message::CalendarDaySelected(today));
+
+        assert!(state.calendar.follow_today);
+    }
+
+    #[test]
+    fn the_month_picker_opens_on_the_month_of_the_day_in_view() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar.day = chrono::NaiveDate::from_ymd_opt(2026, 10, 17).unwrap();
+
+        let _ = update(&mut state, Message::CalendarMonthToggled);
+
+        assert!(state.calendar.month_open);
+        assert_eq!(
+            state.calendar.month,
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        );
+
+        let _ = update(&mut state, Message::CalendarMonthToggled);
+        assert!(!state.calendar.month_open);
+    }
+
+    #[test]
+    fn stepping_the_month_crosses_the_year_boundary() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar.month = chrono::NaiveDate::from_ymd_opt(2026, 12, 1).unwrap();
+
+        let _ = update(&mut state, Message::CalendarMonthShift(1));
+        assert_eq!(
+            state.calendar.month,
+            chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
+        );
+
+        let _ = update(&mut state, Message::CalendarMonthShift(-2));
+        assert_eq!(
+            state.calendar.month,
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn picking_a_day_closes_the_month_picker_and_moves_the_view() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar.month_open = true;
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+
+        let _ = update(&mut state, Message::CalendarDaySelected(day));
+
+        assert_eq!(state.calendar.day, day);
+        assert!(!state.calendar.month_open);
+    }
+
+    #[test]
+    fn a_snapshot_for_a_day_we_left_does_not_snap_the_view_back() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let moved_to = state.calendar.day.succ_opt().unwrap();
+        state.calendar.day = moved_to;
+        state.calendar.sync = SyncState::Syncing;
+
+        // The sample snapshot is for the day we navigated away from.
+        let _ = update(&mut state, Message::CalendarSynced(Ok(calendar::sample_snapshot())));
+
+        assert_eq!(state.calendar.day, moved_to);
     }
 }

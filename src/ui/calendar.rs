@@ -1,6 +1,6 @@
 //! Google Calendar day view, drawn to resemble the web UI.
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
     button, canvas as canvas_widget, column, container, mouse_area, row, scrollable, stack, text,
@@ -26,21 +26,7 @@ const EVENT_RADIUS: f32 = 4.0;
 const NEEDLE_RADIUS: f32 = 5.5;
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    let heading = calendar::day_heading(state.calendar.day, today);
-
-    let header = row![
-        text(heading).size(metrics.label() + 1.0).width(Fill),
-        button(text("Menu").size(metrics.label()).center())
-            .on_press(Message::CalendarMenuToggled)
-            .style(if state.calendar.menu_open {
-                button::primary
-            } else {
-                button::secondary
-            }),
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
+    let header = header(state, metrics);
 
     let status = text(state.calendar.status_line())
         .size(metrics.label() - 1.0)
@@ -72,6 +58,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // widget throws away the day grid's scroll state, which jumps the bar.
     let overlay = if state.calendar.open_event.is_some() {
         details_overlay(state, metrics)
+    } else if state.calendar.month_open {
+        month_overlay(state, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
     } else {
@@ -79,6 +67,71 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     };
 
     stack![content, overlay].into()
+}
+
+/// The top of the calendar: a month picker and the menu, then the day in view
+/// flanked by the arrows that step it a day at a time.
+///
+/// The controls are split across two rows because at 200px a single row cannot
+/// hold the arrows, the month button, the heading and the menu without the
+/// heading being squeezed to nothing.
+fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let heading = calendar::day_heading(state.calendar.day, today);
+
+    let month = button(
+        text(format!("{} ▾", calendar::month_short(state.calendar.day.month())))
+            .size(metrics.label())
+            .center(),
+    )
+    .on_press(Message::CalendarMonthToggled)
+    .style(if state.calendar.month_open {
+        button::primary
+    } else {
+        button::secondary
+    });
+
+    let menu = button(text("Menu").size(metrics.label()).center())
+        .on_press(Message::CalendarMenuToggled)
+        .style(if state.calendar.menu_open {
+            button::primary
+        } else {
+            button::secondary
+        });
+
+    let top = row![month, iced::widget::Space::new().width(Fill), menu]
+        .spacing(metrics.spacing)
+        .align_y(Alignment::Center);
+
+    let nav = row![
+        nav_button("◀", Message::CalendarDayShift(-1), metrics),
+        text(heading)
+            .size(metrics.label() + 1.0)
+            .width(Fill)
+            .center(),
+        nav_button("▶", Message::CalendarDayShift(1), metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
+
+    column![top, nav].spacing(metrics.spacing).into()
+}
+
+/// A square button for stepping a day or a month at a time.
+fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Element<'a, Message> {
+    button(text(label).size(metrics.label()).center())
+        .width(Length::Fixed(metrics.icon_button()))
+        .height(Length::Fixed(metrics.icon_button()))
+        .padding(0.0)
+        .on_press(message)
+        .style(button::secondary)
+        .into()
+}
+
+/// The vertical space the two-row header takes, so an overlay can start below
+/// it rather than over it.
+fn header_offset(metrics: &Metrics) -> f32 {
+    metrics.padding + metrics.icon_button() * 2.0 + metrics.spacing * 2.0
 }
 
 /// The clock's own status, repeated at the foot of the calendar: how long it
@@ -486,13 +539,127 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         });
 
     let aligned = column![
-        // Keep the hamburger row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(metrics.icon_button() + metrics.spacing),
+        // Keep the header row tappable; the sheet starts below it.
+        iced::widget::Space::new().height(header_offset(metrics)),
         container(card).padding(metrics.padding).width(Fill),
     ]
     .width(Fill);
 
     stack![dismiss, aligned].into()
+}
+
+/// The month picker: a grid of the month's days, with arrows to step a month
+/// at a time. Tapping a day jumps the day view to it.
+fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
+        .on_press(Message::CalendarMonthToggled);
+
+    let month = state.calendar.month;
+    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let selected = state.calendar.day;
+
+    let title = row![
+        nav_button("◀", Message::CalendarMonthShift(-1), metrics),
+        text(calendar::month_heading(month))
+            .size(metrics.label() + 1.0)
+            .width(Fill)
+            .center(),
+        nav_button("▶", Message::CalendarMonthShift(1), metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
+
+    let weekdays = row(calendar::WEEKDAY_INITIALS.iter().map(|label| {
+        text(*label)
+            .size(metrics.label() - 1.0)
+            .width(Fill)
+            .center()
+            .style(text::secondary)
+            .into()
+    }))
+    .spacing(2.0)
+    .width(Fill);
+
+    let days = calendar::month_grid(month);
+    let mut weeks: Vec<Element<'a, Message>> = Vec::new();
+    for week in days.chunks(7) {
+        let cells: Vec<Element<'a, Message>> = week
+            .iter()
+            .map(|&date| day_cell(date, month, selected, today, metrics))
+            .collect();
+        weeks.push(row(cells).spacing(2.0).width(Fill).into());
+    }
+
+    let panel = column![
+        title,
+        weekdays,
+        column(weeks).spacing(2.0).width(Fill),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let card = container(panel)
+        .padding(metrics.padding)
+        .width(Length::Fill)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+
+    let aligned = column![
+        // Keep the header row tappable; the sheet starts below it.
+        iced::widget::Space::new().height(header_offset(metrics)),
+        container(card).padding(metrics.padding).width(Fill),
+    ]
+    .width(Fill);
+
+    stack![dismiss, aligned].into()
+}
+
+/// One day in the month grid. The selected day is filled, today is outlined,
+/// and days from the neighbouring months are dimmed.
+fn day_cell<'a>(
+    date: NaiveDate,
+    month: NaiveDate,
+    selected: NaiveDate,
+    today: NaiveDate,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let in_month = date.month() == month.month() && date.year() == month.year();
+    let is_selected = date == selected;
+    let is_today = date == today;
+
+    button(
+        text(date.day().to_string())
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .padding([4.0, 0.0])
+    .on_press(Message::CalendarDaySelected(date))
+    .style(move |theme, status| {
+        if is_selected {
+            button::primary(theme, status)
+        } else if is_today {
+            button::secondary(theme, status)
+        } else {
+            let mut style = button::text(theme, status);
+            if !in_month {
+                style.text_color = style.text_color.scale_alpha(0.4);
+            }
+            style
+        }
+    })
+    .into()
 }
 
 fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {

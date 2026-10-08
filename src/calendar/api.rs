@@ -118,20 +118,10 @@ struct ApiError {
     message: String,
 }
 
-/// Pulls every calendar and the events of the day that ends at `day_end_hour`
-/// into a [`Snapshot`].
+/// Pulls every calendar and the events of `day` into a [`Snapshot`].
 ///
 /// The window is anchored to the boundary rather than to midnight, so a day
 /// that ends at 3am still includes the small hours of the next morning.
-pub fn fetch_today(
-    access_token: &str,
-    disabled: &[String],
-    day_end_hour: u32,
-) -> Result<Snapshot, String> {
-    let day = super::day_at(Local::now(), day_end_hour);
-    fetch_day(access_token, disabled, day, day_end_hour)
-}
-
 pub fn fetch_day(
     access_token: &str,
     disabled: &[String],

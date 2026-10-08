@@ -238,6 +238,64 @@ fn the_calendar_tab_is_usable_at_two_hundred_pixels() {
 }
 
 #[test]
+fn the_calendar_offers_day_arrows_and_a_month_button() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+
+    let mut ui = render(&state, Size::new(200.0, 500.0));
+
+    for label in ["◀", "▶", "Oct ▾", "Menu"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
+    }
+
+    let _ = ui.click("▶")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::CalendarDayShift(1))),
+        "expected the next-day arrow to ask for a shift, got {messages:?}"
+    );
+
+    Ok(())
+}
+
+/// The month picker has to fit at 200px, show the month, and let a day be
+/// picked.
+#[test]
+fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar.month_open = true;
+
+    let mut ui = render(&state, Size::new(200.0, 700.0));
+
+    assert!(ui.find("October 2026").is_ok(), "the month title is missing");
+    for label in ["M", "T", "W", "F", "S"] {
+        assert!(ui.find(label).is_ok(), "weekday {label:?} is missing");
+    }
+
+    let _ = ui.click("15")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::CalendarDaySelected(day)
+                if *day == chrono::NaiveDate::from_ymd_opt(2026, 10, 15).unwrap()
+        )),
+        "expected the tapped day to be selected, got {messages:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn the_calendar_menu_lists_calendars_and_the_website_link() {
     let mut state = state();
     state.screen = Screen::Calendar;

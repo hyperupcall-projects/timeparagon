@@ -84,6 +84,14 @@ fn main() {
                     timetracker::calendar::sample_snapshot(),
                 );
             });
+
+            count += shoot(directory, theme, Size::new(width, 720.0), "calendar-month", |state| {
+                state.screen = Screen::Calendar;
+                state.calendar = timetracker::calendar::Store::with_snapshot(
+                    timetracker::calendar::sample_snapshot(),
+                );
+                state.calendar.month_open = true;
+            });
         }
     }
 

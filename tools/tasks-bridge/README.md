@@ -71,7 +71,7 @@ Rust API in `src/calendar/bridge.rs`:
 
 | Function | Purpose |
 | --- | --- |
-| `promote_task_times(&mut Snapshot)` | Called by `sync_today`; best-effort, never fails a sync. |
+| `promote_task_times(&mut Snapshot)` | Called by `sync_day`; best-effort, never fails a sync. |
 | `signin() -> Result<(), String>` | Blocking. For the "Sign in to Google Tasks" button. |
 | `signed_in() -> bool` | Blocking. Whether the profile has a session. |
 
