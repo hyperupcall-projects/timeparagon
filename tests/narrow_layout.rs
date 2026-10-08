@@ -201,6 +201,30 @@ fn the_wide_layout_shows_the_clock_and_the_settings_together() {
     assert!(ui.find("Theme").is_ok(), "the settings are missing");
 }
 
+/// The Cal tab keeps the day it already has on screen while a fresh sync is
+/// in flight, and the status line says so. Both have to survive every width.
+#[test]
+fn the_calendar_keeps_the_day_while_it_reloads() {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+    let snapshot = timetracker::calendar::sample_snapshot();
+    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+    state.calendar.sync = timetracker::calendar::SyncState::Syncing;
+
+    for width in WIDTHS {
+        let mut ui = render(&state, Size::new(width, 720.0));
+
+        assert!(
+            ui.find("Team offsite").is_ok(),
+            "the cached day is missing at {width}px"
+        );
+        assert!(
+            ui.find("Syncing…").is_ok(),
+            "the loading status is missing at {width}px"
+        );
+    }
+}
+
 /// The view used by the flash overlay draws without needing the clock's
 /// widgets, and must not panic when there is no flash in flight.
 #[test]

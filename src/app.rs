@@ -785,6 +785,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // on today if the user had navigated away.
             let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
             state.calendar.set_day(day, day);
+            // The day's window moved, so the cached days no longer describe
+            // the days they are filed under.
+            state.calendar.forget_cached_days();
             let save = queue_save(state);
             Task::batch([save, sync_calendar(state)])
         }
@@ -1344,6 +1347,30 @@ mod tests {
             "the old day's events must not paint onto the new day"
         );
         assert!(!state.calendar.follow_today);
+    }
+
+    #[test]
+    fn stepping_back_to_a_day_paints_its_cached_events_at_once() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let start = state.calendar.day;
+        let cached = state.calendar.events.len();
+        assert!(cached > 0);
+
+        let _ = update(&mut state, Message::CalendarDayShift(1));
+        assert!(
+            state.calendar.events.is_empty(),
+            "a day not seen yet starts empty"
+        );
+
+        let _ = update(&mut state, Message::CalendarDayShift(-1));
+
+        assert_eq!(state.calendar.day, start);
+        assert_eq!(
+            state.calendar.events.len(),
+            cached,
+            "the day we came back to should paint from the cache"
+        );
     }
 
     #[test]

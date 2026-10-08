@@ -7,6 +7,8 @@ pub mod colors;
 pub mod layout;
 pub mod oauth;
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Datelike, Local, Months, NaiveDate, Timelike};
 use iced::Color;
 
@@ -98,10 +100,21 @@ pub const MIN_HOUR_HEIGHT: f32 = 24.0;
 /// Tallest hour row, so a zoomed-in day stays a grid rather than a poster.
 pub const MAX_HOUR_HEIGHT: f32 = 180.0;
 
+/// How many days of events to keep cached before the ones furthest from the
+/// day in view are dropped.
+const MAX_CACHED_DAYS: usize = 31;
+
 /// A task list's color: the user's choice if there is one, otherwise Google's
 /// blue.
 fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
     settings.task_color(calendar_id).unwrap_or(colors::TASK)
+}
+
+/// Gives a Google Tasks event its list's color, leaving calendar events alone.
+fn recolor_task(event: &mut Event, settings: &CalendarSettings) {
+    if event.calendar_id.starts_with("tasks:") {
+        event.color = task_color(settings, &event.calendar_id);
+    }
 }
 
 /// Everything the Calendar tab and its settings pane need.
@@ -111,6 +124,9 @@ pub struct Store {
     pub menu_open: bool,
     pub calendars: Vec<Calendar>,
     pub events: Vec<Event>,
+    /// Events for the days already visited, so stepping back to one paints it
+    /// at once while the fresh sync runs. The day in view lives in `events`.
+    cache: HashMap<NaiveDate, Vec<Event>>,
     pub day: NaiveDate,
     pub last_sync: Option<DateTime<Local>>,
     pub error: Option<String>,
@@ -147,6 +163,7 @@ impl Store {
             menu_open: false,
             calendars: Vec::new(),
             events: Vec::new(),
+            cache: HashMap::new(),
             day,
             last_sync: None,
             error: None,
@@ -168,6 +185,7 @@ impl Store {
             menu_open: false,
             calendars: snapshot.calendars,
             events: snapshot.events,
+            cache: HashMap::new(),
             day: snapshot.day,
             last_sync: Some(snapshot.fetched_at),
             error: None,
@@ -183,17 +201,53 @@ impl Store {
         }
     }
 
-    /// Moves the day in view, dropping the events that belonged to the old one.
+    /// Moves the day in view, restoring whatever was cached for it.
     ///
-    /// The day grid draws whatever events are loaded, so leaving the previous
-    /// day's events in place would paint them onto the new day until the sync
-    /// comes back. `today` is the real day the clock is on, used to decide
-    /// whether the view keeps following it.
+    /// The day being left is parked in the cache, so stepping back to it paints
+    /// at once rather than waiting for the sync. A day that has not been seen
+    /// yet comes back empty and fills in when the sync lands. `today` is the
+    /// real day the clock is on, used to decide whether the view keeps
+    /// following it.
     pub fn set_day(&mut self, day: NaiveDate, today: NaiveDate) {
+        if day != self.day {
+            let leaving = std::mem::take(&mut self.events);
+            self.cache.insert(self.day, leaving);
+            self.events = self.cache.remove(&day).unwrap_or_default();
+            self.open_event = None;
+            self.trim_cache();
+        }
+
         self.day = day;
+        self.follow_today = day == today;
+    }
+
+    /// Drops every cached day, so the next visit to each fetches it afresh.
+    ///
+    /// The day boundary moving changes which events a day holds, so the cache
+    /// no longer describes the days filed under it.
+    pub fn forget_cached_days(&mut self) {
+        self.cache.clear();
         self.events.clear();
         self.open_event = None;
-        self.follow_today = day == today;
+    }
+
+    /// Keeps the cache from growing without bound, dropping the days furthest
+    /// from the one in view first.
+    fn trim_cache(&mut self) {
+        while self.cache.len() > MAX_CACHED_DAYS {
+            let farthest = self
+                .cache
+                .keys()
+                .max_by_key(|day| (**day - self.day).num_days().abs())
+                .copied();
+
+            match farthest {
+                Some(day) => {
+                    self.cache.remove(&day);
+                }
+                None => break,
+            }
+        }
     }
 
     /// Grows or shrinks the hour rows. `factor` above 1 spreads the day out.
@@ -230,8 +284,14 @@ impl Store {
         }
 
         for event in &mut self.events {
-            if event.calendar_id.starts_with("tasks:") {
-                event.color = task_color(settings, &event.calendar_id);
+            recolor_task(event, settings);
+        }
+
+        // The cached days are recolored too, so a day painted from the cache
+        // does not flash the old color before the sync lands.
+        for events in self.cache.values_mut() {
+            for event in events {
+                recolor_task(event, settings);
             }
         }
     }
@@ -791,5 +851,31 @@ mod tests {
 
         store.set_day(today, today);
         assert!(store.follow_today, "back on today, the view follows it again");
+    }
+
+    #[test]
+    fn stepping_back_to_a_day_brings_its_events_back() {
+        let mut store = Store::with_snapshot(sample_snapshot());
+        let today = store.day;
+        let parked = store.events.len();
+        assert!(parked > 0);
+
+        store.set_day(today.succ_opt().unwrap(), today);
+        assert!(store.events.is_empty());
+
+        store.set_day(today, today);
+        assert_eq!(store.events.len(), parked, "the cached day should come back");
+    }
+
+    #[test]
+    fn forgetting_the_cache_drops_the_days_it_held() {
+        let mut store = Store::with_snapshot(sample_snapshot());
+        let today = store.day;
+
+        store.set_day(today.succ_opt().unwrap(), today);
+        store.forget_cached_days();
+        store.set_day(today, today);
+
+        assert!(store.events.is_empty(), "a forgotten day has to be fetched again");
     }
 }
