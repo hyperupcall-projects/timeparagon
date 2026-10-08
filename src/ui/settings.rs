@@ -7,6 +7,7 @@ use iced::{Center, Element, Fill, Length};
 
 use crate::app::{Message, Screen, State};
 use crate::audio::Tone;
+use crate::calendar;
 use crate::config;
 
 use super::layout::Metrics;
@@ -241,6 +242,17 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
+    section = section.push(field(
+        day_end_label(settings.day_start_hour()),
+        slider(
+            0..=config::CalendarSettings::MAX_DAY_END_HOUR,
+            settings.day_start_hour(),
+            Message::CalendarDayEndChanged,
+        )
+        .into(),
+        metrics,
+    ));
+
     indent(section.into(), metrics)
 }
 
@@ -248,6 +260,14 @@ fn sync_label(minutes: u32) -> String {
     match minutes {
         1 => "Sync every minute".to_owned(),
         n => format!("Sync every {n} minutes"),
+    }
+}
+
+fn day_end_label(hour: u32) -> String {
+    if hour == 0 {
+        "Day ends at midnight".to_owned()
+    } else {
+        format!("Day ends at {}", calendar::hour_label(hour))
     }
 }
 
@@ -508,5 +528,12 @@ mod tests {
     fn sync_labels_read_naturally() {
         assert_eq!(sync_label(1), "Sync every minute");
         assert_eq!(sync_label(15), "Sync every 15 minutes");
+    }
+
+    #[test]
+    fn day_end_labels_read_naturally() {
+        assert_eq!(day_end_label(0), "Day ends at midnight");
+        assert_eq!(day_end_label(3), "Day ends at 3 AM");
+        assert_eq!(day_end_label(5), "Day ends at 5 AM");
     }
 }

@@ -125,7 +125,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new() -> Self {
+    pub fn new(day_end_hour: u32) -> Self {
         let connection = if oauth::load_tokens().is_some() {
             Connection::SignedIn
         } else {
@@ -138,7 +138,7 @@ impl Store {
             menu_open: false,
             calendars: Vec::new(),
             events: Vec::new(),
-            day: Local::now().date_naive(),
+            day: day_at(Local::now(), day_end_hour),
             last_sync: None,
             error: None,
             hour_height: DEFAULT_HOUR_HEIGHT,
@@ -271,7 +271,22 @@ impl Store {
 
 impl Default for Store {
     fn default() -> Self {
-        Self::new()
+        Self::new(0)
+    }
+}
+
+/// The calendar day `now` belongs to, given the hour the day ends.
+///
+/// With the default midnight boundary this is simply today's date. With a later
+/// boundary the small hours still belong to the day that is ending, so a 3am
+/// end of day keeps 1am on the previous date. The date an event is stored under
+/// never changes; this only decides which day's view it lands in.
+pub fn day_at(now: DateTime<Local>, day_end_hour: u32) -> NaiveDate {
+    let date = now.date_naive();
+    if now.hour() < day_end_hour.min(24) {
+        date.pred_opt().unwrap_or(date)
+    } else {
+        date
     }
 }
 
@@ -282,6 +297,17 @@ pub fn minutes_from_midnight(when: DateTime<Local>) -> i32 {
 
 pub fn clock_label(when: DateTime<Local>) -> String {
     format!("{:02}:{:02}", when.hour(), when.minute())
+}
+
+/// An hour of the day as the grid's gutter spells it, matching Google
+/// Calendar: "12 AM", "9 AM", "12 PM", "1 PM".
+pub fn hour_label(hour: u32) -> String {
+    match hour % 24 {
+        0 => "12 AM".to_owned(),
+        12 => "12 PM".to_owned(),
+        1..=11 => format!("{} AM", hour % 24),
+        hour => format!("{} PM", hour - 12),
+    }
 }
 
 pub fn event_time_label(event: &Event) -> String {
@@ -300,10 +326,15 @@ pub fn connect(client_id: String, client_secret: String) -> Result<oauth::Tokens
 }
 
 /// Pulls today's calendars and events, refreshing the access token if needed.
-pub fn sync_today(client_id: &str, client_secret: &str, disabled: &[String]) -> Result<Snapshot, String> {
+pub fn sync_today(
+    client_id: &str,
+    client_secret: &str,
+    disabled: &[String],
+    day_end_hour: u32,
+) -> Result<Snapshot, String> {
     let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let mut snapshot = api::fetch_today(&tokens.access_token, disabled)?;
+    let mut snapshot = api::fetch_today(&tokens.access_token, disabled, day_end_hour)?;
     // Tasks come back as all-day chips because the API has no time for them.
     // If the browser helper is installed and signed in, the scheduled ones get
     // their real time here.
@@ -588,8 +619,30 @@ mod tests {
     }
 
     #[test]
+    fn the_day_boundary_follows_the_end_of_day_setting() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 2).unwrap();
+        let at = |hour, minute| {
+            day.and_hms_opt(hour, minute, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .single()
+                .unwrap()
+        };
+
+        // Midnight: the date is simply today's, all day long.
+        assert_eq!(day_at(at(0, 30), 0), day);
+        assert_eq!(day_at(at(23, 30), 0), day);
+
+        // A 3am boundary keeps the small hours on the day that is ending.
+        assert_eq!(day_at(at(1, 0), 3), day.pred_opt().unwrap());
+        assert_eq!(day_at(at(2, 59), 3), day.pred_opt().unwrap());
+        assert_eq!(day_at(at(3, 0), 3), day);
+        assert_eq!(day_at(at(23, 0), 3), day);
+    }
+
+    #[test]
     fn zoom_stays_inside_the_readable_range() {
-        let mut store = Store::new();
+        let mut store = Store::new(0);
         store.zoom(100.0);
         assert_eq!(store.hour_height, MAX_HOUR_HEIGHT);
         store.zoom(0.001);

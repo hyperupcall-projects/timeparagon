@@ -498,7 +498,12 @@ fn the_settings_pane_includes_calendar_sync_controls() {
 
     let mut ui = render(&state, Size::new(200.0, 400.0));
 
-    for label in ["Google Calendar", "OAuth client ID", "Sync every 15 minutes"] {
+    for label in [
+        "Google Calendar",
+        "OAuth client ID",
+        "Sync every 15 minutes",
+        "Day ends at midnight",
+    ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from settings");
     }
 }

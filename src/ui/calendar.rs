@@ -26,7 +26,7 @@ const EVENT_RADIUS: f32 = 4.0;
 const NEEDLE_RADIUS: f32 = 5.5;
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let today = Local::now().date_naive();
+    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
     let heading = calendar::day_heading(state.calendar.day, today);
 
     let header = row![
@@ -255,13 +255,20 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         GUTTER
     };
 
+    let day = state.calendar.day;
+    let offset = state.config.calendar.day_end_minutes();
+    let day_start_hour = state.config.calendar.day_start_hour();
+
     let timed: Vec<&Event> = state.calendar.timed_events(&state.config.calendar).collect();
     let spans: Vec<Span> = timed
         .iter()
         .map(|event| {
-            let start = calendar::minutes_from_midnight(event.start);
-            let end = calendar::minutes_from_midnight(event.end);
-            let (start_min, end_min) = layout::clamp_day(start, end).unwrap_or((start.max(0), start.max(0) + 15));
+            let start = minutes_into_day(event.start, day, offset);
+            let end = minutes_into_day(event.end, day, offset);
+            let (start_min, end_min) = layout::clamp_day(start, end).unwrap_or_else(|| {
+                let start = start.clamp(0, DAY_MINUTES);
+                (start, (start + 15).min(DAY_MINUTES))
+            });
             Span {
                 start_min,
                 end_min,
@@ -286,8 +293,9 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         })
         .collect();
 
-    let needle = (state.calendar.day == now.date_naive())
-        .then(|| calendar::minutes_from_midnight(now));
+    // The needle only belongs to the day whose window holds "now".
+    let needle = (day == calendar::day_at(now, day_start_hour))
+        .then(|| minutes_into_day(now, day, offset).clamp(0, DAY_MINUTES));
 
     let height = hour_height * 24.0;
     let compact = metrics.breakpoint.is_compact();
@@ -299,6 +307,7 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             hour_height,
             gutter,
             compact,
+            day_start_hour,
         })
         .width(Fill)
         .height(Length::Fixed(height)),
@@ -309,12 +318,27 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
     .into()
 }
 
+/// Minutes in a day, the height of the grid in minutes.
+const DAY_MINUTES: i32 = 24 * 60;
+
+/// Minutes from the start of the displayed day.
+///
+/// The day's window opens at the configured end-of-day hour, so an event at
+/// 1am lands at the foot of the day that ends at 3am. The event's own date and
+/// time are never touched; only this offset moves. Values outside the window
+/// come back negative or past 24h and are clamped away by the caller.
+fn minutes_into_day(when: DateTime<Local>, day: chrono::NaiveDate, offset: i32) -> i32 {
+    let days = (when.date_naive() - day).num_days() as i32;
+    days * DAY_MINUTES + calendar::minutes_from_midnight(when) - offset
+}
+
 const DAY_SCROLL: &str = "cal-day";
 
 /// Scrolls the day grid so the needle sits a little below the top, the way
-/// Google Calendar opens on "now" rather than midnight.
-pub fn scroll_to_now(hour_height: f32) -> iced::Task<Message> {
-    let minutes = calendar::minutes_from_midnight(Local::now());
+/// Google Calendar opens on "now" rather than the start of the day.
+pub fn scroll_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
+    let minutes = (calendar::minutes_from_midnight(Local::now()) - day_end_minutes)
+        .rem_euclid(DAY_MINUTES);
     let y = ((minutes - 90) as f32 * (hour_height / 60.0)).max(0.0);
 
     iced::widget::operation::scroll_to(
@@ -804,6 +828,10 @@ struct DayCanvas {
     hour_height: f32,
     gutter: f32,
     compact: bool,
+    /// The hour drawn at the top of the grid. The day's window opens here, so
+    /// with a 3am end of day the top row reads 3 AM and the small hours sit at
+    /// the foot.
+    day_start_hour: u32,
 }
 
 /// Geometry for the grid, the events and their labels, reused while scrolling.
@@ -906,7 +934,7 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let key = cache_key(&self.blocks, self.hour_height, self.gutter, self.compact);
+        let key = cache_key(&self.blocks, self.hour_height, self.gutter, self.compact, self.day_start_hour);
         if state.key.get() != key {
             state.grid.clear();
             state.key.set(key);
@@ -943,7 +971,7 @@ impl DayCanvas {
             );
 
             fill_glyphs(frame, Text {
-                content: hour_label(hour),
+                content: calendar::hour_label((self.day_start_hour + hour) % 24),
                 position: Point::new(self.gutter - 6.0, y + 2.0),
                 color: colors::GUTTER_TEXT,
                 size: Pixels(label_size),
@@ -1095,10 +1123,11 @@ fn fill_glyphs(frame: &mut Frame, text: impl Into<Text>) {
 
 /// Everything the cached geometry is drawn from, so a rebuilt [`Block`] with a
 /// different label or shade retraces instead of going stale.
-fn cache_key(blocks: &[Block], hour_height: f32, gutter: f32, compact: bool) -> u64 {
+fn cache_key(blocks: &[Block], hour_height: f32, gutter: f32, compact: bool, day_start_hour: u32) -> u64 {
     let mut hash = hour_height.to_bits() as u64;
     hash = hash.wrapping_mul(31).wrapping_add(gutter.to_bits() as u64);
     hash = hash.wrapping_mul(31).wrapping_add(u64::from(compact));
+    hash = hash.wrapping_mul(31).wrapping_add(u64::from(day_start_hour));
 
     for block in blocks {
         hash = hash.wrapping_mul(31).wrapping_add(block.start_min as u64);
@@ -1134,26 +1163,45 @@ fn zoom_steps(delta: mouse::ScrollDelta) -> f32 {
     dominant * scale
 }
 
-fn hour_label(hour: u32) -> String {
-    match hour {
-        0 => "12 AM".to_owned(),
-        12 => "12 PM".to_owned(),
-        1..=11 => format!("{hour} AM"),
-        _ => format!("{} PM", hour - 12),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn hour_labels_match_google_calendar() {
-        assert_eq!(hour_label(0), "12 AM");
-        assert_eq!(hour_label(9), "9 AM");
-        assert_eq!(hour_label(12), "12 PM");
-        assert_eq!(hour_label(13), "1 PM");
-        assert_eq!(hour_label(23), "11 PM");
+        assert_eq!(calendar::hour_label(0), "12 AM");
+        assert_eq!(calendar::hour_label(9), "9 AM");
+        assert_eq!(calendar::hour_label(12), "12 PM");
+        assert_eq!(calendar::hour_label(13), "1 PM");
+        assert_eq!(calendar::hour_label(23), "11 PM");
+    }
+
+    #[test]
+    fn a_late_boundary_moves_the_small_hours_to_the_foot_of_the_day() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let at = |hour, minute| {
+            day.and_hms_opt(hour, minute, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .single()
+                .unwrap()
+        };
+
+        // A 3am boundary: the day opens at 3am, so 9am is 6 hours in.
+        assert_eq!(minutes_into_day(at(3, 0), day, 3 * 60), 0);
+        assert_eq!(minutes_into_day(at(9, 0), day, 3 * 60), 6 * 60);
+
+        // 1am on the day itself is before the window, so it belongs to the
+        // previous day's view and comes back negative to be clamped away.
+        assert_eq!(minutes_into_day(at(1, 0), day, 3 * 60), -120);
+
+        // The next morning's small hours belong to this view, at the foot.
+        let next = day.succ_opt().unwrap();
+        let next_1am = next.and_hms_opt(1, 0, 0).unwrap().and_local_timezone(Local).single().unwrap();
+        assert_eq!(minutes_into_day(next_1am, day, 3 * 60), 22 * 60);
+
+        // Midnight keeps the plain mapping.
+        assert_eq!(minutes_into_day(at(1, 0), day, 0), 60);
     }
 
     #[test]
@@ -1182,13 +1230,13 @@ mod tests {
             },
         };
 
-        let key = cache_key(&[block("Standup", "09:00 – 09:30", 1.0)], 48.0, GUTTER, false);
+        let key = cache_key(&[block("Standup", "09:00 – 09:30", 1.0)], 48.0, GUTTER, false, 0);
 
         // A key that drifts between frames would retrace the whole day while
         // scrolling, and one that ignores a label would draw it stale.
         assert_eq!(
             key,
-            cache_key(&[block("Standup", "09:00 – 09:30", 1.0)], 48.0, GUTTER, false)
+            cache_key(&[block("Standup", "09:00 – 09:30", 1.0)], 48.0, GUTTER, false, 0)
         );
 
         for changed in [
@@ -1198,10 +1246,18 @@ mod tests {
         ] {
             assert_ne!(
                 key,
-                cache_key(std::slice::from_ref(&changed), 48.0, GUTTER, false),
+                cache_key(std::slice::from_ref(&changed), 48.0, GUTTER, false, 0),
                 "a changed block has to be retraced"
             );
         }
+
+        // Moving the day's boundary relabels every hour, so the grid has to be
+        // retraced even though the events did not move.
+        assert_ne!(
+            key,
+            cache_key(&[block("Standup", "09:00 – 09:30", 1.0)], 48.0, GUTTER, false, 3),
+            "a new day boundary has to relabel the grid"
+        );
     }
 
     #[test]
@@ -1239,6 +1295,7 @@ mod tests {
             hour_height: 60.0,
             gutter: GUTTER,
             compact: false,
+            day_start_hour: 0,
         };
 
         let rect = canvas.block_rect(&canvas.blocks[0], 240.0);

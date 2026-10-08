@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use iced::keyboard::{self, Key};
 use iced::{Element, Size, Subscription, Task, Theme, window};
 
+use chrono::Local;
+
 use crate::audio::{self, Audio, Pcm, Tone};
 use crate::calendar::{self, Connection, SyncState};
 use crate::config::{self, Config};
@@ -179,6 +181,9 @@ pub enum Message {
     GoogleConnected(Result<calendar::oauth::Tokens, String>),
     GoogleDisconnectRequested,
     CalendarSyncMinutesChanged(u32),
+    /// The hour the calendar day ends, so late-night events stay with the
+    /// evening they belong to.
+    CalendarDayEndChanged(u32),
     /// Multiplies the calendar hour height. Above 1 spreads the hours apart.
     CalendarZoomed(f32),
 }
@@ -197,6 +202,8 @@ impl State {
     /// Separate from [`boot`] so tests can assemble a state without reading
     /// or writing anything in the user's config directory.
     pub fn new(config: Config, catalog: Catalog) -> Self {
+        let day_end_hour = config.calendar.day_start_hour();
+
         Self {
             timer: Timer::new(config.timer.last_duration()),
             now: Instant::now(),
@@ -210,7 +217,7 @@ impl State {
             save_queued: false,
             catalog,
             config,
-            calendar: calendar::Store::new(),
+            calendar: calendar::Store::new(day_end_hour),
         }
     }
 
@@ -318,7 +325,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.screen = screen;
 
                     if screen == Screen::Calendar {
-                        return crate::ui::calendar::scroll_to_now(state.calendar.hour_height);
+                        let scroll = crate::ui::calendar::scroll_to_now(
+                            state.calendar.hour_height,
+                            state.config.calendar.day_end_minutes(),
+                        );
+                        return Task::batch([scroll, refresh_day(state)]);
                     }
 
                     Task::none()
@@ -600,7 +611,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::CalendarTick => Task::none(),
+        Message::CalendarTick => refresh_day(state),
 
         Message::OpenGoogleCalendar => {
             if let Err(error) = calendar::oauth::open_in_browser(calendar::WEB_URL) {
@@ -734,7 +745,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::GoogleDisconnectRequested => {
             calendar::disconnect();
-            state.calendar = calendar::Store::new();
+            state.calendar = calendar::Store::new(state.config.calendar.day_start_hour());
             state.calendar.connection = Connection::SignedOut;
             Task::none()
         }
@@ -745,6 +756,17 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 config::CalendarSettings::MAX_SYNC_MINUTES,
             );
             queue_save(state)
+        }
+
+        Message::CalendarDayEndChanged(hour) => {
+            state.config.calendar.day_end_hour =
+                hour.min(config::CalendarSettings::MAX_DAY_END_HOUR);
+            // The day's window moved, so the day in view and the events that
+            // belong to it may have changed too.
+            state.calendar.day =
+                calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            let save = queue_save(state);
+            Task::batch([save, sync_calendar(state)])
         }
 
         Message::CalendarZoomed(factor) => {
@@ -988,6 +1010,20 @@ fn queue_save(state: &mut State) -> Task<Message> {
     Task::none()
 }
 
+/// Re-syncs when the day in view has rolled over at the configured boundary.
+///
+/// The day ends at the configured hour, not at midnight, so a 3am boundary
+/// keeps the small hours on the day that is ending. When the boundary passes,
+/// the events in hand are for the wrong day and have to be pulled again.
+fn refresh_day(state: &mut State) -> Task<Message> {
+    let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    if day != state.calendar.day {
+        state.calendar.day = day;
+        return sync_calendar(state);
+    }
+    Task::none()
+}
+
 fn sync_calendar(state: &mut State) -> Task<Message> {
     if !state.calendar.is_signed_in() || state.calendar.is_busy() {
         return Task::none();
@@ -999,8 +1035,9 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     let client_id = state.config.calendar.client_id.clone();
     let client_secret = state.config.calendar.client_secret.clone();
     let disabled = state.config.calendar.disabled.clone();
+    let day_end_hour = state.config.calendar.day_start_hour();
 
-    blocking::run(move || calendar::sync_today(&client_id, &client_secret, &disabled))
+    blocking::run(move || calendar::sync_today(&client_id, &client_secret, &disabled, day_end_hour))
         .map(Message::CalendarSynced)
 }
 
@@ -1107,6 +1144,32 @@ mod tests {
 
         assert!(!state.config.calendar.show_tasks);
         assert!(state.save_queued);
+    }
+
+    #[test]
+    fn changing_the_end_of_day_moves_the_day_in_view() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        assert_eq!(state.config.calendar.day_end_hour, 0);
+
+        let _ = update(&mut state, Message::CalendarDayEndChanged(3));
+
+        assert_eq!(state.config.calendar.day_end_hour, 3);
+        assert!(state.save_queued);
+        // The day in view is recomputed from the new boundary, not left on the
+        // date the old one produced.
+        assert_eq!(state.calendar.day, calendar::day_at(Local::now(), 3));
+    }
+
+    #[test]
+    fn an_out_of_range_end_of_day_is_clamped() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let _ = update(&mut state, Message::CalendarDayEndChanged(99));
+
+        assert_eq!(
+            state.config.calendar.day_end_hour,
+            config::CalendarSettings::MAX_DAY_END_HOUR
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use super::colors;
 use super::{Calendar, Event, Snapshot};
+use crate::config::CalendarSettings;
 use crate::hex;
 
 const CALENDAR_LIST: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
@@ -117,15 +118,25 @@ struct ApiError {
     message: String,
 }
 
-/// Pulls every calendar and today's events into a [`Snapshot`].
-pub fn fetch_today(access_token: &str, disabled: &[String]) -> Result<Snapshot, String> {
-    fetch_day(access_token, disabled, Local::now().date_naive())
+/// Pulls every calendar and the events of the day that ends at `day_end_hour`
+/// into a [`Snapshot`].
+///
+/// The window is anchored to the boundary rather than to midnight, so a day
+/// that ends at 3am still includes the small hours of the next morning.
+pub fn fetch_today(
+    access_token: &str,
+    disabled: &[String],
+    day_end_hour: u32,
+) -> Result<Snapshot, String> {
+    let day = super::day_at(Local::now(), day_end_hour);
+    fetch_day(access_token, disabled, day, day_end_hour)
 }
 
 pub fn fetch_day(
     access_token: &str,
     disabled: &[String],
     day: NaiveDate,
+    day_end_hour: u32,
 ) -> Result<Snapshot, String> {
     let mut calendars = fetch_calendars(access_token)?;
     let mut events = Vec::new();
@@ -134,7 +145,7 @@ pub fn fetch_day(
     // view so toggling one back on does not need another round trip.
     let _ = disabled;
     for calendar in &calendars {
-        events.extend(fetch_events(access_token, calendar, day)?);
+        events.extend(fetch_events(access_token, calendar, day, day_end_hour)?);
     }
 
     let (task_calendars, task_events, notice) = match fetch_tasks(access_token, day) {
@@ -186,8 +197,13 @@ fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
     Ok(calendars)
 }
 
-fn fetch_events(access_token: &str, calendar: &Calendar, day: NaiveDate) -> Result<Vec<Event>, String> {
-    let (time_min, time_max) = day_bounds(day);
+fn fetch_events(
+    access_token: &str,
+    calendar: &Calendar,
+    day: NaiveDate,
+    day_end_hour: u32,
+) -> Result<Vec<Event>, String> {
+    let (time_min, time_max) = day_bounds(day, day_end_hour);
     let calendar_id = urlencoding::encode(&calendar.id);
     let mut page_token: Option<String> = None;
     let mut events = Vec::new();
@@ -589,9 +605,10 @@ fn plain_text(value: &str) -> String {
         .to_owned()
 }
 
-fn day_bounds(day: NaiveDate) -> (String, String) {
-    let start = date_at(day, 0, 0);
-    let end = date_at(day.succ_opt().unwrap_or(day), 0, 0);
+fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (String, String) {
+    let hour = day_end_hour.min(CalendarSettings::MAX_DAY_END_HOUR);
+    let start = date_at(day, hour, 0);
+    let end = date_at(day.succ_opt().unwrap_or(day), hour, 0);
     (
         start.with_timezone(&Utc).to_rfc3339(),
         end.with_timezone(&Utc).to_rfc3339(),

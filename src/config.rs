@@ -127,6 +127,12 @@ pub struct CalendarSettings {
     pub disabled: Vec<String>,
     /// When false, Google Tasks are hidden and only calendar events show.
     pub show_tasks: bool,
+    /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
+    /// to 3 and the day runs 3am to 3am, so the small hours stay with the
+    /// evening they belong to. This only moves the view: an event keeps its
+    /// real date and time, it is just drawn at the foot of the day it belongs
+    /// to.
+    pub day_end_hour: u32,
     /// Custom colors for Google Tasks lists, keyed by the calendar id
     /// (`tasks:<list>`). Google hands every list back with the same blue, so
     /// this is where a list gets a color of its own. A missing key means the
@@ -143,6 +149,7 @@ impl Default for CalendarSettings {
             client_secret: String::new(),
             disabled: Vec::new(),
             show_tasks: true,
+            day_end_hour: 0,
             task_colors: BTreeMap::new(),
         }
     }
@@ -151,10 +158,25 @@ impl Default for CalendarSettings {
 impl CalendarSettings {
     pub const MIN_SYNC_MINUTES: u32 = 1;
     pub const MAX_SYNC_MINUTES: u32 = 120;
+    /// The latest hour a day can end: 5am, which is as far into the morning
+    /// as a late night is worth pushing the boundary. Midnight (0) is the
+    /// default.
+    pub const MAX_DAY_END_HOUR: u32 = 5;
 
     pub fn sync_every(&self) -> Duration {
         let minutes = self.sync_minutes.clamp(Self::MIN_SYNC_MINUTES, Self::MAX_SYNC_MINUTES);
         Duration::from_secs(u64::from(minutes) * 60)
+    }
+
+    /// Minutes past midnight at which the day ends, clamped to a real hour.
+    pub fn day_end_minutes(&self) -> i32 {
+        self.day_start_hour() as i32 * 60
+    }
+
+    /// The hour the day's window opens, which is the hour the previous day
+    /// ended. The grid's top row is labelled with this hour.
+    pub fn day_start_hour(&self) -> u32 {
+        self.day_end_hour.min(Self::MAX_DAY_END_HOUR)
     }
 
     pub fn set_calendar_enabled(&mut self, id: &str, enabled: bool) {
@@ -493,6 +515,25 @@ mod tests {
         let parsed: Config = toml::from_str("").unwrap();
         assert_eq!(parsed.calendar.sync_minutes, 15);
         assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(15 * 60));
+    }
+
+    #[test]
+    fn the_day_ends_at_midnight_by_default() {
+        let parsed: Config = toml::from_str("").unwrap();
+        assert_eq!(parsed.calendar.day_end_hour, 0);
+        assert_eq!(parsed.calendar.day_start_hour(), 0);
+        assert_eq!(parsed.calendar.day_end_minutes(), 0);
+    }
+
+    #[test]
+    fn an_out_of_range_day_end_hour_is_clamped() {
+        let settings = CalendarSettings {
+            day_end_hour: 99,
+            ..CalendarSettings::default()
+        };
+
+        assert_eq!(settings.day_start_hour(), CalendarSettings::MAX_DAY_END_HOUR);
+        assert_eq!(settings.day_end_minutes(), 5 * 60);
     }
 
     #[test]
