@@ -4,13 +4,16 @@
 pub mod api;
 pub mod bridge;
 pub mod colors;
+mod day_cache;
 pub mod layout;
 pub mod oauth;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Local, Months, NaiveDate, Timelike};
 use iced::Color;
+use serde::{Deserialize, Serialize};
 
 use crate::config::CalendarSettings;
 
@@ -72,7 +75,10 @@ impl Event {
 }
 
 /// The parts of a Google event that are worth reading, beyond the chip.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// It carries serde derives so a day can be written out to the cache whole.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Details {
     pub location: String,
     pub description: String,
@@ -100,9 +106,34 @@ pub const MIN_HOUR_HEIGHT: f32 = 24.0;
 /// Tallest hour row, so a zoomed-in day stays a grid rather than a poster.
 pub const MAX_HOUR_HEIGHT: f32 = 180.0;
 
-/// How many days of events to keep cached before the ones furthest from the
-/// day in view are dropped.
-const MAX_CACHED_DAYS: usize = 31;
+/// How far either side of the day in view a cached day can be and still be
+/// kept whatever else is cached: the previous day and the next one, once they
+/// have been viewed.
+const ALWAYS_KEPT_DISTANCE: i64 = 1;
+
+/// How many days beyond that window stay cached, counted from the day in view
+/// outwards. The memory cache and the days on disk are trimmed by the same
+/// rule, so both end up holding the same days.
+const EXTRA_CACHED_DAYS: usize = 10;
+
+/// The days that should leave a cache while `current` is in view.
+///
+/// The day in view, the day before it and the day after it are never dropped,
+/// and the [`EXTRA_CACHED_DAYS`] closest days beyond that window survive too.
+/// Everything further out goes, furthest first.
+fn days_to_drop(days: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -> Vec<NaiveDate> {
+    let mut far: Vec<NaiveDate> = days
+        .into_iter()
+        .filter(|day| (*day - current).num_days().abs() > ALWAYS_KEPT_DISTANCE)
+        .collect();
+
+    far.sort_by_key(|day| (*day - current).num_days().abs());
+    if far.len() <= EXTRA_CACHED_DAYS {
+        Vec::new()
+    } else {
+        far.split_off(EXTRA_CACHED_DAYS)
+    }
+}
 
 /// A task list's color: the user's choice if there is one, otherwise Google's
 /// blue.
@@ -127,6 +158,11 @@ pub struct Store {
     /// Events for the days already visited, so stepping back to one paints it
     /// at once while the fresh sync runs. The day in view lives in `events`.
     cache: HashMap<NaiveDate, Vec<Event>>,
+    /// The directory those days are also written to, so they survive a
+    /// restart. `None` until [`Store::cache_days_in`] is called, which only
+    /// `boot` and a reconnect do: a store built by hand must not read or
+    /// rewrite the cache the user's own days live in.
+    day_cache: Option<PathBuf>,
     pub day: NaiveDate,
     pub last_sync: Option<DateTime<Local>>,
     pub error: Option<String>,
@@ -164,6 +200,7 @@ impl Store {
             calendars: Vec::new(),
             events: Vec::new(),
             cache: HashMap::new(),
+            day_cache: None,
             day,
             last_sync: None,
             error: None,
@@ -186,6 +223,7 @@ impl Store {
             calendars: snapshot.calendars,
             events: snapshot.events,
             cache: HashMap::new(),
+            day_cache: None,
             day: snapshot.day,
             last_sync: Some(snapshot.fetched_at),
             error: None,
@@ -201,20 +239,52 @@ impl Store {
         }
     }
 
+    /// Points the store at the directory cached days are written to, so they
+    /// outlive the process.
+    ///
+    /// The day in view is read straight back when a previous run left it
+    /// there, which is what gives the window something to show before the
+    /// first sync lands, and days that fell out of the cache while the app
+    /// was closed are dropped. Called at boot and when a reconnect replaces
+    /// the store: a store built by hand keeps its days in memory only.
+    pub fn cache_days_in(&mut self, directory: Option<PathBuf>) {
+        self.day_cache = directory;
+
+        if self.events.is_empty()
+            && let Some(events) = self.read_day(self.day)
+        {
+            self.events = events;
+        }
+
+        self.trim_cache();
+    }
+
     /// Moves the day in view, restoring whatever was cached for it.
     ///
     /// The day being left is parked in the cache, so stepping back to it paints
     /// at once rather than waiting for the sync. A day that has not been seen
-    /// yet comes back empty and fills in when the sync lands. `today` is the
+    /// yet comes back from the cache directory if an earlier run left it there,
+    /// and empty otherwise, filling in when the sync lands. `today` is the
     /// real day the clock is on, used to decide whether the view keeps
     /// following it.
     pub fn set_day(&mut self, day: NaiveDate, today: NaiveDate) {
         if day != self.day {
-            let leaving = std::mem::take(&mut self.events);
-            self.cache.insert(self.day, leaving);
-            self.events = self.cache.remove(&day).unwrap_or_default();
+            let left = self.day;
+            self.cache.insert(left, std::mem::take(&mut self.events));
+
+            let restored = match self.cache.remove(&day) {
+                Some(events) => events,
+                None => self.read_day(day).unwrap_or_default(),
+            };
+            self.events = restored;
             self.open_event = None;
+            self.day = day;
             self.trim_cache();
+
+            // The day we left only stays on disk if the cache still wants it.
+            if let Some(events) = self.cache.get(&left) {
+                self.write_day(left, events);
+            }
         }
 
         self.day = day;
@@ -229,24 +299,47 @@ impl Store {
         self.cache.clear();
         self.events.clear();
         self.open_event = None;
+
+        // The days on disk were filed under the old boundary too.
+        if let Some(directory) = self.day_cache.as_ref() {
+            day_cache::clear(directory);
+        }
     }
 
-    /// Keeps the cache from growing without bound, dropping the days furthest
-    /// from the one in view first.
+    /// Keeps the caches from growing without bound, dropping the days furthest
+    /// from the one in view first. The day in view, the day before it and the
+    /// day after it are kept, along with [`EXTRA_CACHED_DAYS`] further days.
+    ///
+    /// The days on disk are trimmed by the same rule, so both caches end up
+    /// holding the same days.
     fn trim_cache(&mut self) {
-        while self.cache.len() > MAX_CACHED_DAYS {
-            let farthest = self
-                .cache
-                .keys()
-                .max_by_key(|day| (**day - self.day).num_days().abs())
-                .copied();
+        let current = self.day;
 
-            match farthest {
-                Some(day) => {
-                    self.cache.remove(&day);
-                }
-                None => break,
-            }
+        for day in days_to_drop(self.cache.keys().copied(), current) {
+            self.cache.remove(&day);
+        }
+
+        let Some(directory) = self.day_cache.as_ref() else {
+            return;
+        };
+        for day in days_to_drop(day_cache::days(directory), current) {
+            day_cache::remove(directory, day);
+        }
+    }
+
+    /// The day's events as an earlier run left them, if it left them.
+    fn read_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
+        day_cache::load(self.day_cache.as_ref()?, day)
+    }
+
+    /// Writes one day out, so the run after this one paints it at once.
+    fn write_day(&self, day: NaiveDate, events: &[Event]) {
+        let Some(directory) = self.day_cache.as_ref() else {
+            return;
+        };
+
+        if let Err(error) = day_cache::save(directory, day, events) {
+            log::warn!("could not cache {}: {error}", day);
         }
     }
 
@@ -311,6 +404,10 @@ impl Store {
         {
             self.open_event = None;
         }
+
+        // The day in view has fresh events now, so the run after this one
+        // opens on them rather than on an empty grid.
+        self.write_day(self.day, &self.events);
     }
 
     pub fn visible_events<'a>(
@@ -877,5 +974,129 @@ mod tests {
         store.set_day(today, today);
 
         assert!(store.events.is_empty(), "a forgotten day has to be fetched again");
+    }
+
+    /// A snapshot with nothing in it, standing in for a run that has not
+    /// synced yet.
+    fn empty_snapshot(day: NaiveDate) -> Snapshot {
+        Snapshot {
+            calendars: Vec::new(),
+            events: Vec::new(),
+            day,
+            fetched_at: Local::now(),
+            notice: None,
+        }
+    }
+
+    /// The day in view, the day before it and the day after it are never
+    /// dropped, and ten more days beyond that window survive; everything
+    /// further out goes.
+    #[test]
+    fn the_cache_keeps_the_day_in_view_its_neighbours_and_ten_more() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        let all: Vec<NaiveDate> = (-40..=40)
+            .map(|offset| today + chrono::Duration::days(i64::from(offset)))
+            .collect();
+
+        let dropped = days_to_drop(all.clone(), today);
+        let kept: Vec<NaiveDate> = all
+            .into_iter()
+            .filter(|day| !dropped.contains(day))
+            .collect();
+
+        assert_eq!(kept.len(), 13, "the day in view, its neighbours and ten more");
+        for offset in [-6, -1, 0, 1, 6] {
+            let day = today + chrono::Duration::days(i64::from(offset));
+            assert!(kept.contains(&day), "day {offset} should stay");
+        }
+        for offset in [-7, 7, 40] {
+            let day = today + chrono::Duration::days(i64::from(offset));
+            assert!(!kept.contains(&day), "day {offset} should go");
+        }
+    }
+
+    /// A day parked by one run is painted by the next one, straight from the
+    /// cache directory, without a sync having run.
+    #[test]
+    fn a_day_parked_by_one_run_is_painted_by_the_next() {
+        let scratch = day_cache::Scratch::new("across-runs");
+        let directory = scratch.path().to_path_buf();
+
+        let mut first = Store::with_snapshot(sample_snapshot());
+        first.cache_days_in(Some(directory.clone()));
+        let today = first.day;
+        let parked = first.events.clone();
+        assert!(!parked.is_empty());
+
+        let tomorrow = today.succ_opt().unwrap();
+        first.set_day(tomorrow, today);
+        drop(first);
+
+        // The next run starts with nothing in memory, and tomorrow was never
+        // fetched by anyone.
+        let mut second = Store::with_snapshot(empty_snapshot(tomorrow));
+        second.cache_days_in(Some(directory));
+        assert!(second.events.is_empty(), "tomorrow has never been fetched");
+
+        second.set_day(today, today);
+        assert_eq!(second.events, parked, "the day should come back from disk");
+    }
+
+    /// The days on disk are trimmed by the same rule as the memory cache.
+    #[test]
+    fn days_far_from_the_one_in_view_leave_the_cache_directory() {
+        let scratch = day_cache::Scratch::new("pruning");
+        let directory = scratch.path().to_path_buf();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+
+        for offset in -20..=20 {
+            let day = today + chrono::Duration::days(i64::from(offset));
+            day_cache::save(&directory, day, &[]).unwrap();
+        }
+
+        let mut store = Store::with_snapshot(empty_snapshot(today));
+        store.cache_days_in(Some(directory.clone()));
+
+        let left = day_cache::days(&directory);
+        assert_eq!(left.len(), 13, "the day in view, its neighbours and ten more");
+        for offset in [-6, -1, 0, 1, 6] {
+            let day = today + chrono::Duration::days(i64::from(offset));
+            assert!(left.contains(&day), "day {offset} should stay on disk");
+        }
+        for offset in [-20, -7, 7, 20] {
+            let day = today + chrono::Duration::days(i64::from(offset));
+            assert!(!left.contains(&day), "day {offset} should leave the disk");
+        }
+    }
+
+    #[test]
+    fn forgetting_the_cache_drops_the_days_on_disk_too() {
+        let scratch = day_cache::Scratch::new("forgetting");
+        let directory = scratch.path().to_path_buf();
+
+        let mut store = Store::with_snapshot(sample_snapshot());
+        store.cache_days_in(Some(directory.clone()));
+        let today = store.day;
+
+        store.set_day(today.succ_opt().unwrap(), today);
+        assert!(
+            day_cache::days(&directory).contains(&today),
+            "the day we left is on disk"
+        );
+
+        store.forget_cached_days();
+        assert!(
+            day_cache::days(&directory).is_empty(),
+            "the boundary moved, so the days filed under it go too"
+        );
+        assert!(store.events.is_empty());
+    }
+
+    /// `State::new` builds its store by hand, and a state built by hand must
+    /// not read or rewrite the days the real app has cached.
+    #[test]
+    fn a_store_built_by_hand_keeps_its_days_in_memory() {
+        assert!(Store::new(0).day_cache.is_none());
+        assert!(Store::with_snapshot(sample_snapshot()).day_cache.is_none());
     }
 }

@@ -406,6 +406,13 @@ pub fn themes_dir() -> Option<PathBuf> {
     Some(project_dirs()?.config_dir().join("themes"))
 }
 
+/// Where cached days live: `$XDG_CACHE_HOME/timetracker/days`, which is
+/// `~/.cache/timetracker/days` unless the environment says otherwise. It is
+/// a cache rather than state: losing it only costs a re-sync.
+pub fn cache_days_dir() -> Option<PathBuf> {
+    Some(project_dirs()?.cache_dir().join("days"))
+}
+
 impl Config {
     /// Reads the config, falling back to defaults for anything unreadable.
     pub fn load() -> Self {
@@ -515,6 +522,16 @@ mod tests {
         let parsed: Config = toml::from_str("").unwrap();
         assert_eq!(parsed.calendar.sync_minutes, 15);
         assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(15 * 60));
+    }
+
+    #[test]
+    fn cached_days_live_under_the_xdg_cache_directory() {
+        let days = cache_days_dir().expect("a cache directory");
+        assert!(
+            days.ends_with(Path::new("timetracker").join("days")),
+            "{} should sit under the XDG cache directory",
+            days.display()
+        );
     }
 
     #[test]

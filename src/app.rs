@@ -246,7 +246,13 @@ impl State {
 }
 
 pub fn boot() -> (State, Task<Message>) {
-    let state = State::new(Config::load(), Catalog::load());
+    let mut state = State::new(Config::load(), Catalog::load());
+
+    // Days are kept under the XDG cache directory as well as in memory, so a
+    // restart opens on what the last run saw rather than an empty grid. This
+    // is deliberately not part of `State::new`: a state built by hand in a
+    // test must not read or rewrite the user's cache.
+    state.calendar.cache_days_in(config::cache_days_dir());
 
     // A daemon opens no window by itself, which is what lets the flash
     // overlay be a peer window rather than a child of the clock.
@@ -765,6 +771,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::GoogleDisconnectRequested => {
             calendar::disconnect();
             state.calendar = calendar::Store::new(state.config.calendar.day_start_hour());
+            // The reset takes the store with it, so the directory is put
+            // straight back: days keep being written across a disconnect.
+            state.calendar.cache_days_in(config::cache_days_dir());
             state.calendar.connection = Connection::SignedOut;
             Task::none()
         }
