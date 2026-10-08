@@ -185,7 +185,10 @@ pub enum Message {
     /// evening they belong to.
     CalendarDayEndChanged(u32),
     /// Multiplies the calendar hour height. Above 1 spreads the hours apart.
-    CalendarZoomed(f32),
+    ///
+    /// `anchor` is the pixel row under the pointer, measured from the top of
+    /// the day grid, so the zoom can keep that row still under the mouse.
+    CalendarZoomed { factor: f32, anchor: f32 },
 }
 
 /// The parts of a play request that survive the trip through rendering.
@@ -769,9 +772,20 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([save, sync_calendar(state)])
         }
 
-        Message::CalendarZoomed(factor) => {
+        Message::CalendarZoomed { factor, anchor } => {
+            let before = state.calendar.hour_height;
             state.calendar.zoom(factor);
-            Task::none()
+            let after = state.calendar.hour_height;
+
+            if after == before {
+                return Task::none();
+            }
+
+            // Keep the row under the pointer fixed. The grid grows by `ratio`,
+            // so the anchored row slides down by `anchor * (ratio - 1)` and the
+            // scroll has to follow it by the same amount.
+            let delta = crate::ui::calendar::zoom_scroll_delta(anchor, before, after);
+            crate::ui::calendar::scroll_by(delta)
         }
     }
 }

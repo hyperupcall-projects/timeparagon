@@ -347,6 +347,31 @@ pub fn scroll_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Messa
     )
 }
 
+/// Scrolls the day grid by a pixel amount.
+///
+/// Used after a zoom to keep the row under the pointer still: the grid grows
+/// or shrinks around that row, so the scroll follows it by the same delta.
+pub fn scroll_by(delta: f32) -> iced::Task<Message> {
+    iced::widget::operation::scroll_by(
+        iced::widget::Id::new(DAY_SCROLL),
+        iced::widget::operation::AbsoluteOffset { x: 0.0, y: delta },
+    )
+}
+
+/// The scroll adjustment that keeps the row under the pointer still while the
+/// hour height changes from `before` to `after`.
+///
+/// `anchor` is the pointer's row measured from the top of the grid. The grid
+/// grows by `after / before`, so that row slides down by `anchor * (ratio - 1)`
+/// and the scroll has to follow it by the same amount to stay under the mouse.
+pub fn zoom_scroll_delta(anchor: f32, before: f32, after: f32) -> f32 {
+    if !before.is_finite() || !after.is_finite() || before <= 0.0 {
+        return 0.0;
+    }
+
+    anchor * (after / before - 1.0)
+}
+
 fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
         .on_press(Message::CalendarMenuToggled);
@@ -883,8 +908,18 @@ impl canvas::Program<Message> for DayCanvas {
                     return None;
                 }
 
+                // The row under the pointer, in grid pixels, so the zoom can
+                // keep it anchored instead of letting the grid slide away.
+                let anchor = cursor.position_in(bounds)?.y;
+
                 // Scroll up spreads the hours apart; scroll down packs them.
-                Some(canvas::Action::publish(Message::CalendarZoomed(1.12_f32.powf(steps))).and_capture())
+                Some(
+                    canvas::Action::publish(Message::CalendarZoomed {
+                        factor: 1.12_f32.powf(steps),
+                        anchor,
+                    })
+                    .and_capture(),
+                )
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 self.track_hover(state, bounds, cursor)
@@ -1212,6 +1247,24 @@ mod tests {
         assert!(up > 0.0);
         assert!(down < 0.0);
         assert!((up + down).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn zooming_keeps_the_row_under_the_pointer_still() {
+        // A row 300px down the grid, zoomed in by 1.5x, slides to 450px. The
+        // scroll has to move by the 150px difference so it stays under the
+        // mouse.
+        assert!((zoom_scroll_delta(300.0, 48.0, 72.0) - 150.0).abs() < 0.001);
+
+        // Zooming out pulls the row back up, so the scroll moves the other way.
+        assert!((zoom_scroll_delta(300.0, 72.0, 48.0) + 100.0).abs() < 0.001);
+
+        // The row at the very top never moves, whatever the zoom.
+        assert_eq!(zoom_scroll_delta(0.0, 48.0, 180.0), 0.0);
+
+        // A no-op zoom, or a degenerate height, asks for no scroll at all.
+        assert_eq!(zoom_scroll_delta(300.0, 48.0, 48.0), 0.0);
+        assert_eq!(zoom_scroll_delta(300.0, 0.0, 48.0), 0.0);
     }
 
     #[test]
