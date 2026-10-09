@@ -28,13 +28,18 @@ const NEEDLE_RADIUS: f32 = 5.5;
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let header = header(state, metrics);
 
-    let status = text(state.calendar.status_line())
-        .size(metrics.label() - 1.0)
-        .style(if state.calendar.error.is_some() {
-            text::danger
-        } else {
-            text::secondary
-        });
+    let status = row![
+        text(state.calendar.status_line())
+            .size(metrics.label() - 1.0)
+            .style(if state.calendar.error.is_some() {
+                text::danger
+            } else {
+                text::secondary
+            }),
+        tasks_toggle(state, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
 
     let all_day = all_day_row(state, metrics);
     let grid = day_grid(state, metrics, Local::now());
@@ -132,6 +137,19 @@ fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Elemen
 /// it rather than over it.
 fn header_offset(metrics: &Metrics) -> f32 {
     metrics.padding + metrics.icon_button() * 2.0 + metrics.spacing * 2.0
+}
+
+/// The small switch beside the sync line: the same setting the menu and the
+/// settings pane offer, one tap away from the day grid.
+fn tasks_toggle<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let shown = state.config.calendar.show_tasks;
+    let label = if shown { "Hide tasks" } else { "Show tasks" };
+
+    button(text(label).size(metrics.label() - 1.0).center())
+        .padding([2.0, 6.0])
+        .on_press(Message::ShowTasksToggled(!shown))
+        .style(button::secondary)
+        .into()
 }
 
 /// The clock's own status, repeated at the foot of the calendar: how long it
