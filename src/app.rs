@@ -45,6 +45,10 @@ pub enum Screen {
     Settings,
     /// The pane for choosing the target time.
     SetTime,
+    /// What happens when the clock reaches zero. Kept off the main settings
+    /// page because it changes the timer rather than the calendar, and reached
+    /// from the clock itself.
+    TimerSettings,
 }
 
 /// A flash overlay that is currently on screen.
@@ -118,6 +122,12 @@ pub enum Message {
     DurationAdjusted(i64),
     /// Clear the target so the clock counts up without an alarm.
     TargetCleared,
+    /// The "what am I doing" line beside the clock was edited, or filled in
+    /// from one of the upcoming items in the timer view.
+    CurrentTaskChanged(String),
+    /// An upcoming item was picked: it becomes the current task, and the clock
+    /// is armed with how long it is meant to take (when it has a length).
+    CurrentTaskPicked(String, Option<Duration>),
     /// Unfold the clock inside the calendar and set it going.
     TimerOpened,
     /// Fold the clock away again; a timer that is running keeps going.
@@ -340,6 +350,24 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::TargetCleared => {
             state.timer.set_target(None);
             state.config.timer.last_duration_secs = 0;
+            Task::batch([queue_save(state), sync_tracks(state)])
+        }
+
+        Message::CurrentTaskChanged(task) => {
+            state.config.timer.current_task = task;
+            queue_save(state)
+        }
+
+        Message::CurrentTaskPicked(task, span) => {
+            state.config.timer.current_task = task;
+
+            // An all-day entry has no length of its own, so it only names the
+            // task and leaves the target as it was.
+            if let Some(span) = span {
+                state.timer.set_target(Some(span));
+                state.config.timer.last_duration_secs = span.as_secs();
+            }
+
             Task::batch([queue_save(state), sync_tracks(state)])
         }
 
@@ -975,7 +1003,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(iced::time::every(FLASH_FRAME).map(Message::FlashFrame));
     }
 
-    if state.screen == Screen::Settings {
+    if matches!(state.screen, Screen::Settings | Screen::TimerSettings) {
         subscriptions
             .push(iced::time::every(STATUS_POLL).map(|_| Message::AudioStatusPolled));
     }
@@ -1328,6 +1356,49 @@ mod tests {
 
         assert!(!state.config.calendar.show_tasks);
         assert!(state.save_queued);
+    }
+
+    #[test]
+    fn editing_the_current_task_is_remembered() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        assert!(state.config.timer.current_task.is_empty());
+
+        let _ = update(
+            &mut state,
+            Message::CurrentTaskChanged("Write the report".into()),
+        );
+
+        assert_eq!(state.config.timer.current_task, "Write the report");
+        assert!(state.save_queued);
+    }
+
+    #[test]
+    fn picking_an_upcoming_item_names_it_and_arms_the_clock() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let _ = update(
+            &mut state,
+            Message::CurrentTaskPicked("Standup".into(), Some(Duration::from_secs(30 * 60))),
+        );
+
+        assert_eq!(state.config.timer.current_task, "Standup");
+        assert_eq!(state.timer.target(), Some(Duration::from_secs(30 * 60)));
+        assert_eq!(state.config.timer.last_duration_secs, 30 * 60);
+        assert!(state.save_queued);
+    }
+
+    #[test]
+    fn picking_an_all_day_item_leaves_the_target_alone() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let before = state.timer.target();
+
+        let _ = update(
+            &mut state,
+            Message::CurrentTaskPicked("Team offsite".into(), None),
+        );
+
+        assert_eq!(state.config.timer.current_task, "Team offsite");
+        assert_eq!(state.timer.target(), before);
     }
 
     #[test]

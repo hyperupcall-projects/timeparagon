@@ -507,6 +507,32 @@ pub fn event_time_label(event: &Event) -> String {
     }
 }
 
+/// The next few things coming up, in the order they will happen.
+///
+/// A timed event counts until it has finished, so the one in progress is still
+/// offered; a task counts until it is ticked off, since an all-day task has no
+/// hour to sit next to. The list is capped at `limit` so the timer view stays a
+/// glance rather than a second calendar.
+pub fn upcoming<'a>(
+    events: impl Iterator<Item = &'a Event>,
+    now: DateTime<Local>,
+    limit: usize,
+) -> Vec<&'a Event> {
+    let mut upcoming: Vec<&Event> = events
+        .filter(|event| {
+            if event.is_task() {
+                !event.completed
+            } else {
+                event.end > now
+            }
+        })
+        .collect();
+
+    upcoming.sort_by_key(|event| event.start);
+    upcoming.truncate(limit);
+    upcoming
+}
+
 /// Connects the Google account, blocking until the browser comes back.
 pub fn connect(client_id: String, client_secret: String) -> Result<oauth::Tokens, String> {
     let tokens = oauth::authorize(&client_id, &client_secret)?;
@@ -759,6 +785,73 @@ pub fn sample_snapshot() -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upcoming_keeps_unfinished_things_in_time_order() {
+        fn make(
+            id: &str,
+            calendar_id: &str,
+            start: DateTime<Local>,
+            end: DateTime<Local>,
+            all_day: bool,
+            completed: bool,
+        ) -> Event {
+            Event {
+                id: id.into(),
+                calendar_id: calendar_id.into(),
+                title: id.into(),
+                start,
+                end,
+                all_day,
+                color: colors::DEFAULT_EVENT,
+                completed,
+                details: Details::default(),
+            }
+        }
+
+        let now = Local::now();
+        let at = |minutes: i64| now + chrono::Duration::minutes(minutes);
+
+        let events = vec![
+            make("later", "work", at(60), at(90), false, false),
+            make("task:done", "tasks:list", at(10), at(20), false, true),
+            make("past", "work", at(-60), at(-30), false, false),
+            make("soon", "work", at(5), at(15), false, false),
+            make("task:today", "tasks:list", at(0), at(0), true, false),
+        ];
+
+        let ids: Vec<&str> = upcoming(events.iter(), now, 5)
+            .iter()
+            .map(|event| event.id.as_str())
+            .collect();
+
+        // The finished task and the event that is already over are dropped; an
+        // all-day task is kept even though it has no hour of its own.
+        assert_eq!(ids, vec!["task:today", "soon", "later"]);
+    }
+
+    #[test]
+    fn upcoming_is_capped_at_the_limit() {
+        fn make(id: &str, start: DateTime<Local>) -> Event {
+            Event {
+                id: id.into(),
+                calendar_id: "work".into(),
+                title: id.into(),
+                start,
+                end: start + chrono::Duration::minutes(30),
+                all_day: false,
+                color: colors::DEFAULT_EVENT,
+                completed: false,
+                details: Details::default(),
+            }
+        }
+
+        let now = Local::now();
+        let at = |minutes: i64| now + chrono::Duration::minutes(minutes);
+        let events = vec![make("a", at(10)), make("b", at(20)), make("c", at(30))];
+
+        assert_eq!(upcoming(events.iter(), now, 2).len(), 2);
+    }
 
     #[test]
     fn disabling_a_calendar_hides_its_events() {

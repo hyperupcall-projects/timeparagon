@@ -87,6 +87,10 @@ pub struct TimerSettings {
     pub last_duration_secs: u64,
     /// Preset chips, in seconds.
     pub presets_secs: Vec<u64>,
+    /// What the user is working on right now, shown beside the clock. It is
+    /// free text so it can be corrected or replaced as the moment changes, and
+    /// the upcoming items in the timer view fill it in with one tap.
+    pub current_task: String,
 }
 
 impl Default for TimerSettings {
@@ -94,6 +98,7 @@ impl Default for TimerSettings {
         Self {
             last_duration_secs: 300,
             presets_secs: vec![60, 300, 600, 1500, 3000],
+            current_task: String::new(),
         }
     }
 }

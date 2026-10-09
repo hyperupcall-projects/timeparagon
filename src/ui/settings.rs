@@ -23,10 +23,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         heading("Appearance", metrics),
         appearance(state, metrics),
-        heading("When time is up", metrics),
-        notification(state, metrics),
-        sound(state, metrics),
-        flash(state, metrics),
         heading("Google Calendar", metrics),
         calendar(state, metrics),
     ]
@@ -37,9 +33,39 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     })
     .width(Fill);
 
+    page("Settings", content.into(), metrics)
+}
+
+/// What happens when the clock reaches zero.
+///
+/// These settings change the timer rather than the calendar, so they are kept
+/// off the main settings page and reached from the clock itself.
+pub fn timer_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let content = column![
+        heading("When time is up", metrics),
+        notification(state, metrics),
+        sound(state, metrics),
+        flash(state, metrics),
+    ]
+    .spacing(metrics.spacing * 1.5)
+    .padding(iced::Padding {
+        right: SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    })
+    .width(Fill);
+
+    page("Alarm", content.into(), metrics)
+}
+
+/// A settings page: a title with a way back, over a scrolling body.
+fn page<'a>(
+    title: &'a str,
+    content: Element<'a, Message>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
     column![
         row![
-            text("Settings").size(metrics.label() + 3.0).width(Fill),
+            text(title).size(metrics.label() + 3.0).width(Fill),
             button(text("Done").size(metrics.label()))
                 .on_press(Message::ScreenSelected(Screen::Calendar))
                 .style(button::primary),

@@ -30,7 +30,10 @@ pub fn primary_action<'a>(state: &State, metrics: &Metrics) -> Element<'a, Messa
         .into()
 }
 
-/// Set time, reset and the way into settings.
+/// Set time, reset and the way into the alarm settings.
+///
+/// The alarm settings live here rather than under the calendar's menu because
+/// they change the timer, not the calendar.
 pub fn secondary_row<'a>(metrics: &Metrics) -> Element<'a, Message> {
     let small = |label: &'a str, message: Message| {
         button(text(label).size(metrics.label()).center().width(Fill))
@@ -43,7 +46,7 @@ pub fn secondary_row<'a>(metrics: &Metrics) -> Element<'a, Message> {
     row![
         small("Set Time", Message::ScreenSelected(Screen::SetTime)),
         small("Reset", Message::Reset),
-        small("Settings", Message::ScreenSelected(Screen::Settings)),
+        small("Alarm", Message::ScreenSelected(Screen::TimerSettings)),
     ]
     .spacing(metrics.spacing)
     .into()

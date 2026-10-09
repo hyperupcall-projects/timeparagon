@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
     button, canvas as canvas_widget, column, container, mouse_area, row, scrollable, stack, text,
-    toggler,
+    text_input, toggler,
 };
 use iced::{
     Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -25,22 +25,10 @@ const EVENT_GAP: f32 = 2.0;
 const EVENT_RADIUS: f32 = 4.0;
 const NEEDLE_RADIUS: f32 = 5.5;
 
+/// How many upcoming items the timer view offers as one-tap answers.
+const UPCOMING_LIMIT: usize = 4;
+
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let header = header(state, metrics);
-
-    let status = row![
-        text(state.calendar.status_line())
-            .size(metrics.label() - 1.0)
-            .style(if state.calendar.error.is_some() {
-                text::danger
-            } else {
-                text::secondary
-            }),
-        tasks_toggle(state, metrics),
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
-
     // The clock takes the day grid's place while it is open. The calendar is
     // still one tap away: the button at the foot of the view folds it away
     // again, and a timer left running keeps going.
@@ -60,7 +48,31 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         )
     };
 
-    let content = column![header, status, body, clock_footer(state, metrics)]
+    // The month picker, the menu, the day arrows and the sync line belong to the
+    // day view. With the clock open they would only crowd the readout, so they
+    // are left out until the clock is folded away again.
+    let mut content = column![];
+
+    if !state.timer_open {
+        let status = row![
+            text(state.calendar.status_line())
+                .size(metrics.label() - 1.0)
+                .style(if state.calendar.error.is_some() {
+                    text::danger
+                } else {
+                    text::secondary
+                }),
+            tasks_toggle(state, metrics),
+        ]
+        .spacing(metrics.spacing)
+        .align_y(Alignment::Center);
+
+        content = content.push(header(state, metrics)).push(status);
+    }
+
+    let content = content
+        .push(body)
+        .push(clock_footer(state, metrics))
         .spacing(metrics.spacing)
         .padding(metrics.padding)
         .width(Fill)
@@ -184,19 +196,23 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
 
+    // The "what am I doing" line sits with the count-up, so the task is
+    // readable at a glance whether the clock is folded away or not.
+    let task = current_task_input(state, metrics);
+
     // An alarm can go off with the clock put away, so this button doubles as
     // the way to silence it.
     let (label, message, style) = if state.alarm_active {
         ("Dismiss", Message::Dismiss, button::danger as fn(&_, _) -> _)
     } else if state.timer_open {
         (
-            "Hide timer",
+            "Go back",
             Message::TimerClosed,
             button::secondary as fn(&_, _) -> _,
         )
     } else {
         (
-            "Show timer",
+            "Set Current Task",
             Message::TimerOpened,
             button::primary as fn(&_, _) -> _,
         )
@@ -208,7 +224,75 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .on_press(message)
         .style(style);
 
-    column![status, toggle].spacing(metrics.spacing).into()
+    column![status, task, toggle].spacing(metrics.spacing).into()
+}
+
+/// The editable "what am I doing" line beside the clock.
+///
+/// It is a real text field rather than a label, so the task can be corrected or
+/// replaced without leaving the calendar, and it is what the upcoming items in
+/// the timer view fill in when they are tapped.
+fn current_task_input<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let input = text_input("what are you doing?", &state.config.timer.current_task)
+        .on_input(Message::CurrentTaskChanged)
+        .size(metrics.label())
+        .width(Fill);
+
+    let caption = text("Currently task:").size(metrics.label());
+
+    if metrics.breakpoint.is_compact() {
+        column![caption, input]
+            .spacing(2.0)
+            .width(Fill)
+            .into()
+    } else {
+        row![caption, input]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center)
+            .into()
+    }
+}
+
+/// The next few things on the calendar, offered as one-tap answers to "what am
+/// I doing". Tapping one fills the task field in, where it can still be edited.
+pub fn upcoming_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let items = calendar::upcoming(
+        state.calendar.visible_events(&state.config.calendar),
+        Local::now(),
+        UPCOMING_LIMIT,
+    );
+
+    if items.is_empty() {
+        return text("").size(1.0).into();
+    }
+
+    let mut list = column![text("Coming up").size(metrics.label()).style(text::secondary)]
+        .spacing(2.0)
+        .width(Fill);
+
+    for event in items {
+        let label = if event.all_day {
+            event.title.clone()
+        } else {
+            format!("{}  {}", calendar::clock_label(event.start), event.title)
+        };
+
+        // An all-day entry has no length to arm the clock with, so it only
+        // names the task.
+        let span = (event.end - event.start)
+            .to_std()
+            .ok()
+            .filter(|span| !span.is_zero());
+
+        list = list.push(
+            button(text(label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::CurrentTaskPicked(event.title.clone(), span))
+                .style(button::secondary),
+        );
+    }
+
+    list.into()
 }
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {

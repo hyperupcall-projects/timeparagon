@@ -46,7 +46,7 @@ fn the_clock_controls_survive_every_width() {
         state.timer_open = true;
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
-        for label in ["Start", "Reset", "Set Time", "Settings", "0:00", "of 5:00"] {
+        for label in ["Start", "Reset", "Set Time", "Alarm", "0:00", "of 5:00"] {
             assert!(
                 ui.find(label).is_ok(),
                 "{label:?} is missing at {width}px"
@@ -55,20 +55,20 @@ fn the_clock_controls_survive_every_width() {
     }
 }
 
-/// Pressing Start timer has to actually unfold and start the clock at the
+/// Pressing Set Current Task has to actually unfold and start the clock at the
 /// narrowest size, which is the part a broken layout silently takes away.
 #[test]
-fn start_timer_is_clickable_at_the_minimum_width() -> Result<(), Error> {
+fn set_current_task_is_clickable_at_the_minimum_width() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(180.0, 240.0));
 
-    let _ = ui.click("Start timer")?;
+    let _ = ui.click("Set Current Task")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
         messages.iter().any(|message| matches!(message, Message::TimerOpened)),
-        "clicking Start timer produced {messages:?}"
+        "clicking Set Current Task produced {messages:?}"
     );
 
     Ok(())
@@ -82,7 +82,7 @@ fn the_calendar_unfolds_the_clock_and_folds_it_away() -> Result<(), Error> {
 
     {
         let mut ui = render(&state, Size::new(260.0, 600.0));
-        assert!(ui.find("Start timer").is_ok(), "the way in is missing");
+        assert!(ui.find("Set Current Task").is_ok(), "the way in is missing");
     }
 
     state.timer_open = true;
@@ -90,11 +90,11 @@ fn the_calendar_unfolds_the_clock_and_folds_it_away() -> Result<(), Error> {
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
-    for label in ["Pause", "Set Time", "Reset", "Settings", "Hide timer"] {
+    for label in ["Pause", "Set Time", "Reset", "Alarm", "Go back"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing with the clock open");
     }
 
-    let _ = ui.click("Hide timer")?;
+    let _ = ui.click("Go back")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -140,6 +140,26 @@ fn the_settings_pane_is_usable_at_two_hundred_pixels() {
         "Done",
         // Appearance.
         "Theme",
+        // Google Calendar.
+        "OAuth client ID",
+        "Sync every 15 minutes",
+    ] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
+    }
+}
+
+/// The alarm settings are their own page, reached from the clock, and have to
+/// stay usable at 200px just like the main settings pane.
+#[test]
+fn the_alarm_settings_pane_is_usable_at_two_hundred_pixels() {
+    let mut state = state();
+    state.screen = Screen::TimerSettings;
+
+    let mut ui = render(&state, Size::new(200.0, 400.0));
+
+    for label in [
+        "Alarm",
+        "Done",
         // Notification.
         "Urgency",
         // Sound.
@@ -236,7 +256,7 @@ fn rendering_never_panics_at_any_size() {
         Size::new(4_000.0, 4_000.0),
     ] {
         let mut ui = render(&state, size);
-        let _: Result<_, _> = ui.find("Start timer");
+        let _: Result<_, _> = ui.find("Set Current Task");
     }
 }
 
@@ -310,7 +330,7 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Menu", "Team offsite", "Start timer"] {
+    for label in ["Menu", "Team offsite", "Set Current Task"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }

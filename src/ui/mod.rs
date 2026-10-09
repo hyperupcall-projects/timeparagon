@@ -35,6 +35,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
             ]
             .into(),
             (Screen::Settings, _) => settings::view(state, &metrics),
+            (Screen::TimerSettings, Breakpoint::Wide) => row![
+                container(calendar::view(state, &metrics)).width(Length::FillPortion(2)),
+                container(settings::timer_view(state, &metrics)).width(Length::FillPortion(3)),
+            ]
+            .into(),
+            (Screen::TimerSettings, _) => settings::timer_view(state, &metrics),
             (Screen::SetTime, Breakpoint::Wide) => row![
                 container(calendar::view(state, &metrics)).width(Length::FillPortion(2)),
                 container(set_time(state, &metrics)).width(Length::FillPortion(3)),
@@ -56,6 +62,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 pub fn clock_body<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         container(timer(state, metrics)).height(Fill).center_y(Fill),
+        calendar::upcoming_tasks(state, metrics),
         controls::primary_action(state, metrics),
         controls::secondary_row(metrics),
     ]
