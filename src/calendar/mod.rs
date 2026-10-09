@@ -148,7 +148,7 @@ fn recolor_task(event: &mut Event, settings: &CalendarSettings) {
     }
 }
 
-/// Everything the Calendar tab and its settings pane need.
+/// Everything the calendar view and its settings pane need.
 pub struct Store {
     pub connection: Connection,
     pub sync: SyncState,
@@ -657,7 +657,7 @@ fn days_in_month(month: NaiveDate) -> u32 {
     (next - first).num_days() as u32
 }
 
-/// Sample day used by tests and screenshot generation, so the Cal tab can be
+/// Sample day used by tests and screenshot generation, so the day view can be
 /// exercised without talking to Google.
 pub fn sample_snapshot() -> Snapshot {
     let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();

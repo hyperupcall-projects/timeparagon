@@ -48,22 +48,26 @@ fn main() {
             let size = Size::new(width, 360.0);
 
             count += shoot(directory, theme, size, "armed", |state| {
+                state.timer_open = true;
                 state.timer.set_target(Some(Duration::from_secs(1_500)));
             });
 
             count += shoot(directory, theme, size, "running", |state| {
+                state.timer_open = true;
                 state.timer.set_target(Some(Duration::from_secs(300)));
                 state.timer.start(state.now);
                 state.now += Duration::from_secs(73);
             });
 
             count += shoot(directory, theme, size, "count-up", |state| {
+                state.timer_open = true;
                 state.timer.set_target(None);
                 state.timer.start(state.now);
                 state.now += Duration::from_secs(45);
             });
 
             count += shoot(directory, theme, size, "finished", |state| {
+                state.timer_open = true;
                 state.timer.set_target(Some(Duration::from_secs(300)));
                 state.timer.start(state.now);
                 let _ = state.timer.poll(state.now + Duration::from_secs(300));
@@ -105,6 +109,7 @@ fn main() {
             Size::new(360.0, 520.0),
             "ring",
             |state| {
+                state.timer_open = true;
                 state.timer.set_target(Some(Duration::from_secs(300)));
                 state.timer.start(state.now);
                 state.now += Duration::from_secs(73);
@@ -112,7 +117,7 @@ fn main() {
         );
     }
 
-    // And the widest layout, where the settings sit beside the clock.
+    // And the widest layout, where the settings sit beside the calendar.
     for theme in ["Sakura", "Matcha"] {
         count += shoot(
             directory,

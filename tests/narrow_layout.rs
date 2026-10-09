@@ -37,14 +37,16 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
     Sim::with_size(Settings::default(), size, element)
 }
 
-/// Every width has to offer the controls the clock cannot do without.
+/// Every width has to offer the controls the clock cannot do without, once
+/// the clock has been unfolded out of the calendar.
 #[test]
 fn the_clock_controls_survive_every_width() {
     for width in WIDTHS {
-        let state = state();
+        let mut state = state();
+        state.timer_open = true;
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
-        for label in ["Clock", "Calendar", "Start", "Reset", "Set Time", "Settings", "0:00", "of 5:00"] {
+        for label in ["Start", "Reset", "Set Time", "Settings", "0:00", "of 5:00"] {
             assert!(
                 ui.find(label).is_ok(),
                 "{label:?} is missing at {width}px"
@@ -53,20 +55,54 @@ fn the_clock_controls_survive_every_width() {
     }
 }
 
-/// Pressing Start has to actually start the timer at the narrowest size,
-/// which is the part a broken layout silently takes away.
+/// Pressing Start timer has to actually unfold and start the clock at the
+/// narrowest size, which is the part a broken layout silently takes away.
 #[test]
-fn start_is_clickable_at_the_minimum_width() -> Result<(), Error> {
+fn start_timer_is_clickable_at_the_minimum_width() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(180.0, 240.0));
 
-    let _ = ui.click("Start")?;
+    let _ = ui.click("Start timer")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages.iter().any(|message| matches!(message, Message::StartPause)),
-        "clicking Start produced {messages:?}"
+        messages.iter().any(|message| matches!(message, Message::TimerOpened)),
+        "clicking Start timer produced {messages:?}"
+    );
+
+    Ok(())
+}
+
+/// The clock lives inside the calendar: the button at the foot of the day
+/// view unfolds it, and folds it away again without stopping the timer.
+#[test]
+fn the_calendar_unfolds_the_clock_and_folds_it_away() -> Result<(), Error> {
+    let mut state = state();
+
+    {
+        let mut ui = render(&state, Size::new(260.0, 600.0));
+        assert!(ui.find("Start timer").is_ok(), "the way in is missing");
+    }
+
+    state.timer_open = true;
+    state.timer.start(state.now);
+
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+
+    for label in ["Pause", "Set Time", "Reset", "Settings", "Hide timer"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing with the clock open");
+    }
+
+    let _ = ui.click("Hide timer")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::TimerClosed)),
+        "folding the clock away produced {messages:?}"
     );
 
     Ok(())
@@ -155,19 +191,35 @@ fn the_set_time_screen_is_usable_at_two_hundred_pixels() {
     }
 }
 
-/// A fired alarm replaces Start with a way to silence the alarm.
+/// A fired alarm has to be silenceable however the clock is showing: as the
+/// clock's own button, and as the foot of the calendar when it is put away.
 #[test]
 fn a_firing_alarm_offers_a_dismiss_button() {
     let mut state = state();
     state.alarm_active = true;
 
     for width in WIDTHS {
-        let mut ui = render(&state, Size::new(width, HEIGHT));
+        state.timer_open = false;
 
-        assert!(
-            ui.find("Dismiss").is_ok(),
-            "no way to dismiss the alarm at {width}px"
-        );
+        {
+            let mut ui = render(&state, Size::new(width, HEIGHT));
+
+            assert!(
+                ui.find("Dismiss").is_ok(),
+                "no way to dismiss the alarm at {width}px"
+            );
+        }
+
+        state.timer_open = true;
+
+        {
+            let mut ui = render(&state, Size::new(width, HEIGHT));
+
+            assert!(
+                ui.find("Dismiss").is_ok(),
+                "no way to dismiss the alarm at {width}px with the clock open"
+            );
+        }
     }
 }
 
@@ -184,16 +236,17 @@ fn rendering_never_panics_at_any_size() {
         Size::new(4_000.0, 4_000.0),
     ] {
         let mut ui = render(&state, size);
-        let _: Result<_, _> = ui.find("Start");
+        let _: Result<_, _> = ui.find("Start timer");
     }
 }
 
-/// The widest layout puts the settings beside the clock rather than over it,
-/// so both are on screen at once.
+/// The widest layout puts the settings beside the calendar rather than over
+/// it, so both are on screen at once.
 #[test]
 fn the_wide_layout_shows_the_clock_and_the_settings_together() {
     let mut state = state();
     state.screen = Screen::Settings;
+    state.timer_open = true;
 
     let mut ui = render(&state, Size::new(900.0, 600.0));
 
@@ -201,7 +254,7 @@ fn the_wide_layout_shows_the_clock_and_the_settings_together() {
     assert!(ui.find("Theme").is_ok(), "the settings are missing");
 }
 
-/// The Cal tab keeps the day it already has on screen while a fresh sync is
+/// The calendar keeps the day it already has on screen while a fresh sync is
 /// in flight, and the status line says so. Both have to survive every width.
 #[test]
 fn the_calendar_keeps_the_day_while_it_reloads() {
@@ -246,17 +299,18 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
     let _: Result<_, _> = ui.find("nothing");
 }
 
-/// The Cal tab has to stay usable at 200px: tabs, the day heading, the
-/// menu, and a way to open Google Calendar even before anyone has signed in.
+/// The calendar has to stay usable at 200px: the day heading, the menu, a
+/// way to open Google Calendar even before anyone has signed in, and the way
+/// in to the clock.
 #[test]
-fn the_calendar_tab_is_usable_at_two_hundred_pixels() {
+fn the_calendar_view_is_usable_at_two_hundred_pixels() {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Clock", "Calendar", "Menu", "Team offsite"] {
+    for label in ["Menu", "Team offsite", "Start timer"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -526,7 +580,7 @@ fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
 }
 
 /// The clock keeps reporting itself at the foot of the calendar, so the
-/// elapsed time and target are visible without switching tabs.
+/// elapsed time and target are visible even with the clock put away.
 #[test]
 fn the_calendar_view_shows_the_clock_status() {
     let mut state = state();
@@ -575,7 +629,6 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
 #[test]
 fn the_settings_pane_includes_calendar_sync_controls() {
     let mut state = state();
-    state.last_tab = Screen::Calendar;
     state.screen = Screen::Settings;
 
     let mut ui = render(&state, Size::new(200.0, 400.0));

@@ -27,55 +27,39 @@ pub fn view(state: &State) -> Element<'_, Message> {
         let metrics = Metrics::of(size);
 
         match (state.screen, metrics.breakpoint) {
-            // A settings or set-time pane beside a 200px clock would leave
+            // A settings or set-time pane beside a 200px calendar would leave
             // neither any room, so below Wide they take over the window.
             (Screen::Settings, Breakpoint::Wide) => row![
-                container(main_pane(state, &metrics)).width(Length::FillPortion(2)),
+                container(calendar::view(state, &metrics)).width(Length::FillPortion(2)),
                 container(settings::view(state, &metrics)).width(Length::FillPortion(3)),
             ]
             .into(),
             (Screen::Settings, _) => settings::view(state, &metrics),
             (Screen::SetTime, Breakpoint::Wide) => row![
-                container(main_pane(state, &metrics)).width(Length::FillPortion(2)),
+                container(calendar::view(state, &metrics)).width(Length::FillPortion(2)),
                 container(set_time(state, &metrics)).width(Length::FillPortion(3)),
             ]
             .into(),
             (Screen::SetTime, _) => set_time(state, &metrics),
-            (Screen::Clock | Screen::Calendar, _) => main_pane(state, &metrics),
+            (Screen::Calendar, _) => calendar::view(state, &metrics),
         }
     })
     .into()
 }
 
-fn main_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let body = match state.main_tab() {
-        Screen::Calendar => calendar::view(state, metrics),
-        _ => clock_body(state, metrics),
-    };
-
-    column![
-        container(controls::tabs(state, metrics)).padding(iced::Padding {
-            top: metrics.padding,
-            right: metrics.padding,
-            left: metrics.padding,
-            bottom: 0.0,
-        }),
-        body,
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill)
-    .height(Fill)
-    .into()
-}
-
-fn clock_body<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+/// The clock: the readout, the one action button, and the row of secondary
+/// controls.
+///
+/// The clock has no section of its own any more, so this is drawn inside the
+/// calendar in the place the day grid usually holds. The padding around it
+/// belongs to the caller, which already has some.
+pub fn clock_body<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         container(timer(state, metrics)).height(Fill).center_y(Fill),
         controls::primary_action(state, metrics),
         controls::secondary_row(metrics),
     ]
     .spacing(metrics.spacing)
-    .padding(metrics.padding)
     .width(Fill)
     .height(Fill);
 
@@ -178,12 +162,12 @@ fn set_time<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into()
 }
 
-/// Returns to the clock, accepting whatever target is set.
+/// Returns to the calendar, accepting whatever target is set.
 fn done_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
     button(text("Done").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .height(metrics.icon_button())
-        .on_press(Message::ScreenSelected(Screen::Clock))
+        .on_press(Message::ScreenSelected(Screen::Calendar))
         .style(button::primary)
         .into()
 }

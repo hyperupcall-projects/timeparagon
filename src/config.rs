@@ -109,7 +109,7 @@ impl TimerSettings {
     }
 }
 
-/// Google Calendar connection and which calendars are shown on the Cal tab.
+/// Google Calendar connection and which calendars are shown on the calendar.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CalendarSettings {

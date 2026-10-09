@@ -18,20 +18,18 @@ use super::layout::Metrics;
 const SCROLLBAR_GUTTER: f32 = 14.0;
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let content = match state.main_tab() {
-        Screen::Calendar => column![
-            heading("Google Calendar", metrics),
-            calendar(state, metrics),
-        ],
-        _ => column![
-            heading("Appearance", metrics),
-            appearance(state, metrics),
-            heading("When time is up", metrics),
-            notification(state, metrics),
-            sound(state, metrics),
-            flash(state, metrics),
-        ],
-    }
+    // The clock lives inside the calendar now, so there is one menu rather
+    // than one per tab: everything is set from the same place.
+    let content = column![
+        heading("Appearance", metrics),
+        appearance(state, metrics),
+        heading("When time is up", metrics),
+        notification(state, metrics),
+        sound(state, metrics),
+        flash(state, metrics),
+        heading("Google Calendar", metrics),
+        calendar(state, metrics),
+    ]
     .spacing(metrics.spacing * 1.5)
     .padding(iced::Padding {
         right: SCROLLBAR_GUTTER,
@@ -43,7 +41,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         row![
             text("Settings").size(metrics.label() + 3.0).width(Fill),
             button(text("Done").size(metrics.label()))
-                .on_press(Message::ScreenSelected(state.main_tab()))
+                .on_press(Message::ScreenSelected(Screen::Calendar))
                 .style(button::primary),
         ]
         .align_y(Center),

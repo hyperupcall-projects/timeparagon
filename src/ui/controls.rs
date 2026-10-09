@@ -12,27 +12,6 @@ use crate::engine::format;
 
 use super::layout::Metrics;
 
-/// Clock / Cal tabs. These stay at the top of the main view so the two
-/// modes share one window instead of fighting over it.
-pub fn tabs<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
-    let active = state.main_tab();
-    let tab = |screen: Screen, label: &'a str| {
-        button(text(label).size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .height(metrics.icon_button())
-            .on_press(Message::ScreenSelected(screen))
-            .style(if active == screen {
-                button::primary
-            } else {
-                button::secondary
-            })
-    };
-
-    row![tab(Screen::Clock, "Clock"), tab(Screen::Calendar, "Calendar")]
-        .spacing(metrics.spacing)
-        .into()
-}
-
 /// The one button that is always in the same place: start, pause, or dismiss.
 pub fn primary_action<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
     let (label, message, style) = if state.alarm_active {

@@ -6,14 +6,14 @@ use std::time::{Duration, Instant};
 use iced::keyboard::{self, Key};
 use iced::{Element, Size, Subscription, Task, Theme, window};
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 
 use crate::audio::{self, Audio, Pcm, Tone};
 use crate::calendar::{self, Connection, SyncState};
 use crate::config::{self, Config};
 use crate::engine::{TIMER_TICK, Timer};
 use crate::theme::Catalog;
-use crate::{alarm, blocking, notify, theme, ui};
+use crate::{alarm, blocking, notify, theme, tracks, ui};
 
 /// The smallest window we are willing to be asked to draw.
 ///
@@ -32,12 +32,15 @@ const FLASH_FRAME: Duration = Duration::from_millis(33);
 /// "PipeWire unavailable" appears without needing a mouse wiggle.
 const STATUS_POLL: Duration = Duration::from_millis(500);
 
-/// How often the current-time needle is redrawn on the Cal tab.
+/// How often the current-time needle is redrawn on the calendar.
 const NEEDLE_TICK: Duration = Duration::from_secs(15);
+
+/// How close, in minutes, to an event's start you have to be for a freshly
+/// started timer to take the event's length as its target.
+const NEAR_EVENT_START: i64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    Clock,
     Calendar,
     Settings,
     /// The pane for choosing the target time.
@@ -79,10 +82,14 @@ pub struct State {
     /// The clock reading used for this frame, so every widget agrees.
     pub now: Instant,
 
+    /// Whether the clock is showing inside the calendar. The clock has no
+    /// section of its own any more: it lives at the foot of the day view and
+    /// is put away behind "Hide timer".
+    pub timer_open: bool,
+    /// Every stretch of time the timer has been running, kept on disk.
+    pub recorder: tracks::Recorder,
+
     pub screen: Screen,
-    /// Clock or Calendar: remembered so Settings/Set Time can return to the tab
-    /// you were on, and so the wide layout can keep showing it.
-    pub last_tab: Screen,
     pub main_window: Option<window::Id>,
     pub flash: Option<Flash>,
     /// True while a sound or flash is still asking to be dismissed.
@@ -111,6 +118,10 @@ pub enum Message {
     DurationAdjusted(i64),
     /// Clear the target so the clock counts up without an alarm.
     TargetCleared,
+    /// Unfold the clock inside the calendar and set it going.
+    TimerOpened,
+    /// Fold the clock away again; a timer that is running keeps going.
+    TimerClosed,
 
     ScreenSelected(Screen),
     Dismiss,
@@ -143,6 +154,10 @@ pub enum Message {
     NotificationPosted(Result<(), String>),
     ConfigSaved(Result<(), String>),
     SaveRequested,
+    TracksSaved(Result<(), String>),
+    /// Rewrite the track the running timer has open, so a crash cannot lose
+    /// more than the time since the last write.
+    TracksFlushRequested,
     AudioStatusPolled,
 
     WindowOpened(window::Id),
@@ -218,8 +233,9 @@ impl State {
         Self {
             timer: Timer::new(config.timer.last_duration()),
             now: Instant::now(),
-            screen: Screen::Clock,
-            last_tab: Screen::Clock,
+            timer_open: false,
+            recorder: tracks::Recorder::default(),
+            screen: Screen::Calendar,
             main_window: None,
             flash: None,
             alarm_active: false,
@@ -229,18 +245,6 @@ impl State {
             catalog,
             config,
             calendar: calendar::Store::new(day_end_hour),
-        }
-    }
-
-    /// The Clock/Cal tab that should be highlighted and shown.
-    ///
-    /// Settings and Set Time sit on top of a tab rather than replacing it, so
-    /// this falls back to the last Clock/Cal choice in those cases.
-    pub fn main_tab(&self) -> Screen {
-        match self.screen {
-            Screen::Calendar => Screen::Calendar,
-            Screen::Clock => Screen::Clock,
-            _ => self.last_tab,
         }
     }
 }
@@ -253,6 +257,10 @@ pub fn boot() -> (State, Task<Message>) {
     // is deliberately not part of `State::new`: a state built by hand in a
     // test must not read or rewrite the user's cache.
     state.calendar.cache_days_in(config::cache_days_dir());
+
+    // The same goes for the time tracks: the file is the user's own, so only
+    // a real boot is allowed to pick it up.
+    state.recorder.keep_in(tracks::path());
 
     // A daemon opens no window by itself, which is what lets the flash
     // overlay be a peer window rather than a child of the clock.
@@ -296,23 +304,24 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             state.timer.toggle(state.now);
-            Task::none()
+            sync_tracks(state)
         }
 
         Message::Reset => {
             state.timer.reset();
+            let tracks = sync_tracks(state);
 
             if state.alarm_active {
-                return dismiss(state);
+                return Task::batch([tracks, dismiss(state)]);
             }
 
-            Task::none()
+            tracks
         }
 
         Message::PresetSelected(duration) => {
             state.timer.set_target(Some(duration));
             state.config.timer.last_duration_secs = duration.as_secs();
-            queue_save(state)
+            Task::batch([queue_save(state), sync_tracks(state)])
         }
 
         Message::DurationAdjusted(delta) => {
@@ -325,38 +334,47 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 Some(Duration::from_secs(adjusted))
             });
             state.config.timer.last_duration_secs = adjusted;
-            queue_save(state)
+            Task::batch([queue_save(state), sync_tracks(state)])
         }
 
         Message::TargetCleared => {
             state.timer.set_target(None);
             state.config.timer.last_duration_secs = 0;
-            queue_save(state)
+            Task::batch([queue_save(state), sync_tracks(state)])
+        }
+
+        Message::TimerOpened => {
+            state.now = Instant::now();
+            state.timer_open = true;
+
+            // A timer set going from scratch takes the length of whatever is
+            // about to happen, so opening the clock while a standup is
+            // starting times the standup rather than the last thing armed.
+            if state.timer.is_idle() {
+                let wall = Local::now();
+                let target = nearby_span(state, wall).or_else(|| state.timer.target());
+                state.timer.set_target(target);
+            }
+
+            if !state.timer.is_running() {
+                state.timer.start(state.now);
+            }
+
+            sync_tracks(state)
+        }
+
+        Message::TimerClosed => {
+            state.timer_open = false;
+            Task::none()
         }
 
         Message::ScreenSelected(screen) => {
-            match screen {
-                Screen::Clock | Screen::Calendar => {
-                    state.last_tab = screen;
-                    state.calendar.menu_open = false;
-                    state.screen = screen;
-
-                    if screen == Screen::Calendar {
-                        let scroll = crate::ui::calendar::scroll_to_now(
-                            state.calendar.hour_height,
-                            state.config.calendar.day_end_minutes(),
-                        );
-                        return Task::batch([scroll, refresh_day(state)]);
-                    }
-
-                    Task::none()
-                }
-                Screen::Settings | Screen::SetTime => {
-                    state.calendar.menu_open = false;
-                    state.screen = screen;
-                    Task::none()
-                }
-            }
+            // Settings and Set Time sit on top of the calendar rather than
+            // replacing it, so coming back out of one leaves the day grid
+            // exactly where the user scrolled it to.
+            state.calendar.menu_open = false;
+            state.screen = screen;
+            Task::none()
         }
 
         Message::Dismiss => dismiss(state),
@@ -515,6 +533,22 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 .map(Message::ConfigSaved)
         }
 
+        Message::TracksFlushRequested => {
+            if state.recorder.flush(Local::now()) {
+                save_tracks(state)
+            } else {
+                Task::none()
+            }
+        }
+
+        Message::TracksSaved(result) => {
+            if let Err(error) = result {
+                log::warn!("could not save the time tracks: {error}");
+            }
+
+            Task::none()
+        }
+
         Message::AudioStatusPolled => {
             if let audio::Status::Unavailable(reason) = state.audio.status() {
                 state.audio_error = Some(reason);
@@ -530,13 +564,21 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // monitor size is known it is widened to the default fraction of
             // the screen. The height stays as the user left it.
             let measure = window::monitor_size(id).map(move |size| Message::MonitorSized(id, size));
+
+            // The calendar is the front page now, so it opens on the hour the
+            // needle is at rather than on midnight.
+            let scroll = ui::calendar::scroll_to_now(
+                state.calendar.hour_height,
+                state.config.calendar.day_end_minutes(),
+            );
+
             let sync = if state.calendar.is_signed_in() {
                 sync_calendar(state)
             } else {
                 Task::none()
             };
 
-            Task::batch([measure, sync])
+            Task::batch([measure, sync, scroll])
         }
 
         Message::MonitorSized(id, size) => {
@@ -906,9 +948,14 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     ];
 
     // The clock only ticks when it is actually running, which is what keeps
-    // an idle TimeTracker at zero CPU.
+    // an idle TimeTracker at zero CPU. The open track is rewritten on the
+    // same cadence as the clock's own running, so a crash costs at most one
+    // flush even if the timer never pauses.
     if state.timer.is_running() {
         subscriptions.push(iced::time::every(TIMER_TICK).map(Message::Tick));
+        subscriptions.push(
+            iced::time::every(tracks::FLUSH_EVERY).map(|_| Message::TracksFlushRequested),
+        );
     }
 
     // The needle has to move even when the clock is idle, but only while
@@ -973,8 +1020,8 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
                 Task::none()
             } else if state.alarm_active {
                 Task::done(Message::Dismiss)
-            } else if state.screen != state.main_tab() {
-                Task::done(Message::ScreenSelected(state.main_tab()))
+            } else if state.screen != Screen::Calendar {
+                Task::done(Message::ScreenSelected(Screen::Calendar))
             } else {
                 Task::none()
             }
@@ -1091,6 +1138,50 @@ fn queue_save(state: &mut State) -> Task<Message> {
     state.save_queued = true;
 
     Task::none()
+}
+
+/// Brings the recorded tracks in line with the timer, writing the file when
+/// a stretch has just opened or closed.
+fn sync_tracks(state: &mut State) -> Task<Message> {
+    if state.recorder.follow(state.timer.is_running(), Local::now()) {
+        save_tracks(state)
+    } else {
+        Task::none()
+    }
+}
+
+/// Writes the tracks out on a worker thread, the way the config is saved.
+fn save_tracks(state: &State) -> Task<Message> {
+    if !state.recorder.is_kept() {
+        return Task::none();
+    }
+
+    let recorder = state.recorder.clone();
+    blocking::run(move || recorder.save().map_err(|error| error.to_string()))
+        .map(Message::TracksSaved)
+}
+
+/// The length of the nearest event or task that is just starting, if there
+/// is one.
+///
+/// A timer set going while a standup is starting should time the standup, so
+/// an event starting within [`NEAR_EVENT_START`] minutes donates its length.
+/// All-day entries are left out: they have no hour to sit next to. A task
+/// that has already been ticked off is not what anyone is timing either.
+fn nearby_span(state: &State, now: DateTime<Local>) -> Option<Duration> {
+    let window = chrono::Duration::minutes(NEAR_EVENT_START);
+
+    state
+        .calendar
+        .visible_events(&state.config.calendar)
+        .filter(|event| !event.all_day && !event.completed)
+        .filter_map(|event| {
+            let since = now.signed_duration_since(event.start);
+            (since <= window && since >= -window).then(|| (since.abs(), event))
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .and_then(|(_, event)| (event.end - event.start).to_std().ok())
+        .filter(|span| !span.is_zero())
 }
 
 /// Re-syncs when the day in view has rolled over at the configured boundary.
@@ -1453,5 +1544,69 @@ mod tests {
         let _ = update(&mut state, Message::CalendarSynced(Ok(calendar::sample_snapshot())));
 
         assert_eq!(state.calendar.day, moved_to);
+    }
+
+    #[test]
+    fn opening_the_timer_records_a_track_that_pausing_closes() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let _ = update(&mut state, Message::TimerOpened);
+
+        assert!(state.timer_open);
+        assert!(state.timer.is_running());
+        assert!(state.recorder.is_recording());
+        assert_eq!(state.recorder.tracks().len(), 1);
+
+        let _ = update(&mut state, Message::StartPause);
+
+        assert!(!state.timer.is_running());
+        assert!(!state.recorder.is_recording());
+        assert_eq!(state.recorder.tracks().len(), 1);
+
+        let _ = update(&mut state, Message::StartPause);
+
+        assert_eq!(
+            state.recorder.tracks().len(),
+            2,
+            "resuming opens a second track"
+        );
+    }
+
+    #[test]
+    fn hiding_the_timer_leaves_a_running_one_and_its_track_alone() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let _ = update(&mut state, Message::TimerOpened);
+        let _ = update(&mut state, Message::TimerClosed);
+
+        assert!(!state.timer_open);
+        assert!(state.timer.is_running());
+        assert!(state.recorder.is_recording());
+    }
+
+    #[test]
+    fn a_timer_started_near_an_event_takes_the_event_length() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+
+        // Move the standup to now, so the clock is opened as it is starting.
+        let standup = state.calendar.event_mut("standup").unwrap();
+        standup.start = Local::now();
+        standup.end = standup.start + chrono::Duration::minutes(30);
+
+        let _ = update(&mut state, Message::TimerOpened);
+
+        assert_eq!(state.timer.target(), Some(Duration::from_secs(30 * 60)));
+    }
+
+    #[test]
+    fn a_timer_started_far_from_anything_keeps_the_target_it_had() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+
+        // The sample day is a week back, so nothing is starting right now.
+        let _ = update(&mut state, Message::TimerOpened);
+
+        assert_eq!(state.timer.target(), Config::default().timer.last_duration());
     }
 }

@@ -13,4 +13,5 @@ pub mod engine;
 pub mod hex;
 pub mod notify;
 pub mod theme;
+pub mod tracks;
 pub mod ui;

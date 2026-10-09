@@ -36,17 +36,24 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             text::secondary
         });
 
-    let all_day = all_day_row(state, metrics);
-    let grid = day_grid(state, metrics, Local::now());
+    // The clock takes the day grid's place while it is open. The calendar is
+    // still one tap away: the button at the foot of the view folds it away
+    // again, and a timer left running keeps going.
+    let body: Element<'a, Message> = if state.timer_open {
+        super::clock_body(state, metrics)
+    } else {
+        let all_day = all_day_row(state, metrics);
+        let grid = day_grid(state, metrics, Local::now());
 
-    // The pointer watch records where the click landed without publishing a
-    // message, so scrolling stays on the widget's own path.
-    let body = pointer_watch(
-        column![all_day, grid]
-            .spacing(metrics.spacing)
-            .height(Fill)
-            .width(Fill),
-    );
+        // The pointer watch records where the click landed without publishing a
+        // message, so scrolling stays on the widget's own path.
+        pointer_watch(
+            column![all_day, grid]
+                .spacing(metrics.spacing)
+                .height(Fill)
+                .width(Fill),
+        )
+    };
 
     let content = column![header, status, body, clock_footer(state, metrics)]
         .spacing(metrics.spacing)
@@ -134,8 +141,12 @@ fn header_offset(metrics: &Metrics) -> f32 {
     metrics.padding + metrics.icon_button() * 2.0 + metrics.spacing * 2.0
 }
 
-/// The clock's own status, repeated at the foot of the calendar: how long it
-/// has been running and the target it is counting toward.
+/// The foot of the calendar: what the clock is doing, and the way into it.
+///
+/// The clock lives inside the calendar rather than on a screen of its own, so
+/// this row is where a timer is started and where it is put away again. The
+/// status stays even with the clock folded away, because a timer left running
+/// should still be readable at a glance.
 fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let allow_hours = metrics.allow_hours;
     let elapsed = format::readout(
@@ -148,13 +159,38 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         None => "No target".to_owned(),
     };
 
-    row![
+    let status = row![
         text(elapsed).size(metrics.label()).width(Fill),
         text(target).size(metrics.label()).style(text::secondary),
     ]
     .spacing(metrics.spacing)
-    .align_y(Alignment::Center)
-    .into()
+    .align_y(Alignment::Center);
+
+    // An alarm can go off with the clock put away, so this button doubles as
+    // the way to silence it.
+    let (label, message, style) = if state.alarm_active {
+        ("Dismiss", Message::Dismiss, button::danger as fn(&_, _) -> _)
+    } else if state.timer_open {
+        (
+            "Hide timer",
+            Message::TimerClosed,
+            button::secondary as fn(&_, _) -> _,
+        )
+    } else {
+        (
+            "Show timer",
+            Message::TimerOpened,
+            button::primary as fn(&_, _) -> _,
+        )
+    };
+
+    let toggle = button(text(label).size(metrics.label() + 2.0).center().width(Fill))
+        .width(Fill)
+        .height(metrics.button)
+        .on_press(message)
+        .style(style);
+
+    column![status, toggle].spacing(metrics.spacing).into()
 }
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -1206,9 +1242,11 @@ impl DayCanvas {
 
             let ink = on_color(block.color);
             let title_size = if self.compact { 11.0 } else { 12.0 };
+            let text_width = (block_bounds.width - 10.0).max(8.0);
+            let title_top = block_bounds.y + 3.0;
             fill_glyphs(frame, Text {
                 content: block.title.clone(),
-                position: Point::new(block_bounds.x + 6.0, block_bounds.y + 3.0),
+                position: Point::new(block_bounds.x + 6.0, title_top),
                 color: ink,
                 size: Pixels(title_size),
                 font: Font::DEFAULT,
@@ -1216,21 +1254,27 @@ impl DayCanvas {
                 align_y: iced::alignment::Vertical::Top,
                 line_height: text::LineHeight::default(),
                 shaping: text::Shaping::Basic,
-                max_width: (block_bounds.width - 10.0).max(8.0),
+                max_width: text_width,
             });
 
-            if block_bounds.height >= 28.0 {
+            // The time sits under the title, so it has to clear however many
+            // lines the title wrapped to rather than a fixed one-line offset.
+            let when_size = title_size - 1.0;
+            let when_top = title_top + wrapped_height(&block.title, title_size, text_width) + 2.0;
+            if block_bounds.height >= 28.0
+                && when_top + when_size <= block_bounds.y + block_bounds.height - 2.0
+            {
                 fill_glyphs(frame, Text {
                     content: block.when.clone(),
-                    position: Point::new(block_bounds.x + 6.0, block_bounds.y + title_size + 5.0),
+                    position: Point::new(block_bounds.x + 6.0, when_top),
                     color: ink.scale_alpha(0.85),
-                    size: Pixels(title_size - 1.0),
+                    size: Pixels(when_size),
                     font: Font::DEFAULT,
                     align_x: iced::alignment::Horizontal::Left.into(),
                     align_y: iced::alignment::Vertical::Top,
                     line_height: text::LineHeight::default(),
                     shaping: text::Shaping::Basic,
-                    max_width: (block_bounds.width - 10.0).max(8.0),
+                    max_width: text_width,
                 });
             }
         }
@@ -1321,6 +1365,29 @@ impl DayCanvas {
 fn fill_glyphs(frame: &mut Frame, text: impl Into<Text>) {
     let text = text.into();
     text.draw_with(|glyph, color| frame.fill(&glyph, color));
+}
+
+/// The height a title occupies once wrapped to `max_width`.
+///
+/// The time label is drawn below the title, so a title that wraps to two lines
+/// would otherwise have the time run straight through it. Measuring the
+/// paragraph keeps the label clear of however many lines the title takes.
+fn wrapped_height(content: &str, size: f32, max_width: f32) -> f32 {
+    use iced::advanced::graphics::text::Paragraph;
+    use iced::advanced::text::Paragraph as _;
+
+    Paragraph::with_text(iced::advanced::text::Text {
+        content,
+        bounds: Size::new(max_width, f32::INFINITY),
+        size: Pixels(size),
+        line_height: text::LineHeight::default(),
+        font: Font::DEFAULT,
+        align_x: iced::advanced::text::Alignment::Left,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: text::Shaping::Basic,
+        wrapping: text::Wrapping::default(),
+    })
+    .min_height()
 }
 
 /// Everything the cached geometry is drawn from, so a rebuilt [`Block`] with a
@@ -1477,6 +1544,21 @@ mod tests {
             key,
             cache_key(&[block("Standup", "09:00 – 09:30", 1.0)], 48.0, GUTTER, false, 3),
             "a new day boundary has to relabel the grid"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_title_measures_taller_than_a_single_line() {
+        // The time label is placed below the title using this measurement, so a
+        // title that wraps to two lines has to report more than one line's
+        // height or the time would be drawn through the second line.
+        let one_line = wrapped_height("Standup", 12.0, 200.0);
+        let two_lines = wrapped_height("Programming Team Meeting", 12.0, 90.0);
+
+        assert!(one_line > 0.0);
+        assert!(
+            two_lines > one_line,
+            "a wrapped title ({two_lines}) should be taller than a single line ({one_line})"
         );
     }
 
