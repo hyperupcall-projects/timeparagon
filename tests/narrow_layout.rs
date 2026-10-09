@@ -593,6 +593,35 @@ fn the_calendar_view_shows_the_clock_status() {
     assert!(ui.find("of 5:00").is_ok(), "the target is missing");
 }
 
+/// The day view carries its own switch for Google Tasks, beside the sync
+/// line, so they can be hidden without opening the menu.
+#[test]
+fn the_calendar_offers_a_tasks_toggle_beside_the_sync_line() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+
+    let mut ui = render(&state, Size::new(200.0, 600.0));
+    assert!(ui.find("Hide tasks").is_ok(), "the tasks toggle is missing");
+
+    let _ = ui.click("Hide tasks")?;
+    let messages: Vec<Message> = ui.into_messages().collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::ShowTasksToggled(false))),
+        "expected the toggle to ask for the tasks to be hidden, got {messages:?}"
+    );
+
+    // Once they are hidden the same button offers to bring them back.
+    state.config.calendar.show_tasks = false;
+    let mut ui = render(&state, Size::new(200.0, 600.0));
+    assert!(ui.find("Show tasks").is_ok(), "the toggle should offer to restore tasks");
+
+    Ok(())
+}
+
 /// Opening the details for one event and then clicking a different one must
 /// switch straight to the new event. A full-screen dismiss layer used to eat
 /// that click and only close the card, so the switch needed two clicks.

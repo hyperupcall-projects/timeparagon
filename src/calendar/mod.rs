@@ -416,7 +416,9 @@ impl Store {
     ) -> impl Iterator<Item = &'a Event> {
         self.events
             .iter()
-            .filter(move |event| settings.show_tasks || !event.is_task())
+            // The tasks switch only hides the all-day ones. A task with a time
+            // is a block on the grid, so it stays put alongside the events.
+            .filter(move |event| settings.show_tasks || !event.is_task() || !event.all_day)
             .filter(|event| self.calendar_enabled(&event.calendar_id, settings))
     }
 
@@ -776,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn disabling_tasks_hides_them_from_the_day_view() {
+    fn disabling_tasks_hides_only_the_all_day_ones() {
         let mut snapshot = sample_snapshot();
         let day = snapshot.day;
         snapshot.events.push(Event {
@@ -790,13 +792,31 @@ mod tests {
             completed: false,
             details: Details::default(),
         });
+        // A task the browser gave a time to is a block on the grid, so the
+        // switch leaves it alone.
+        snapshot.events.push(Event {
+            id: "task:def".into(),
+            calendar_id: "tasks:list".into(),
+            title: "Stand-up".into(),
+            start: day.and_hms_opt(9, 30, 0).unwrap().and_local_timezone(Local).unwrap(),
+            end: day.and_hms_opt(10, 0, 0).unwrap().and_local_timezone(Local).unwrap(),
+            all_day: false,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        });
 
         let store = Store::with_snapshot(snapshot);
         let mut settings = CalendarSettings::default();
-        assert_eq!(store.visible_events(&settings).filter(|e| e.is_task()).count(), 1);
+        assert_eq!(store.visible_events(&settings).filter(|e| e.is_task()).count(), 2);
 
         settings.show_tasks = false;
-        assert_eq!(store.visible_events(&settings).filter(|e| e.is_task()).count(), 0);
+        let tasks: Vec<_> = store
+            .visible_events(&settings)
+            .filter(|e| e.is_task())
+            .map(|e| e.title.as_str())
+            .collect();
+        assert_eq!(tasks, vec!["Stand-up"]);
     }
 
     #[test]
