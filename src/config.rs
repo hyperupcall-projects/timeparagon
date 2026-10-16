@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::Tone;
 use crate::hex::HexColor;
+use crate::todos::TodoList;
 
 /// How long to wait after the last change before writing to disk.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -28,6 +29,10 @@ pub struct Config {
     pub timer: TimerSettings,
     pub alarm: AlarmProfile,
     pub calendar: CalendarSettings,
+    /// The temporary todo scratchpad. It is left out of the file while it is
+    /// empty, so a config that never used it stays as it was.
+    #[serde(default, skip_serializing_if = "TodoList::is_empty")]
+    pub todos: TodoList,
 }
 
 impl Default for Config {
@@ -38,6 +43,7 @@ impl Default for Config {
             timer: TimerSettings::default(),
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
+            todos: TodoList::default(),
         }
     }
 }
@@ -585,6 +591,28 @@ mod tests {
     fn an_empty_task_color_map_is_left_out_of_the_config_file() {
         let text = toml::to_string_pretty(&CalendarSettings::default()).unwrap();
         assert!(!text.contains("task_colors"), "got {text:?}");
+    }
+
+    #[test]
+    fn a_todo_scratchpad_survives_a_round_trip() {
+        let mut config = Config::default();
+        config.todos.add("write the report");
+        config.todos.add("send the email");
+        config.todos.set_current(1);
+        config.todos.indent(1, 1);
+
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+
+        assert_eq!(parsed.todos, config.todos);
+        assert_eq!(parsed.todos.current().unwrap().text, "send the email");
+        assert_eq!(parsed.todos.items()[1].indent, 1);
+    }
+
+    #[test]
+    fn an_empty_scratchpad_is_left_out_of_the_config_file() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(!text.contains("todos"), "got {text:?}");
     }
 
     #[test]

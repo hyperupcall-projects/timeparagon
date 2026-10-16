@@ -376,8 +376,9 @@ fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) 
 
 /// Flips a task between complete and not in Google Tasks.
 ///
-/// The tasks scope is read/write, so this is the one place the app changes
-/// anything on Google's side. Blocking: call it from [`crate::blocking::run`].
+/// The tasks scope is read/write, so this is one of the two places the app
+/// changes anything on Google's side. Blocking: call it from
+/// [`crate::blocking::run`].
 pub fn set_task_completed(
     access_token: &str,
     list_id: &str,
@@ -395,7 +396,34 @@ pub fn set_task_completed(
         r#"{"status":"needsAction"}"#
     };
 
-    patch(&url, access_token, body)
+    patch(&url, access_token, body, "Google Tasks")
+}
+
+/// Moves an event's start and end on Google's side.
+///
+/// Only the two times are sent, so the title, description and guests are left
+/// exactly as they were. The times are written as UTC instants, which is what
+/// the API expects for a timed event. Blocking: call it from
+/// [`crate::blocking::run`].
+pub fn patch_event_time(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+    let body = serde_json::json!({
+        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
+        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
+    })
+    .to_string();
+
+    patch(&url, access_token, &body, "Google Calendar")
 }
 
 /// `webViewLink` opens the task in the Google Tasks UI. The API id is the
@@ -629,7 +657,11 @@ fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str) -> Result<
 }
 
 /// Sends a small JSON body to Google and discards the response.
-fn patch(url: &str, access_token: &str, body: &str) -> Result<(), String> {
+///
+/// `context` names the API in the error, so a failed write reads as coming
+/// from Calendar or Tasks rather than from whichever call site happened to
+/// share this helper.
+fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), String> {
     let result = ureq::request("PATCH", url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
@@ -644,9 +676,9 @@ fn patch(url: &str, access_token: &str, body: &str) -> Result<(), String> {
                 .map(|body| body.error.message)
                 .filter(|message| !message.is_empty())
                 .unwrap_or_else(|| format!("HTTP {code}"));
-            Err(format!("Google Tasks: {detail}"))
+            Err(format!("{context}: {detail}"))
         }
-        Err(error) => Err(format!("Google Tasks: {error}")),
+        Err(error) => Err(format!("{context}: {error}")),
     }
 }
 

@@ -1,0 +1,23 @@
+[Unit]
+Description=TimeTracker side-panel daemon
+# Owns the global shortcut (Meta+U by default) and maps the 200px strip on the
+# left edge when it fires. It is Wayland-only: a layer surface needs a
+# compositor that speaks zwlr_layer_shell_v1 (KWin does).
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@EXEC@
+Restart=on-failure
+RestartSec=2
+
+# systemd's user manager does not inherit the session's environment on its own,
+# so pull the display variables in explicitly. `%t` is the runtime directory.
+Environment=XDG_RUNTIME_DIR=%t
+# Uncomment and adjust if your compositor does not export this to the user
+# manager (most Wayland sessions do):
+#Environment=WAYLAND_DISPLAY=wayland-0
+
+[Install]
+WantedBy=graphical-session.target

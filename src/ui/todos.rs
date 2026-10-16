@@ -1,0 +1,210 @@
+//! The temporary todo scratchpad.
+//!
+//! A flat list drawn with an indent, so a few items can read as subtasks of the
+//! one above without the list itself being a tree. Every item carries its own
+//! controls, which is what keeps reordering and indenting a one-tap affair
+//! rather than a mode to enter.
+
+use chrono::Local;
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::{Center, Element, Fill, Length, Padding};
+
+use crate::app::{Message, Screen, State};
+use crate::calendar;
+use crate::todos::Todo;
+
+use super::layout::Metrics;
+
+/// How far one indent level pushes an item in.
+const INDENT_STEP: f32 = 14.0;
+
+/// How many upcoming items the todo view offers as one-tap answers.
+const UPCOMING_LIMIT: usize = 4;
+
+/// The id of the text field for the item at this index.
+///
+/// A freshly added item is focused through this, so the cursor is already in
+/// the new row rather than the user having to find it.
+pub fn input_id(index: usize) -> iced::widget::Id {
+    iced::widget::Id::from(format!("todo-{index}"))
+}
+
+pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let mut body = column![].spacing(metrics.spacing).width(Fill);
+
+    if state.config.todos.is_empty() {
+        body = body.push(
+            text("Add a todo to break the work up, then tap one to make it current.")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
+    } else {
+        // The page already carries the title, so this row is only the way to
+        // throw the whole list away.
+        body = body.push(
+            row![Space::new().width(Fill), clear_button(metrics)].align_y(Center),
+        );
+
+        for (index, todo) in state.config.todos.items().iter().enumerate() {
+            body = body.push(item(state, index, todo, metrics));
+        }
+    }
+
+    body = body.push(add_button(metrics));
+    body = body.push(coming_up(state, metrics));
+
+    // The way back sits at the foot of the page, the same place the clock puts
+    // its own, so leaving either view is always the same gesture.
+    column![
+        text("Todos").size(metrics.label() + 3.0),
+        scrollable(body).height(Fill).width(Fill),
+        go_back_button(metrics),
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
+    .into()
+}
+
+/// The way back to the calendar.
+fn go_back_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
+    button(text("Go back").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .height(metrics.icon_button())
+        .on_press(Message::ScreenSelected(Screen::Calendar))
+        .style(button::secondary)
+        .into()
+}
+
+/// The next few things on the calendar, offered as one-tap answers to "what am
+/// I doing". Tapping one fills the current todo in, where it can still be
+/// edited.
+fn coming_up<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let items = calendar::upcoming(
+        state.calendar.visible_events(&state.config.calendar),
+        Local::now(),
+        UPCOMING_LIMIT,
+    );
+
+    if items.is_empty() {
+        return text("").size(1.0).into();
+    }
+
+    let mut list = column![text("Coming up").size(metrics.label()).style(text::secondary)]
+        .spacing(2.0)
+        .width(Fill);
+
+    for event in items {
+        let label = if event.all_day {
+            event.title.clone()
+        } else {
+            format!("{}  {}", calendar::clock_label(event.start), event.title)
+        };
+
+        // An all-day entry has no length to arm the clock with, so it only
+        // names the task.
+        let span = (event.end - event.start)
+            .to_std()
+            .ok()
+            .filter(|span| !span.is_zero());
+
+        list = list.push(
+            button(text(label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::CurrentTaskPicked(event.title.clone(), span))
+                .style(button::secondary),
+        );
+    }
+
+    list.into()
+}
+
+/// One item: the marker that makes it current, its text, and the controls that
+/// reorder and indent it.
+fn item<'a>(
+    state: &'a State,
+    index: usize,
+    todo: &'a Todo,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let current = state.config.todos.current_index() == Some(index);
+
+    let marker = button(
+        text(if current { "●" } else { "○" })
+            .size(metrics.label())
+            .center(),
+    )
+    .width(Length::Fixed(metrics.icon_button()))
+    .height(Length::Fixed(metrics.icon_button()))
+    .padding(0.0)
+    .on_press(Message::TodoSelected(index))
+    .style(if current {
+        button::primary
+    } else {
+        button::secondary
+    });
+
+    let input = text_input("todo", &todo.text)
+        .id(input_id(index))
+        .on_input(move |text| Message::TodoTextChanged(index, text))
+        .size(metrics.label())
+        .width(Fill);
+
+    let remove = control("✕", Message::TodoRemoved(index), metrics);
+
+    let controls = || {
+        row![
+            control("↑", Message::TodoMoved(index, -1), metrics),
+            control("↓", Message::TodoMoved(index, 1), metrics),
+            control("→", Message::TodoIndented(index, 1), metrics),
+            control("←", Message::TodoIndented(index, -1), metrics),
+        ]
+        .spacing(metrics.spacing)
+    };
+
+    // The controls sit under the text rather than beside it: even on a wide
+    // window this pane is a narrow column next to the calendar, and a single
+    // line would leave the text field almost no room.
+    let line = column![
+        row![marker, input, remove]
+            .spacing(metrics.spacing)
+            .align_y(Center),
+        controls().width(Fill),
+    ]
+    .spacing(2.0);
+
+    container(line)
+        .padding(Padding {
+            left: f32::from(todo.indent) * INDENT_STEP,
+            ..Padding::ZERO
+        })
+        .width(Fill)
+        .into()
+}
+
+/// A square button for one of the per-item actions.
+fn control<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Element<'a, Message> {
+    button(text(label).size(metrics.label()).center())
+        .width(Length::Fixed(metrics.icon_button()))
+        .height(Length::Fixed(metrics.icon_button()))
+        .padding(0.0)
+        .on_press(message)
+        .style(button::secondary)
+        .into()
+}
+
+fn add_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
+    button(text("+ Add todo").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .height(metrics.icon_button())
+        .on_press(Message::TodoAdded)
+        .style(button::secondary)
+        .into()
+}
+
+/// The way to throw the whole scratchpad away.
+fn clear_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
+    button(text("Clear").size(metrics.label()))
+        .on_press(Message::TodosCleared)
+        .style(button::secondary)
+        .into()
+}

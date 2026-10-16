@@ -1,11 +1,11 @@
 //! The settings pane, including the timer-hits-zero menu.
 
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
+    button, column, container, pick_list, row, slider, text, text_input, toggler,
 };
 use iced::{Center, Element, Fill, Length};
 
-use crate::app::{Message, Screen, State};
+use crate::app::{Message, State};
 use crate::audio::Tone;
 use crate::calendar;
 use crate::config;
@@ -33,7 +33,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     })
     .width(Fill);
 
-    page("Settings", content.into(), metrics)
+    super::page("Settings", content.into(), metrics)
 }
 
 /// What happens when the clock reaches zero.
@@ -54,28 +54,7 @@ pub fn timer_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     })
     .width(Fill);
 
-    page("Alarm", content.into(), metrics)
-}
-
-/// A settings page: a title with a way back, over a scrolling body.
-fn page<'a>(
-    title: &'a str,
-    content: Element<'a, Message>,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
-    column![
-        row![
-            text(title).size(metrics.label() + 3.0).width(Fill),
-            button(text("Done").size(metrics.label()))
-                .on_press(Message::ScreenSelected(Screen::Calendar))
-                .style(button::primary),
-        ]
-        .align_y(Center),
-        scrollable(content).height(Fill).width(Fill),
-    ]
-    .spacing(metrics.spacing)
-    .padding(metrics.padding)
-    .into()
+    super::page("Alarm", content.into(), metrics)
 }
 
 fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
@@ -209,7 +188,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .into(),
             metrics,
         ),
-        text("Create a Desktop OAuth client in Google Cloud, enable the Calendar API and the Tasks API, and allow http://127.0.0.1 as a redirect. Reconnect after enabling Tasks so they can be read and ticked off.")
+        text("Create a Desktop OAuth client in Google Cloud, enable the Calendar API and the Tasks API, and allow http://127.0.0.1 as a redirect. Reconnect after enabling Tasks so they can be read and ticked off, and so events can be dragged to a new time.")
             .size((metrics.label() - 1.0).max(10.0))
             .style(text::secondary),
     ]

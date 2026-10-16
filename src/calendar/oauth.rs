@@ -20,9 +20,11 @@ use crate::config;
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-// Tasks is read/write because the details card can tick a task off, which is
-// the one thing this app writes back to Google. Calendar stays read-only.
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks";
+// Calendar is read-only for the calendar list, and read/write for events so
+// the day grid can drag an event's time. Tasks is read/write so the details
+// card can tick a task off. A token minted before events were writable lacks
+// the `calendar.events` scope, so a write is refused until the user reconnects.
+const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks";
 
 /// How long we wait for the browser to come back with a code.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(180);

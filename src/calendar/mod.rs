@@ -74,6 +74,21 @@ impl Event {
     }
 }
 
+/// A time change that has been applied to the view but not yet confirmed by
+/// Google.
+///
+/// The event is drawn lighter while the write is in flight, and the times here
+/// are what the chip goes back to if Google refuses it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PendingTime {
+    /// The times shown while the write is in flight.
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
+    /// The times to put back if the write fails.
+    pub previous_start: DateTime<Local>,
+    pub previous_end: DateTime<Local>,
+}
+
 /// The parts of a Google event that are worth reading, beyond the chip.
 ///
 /// It carries serde derives so a day can be written out to the cache whole.
@@ -182,6 +197,10 @@ pub struct Store {
     /// user navigates to another day, so a boundary rollover does not yank them
     /// back to today.
     pub follow_today: bool,
+    /// Time changes still being written to Google, by event id. The event is
+    /// drawn lighter until the write is confirmed, and it goes back to the
+    /// times here if the write fails. Read through [`Store::pending_time`].
+    pending: HashMap<String, PendingTime>,
 }
 
 impl Store {
@@ -211,6 +230,7 @@ impl Store {
             month_open: false,
             month: first_of_month(day),
             follow_today: true,
+            pending: HashMap::new(),
         }
     }
 
@@ -236,6 +256,7 @@ impl Store {
             // A snapshot is pinned to the day it was fetched for, so it does
             // not follow the clock until the user asks it to.
             follow_today: false,
+            pending: HashMap::new(),
         }
     }
 
@@ -299,6 +320,9 @@ impl Store {
         self.cache.clear();
         self.events.clear();
         self.open_event = None;
+        // The events the pending writes belonged to are gone; the answers will
+        // arrive to find nothing to confirm or put back.
+        self.pending.clear();
 
         // The days on disk were filed under the old boundary too.
         if let Some(directory) = self.day_cache.as_ref() {
@@ -405,6 +429,16 @@ impl Store {
             self.open_event = None;
         }
 
+        // A write that is still in flight wins over the snapshot: Google may
+        // not have processed it yet, and the chip must not snap back to the
+        // old time while the user is watching.
+        for (id, pending) in &self.pending {
+            if let Some(event) = self.events.iter_mut().find(|event| &event.id == id) {
+                event.start = pending.start;
+                event.end = pending.end;
+            }
+        }
+
         // The day in view has fresh events now, so the run after this one
         // opens on them rather than on an empty grid.
         self.write_day(self.day, &self.events);
@@ -430,6 +464,70 @@ impl Store {
     /// A mutable handle to the event with this id.
     pub fn event_mut(&mut self, id: &str) -> Option<&mut Event> {
         self.events.iter_mut().find(|event| event.id == id)
+    }
+
+    /// A mutable handle to an event, whether it is on the day in view or parked
+    /// in the cache. A write can land while the user is looking at another day.
+    fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
+        if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
+            return Some(event);
+        }
+        self.cache.values_mut().flatten().find(|event| event.id == id)
+    }
+
+    /// Applies a dragged time to the event and remembers it as unconfirmed.
+    ///
+    /// The chip moves at once; the lighter shade and the write to Google
+    /// follow. Returns false when the event is unknown or already has a write
+    /// in flight, so a second drag cannot race the first.
+    pub fn begin_time_change(
+        &mut self,
+        id: &str,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    ) -> bool {
+        if self.pending.contains_key(id) {
+            return false;
+        }
+        let Some(event) = self.events.iter_mut().find(|event| event.id == id) else {
+            return false;
+        };
+
+        let previous_start = event.start;
+        let previous_end = event.end;
+        event.start = start;
+        event.end = end;
+        self.pending.insert(
+            id.to_owned(),
+            PendingTime {
+                start,
+                end,
+                previous_start,
+                previous_end,
+            },
+        );
+        true
+    }
+
+    /// The unconfirmed time change for an event, if there is one.
+    pub fn pending_time(&self, id: &str) -> Option<PendingTime> {
+        self.pending.get(id).copied()
+    }
+
+    /// Google accepted the write, so the chip is final again.
+    pub fn confirm_time_change(&mut self, id: &str) {
+        self.pending.remove(id);
+    }
+
+    /// Google refused the write, so the event goes back to the time it had.
+    pub fn fail_time_change(&mut self, id: &str) {
+        let Some(pending) = self.pending.remove(id) else {
+            return;
+        };
+        if let Some(event) = self.event_mut_anywhere(id) {
+            event.start = pending.previous_start;
+            event.end = pending.previous_end;
+        }
     }
 
     pub fn all_day_events<'a>(
@@ -588,6 +686,33 @@ fn describe_task_write_error(error: String) -> String {
     let lower = error.to_ascii_lowercase();
     if lower.contains("insufficient") || lower.contains("scope") {
         "Reconnect Google in Settings so Tasks can be ticked off".to_owned()
+    } else {
+        error
+    }
+}
+
+/// Moves an event's start and end on Google. Blocking: run it on a worker
+/// thread through [`crate::blocking::run`].
+pub fn set_event_time(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<(), String> {
+    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+
+    api::patch_event_time(&tokens.access_token, calendar_id, event_id, start, end)
+        .map_err(describe_event_write_error)
+}
+
+/// Turns a read-only-token rejection into something a user can act on.
+fn describe_event_write_error(error: String) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("insufficient") || lower.contains("scope") {
+        "Reconnect Google in Settings so events can be moved".to_owned()
     } else {
         error
     }
@@ -1211,5 +1336,93 @@ mod tests {
     fn a_store_built_by_hand_keeps_its_days_in_memory() {
         assert!(Store::new(0).day_cache.is_none());
         assert!(Store::with_snapshot(sample_snapshot()).day_cache.is_none());
+    }
+
+    /// The standup in the sample day, and a time an hour later.
+    fn standup_and_later() -> (Store, DateTime<Local>, DateTime<Local>) {
+        let store = Store::with_snapshot(sample_snapshot());
+        let event = store.event("standup").unwrap();
+        let start = event.start + chrono::Duration::hours(1);
+        let end = event.end + chrono::Duration::hours(1);
+        (store, start, end)
+    }
+
+    #[test]
+    fn a_dragged_time_moves_the_chip_and_marks_it_pending() {
+        let (mut store, start, end) = standup_and_later();
+
+        assert!(store.begin_time_change("standup", start, end));
+
+        let event = store.event("standup").unwrap();
+        assert_eq!(event.start, start);
+        assert_eq!(event.end, end);
+        assert_eq!(store.pending_time("standup").map(|p| p.start), Some(start));
+    }
+
+    #[test]
+    fn confirming_a_drag_makes_the_chip_final() {
+        let (mut store, start, end) = standup_and_later();
+        store.begin_time_change("standup", start, end);
+
+        store.confirm_time_change("standup");
+
+        assert!(store.pending_time("standup").is_none());
+        assert_eq!(store.event("standup").unwrap().start, start);
+    }
+
+    #[test]
+    fn a_refused_drag_puts_the_old_time_back() {
+        let (mut store, start, end) = standup_and_later();
+        let before = store.event("standup").unwrap().start;
+        store.begin_time_change("standup", start, end);
+
+        store.fail_time_change("standup");
+
+        assert!(store.pending_time("standup").is_none());
+        assert_eq!(store.event("standup").unwrap().start, before);
+    }
+
+    #[test]
+    fn a_second_drag_on_a_pending_event_is_refused() {
+        let (mut store, start, end) = standup_and_later();
+        assert!(store.begin_time_change("standup", start, end));
+
+        // A second drag would race the first write, so it is turned away.
+        assert!(!store.begin_time_change("standup", start, end));
+        assert!(store.begin_time_change("lunch", start, end));
+    }
+
+    #[test]
+    fn a_sync_does_not_snap_a_pending_chip_back() {
+        let (mut store, start, end) = standup_and_later();
+        store.begin_time_change("standup", start, end);
+
+        // Google has not processed the write yet, so the snapshot still carries
+        // the old time. The pending time has to win.
+        store.apply_snapshot(sample_snapshot());
+
+        assert_eq!(store.event("standup").unwrap().start, start);
+        assert_eq!(store.event("standup").unwrap().end, end);
+    }
+
+    #[test]
+    fn a_drag_on_an_unknown_event_is_refused() {
+        let (mut store, start, end) = standup_and_later();
+        assert!(!store.begin_time_change("nobody", start, end));
+    }
+
+    #[test]
+    fn a_refused_drag_reaches_an_event_parked_in_the_cache() {
+        let (mut store, start, end) = standup_and_later();
+        let day = store.day;
+        store.begin_time_change("standup", start, end);
+
+        // The user steps to another day while the write is in flight.
+        store.set_day(day.succ_opt().unwrap(), day);
+        store.fail_time_change("standup");
+
+        // Coming back paints the old time, not the one Google refused.
+        store.set_day(day, day);
+        assert_ne!(store.event("standup").unwrap().start, start);
     }
 }

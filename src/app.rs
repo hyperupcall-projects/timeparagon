@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use iced::advanced::widget::{operate, operation};
 use iced::keyboard::{self, Key};
-use iced::{Element, Size, Subscription, Task, Theme, window};
+use iced::{Element, Point, Size, Subscription, Task, Theme, window};
 
 use chrono::{DateTime, Local};
 
@@ -13,7 +14,7 @@ use crate::calendar::{self, Connection, SyncState};
 use crate::config::{self, Config};
 use crate::engine::{TIMER_TICK, Timer};
 use crate::theme::Catalog;
-use crate::{alarm, blocking, notify, theme, tracks, ui};
+use crate::{alarm, blocking, notify, panel, theme, tracks, ui};
 
 /// The smallest window we are willing to be asked to draw.
 ///
@@ -49,6 +50,8 @@ pub enum Screen {
     /// page because it changes the timer rather than the calendar, and reached
     /// from the clock itself.
     TimerSettings,
+    /// The temporary todo scratchpad, reached from the clock.
+    Todos,
 }
 
 /// A flash overlay that is currently on screen.
@@ -56,6 +59,14 @@ pub struct Flash {
     pub window: window::Id,
     pub started: Instant,
     pub settings: config::Flash,
+}
+
+/// Set when this process is the side panel rather than the main window.
+pub struct Sidebar {
+    /// Width the panel is pinned to, in logical pixels.
+    pub width: f32,
+    /// Which edge it is anchored to.
+    pub side: panel::Side,
 }
 
 impl Flash {
@@ -85,6 +96,11 @@ pub struct State {
     pub timer: Timer,
     /// The clock reading used for this frame, so every widget agrees.
     pub now: Instant,
+
+    /// Set when this process is the side panel rather than the main window.
+    /// It pins the window to its configured width and edge, and keeps the panel
+    /// from writing its own geometry back over the user's saved window.
+    pub sidebar: Option<Sidebar>,
 
     /// Whether the clock is showing inside the calendar. The clock has no
     /// section of its own any more: it lives at the foot of the day view and
@@ -128,6 +144,21 @@ pub enum Message {
     /// An upcoming item was picked: it becomes the current task, and the clock
     /// is armed with how long it is meant to take (when it has a length).
     CurrentTaskPicked(String, Option<Duration>),
+
+    /// Add a new, empty item to the scratchpad and put the cursor in it.
+    TodoAdded,
+    /// The text of the scratchpad item at this index was edited.
+    TodoTextChanged(usize, String),
+    /// Remove the scratchpad item at this index.
+    TodoRemoved(usize),
+    /// Move the scratchpad item at this index up or down by this many places.
+    TodoMoved(usize, i32),
+    /// Indent or outdent the scratchpad item at this index by this many levels.
+    TodoIndented(usize, i32),
+    /// Make the scratchpad item at this index the one being worked on.
+    TodoSelected(usize),
+    /// Throw the whole scratchpad away.
+    TodosCleared,
     /// Unfold the clock inside the calendar and set it going.
     TimerOpened,
     /// Fold the clock away again; a timer that is running keeps going.
@@ -191,6 +222,15 @@ pub enum Message {
     EventOpened(String),
     EventClosed,
     OpenEventLink(String),
+    /// The user dragged an event's time on the day grid. The new times are
+    /// applied to the view at once and written back to Google.
+    EventTimeChanged {
+        id: String,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    },
+    /// Google's answer to a dragged time change.
+    EventTimeSaved(String, Result<(), String>),
     /// Tick a Google Task off, or put it back.
     TaskToggled(String),
     TaskCompletionSaved(String, bool, Result<(), String>),
@@ -243,6 +283,7 @@ impl State {
         Self {
             timer: Timer::new(config.timer.last_duration()),
             now: Instant::now(),
+            sidebar: None,
             timer_open: false,
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
@@ -257,9 +298,103 @@ impl State {
             calendar: calendar::Store::new(day_end_hour),
         }
     }
+
+    /// What the clock is working on: the current scratchpad item when there is
+    /// one, otherwise the free-text task. Keeping this in one place is what
+    /// lets the line beside the clock edit whichever of the two is in play.
+    pub fn current_task(&self) -> &str {
+        self.config.todos.current().map_or(
+            self.config.timer.current_task.as_str(),
+            |todo| todo.text.as_str(),
+        )
+    }
 }
 
 pub fn boot() -> (State, Task<Message>) {
+    let state = boot_state();
+
+    // A daemon opens no window by itself, which is what lets the flash
+    // overlay be a peer window rather than a child of the clock.
+    let (_id, open) = window::open(window::Settings {
+        size: Size::new(state.config.window.width, state.config.window.height),
+        min_size: Some(MIN_SIZE),
+        level: level(state.config.window.always_on_top),
+        exit_on_close_request: true,
+        icon: window_icon(),
+        ..Default::default()
+    });
+
+    (state, open.map(Message::WindowOpened))
+}
+
+/// Opens the clock as the side panel: a separate, narrow instance pinned to one
+/// screen edge and kept above other windows.
+///
+/// The width and edge come from `panel.toml`, and the width is also fixed by
+/// the window's minimum and maximum so the compositor cannot stretch it. The
+/// height is filled in once the monitor size is known, in [`Message::MonitorSized`].
+///
+/// Where the window lands is the compositor's call on Wayland, where a client
+/// cannot dictate its own position; see the packaging README.
+pub fn boot_sidebar() -> (State, Task<Message>) {
+    let panel = panel::PanelConfig::load();
+
+    let mut state = boot_state();
+    state.sidebar = Some(Sidebar {
+        width: panel.width as f32,
+        side: panel.side,
+    });
+
+    let (_id, open) = window::open(sidebar_settings(&panel));
+
+    (state, open.map(Message::WindowOpened))
+}
+
+/// The height a panel asks for before the compositor clamps it.
+///
+/// A Wayland client cannot learn how tall the output is (iced's
+/// `window::monitor_size` reports `None` here), so the panel asks for a strip
+/// taller than any screen and lets the compositor fit it — KWin clamps a window
+/// to the screen. Only the height is free to clamp; the width is fixed.
+const PANEL_FILL: f32 = 10_000.0;
+
+/// The window a panel instance opens with.
+fn sidebar_settings(panel: &panel::PanelConfig) -> window::Settings {
+    let width = panel.width as f32;
+    let side = panel.side;
+
+    window::Settings {
+        size: Size::new(width, PANEL_FILL),
+        min_size: Some(Size::new(width, MIN_SIZE.height)),
+        max_size: Some(Size::new(width, 100_000.0)),
+        position: match side {
+            panel::Side::Left => window::Position::SpecificWith(left_edge),
+            panel::Side::Right => window::Position::SpecificWith(right_edge),
+        },
+        decorations: false,
+        level: window::Level::AlwaysOnTop,
+        exit_on_close_request: true,
+        icon: window_icon(),
+        ..Default::default()
+    }
+}
+
+/// The top-left corner of the monitor. `SpecificWith` wants a plain `fn`, so
+/// the edge is chosen with a pair of functions rather than a captured closure.
+fn left_edge(_window: Size, _monitor: Size) -> Point {
+    Point::new(0.0, 0.0)
+}
+
+fn right_edge(window: Size, monitor: Size) -> Point {
+    Point::new(monitor.width - window.width, 0.0)
+}
+
+/// Builds the state that is read from disk at startup.
+///
+/// Shared by the main window and the side panel, so both open on the same
+/// config, the same cached days and the same running track. It deliberately
+/// opens no window: the two callers want different ones.
+fn boot_state() -> State {
     let mut state = State::new(Config::load(), Catalog::load());
 
     // Days are kept under the XDG cache directory as well as in memory, so a
@@ -272,17 +407,23 @@ pub fn boot() -> (State, Task<Message>) {
     // a real boot is allowed to pick it up.
     state.recorder.keep_in(tracks::path());
 
-    // A daemon opens no window by itself, which is what lets the flash
-    // overlay be a peer window rather than a child of the clock.
-    let (_id, open) = window::open(window::Settings {
-        size: Size::new(state.config.window.width, state.config.window.height),
-        min_size: Some(MIN_SIZE),
-        level: level(state.config.window.always_on_top),
-        exit_on_close_request: true,
-        ..Default::default()
-    });
+    state
+}
 
-    (state, open.map(Message::WindowOpened))
+/// The window icon, embedded so it survives being installed anywhere.
+///
+/// A missing or unreadable icon is not worth failing a start over, so it is
+/// logged and the window opens without one.
+fn window_icon() -> Option<window::Icon> {
+    let data = include_bytes!("../assets/noto-hourglass-done.png");
+
+    match window::icon::from_file_data(data, None) {
+        Ok(icon) => Some(icon),
+        Err(error) => {
+            log::warn!("could not load the window icon: {error}");
+            None
+        }
+    }
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -354,12 +495,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CurrentTaskChanged(task) => {
-            state.config.timer.current_task = task;
+            set_current_task(state, task);
             queue_save(state)
         }
 
         Message::CurrentTaskPicked(task, span) => {
-            state.config.timer.current_task = task;
+            set_current_task(state, task);
 
             // An all-day entry has no length of its own, so it only names the
             // task and leaves the target as it was.
@@ -369,6 +510,45 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             Task::batch([queue_save(state), sync_tracks(state)])
+        }
+
+        Message::TodoAdded => {
+            let index = state.config.todos.add(String::new());
+            let _ = queue_save(state);
+
+            // The new item is empty, so the cursor is put in it rather than
+            // making the user find it.
+            operate(operation::focusable::focus(ui::todos::input_id(index)))
+        }
+
+        Message::TodoTextChanged(index, text) => {
+            state.config.todos.set_text(index, text);
+            queue_save(state)
+        }
+
+        Message::TodoRemoved(index) => {
+            state.config.todos.remove(index);
+            queue_save(state)
+        }
+
+        Message::TodoMoved(index, delta) => {
+            state.config.todos.move_item(index, delta);
+            queue_save(state)
+        }
+
+        Message::TodoIndented(index, delta) => {
+            state.config.todos.indent(index, delta);
+            queue_save(state)
+        }
+
+        Message::TodoSelected(index) => {
+            state.config.todos.set_current(index);
+            queue_save(state)
+        }
+
+        Message::TodosCleared => {
+            state.config.todos.clear();
+            queue_save(state)
         }
 
         Message::TimerOpened => {
@@ -618,6 +798,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             };
 
+            // The panel is pinned to its configured width and the full height
+            // of the monitor, and never widens to the default fraction.
+            if let Some(sidebar) = &state.sidebar {
+                log::debug!("panel filling {}x{}", sidebar.width, size.height);
+                return window::resize(id, Size::new(sidebar.width, size.height));
+            }
+
             let width = launch_width(size.width);
             let height = state.config.window.height;
             state.config.window.width = width;
@@ -634,6 +821,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             log::debug!("window is now {}x{}", size.width, size.height);
+
+            // The panel's geometry is not the user's saved window, so it must
+            // not be written back over it.
+            if state.sidebar.is_some() {
+                return Task::none();
+            }
 
             state.config.window.width = size.width;
             state.config.window.height = size.height;
@@ -732,6 +925,54 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             if let Err(error) = calendar::oauth::open_in_browser(&url) {
                 state.calendar.error = Some(error);
             }
+            Task::none()
+        }
+
+        Message::EventTimeChanged { id, start, end } => {
+            // Tasks are Google Tasks, not calendar events, and have no time to
+            // move. The grid does not offer the drag, but guard the write too.
+            let Some(calendar_id) = state
+                .calendar
+                .event(&id)
+                .filter(|event| !event.is_task())
+                .map(|event| event.calendar_id.clone())
+            else {
+                return Task::none();
+            };
+
+            // The chip moves now; the lighter shade and the write follow. A
+            // second drag on the same event is refused until this one lands.
+            if !state.calendar.begin_time_change(&id, start, end) {
+                return Task::none();
+            }
+
+            let client_id = state.config.calendar.client_id.clone();
+            let client_secret = state.config.calendar.client_secret.clone();
+            let request_id = id.clone();
+            state.calendar.error = None;
+
+            blocking::run(move || {
+                calendar::set_event_time(
+                    &client_id,
+                    &client_secret,
+                    &calendar_id,
+                    &request_id,
+                    start,
+                    end,
+                )
+            })
+            .map(move |result| Message::EventTimeSaved(id.clone(), result))
+        }
+
+        Message::EventTimeSaved(id, Ok(())) => {
+            state.calendar.confirm_time_change(&id);
+            Task::none()
+        }
+
+        Message::EventTimeSaved(id, Err(error)) => {
+            state.calendar.fail_time_change(&id);
+            log::warn!("could not move the event: {error}");
+            state.calendar.error = Some(error);
             Task::none()
         }
 
@@ -957,6 +1198,12 @@ pub fn title(state: &State, window: window::Id) -> String {
         return "TimeTracker".to_owned();
     }
 
+    // The panel carries a stable, distinctive title so a window rule can pick
+    // it out from the main window; see the packaging README.
+    if state.sidebar.is_some() {
+        return "TimeTracker Sidebar".to_owned();
+    }
+
     if state.timer.has_fired() {
         return "Time's up - TimeTracker".to_owned();
     }
@@ -1156,6 +1403,19 @@ fn dismiss(state: &mut State) -> Task<Message> {
     }
 }
 
+/// Points the clock at a new task.
+///
+/// When the scratchpad has a current item, the text lands there, so the line
+/// beside the clock edits the step being worked on. With no scratchpad it goes
+/// to the free-text task, which is the behaviour the line had before there were
+/// any todos.
+fn set_current_task(state: &mut State, task: String) {
+    match state.config.todos.current_mut() {
+        Some(todo) => todo.text = task,
+        None => state.config.timer.current_task = task,
+    }
+}
+
 /// Marks the config dirty.
 ///
 /// Dragging a slider produces a message per pixel; without the debounce that
@@ -1277,6 +1537,11 @@ mod tests {
             started: Instant::now(),
             settings,
         }
+    }
+
+    #[test]
+    fn the_window_icon_decodes() {
+        assert!(window_icon().is_some(), "the embedded icon should decode");
     }
 
     #[test]
@@ -1402,6 +1667,93 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_todo_makes_it_the_current_task() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(0, "write the report".into()));
+
+        assert_eq!(state.config.todos.len(), 1);
+        assert_eq!(state.current_task(), "write the report");
+        assert!(state.save_queued);
+    }
+
+    #[test]
+    fn editing_the_current_task_edits_the_current_todo() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(1, "second".into()));
+
+        // The line beside the clock edits whichever item is current, not the
+        // free-text task, which stays empty.
+        let _ = update(&mut state, Message::CurrentTaskChanged("second, revised".into()));
+
+        assert_eq!(state.config.todos.items()[1].text, "second, revised");
+        assert!(state.config.timer.current_task.is_empty());
+    }
+
+    #[test]
+    fn selecting_a_todo_changes_what_the_clock_is_working_on() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(1, "second".into()));
+
+        let _ = update(&mut state, Message::TodoSelected(1));
+
+        assert_eq!(state.current_task(), "second");
+        assert_eq!(state.config.todos.position(), Some((2, 2)));
+    }
+
+    #[test]
+    fn picking_an_upcoming_item_names_the_current_todo() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
+
+        let _ = update(
+            &mut state,
+            Message::CurrentTaskPicked("Standup".into(), Some(Duration::from_secs(30 * 60))),
+        );
+
+        assert_eq!(state.config.todos.items()[0].text, "Standup");
+        assert_eq!(state.timer.target(), Some(Duration::from_secs(30 * 60)));
+    }
+
+    #[test]
+    fn reordering_and_indenting_a_todo_is_remembered() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoTextChanged(1, "second".into()));
+
+        let _ = update(&mut state, Message::TodoMoved(1, -1));
+        let _ = update(&mut state, Message::TodoIndented(1, 1));
+
+        assert_eq!(state.config.todos.items()[0].text, "second");
+        assert_eq!(state.config.todos.items()[1].indent, 1);
+        assert!(state.save_queued);
+    }
+
+    #[test]
+    fn removing_and_clearing_todos_is_remembered() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = update(&mut state, Message::TodoAdded);
+        let _ = update(&mut state, Message::TodoAdded);
+
+        let _ = update(&mut state, Message::TodoRemoved(0));
+        assert_eq!(state.config.todos.len(), 1);
+
+        let _ = update(&mut state, Message::TodosCleared);
+        assert!(state.config.todos.is_empty());
+        assert_eq!(state.current_task(), "");
+    }
+
+    #[test]
     fn changing_the_end_of_day_moves_the_day_in_view() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         assert_eq!(state.config.calendar.day_end_hour, 0);
@@ -1480,6 +1832,69 @@ mod tests {
         assert_eq!(launch_width(3840.0), 2560.0);
         // A tiny monitor must not fold the layout below its minimum.
         assert_eq!(launch_width(120.0), MIN_SIZE.width);
+    }
+
+    #[test]
+    fn the_panel_window_is_pinned_to_its_width() {
+        let panel = panel::PanelConfig { width: 200, ..Default::default() };
+        let settings = sidebar_settings(&panel);
+
+        // The width is fixed from both sides, so the compositor cannot stretch
+        // the strip, but the height is free to fill the screen.
+        assert_eq!(settings.min_size.unwrap().width, 200.0);
+        assert_eq!(settings.max_size.unwrap().width, 200.0);
+        assert!(settings.min_size.unwrap().height < settings.max_size.unwrap().height);
+        assert!(!settings.decorations);
+        assert_eq!(settings.level, window::Level::AlwaysOnTop);
+    }
+
+    #[test]
+    fn the_panel_pins_to_the_edge_it_was_asked_for() {
+        let window = Size::new(200.0, 1080.0);
+        let monitor = Size::new(1920.0, 1080.0);
+
+        assert_eq!(left_edge(window, monitor), Point::new(0.0, 0.0));
+        assert_eq!(right_edge(window, monitor), Point::new(1720.0, 0.0));
+    }
+
+    #[test]
+    fn the_panel_does_not_widen_to_the_default_fraction() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+        state.sidebar = Some(Sidebar { width: 200.0, side: panel::Side::Left });
+
+        let before = state.config.window.width;
+        let _ = update(&mut state, Message::MonitorSized(id, Some(Size::new(1920.0, 1080.0))));
+
+        // The main window would have adopted `launch_width` (1280px) here; the
+        // panel keeps the width it was told to.
+        assert_eq!(state.config.window.width, before);
+    }
+
+    #[test]
+    fn the_panel_does_not_write_its_geometry_over_the_window() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+        state.sidebar = Some(Sidebar { width: 200.0, side: panel::Side::Left });
+
+        let before = state.config.window.clone();
+        let _ = update(&mut state, Message::WindowResized(id, Size::new(200.0, 1080.0)));
+
+        assert_eq!(state.config.window, before, "the panel must leave the saved window alone");
+    }
+
+    #[test]
+    fn a_main_window_still_remembers_its_own_size() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+
+        let _ = update(&mut state, Message::WindowResized(id, Size::new(640.0, 480.0)));
+
+        assert_eq!(state.config.window.width, 640.0);
+        assert_eq!(state.config.window.height, 480.0);
     }
 
     #[test]
@@ -1679,5 +2094,73 @@ mod tests {
         let _ = update(&mut state, Message::TimerOpened);
 
         assert_eq!(state.timer.target(), Config::default().timer.last_duration());
+    }
+
+    /// A state with the standup already dragged an hour later and pending.
+    fn state_with_a_pending_drag() -> (State, DateTime<Local>, DateTime<Local>) {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+
+        let event = state.calendar.event("standup").unwrap();
+        let start = event.start + chrono::Duration::hours(1);
+        let end = event.end + chrono::Duration::hours(1);
+        state.calendar.begin_time_change("standup", start, end);
+        (state, start, end)
+    }
+
+    #[test]
+    fn a_confirmed_drag_makes_the_chip_final() {
+        let (mut state, start, _) = state_with_a_pending_drag();
+
+        let _ = update(&mut state, Message::EventTimeSaved("standup".into(), Ok(())));
+
+        assert!(state.calendar.pending_time("standup").is_none());
+        assert_eq!(state.calendar.event("standup").unwrap().start, start);
+    }
+
+    #[test]
+    fn a_refused_drag_puts_the_old_time_back_and_says_so() {
+        let (mut state, start, _) = state_with_a_pending_drag();
+        let before = calendar::sample_snapshot()
+            .events
+            .into_iter()
+            .find(|event| event.id == "standup")
+            .unwrap()
+            .start;
+
+        let _ = update(
+            &mut state,
+            Message::EventTimeSaved("standup".into(), Err("Google Calendar: nope".into())),
+        );
+
+        assert!(state.calendar.pending_time("standup").is_none());
+        assert_eq!(state.calendar.event("standup").unwrap().start, before);
+        assert_ne!(state.calendar.event("standup").unwrap().start, start);
+        assert_eq!(state.calendar.error.as_deref(), Some("Google Calendar: nope"));
+    }
+
+    #[test]
+    fn a_task_cannot_be_dragged() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+
+        // The sample's `deep` event stands in for a Google Task.
+        let deep = state.calendar.event_mut("deep").unwrap();
+        deep.id = "task:deep".into();
+        deep.calendar_id = "tasks:list".into();
+        let start = deep.start + chrono::Duration::hours(1);
+        let end = deep.end + chrono::Duration::hours(1);
+
+        let _ = update(
+            &mut state,
+            Message::EventTimeChanged {
+                id: "task:deep".into(),
+                start,
+                end,
+            },
+        );
+
+        assert!(state.calendar.pending_time("task:deep").is_none());
+        assert_ne!(state.calendar.event("task:deep").unwrap().start, start);
     }
 }

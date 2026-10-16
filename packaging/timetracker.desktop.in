@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=TimeTracker
+GenericName=Timer
+Comment=A low-resource timer that stays usable at 200px wide
+Exec=@EXEC@
+Icon=timetracker
+Terminal=false
+Categories=Utility;Clock;
+Keywords=timer;clock;stopwatch;alarm;countdown;
+StartupNotify=true

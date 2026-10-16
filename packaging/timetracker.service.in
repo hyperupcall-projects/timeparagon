@@ -1,0 +1,24 @@
+[Unit]
+Description=TimeTracker timer daemon
+# A GUI process: only start it once a graphical session exists, and stop it
+# when that session goes away.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@EXEC@
+Restart=on-failure
+RestartSec=2
+
+# The daemon draws with iced, which needs a Wayland or X11 display. systemd's
+# user manager does not inherit the session's environment on its own, so pull
+# the display variables in explicitly. `%t` is the runtime directory.
+Environment=XDG_RUNTIME_DIR=%t
+# Uncomment and adjust if your compositor does not export these to the user
+# manager (most Wayland sessions do):
+#Environment=WAYLAND_DISPLAY=wayland-0
+#Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical-session.target

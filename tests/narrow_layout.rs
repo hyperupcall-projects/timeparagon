@@ -55,20 +55,20 @@ fn the_clock_controls_survive_every_width() {
     }
 }
 
-/// Pressing Set Current Task has to actually unfold and start the clock at the
+/// Pressing Timer has to actually unfold and start the clock at the
 /// narrowest size, which is the part a broken layout silently takes away.
 #[test]
 fn set_current_task_is_clickable_at_the_minimum_width() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(180.0, 240.0));
 
-    let _ = ui.click("Set Current Task")?;
+    let _ = ui.click("Timer")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
         messages.iter().any(|message| matches!(message, Message::TimerOpened)),
-        "clicking Set Current Task produced {messages:?}"
+        "clicking Timer produced {messages:?}"
     );
 
     Ok(())
@@ -82,7 +82,7 @@ fn the_calendar_unfolds_the_clock_and_folds_it_away() -> Result<(), Error> {
 
     {
         let mut ui = render(&state, Size::new(260.0, 600.0));
-        assert!(ui.find("Set Current Task").is_ok(), "the way in is missing");
+        assert!(ui.find("Timer").is_ok(), "the way in is missing");
     }
 
     state.timer_open = true;
@@ -256,7 +256,7 @@ fn rendering_never_panics_at_any_size() {
         Size::new(4_000.0, 4_000.0),
     ] {
         let mut ui = render(&state, size);
-        let _: Result<_, _> = ui.find("Set Current Task");
+        let _: Result<_, _> = ui.find("Timer");
     }
 }
 
@@ -330,7 +330,7 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Menu", "Team offsite", "Set Current Task"] {
+    for label in ["Calendars", "Team offsite", "Timer"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -343,7 +343,7 @@ fn the_calendar_offers_day_arrows_and_a_month_button() -> Result<(), Error> {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["◀", "▶", "Oct ▾", "Menu"] {
+    for label in ["◀", "▶", "Oct ▾", "Calendars"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 
@@ -402,7 +402,7 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Calendars", "Show Google Tasks", "Personal", "Work", "Tasks", "Sync now", "Settings", "Open Google Calendar"] {
+    for label in ["Calendars", "Show Google Tasks", "Personal", "Work", "Tasks", "Sync now", "Open Google Calendar"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
     }
 }
@@ -673,6 +673,121 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
     );
 
     Ok(())
+}
+
+/// The calendar shows what is being worked on and how far through the
+/// scratchpad it is, without the list having to be opened.
+#[test]
+fn the_calendar_shows_the_current_todo_and_its_progress() {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+
+    for text in ["first", "second", "third", "fourth"] {
+        state.config.todos.add(text);
+    }
+    state.config.todos.set_current(1);
+
+    let mut ui = render(&state, Size::new(320.0, 600.0));
+
+    assert!(ui.find("Todos 2/4:").is_ok(), "the progress is missing");
+}
+
+/// The way into the scratchpad sits beside the task line, so it is one tap from
+/// the calendar rather than buried behind the clock.
+#[test]
+fn the_calendar_offers_a_way_into_the_todos() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+    assert!(ui.find("Todos").is_ok(), "the way into the todos is missing");
+
+    let _ = ui.click("Todos")?;
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::ScreenSelected(Screen::Todos))),
+        "expected the todos button to open the scratchpad, got {messages:?}"
+    );
+
+    Ok(())
+}
+
+/// With the clock open the footer offers only the way back, so the scratchpad
+/// is not one tap away from inside the timer.
+#[test]
+fn the_timer_view_offers_only_a_way_back() {
+    let mut state = state();
+    state.timer_open = true;
+
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+
+    assert!(ui.find("Go back").is_ok(), "the way back is missing");
+    assert!(ui.find("Todos").is_err(), "the scratchpad button should be gone");
+}
+
+/// The scratchpad takes the whole window and offers only the way back, so the
+/// clock is not in view while the list is being rearranged.
+#[test]
+fn the_todos_view_offers_only_a_way_back() {
+    let mut state = state();
+    state.screen = Screen::Todos;
+    state.timer.set_target(Some(Duration::from_secs(300)));
+
+    let mut ui = render(&state, Size::new(420.0, 600.0));
+
+    assert!(ui.find("Go back").is_ok(), "the way back is missing");
+    assert!(ui.find("of 5:00").is_err(), "the timer should not be in view");
+}
+
+/// Every control the scratchpad needs has to be reachable at 200px, including
+/// the ones that only appear once there is an item to act on.
+#[test]
+fn the_todos_screen_is_usable_at_two_hundred_pixels() {
+    let mut state = state();
+    state.screen = Screen::Todos;
+    state.config.todos.add("write the report");
+    state.config.todos.add("send the email");
+
+    let mut ui = render(&state, Size::new(200.0, 600.0));
+
+    for label in ["Todos", "Go back", "Clear", "+ Add todo", "↑", "↓", "→", "←", "✕"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
+    }
+}
+
+/// The "Coming up" list lives on the todo page now, so the calendar's next few
+/// things are one tap from the scratchpad.
+#[test]
+fn the_todos_page_lists_what_is_coming_up() {
+    let mut state = state();
+    state.screen = Screen::Todos;
+
+    // The sample events are in the past, so one is moved to later today.
+    let mut snapshot = timetracker::calendar::sample_snapshot();
+    let soon = chrono::Local::now() + chrono::Duration::minutes(30);
+    snapshot.events[1].start = soon;
+    snapshot.events[1].end = soon + chrono::Duration::minutes(30);
+    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+
+    let mut ui = render(&state, Size::new(200.0, 600.0));
+
+    // The heading only appears when there is something to show, so finding it
+    // is enough to know the list made it onto the page.
+    assert!(ui.find("Coming up").is_ok(), "the coming-up list is missing");
+}
+
+/// An empty scratchpad still has to render, and offer the way to start one.
+#[test]
+fn an_empty_scratchpad_offers_a_way_to_start() {
+    let mut state = state();
+    state.screen = Screen::Todos;
+
+    let mut ui = render(&state, Size::new(200.0, 400.0));
+
+    assert!(ui.find("+ Add todo").is_ok(), "the way to add the first todo is missing");
 }
 
 #[test]

@@ -4,3 +4,4 @@
 # tasks-bridge: local Deno/npm install and the compiled helper.
 /tools/tasks-bridge/node_modules/
 /tools/tasks-bridge/tasks-bridge
+.env

@@ -10,11 +10,12 @@ pub mod digits;
 pub mod flash;
 pub mod layout;
 pub mod settings;
+pub mod todos;
 
 use std::time::Duration;
 
-use iced::widget::{button, column, container, responsive, row, text};
-use iced::{Element, Fill, Length};
+use iced::widget::{button, column, container, responsive, row, scrollable, text};
+use iced::{Center, Element, Fill, Length};
 
 use crate::alarm;
 use crate::app::{Message, Screen, State};
@@ -47,9 +48,37 @@ pub fn view(state: &State) -> Element<'_, Message> {
             ]
             .into(),
             (Screen::SetTime, _) => set_time(state, &metrics),
+            // The scratchpad takes the whole window rather than sitting beside
+            // the calendar: it is a place to think, not a place to watch the
+            // clock from.
+            (Screen::Todos, _) => todos::view(state, &metrics),
             (Screen::Calendar, _) => calendar::view(state, &metrics),
         }
     })
+    .into()
+}
+
+/// A settings-style page: a title with a way back, over a scrolling body.
+///
+/// The settings panes and the todo scratchpad share this so they read as the
+/// same kind of place.
+pub(crate) fn page<'a>(
+    title: &'a str,
+    content: Element<'a, Message>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    column![
+        row![
+            text(title).size(metrics.label() + 3.0).width(Fill),
+            button(text("Done").size(metrics.label()))
+                .on_press(Message::ScreenSelected(Screen::Calendar))
+                .style(button::primary),
+        ]
+        .align_y(Center),
+        scrollable(content).height(Fill).width(Fill),
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
     .into()
 }
 
@@ -62,7 +91,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
 pub fn clock_body<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         container(timer(state, metrics)).height(Fill).center_y(Fill),
-        calendar::upcoming_tasks(state, metrics),
         controls::primary_action(state, metrics),
         controls::secondary_row(metrics),
     ]

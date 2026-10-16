@@ -1,7 +1,11 @@
 //! TimeTracker: a count-up timer that stays out of the way.
 //!
-//! The binary is a thin wrapper around this library so that the layout and
-//! the clock engine can be exercised by tests without a compositor.
+//! The library backs two thin binaries so the interface and the clock engine can
+//! be exercised by tests without a compositor:
+//!
+//! * `timetracker` — the main window (this crate's [`app`]).
+//! * `timetracker-panel` — the side-panel companion (see [`panel`]): a 200px,
+//!   left-anchored strip summoned with a global shortcut.
 
 pub mod alarm;
 pub mod app;
@@ -12,6 +16,8 @@ pub mod config;
 pub mod engine;
 pub mod hex;
 pub mod notify;
+pub mod panel;
 pub mod theme;
+pub mod todos;
 pub mod tracks;
 pub mod ui;
