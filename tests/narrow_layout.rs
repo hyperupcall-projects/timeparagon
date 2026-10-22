@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use chrono::Local;
 use iced::{Element, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
@@ -335,27 +336,44 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
     }
 }
 
+/// The left/right day arrows are gone: the month button opens a picker where
+/// the user can tap a day directly instead of stepping one day at a time.
 #[test]
-fn the_calendar_offers_day_arrows_and_a_month_button() -> Result<(), Error> {
+fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["◀", "▶", "Oct ▾", "Calendars"] {
+    for label in ["◀", "▶"] {
+        assert!(
+            ui.find(label).is_err(),
+            "{label:?} should no longer be in the header"
+        );
+    }
+
+    for label in ["Oct ▾", "Calendars"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 
-    let _ = ui.click("▶")?;
+    // The day in view sits in the title bar between the month picker and the menu.
+    let today = timetracker::calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let heading = timetracker::calendar::day_heading(state.calendar.day, today);
+    assert!(
+        ui.find(heading.as_str()).is_ok(),
+        "the day in view is missing from the title bar"
+    );
+
+    let _ = ui.click("Oct ▾")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
         messages
             .iter()
-            .any(|message| matches!(message, Message::CalendarDayShift(1))),
-        "expected the next-day arrow to ask for a shift, got {messages:?}"
+            .any(|message| matches!(message, Message::CalendarMonthToggled)),
+        "expected the month button to open the month picker, got {messages:?}"
     );
 
     Ok(())

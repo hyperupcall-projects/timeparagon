@@ -11,7 +11,7 @@ pub mod oauth;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Local, Months, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, Local, Months, NaiveDate, TimeZone, Timelike};
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +87,136 @@ pub struct PendingTime {
     /// The times to put back if the write fails.
     pub previous_start: DateTime<Local>,
     pub previous_end: DateTime<Local>,
+}
+
+/// A new event being filled in before it is written to Google.
+///
+/// It is created by a click or a drag on empty grid space and lives in the
+/// store until it is saved or cancelled. The times are kept both as real
+/// instants and as the text the user is editing, so a half-typed `9:3` does not
+/// throw away the last valid time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Draft {
+    pub title: String,
+    pub description: String,
+    /// The calendar the event will be created on.
+    pub calendar_id: String,
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
+    /// The `HH:MM` text shown in the start field.
+    pub start_text: String,
+    /// The `HH:MM` text shown in the end field.
+    pub end_text: String,
+    /// Whether the calendar dropdown is open.
+    pub calendar_dropdown_open: bool,
+}
+
+impl Draft {
+    /// A draft on `calendar_id` spanning `start` to `end`.
+    pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
+        Self {
+            title: String::new(),
+            description: String::new(),
+            calendar_id,
+            start,
+            end,
+            start_text: clock_label(start),
+            end_text: clock_label(end),
+            calendar_dropdown_open: false,
+        }
+    }
+
+    /// Applies the start field's text. A value that does not parse as a clock
+    /// time is kept as text but leaves the real start alone.
+    pub fn set_start_text(&mut self, text: String) {
+        if let Some((hour, minute)) = parse_clock(&text) {
+            self.start = at_clock(self.start.date_naive(), hour, minute);
+        }
+        self.start_text = text;
+    }
+
+    /// Applies the end field's text, with the same forgiving parse as the start.
+    pub fn set_end_text(&mut self, text: String) {
+        if let Some((hour, minute)) = parse_clock(&text) {
+            self.end = at_clock(self.end.date_naive(), hour, minute);
+        }
+        self.end_text = text;
+    }
+}
+
+/// An existing event being edited before the changes are written to Google.
+///
+/// It carries the event's id so the update knows which event to patch, and
+/// starts from the event's current values so the user only changes what they
+/// want to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditDraft {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    /// The calendar the event is on.
+    pub calendar_id: String,
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
+    /// The `HH:MM` text shown in the start field.
+    pub start_text: String,
+    /// The `HH:MM` text shown in the end field.
+    pub end_text: String,
+}
+
+impl EditDraft {
+    /// Build an edit draft from an existing event.
+    pub fn from_event(event: &Event) -> Self {
+        Self {
+            id: event.id.clone(),
+            title: event.title.clone(),
+            description: event.details.description.clone(),
+            calendar_id: event.calendar_id.clone(),
+            start: event.start,
+            end: event.end,
+            start_text: clock_label(event.start),
+            end_text: clock_label(event.end),
+        }
+    }
+
+    /// Applies the start field's text. A value that does not parse as a clock
+    /// time is kept as text but leaves the real start alone.
+    pub fn set_start_text(&mut self, text: String) {
+        if let Some((hour, minute)) = parse_clock(&text) {
+            self.start = at_clock(self.start.date_naive(), hour, minute);
+        }
+        self.start_text = text;
+    }
+
+    /// Applies the end field's text, with the same forgiving parse as the start.
+    pub fn set_end_text(&mut self, text: String) {
+        if let Some((hour, minute)) = parse_clock(&text) {
+            self.end = at_clock(self.end.date_naive(), hour, minute);
+        }
+        self.end_text = text;
+    }
+}
+
+/// Parses an `HH:MM` (or `H:MM`) clock time. Anything else is rejected.
+pub fn parse_clock(text: &str) -> Option<(u32, u32)> {
+    let (hour, minute) = text.trim().split_once(':')?;
+    let hour: u32 = hour.trim().parse().ok()?;
+    let minute: u32 = minute.trim().parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some((hour, minute))
+}
+
+/// A local instant at a clock time on a given date, resolving the daylight
+/// saving gaps the same way the rest of the calendar does.
+fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
+    let naive = day.and_hms_opt(hour, minute, 0).unwrap_or_default();
+    match Local.from_local_datetime(&naive) {
+        chrono::offset::LocalResult::Single(when)
+        | chrono::offset::LocalResult::Ambiguous(when, _) => when,
+        chrono::offset::LocalResult::None => naive.and_utc().with_timezone(&Local),
+    }
 }
 
 /// The parts of a Google event that are worth reading, beyond the chip.
@@ -201,6 +331,14 @@ pub struct Store {
     /// drawn lighter until the write is confirmed, and it goes back to the
     /// times here if the write fails. Read through [`Store::pending_time`].
     pending: HashMap<String, PendingTime>,
+    /// The new event being filled in, if the add-event popup is open.
+    pub draft: Option<Draft>,
+    /// The existing event being edited, if the edit-event popup is open.
+    pub edit_draft: Option<EditDraft>,
+    /// The event a delete is being confirmed for, by id. While set, the
+    /// details card is replaced by an "are you sure" prompt so a stray click
+    /// cannot wipe an event.
+    pub pending_delete: Option<String>,
 }
 
 impl Store {
@@ -231,6 +369,9 @@ impl Store {
             month: first_of_month(day),
             follow_today: true,
             pending: HashMap::new(),
+            draft: None,
+            edit_draft: None,
+            pending_delete: None,
         }
     }
 
@@ -257,6 +398,9 @@ impl Store {
             // not follow the clock until the user asks it to.
             follow_today: false,
             pending: HashMap::new(),
+            draft: None,
+            edit_draft: None,
+            pending_delete: None,
         }
     }
 
@@ -519,6 +663,67 @@ impl Store {
         self.pending.remove(id);
     }
 
+    /// The calendar a new event should be created on.
+    ///
+    /// The configured default wins when it still exists; otherwise the primary
+    /// calendar, and failing that the first writable one. Task lists are never
+    /// offered, since they hold Google Tasks rather than events.
+    pub fn default_calendar_id(&self, settings: &CalendarSettings) -> Option<String> {
+        if let Some(id) = settings.default_calendar.as_ref()
+            && self
+                .calendars
+                .iter()
+                .any(|calendar| &calendar.id == id && !calendar.is_task_list())
+        {
+            return Some(id.clone());
+        }
+
+        self.calendars
+            .iter()
+            .find(|calendar| calendar.primary && !calendar.is_task_list())
+            .or_else(|| self.calendars.iter().find(|calendar| !calendar.is_task_list()))
+            .map(|calendar| calendar.id.clone())
+    }
+
+    /// The color a calendar's events are drawn in, or the default event color
+    /// when the calendar is unknown.
+    pub fn calendar_color(&self, id: &str) -> Color {
+        self.calendars
+            .iter()
+            .find(|calendar| calendar.id == id)
+            .map_or(colors::DEFAULT_EVENT, |calendar| calendar.color)
+    }
+
+    /// Opens the add-event popup on `calendar_id`, spanning `start` to `end`.
+    pub fn begin_draft(&mut self, calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) {
+        self.draft = Some(Draft::new(calendar_id, start, end));
+        self.open_event = None;
+        self.edit_draft = None;
+        self.menu_open = false;
+        self.month_open = false;
+    }
+
+    /// Opens the edit-event popup for the event with `id`, pre-filled from its
+    /// current values.
+    pub fn begin_edit(&mut self, id: &str) {
+        let Some(event) = self.event(id) else {
+            return;
+        };
+        self.edit_draft = Some(EditDraft::from_event(event));
+        self.open_event = None;
+        self.draft = None;
+        self.menu_open = false;
+        self.month_open = false;
+    }
+
+    /// Puts a freshly created event into the day in view, keeping the order the
+    /// grid expects.
+    pub fn add_event(&mut self, event: Event) {
+        self.events.push(event);
+        self.events
+            .sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
+    }
+
     /// Google refused the write, so the event goes back to the time it had.
     pub fn fail_time_change(&mut self, id: &str) {
         let Some(pending) = self.pending.remove(id) else {
@@ -716,6 +921,60 @@ fn describe_event_write_error(error: String) -> String {
     } else {
         error
     }
+}
+
+/// Creates a new event on Google and returns its id. Blocking: run it on a
+/// worker thread through [`crate::blocking::run`].
+pub fn create_event(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    title: &str,
+    description: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<String, String> {
+    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+
+    api::insert_event(&tokens.access_token, calendar_id, title, description, start, end)
+        .map_err(describe_event_write_error)
+}
+
+/// Updates an existing event on Google: title, description, start and end.
+/// Blocking: run it on a worker thread through [`crate::blocking::run`].
+pub fn update_event(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+    title: &str,
+    description: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<(), String> {
+    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+
+    api::patch_event(&tokens.access_token, calendar_id, event_id, title, description, start, end)
+        .map_err(describe_event_write_error)
+}
+
+/// Deletes a single event on Google. Blocking: run it on a worker thread
+/// through [`crate::blocking::run`]. Tasks are Google Tasks, not calendar
+/// events, so callers should guard with [`Event::is_task`] before reaching
+/// here.
+pub fn delete_event(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<(), String> {
+    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+
+    api::delete_event(&tokens.access_token, calendar_id, event_id)
+        .map_err(describe_event_write_error)
 }
 
 pub fn day_heading(day: NaiveDate, today: NaiveDate) -> String {

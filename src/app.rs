@@ -231,6 +231,15 @@ pub enum Message {
     },
     /// Google's answer to a dragged time change.
     EventTimeSaved(String, Result<(), String>),
+    /// The user clicked Delete on an event's details card. The confirmation
+    /// prompt opens before anything is sent to Google.
+    EventDeleteRequested(String),
+    /// The user confirmed the deletion prompt.
+    EventDeleteConfirmed(String),
+    /// The user dismissed the deletion prompt without deleting.
+    EventDeleteCancelled,
+    /// Google's answer to a single-event deletion.
+    EventDeleted(String, Result<(), String>),
     /// Tick a Google Task off, or put it back.
     TaskToggled(String),
     TaskCompletionSaved(String, bool, Result<(), String>),
@@ -262,6 +271,53 @@ pub enum Message {
     CalendarMonthToggled,
     /// Move the month picker by a number of months, positive or negative.
     CalendarMonthShift(i32),
+
+    /// A click or drag on empty grid space asked for a new event. The popup
+    /// opens on the default calendar, spanning these times.
+    EventDraftStarted {
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    },
+    /// The new event's title was edited.
+    EventDraftTitleChanged(String),
+    /// The new event's description was edited.
+    EventDraftDescriptionChanged(String),
+    /// The start field was edited, as `HH:MM`.
+    EventDraftStartChanged(String),
+    /// The end field was edited, as `HH:MM`.
+    EventDraftEndChanged(String),
+    /// The new event was moved to another calendar.
+    EventDraftCalendarSelected(String),
+    /// The calendar dropdown in the add-event popup was opened or closed.
+    EventDraftCalendarDropdownToggled,
+    /// The add-event popup was dismissed without saving.
+    EventDraftCancelled,
+    /// Write the new event to Google.
+    EventDraftSaveRequested,
+    /// Google's answer to creating the event, carrying the chip to draw.
+    EventDraftSaved(Result<calendar::Event, String>),
+
+    /// The user asked to edit an existing event, from the details card.
+    EventEditRequested(String),
+    /// The edited event's title was changed.
+    EventEditTitleChanged(String),
+    /// The edited event's description was changed.
+    EventEditDescriptionChanged(String),
+    /// The edited event's start field was edited, as `HH:MM`.
+    EventEditStartChanged(String),
+    /// The edited event's end field was edited, as `HH:MM`.
+    EventEditEndChanged(String),
+    /// The edited event was moved to another calendar.
+    EventEditCalendarSelected(String),
+    /// The edit-event popup was dismissed without saving.
+    EventEditCancelled,
+    /// Write the edited event to Google.
+    EventEditSaveRequested,
+    /// Google's answer to updating the event.
+    EventEditSaved(Result<(), String>),
+
+    /// The calendar new events are created on was changed.
+    DefaultCalendarSelected(String),
 }
 
 /// The parts of a play request that survive the trip through rendering.
@@ -976,6 +1032,71 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDeleteRequested(id) => {
+            // Only calendar events can be deleted this way; Google Tasks live
+            // under the Tasks API and are ticked off instead.
+            let is_task = state
+                .calendar
+                .event(&id)
+                .map(|event| event.is_task())
+                .unwrap_or(false);
+            if is_task {
+                return Task::none();
+            }
+            state.calendar.pending_delete = Some(id);
+            Task::none()
+        }
+
+        Message::EventDeleteConfirmed(id) => {
+            let Some(calendar_id) = state
+                .calendar
+                .event(&id)
+                .filter(|event| !event.is_task())
+                .map(|event| event.calendar_id.clone())
+            else {
+                state.calendar.pending_delete = None;
+                return Task::none();
+            };
+
+            let client_id = state.config.calendar.client_id.clone();
+            let client_secret = state.config.calendar.client_secret.clone();
+            let request_id = id.clone();
+            state.calendar.error = None;
+
+            blocking::run(move || {
+                calendar::delete_event(
+                    &client_id,
+                    &client_secret,
+                    &calendar_id,
+                    &request_id,
+                )
+            })
+            .map(move |result| Message::EventDeleted(id.clone(), result))
+        }
+
+        Message::EventDeleteCancelled => {
+            state.calendar.pending_delete = None;
+            Task::none()
+        }
+
+        Message::EventDeleted(id, Ok(())) => {
+            state.calendar.pending_delete = None;
+            // The event is gone on Google's side, so drop it from the day in
+            // view. The next sync reconciles the cache.
+            state.calendar.events.retain(|event| event.id != id);
+            if state.calendar.open_event.as_deref() == Some(id.as_str()) {
+                state.calendar.open_event = None;
+            }
+            Task::none()
+        }
+
+        Message::EventDeleted(_id, Err(error)) => {
+            state.calendar.pending_delete = None;
+            log::warn!("could not delete the event: {error}");
+            state.calendar.error = Some(error);
+            Task::none()
+        }
+
         Message::TaskToggled(id) => {
             let Some((calendar_id, previous)) = state
                 .calendar
@@ -1166,6 +1287,219 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 state.calendar.month = month;
             }
             Task::none()
+        }
+
+        Message::EventDraftStarted { start, end } => {
+            let Some(calendar_id) = state.calendar.default_calendar_id(&state.config.calendar) else {
+                state.calendar.error =
+                    Some("Connect Google Calendar in Settings to add events".to_owned());
+                return Task::none();
+            };
+
+            state.calendar.error = None;
+            state.calendar.begin_draft(calendar_id, start, end);
+            Task::none()
+        }
+
+        Message::EventDraftTitleChanged(title) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.title = title;
+            }
+            Task::none()
+        }
+
+        Message::EventDraftDescriptionChanged(description) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.description = description;
+            }
+            Task::none()
+        }
+
+        Message::EventDraftStartChanged(text) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.set_start_text(text);
+            }
+            Task::none()
+        }
+
+        Message::EventDraftEndChanged(text) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.set_end_text(text);
+            }
+            Task::none()
+        }
+
+        Message::EventDraftCalendarSelected(id) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.calendar_id = id;
+                draft.calendar_dropdown_open = false;
+            }
+            Task::none()
+        }
+
+        Message::EventDraftCalendarDropdownToggled => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.calendar_dropdown_open = !draft.calendar_dropdown_open;
+            }
+            Task::none()
+        }
+
+        Message::EventDraftCancelled => {
+            state.calendar.draft = None;
+            Task::none()
+        }
+
+        Message::EventDraftSaveRequested => {
+            let Some(draft) = state.calendar.draft.clone() else {
+                return Task::none();
+            };
+
+            if draft.end <= draft.start {
+                state.calendar.error = Some("The end time has to be after the start".to_owned());
+                return Task::none();
+            }
+
+            let color = state.calendar.calendar_color(&draft.calendar_id);
+            let client_id = state.config.calendar.client_id.clone();
+            let client_secret = state.config.calendar.client_secret.clone();
+            state.calendar.error = None;
+
+            blocking::run(move || {
+                let id = calendar::create_event(
+                    &client_id,
+                    &client_secret,
+                    &draft.calendar_id,
+                    &draft.title,
+                    &draft.description,
+                    draft.start,
+                    draft.end,
+                )?;
+
+                Ok(calendar::Event {
+                    id,
+                    calendar_id: draft.calendar_id.clone(),
+                    title: if draft.title.trim().is_empty() {
+                        "(No title)".to_owned()
+                    } else {
+                        draft.title.clone()
+                    },
+                    start: draft.start,
+                    end: draft.end,
+                    all_day: false,
+                    color,
+                    completed: false,
+                    details: calendar::Details {
+                        description: draft.description.clone(),
+                        ..calendar::Details::default()
+                    },
+                })
+            })
+            .map(Message::EventDraftSaved)
+        }
+
+        Message::EventDraftSaved(Ok(event)) => {
+            state.calendar.draft = None;
+            state.calendar.add_event(event);
+            Task::none()
+        }
+
+        Message::EventDraftSaved(Err(error)) => {
+            // The popup stays open so the half-filled event is not lost.
+            log::warn!("could not create the event: {error}");
+            state.calendar.error = Some(error);
+            Task::none()
+        }
+
+        Message::EventEditRequested(id) => {
+            state.calendar.begin_edit(&id);
+            Task::none()
+        }
+
+        Message::EventEditTitleChanged(title) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.title = title;
+            }
+            Task::none()
+        }
+
+        Message::EventEditDescriptionChanged(description) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.description = description;
+            }
+            Task::none()
+        }
+
+        Message::EventEditStartChanged(text) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.set_start_text(text);
+            }
+            Task::none()
+        }
+
+        Message::EventEditEndChanged(text) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.set_end_text(text);
+            }
+            Task::none()
+        }
+
+        Message::EventEditCalendarSelected(id) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.calendar_id = id;
+            }
+            Task::none()
+        }
+
+        Message::EventEditCancelled => {
+            state.calendar.edit_draft = None;
+            Task::none()
+        }
+
+        Message::EventEditSaveRequested => {
+            let Some(draft) = state.calendar.edit_draft.clone() else {
+                return Task::none();
+            };
+
+            if draft.end <= draft.start {
+                state.calendar.error = Some("The end time has to be after the start".to_owned());
+                return Task::none();
+            }
+
+            let client_id = state.config.calendar.client_id.clone();
+            let client_secret = state.config.calendar.client_secret.clone();
+            state.calendar.error = None;
+
+            blocking::run(move || {
+                calendar::update_event(
+                    &client_id,
+                    &client_secret,
+                    &draft.calendar_id,
+                    &draft.id,
+                    &draft.title,
+                    &draft.description,
+                    draft.start,
+                    draft.end,
+                )?;
+                Ok(())
+            })
+            .map(Message::EventEditSaved)
+        }
+
+        Message::EventEditSaved(Ok(())) => {
+            state.calendar.edit_draft = None;
+            Task::none()
+        }
+
+        Message::EventEditSaved(Err(error)) => {
+            // The popup stays open so the half-filled edit is not lost.
+            log::warn!("could not update the event: {error}");
+            state.calendar.error = Some(error);
+            Task::none()
+        }
+
+        Message::DefaultCalendarSelected(id) => {
+            state.config.calendar.default_calendar = if id.is_empty() { None } else { Some(id) };
+            queue_save(state)
         }
     }
 }

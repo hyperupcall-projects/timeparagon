@@ -3,9 +3,10 @@
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
-    button, canvas as canvas_widget, column, container, mouse_area, row, scrollable, stack, text,
-    text_input, toggler, Space,
+    button, canvas as canvas_widget, column, container, mouse_area, row, scrollable,
+    stack, text, text_input, toggler, Space,
 };
+use iced::font::Weight;
 use iced::{
     Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
     mouse,
@@ -34,6 +35,9 @@ const EDGE_GRAB: f32 = 8.0;
 const SNAP_MINUTES: i32 = 15;
 /// The shortest an event can be dragged to.
 const MIN_DURATION: i32 = SNAP_MINUTES;
+/// The length a new event gets from a plain click, matching Google Calendar's
+/// one-hour default.
+const DEFAULT_DURATION: i32 = 60;
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // The clock takes the day grid's place while it is open. The calendar is
@@ -87,8 +91,16 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     // The root stays a stack whether or not a card is open. Swapping the root
     // widget throws away the day grid's scroll state, which jumps the bar.
-    let overlay = if state.calendar.open_event.is_some() {
-        details_overlay(state, metrics)
+    let overlay = if state.calendar.draft.is_some() {
+        draft_overlay(state, metrics)
+    } else if state.calendar.edit_draft.is_some() {
+        edit_overlay(state, metrics)
+    } else if state.calendar.open_event.is_some() {
+        let mut layers: Vec<Element<'a, Message>> = vec![details_overlay(state, metrics)];
+        if state.calendar.pending_delete.is_some() {
+            layers.push(delete_confirmation(state, metrics));
+        }
+        stack(layers).into()
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -100,13 +112,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     stack![content, overlay].into()
 }
 
-/// The top of the calendar: a month picker, the calendars menu and the way into
-/// settings, then the day in view flanked by the arrows that step it a day at a
-/// time.
-///
-/// The controls are split across two rows because at 200px a single row cannot
-/// hold the arrows, the month button, the heading and the menu without the
-/// heading being squeezed to nothing.
+/// The top of the calendar: the month picker, the day in view, the calendars
+/// menu and the way into settings. The day sits between the month picker and
+/// the menu, and tapping the month opens a picker where a day can be chosen
+/// directly instead of stepping with arrows.
 fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
     let heading = calendar::day_heading(state.calendar.day, today);
@@ -135,27 +144,20 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .on_press(Message::ScreenSelected(crate::app::Screen::Settings))
         .style(button::secondary);
 
-    let top = row![
-        month,
-        iced::widget::Space::new().width(Fill),
-        menu,
-        settings
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
+    let day = text(heading)
+        .size(metrics.label() + 1.0)
+        .font(Font {
+            weight: Weight::Bold,
+            ..Font::DEFAULT
+        })
+        .center()
+        .width(Fill);
 
-    let nav = row![
-        nav_button("◀", Message::CalendarDayShift(-1), metrics),
-        text(heading)
-            .size(metrics.label() + 1.0)
-            .width(Fill)
-            .center(),
-        nav_button("▶", Message::CalendarDayShift(1), metrics),
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
+    let top = row![month, day, menu, settings]
+        .spacing(metrics.spacing)
+        .align_y(Alignment::Center);
 
-    column![top, nav].spacing(metrics.spacing).into()
+    top.into()
 }
 
 /// A square button for stepping a day or a month at a time.
@@ -169,10 +171,10 @@ fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Elemen
         .into()
 }
 
-/// The vertical space the two-row header takes, so an overlay can start below
+/// The vertical space the header row takes, so an overlay can start below
 /// it rather than over it.
 fn header_offset(metrics: &Metrics) -> f32 {
-    metrics.padding + metrics.icon_button() * 2.0 + metrics.spacing * 2.0
+    metrics.padding + metrics.icon_button() + metrics.spacing
 }
 
 /// The small switch beside the sync line: the same setting the menu and the
@@ -464,6 +466,14 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
     let height = hour_height * 24.0;
     let compact = metrics.breakpoint.is_compact();
 
+    // Empty grid space draws out a new event, unless a card is already open:
+    // then a click there is how the card is dismissed.
+    let can_create = state.calendar.open_event.is_none() && state.calendar.draft.is_none();
+    let create_color = state
+        .calendar
+        .default_calendar_id(&state.config.calendar)
+        .map_or(colors::DEFAULT_EVENT, |id| state.calendar.calendar_color(&id));
+
     scrollable(
         canvas_widget(DayCanvas {
             blocks,
@@ -473,6 +483,8 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             compact,
             day_start_hour,
             day,
+            can_create,
+            create_color,
         })
         .width(Fill)
         .height(Length::Fixed(height)),
@@ -861,6 +873,27 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 .into(),
         );
     }
+    // Editing an existing calendar event reuses the same fields as creating
+    // one: title, time, calendar and description. Google Tasks are not
+    // calendar events and cannot be edited this way.
+    if !is_task(event) {
+        let id = event.id.clone();
+        buttons.push(
+            button(text("Edit").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::EventEditRequested(id))
+                .style(button::primary)
+                .into(),
+        );
+        let id = event.id.clone();
+        buttons.push(
+            button(text("Delete").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::EventDeleteRequested(id))
+                .style(button::secondary)
+                .into(),
+        );
+    }
     buttons.push(
         button(text("Close").size(metrics.label()).center().width(Fill))
             .width(Fill)
@@ -928,6 +961,493 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .height(Fill);
 
     aligned.into()
+}
+
+/// The "are you sure" prompt that covers the details card while a delete is
+/// being confirmed. Clicking outside the card cancels the deletion.
+fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(id) = state.calendar.pending_delete.as_deref() else {
+        return iced::widget::Space::new().width(0.0).height(0.0).into();
+    };
+    let Some(event) = state.calendar.event(id) else {
+        return iced::widget::Space::new().width(0.0).height(0.0).into();
+    };
+
+    // Clicking outside the card puts the prompt away without deleting.
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new()).width(Fill).height(Fill),
+    )
+    .on_press(Message::EventDeleteCancelled);
+
+    let title = text("Delete this event?").size(metrics.label() + 1.0);
+    let event_title = text(event.title.clone()).size(metrics.label()).style(text::secondary);
+
+    let buttons = row![
+        button(text("Cancel").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .on_press(Message::EventDeleteCancelled)
+            .style(button::secondary),
+        button(text("Delete").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .on_press(Message::EventDeleteConfirmed(id.to_owned()))
+            .style(button::secondary),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let card = container(
+        container(column![title, event_title, buttons])
+            .padding(metrics.padding)
+            .width(Length::Fixed(260.0))
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(palette.background.base.color.into()),
+                    border: iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            }),
+    )
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill);
+
+    stack![dismiss, card].into()
+}
+
+/// The add-event popup, opened by a click or a drag on empty grid space.
+///
+/// It follows the shape of Google Calendar's own dialog: a title, the event
+/// kind, the time, the calendar and a description, with Save at the foot. Only
+/// the times, the calendar and the description are editable here; the event
+/// kind is shown for parity but only "Event" is implemented.
+fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(draft) = state.calendar.draft.as_ref() else {
+        return iced::widget::Space::new().width(0.0).height(0.0).into();
+    };
+
+    // Clicking outside the card puts the draft away, the way the menu closes.
+    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
+        .on_press(Message::EventDraftCancelled);
+
+    let header = row![
+        text("New event").size(metrics.label() + 1.0).width(Fill),
+        button(text("✕").size(metrics.label()).center())
+            .width(Length::Fixed(metrics.icon_button()))
+            .height(Length::Fixed(metrics.icon_button()))
+            .padding(0.0)
+            .on_press(Message::EventDraftCancelled)
+            .style(button::secondary),
+    ]
+    .align_y(Alignment::Center);
+
+    let title = text_input("Add title", &draft.title)
+        .on_input(Message::EventDraftTitleChanged)
+        .size(metrics.label() + 2.0)
+        .width(Fill);
+
+    let kinds: Element<'a, Message> = button(text("Event").size(metrics.label()).center())
+        .style(button::primary)
+        .into();
+
+    let when = column![
+        text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
+        row![
+            text_input("09:00", &draft.start_text)
+                .on_input(Message::EventDraftStartChanged)
+                .size(metrics.label())
+                .width(Length::Fixed(72.0)),
+            text("–").size(metrics.label()),
+            text_input("10:00", &draft.end_text)
+                .on_input(Message::EventDraftEndChanged)
+                .size(metrics.label())
+                .width(Length::Fixed(72.0)),
+        ]
+        .spacing(6.0)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(4.0)
+    .width(Fill);
+
+    let description = column![
+        text("Description")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+        text_input("Add description", &draft.description)
+            .on_input(Message::EventDraftDescriptionChanged)
+            .size(metrics.label())
+            .width(Fill)
+            .padding(8.0),
+    ]
+    .spacing(2.0)
+    .width(Fill);
+
+    let actions = row![
+        Space::new().width(Fill),
+        button(text("Cancel").size(metrics.label()).center())
+            .on_press(Message::EventDraftCancelled)
+            .style(button::secondary),
+        button(text("Save").size(metrics.label()).center())
+            .on_press(Message::EventDraftSaveRequested)
+            .style(button::primary),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
+
+    let panel = column![
+        header,
+        title,
+        kinds,
+        when,
+        draft_calendar_picker(state, metrics),
+        description,
+        actions,
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let card = container(panel)
+        .padding(metrics.padding)
+        .width(Fill)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+
+    // Swallow presses on the card so a click on its blank area cannot fall
+    // through to the dismiss layer and close the draft.
+    let card = mouse_area(card).on_press(Message::Ignored);
+
+    let aligned = column![
+        iced::widget::Space::new().height(Fill),
+        container(card).padding(metrics.padding).width(Fill),
+        iced::widget::Space::new().height(Fill),
+    ]
+    .width(Fill)
+    .height(Fill);
+
+    stack![dismiss, aligned].into()
+}
+
+/// The edit-event popup, opened from the details card of an existing event.
+///
+/// It mirrors the add-event popup: title, time, calendar and description,
+/// pre-filled from the event the user clicked. Save writes the changes to
+/// Google; Cancel throws them away.
+fn edit_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(draft) = state.calendar.edit_draft.as_ref() else {
+        return iced::widget::Space::new().width(0.0).height(0.0).into();
+    };
+
+    // Clicking outside the card puts the edit away.
+    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
+        .on_press(Message::EventEditCancelled);
+
+    let header = row![
+        text("Edit event").size(metrics.label() + 1.0).width(Fill),
+        button(text("✕").size(metrics.label()).center())
+            .width(Length::Fixed(metrics.icon_button()))
+            .height(Length::Fixed(metrics.icon_button()))
+            .padding(0.0)
+            .on_press(Message::EventEditCancelled)
+            .style(button::secondary),
+    ]
+    .align_y(Alignment::Center);
+
+    let title = text_input("Add title", &draft.title)
+        .on_input(Message::EventEditTitleChanged)
+        .size(metrics.label() + 2.0)
+        .width(Fill);
+
+    let kinds: Element<'a, Message> = button(text("Event").size(metrics.label()).center())
+        .style(button::primary)
+        .into();
+
+    let when = column![
+        text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
+        row![
+            text_input("09:00", &draft.start_text)
+                .on_input(Message::EventEditStartChanged)
+                .size(metrics.label())
+                .width(Length::Fixed(72.0)),
+            text("–").size(metrics.label()),
+            text_input("10:00", &draft.end_text)
+                .on_input(Message::EventEditEndChanged)
+                .size(metrics.label())
+                .width(Length::Fixed(72.0)),
+        ]
+        .spacing(6.0)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(4.0)
+    .width(Fill);
+
+    let description = column![
+        text("Description")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+        text_input("Add description", &draft.description)
+            .on_input(Message::EventEditDescriptionChanged)
+            .size(metrics.label())
+            .width(Fill)
+            .padding(8.0),
+    ]
+    .spacing(2.0)
+    .width(Fill);
+
+    let actions = row![
+        Space::new().width(Fill),
+        button(text("Cancel").size(metrics.label()).center())
+            .on_press(Message::EventEditCancelled)
+            .style(button::secondary),
+        button(text("Save").size(metrics.label()).center())
+            .on_press(Message::EventEditSaveRequested)
+            .style(button::primary),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
+
+    let panel = column![
+        header,
+        title,
+        kinds,
+        when,
+        draft_calendar_picker(state, metrics),
+        description,
+        actions,
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let card = container(panel)
+        .padding(metrics.padding)
+        .width(Fill)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+
+    // Swallow presses on the card so a click on its blank area cannot fall
+    // through to the dismiss layer and close the edit.
+    let card = mouse_area(card).on_press(Message::Ignored);
+
+    let aligned = column![
+        iced::widget::Space::new().height(Fill),
+        container(card).padding(metrics.padding).width(Fill),
+        iced::widget::Space::new().height(Fill),
+    ]
+    .width(Fill)
+    .height(Fill);
+
+    stack![dismiss, aligned].into()
+}
+
+/// A calendar offered in the add-event popup's calendar picker.
+#[derive(Debug, Clone, PartialEq)]
+struct CalendarChoice {
+    id: String,
+    name: String,
+    color: Color,
+}
+
+impl std::fmt::Display for CalendarChoice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.name)
+    }
+}
+
+/// A small colored circle used as a calendar swatch in the dropdown.
+fn color_circle<'a>(color: Color) -> Element<'a, Message> {
+    container(iced::widget::Space::new().width(10.0).height(10.0))
+        .style(move |_theme| container::Style {
+            background: Some(color.into()),
+            border: iced::Border {
+                radius: 5.0.into(),
+                ..iced::Border::default()
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// The calendar the new event will be created on. A dropdown when there is
+/// room, and a button that cycles the options when there is not.
+fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let options: Vec<CalendarChoice> = state
+        .calendar
+        .calendars
+        .iter()
+        .filter(|calendar| !calendar.is_task_list())
+        .map(|calendar| CalendarChoice {
+            id: calendar.id.clone(),
+            name: calendar.name.clone(),
+            color: calendar.color,
+        })
+        .collect();
+
+    let current = state
+        .calendar
+        .draft
+        .as_ref()
+        .map(|draft| draft.calendar_id.clone())
+        .unwrap_or_default();
+    let selected = options.iter().find(|option| option.id == current).cloned();
+    let dropdown_open = state
+        .calendar
+        .draft
+        .as_ref()
+        .map(|draft| draft.calendar_dropdown_open)
+        .unwrap_or(false);
+
+    let caption = text("Calendar")
+        .size(metrics.label() - 1.0)
+        .style(text::secondary);
+
+    if metrics.breakpoint.is_compact() {
+        let shown = selected
+            .as_ref()
+            .map(|option| option.name.clone())
+            .unwrap_or_else(|| "Calendar".to_owned());
+        let next = next_calendar(&options, selected.as_ref());
+
+        let control = button(text(shown).size(metrics.label()).center().width(Fill)).width(Fill);
+        let control = match next {
+            Some(option) => control.on_press(Message::EventDraftCalendarSelected(option.id)),
+            None => control,
+        };
+
+        column![caption, control.style(button::secondary)]
+            .spacing(2.0)
+            .width(Fill)
+            .into()
+    } else if dropdown_open {
+        calendar_dropdown_overlay(options, selected, metrics)
+    } else {
+        let shown = selected
+            .as_ref()
+            .map(|option| option.name.clone())
+            .unwrap_or_else(|| "Calendar".to_owned());
+        let color = selected.as_ref().map_or(Color::from_rgb8(0xCC, 0xCC, 0xCC), |c| c.color);
+
+        let control = button(
+            row![
+                color_circle(color),
+                text(shown).size(metrics.label()).width(Fill),
+            ]
+            .spacing(8.0)
+            .align_y(Alignment::Center)
+            .padding([2.0, 8.0])
+        )
+        .width(Fill)
+        .on_press(Message::EventDraftCalendarDropdownToggled)
+        .style(button::secondary);
+
+        column![caption, control]
+            .spacing(2.0)
+            .width(Fill)
+            .into()
+    }
+}
+
+/// The open calendar dropdown overlay: a scrollable list of calendars,
+/// each shown with its color circle to the left of the name.
+fn calendar_dropdown_overlay<'a>(
+    options: Vec<CalendarChoice>,
+    selected: Option<CalendarChoice>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
+        .on_press(Message::EventDraftCalendarDropdownToggled);
+
+    let mut list = column![];
+    for option in &options {
+        let is_selected = selected.as_ref().map_or(false, |s| s.id == option.id);
+        let id = option.id.clone();
+        let color = option.color;
+        let name = option.name.clone();
+
+        let item = button(
+            row![
+                color_circle(color),
+                text(name).size(metrics.label()).width(Fill),
+            ]
+            .spacing(8.0)
+            .align_y(Alignment::Center)
+            .padding([6.0, 10.0])
+        )
+        .width(Fill)
+        .on_press(Message::EventDraftCalendarSelected(id.clone()))
+        .style(move |theme, status| {
+            if is_selected {
+                button::primary(theme, status)
+            } else {
+                button::text(theme, status)
+            }
+        });
+
+        list = list.push(item);
+        list = list.push(Space::new().height(4.0));
+    }
+
+    let scrollable = scrollable(list)
+        .width(Fill)
+        .height(Length::Fixed(320.0));
+
+    let card = container(scrollable)
+        .padding(4.0)
+        .width(Fill)
+        .height(Length::Fixed(328.0))
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+
+    container(stack![dismiss, card])
+        .width(Fill)
+        .height(Length::Fixed(328.0))
+        .into()
+}
+
+/// The calendar after `selected`, wrapping around at the end.
+fn next_calendar(options: &[CalendarChoice], selected: Option<&CalendarChoice>) -> Option<CalendarChoice> {
+    if options.is_empty() {
+        return None;
+    }
+
+    let index = selected
+        .and_then(|current| options.iter().position(|option| option == current))
+        .map_or(0, |index| (index + 1) % options.len());
+
+    options.get(index).cloned()
 }
 
 fn is_task(event: &Event) -> bool {
@@ -1139,6 +1659,24 @@ struct DayCanvas {
     /// The date the grid is showing, so a dragged block can be turned back into
     /// a real time when it is dropped.
     day: NaiveDate,
+    /// Whether empty grid space draws out a new event. False while a card is
+    /// open, so a click there still dismisses it.
+    can_create: bool,
+    /// The color the new-event preview is drawn in, taken from the calendar the
+    /// event will land on.
+    create_color: Color,
+}
+
+/// A drag on empty grid space that is drawing out a new event.
+///
+/// Both ends are snapped to the quarter hour as the pointer moves, so the
+/// preview lands on the same times the event will.
+#[derive(Debug, Clone, Copy)]
+struct CreateDrag {
+    /// The minute the press landed on.
+    anchor_min: i32,
+    /// The minute under the pointer now.
+    head_min: i32,
 }
 
 /// What a drag on a block is doing.
@@ -1189,6 +1727,9 @@ struct DrawState {
     /// The drag in progress, if any. Kept out of the grid cache so the preview
     /// can follow the pointer without retracing the day.
     drag: std::cell::RefCell<Option<Drag>>,
+    /// The new-event drag in progress, if any. Kept out of the grid cache for
+    /// the same reason as `drag`.
+    create: std::cell::RefCell<Option<CreateDrag>>,
 }
 
 impl DrawState {
@@ -1201,6 +1742,16 @@ impl DrawState {
     fn set_drag(&self, drag: Option<Drag>) {
         *self.drag.borrow_mut() = drag;
     }
+
+    /// A copy of the new-event drag in progress, if there is one.
+    fn create(&self) -> Option<CreateDrag> {
+        *self.create.borrow()
+    }
+
+    /// Replaces the new-event drag in progress, or clears it with `None`.
+    fn set_create(&self, create: Option<CreateDrag>) {
+        *self.create.borrow_mut() = create;
+    }
 }
 
 impl Default for DrawState {
@@ -1211,6 +1762,7 @@ impl Default for DrawState {
             shift: std::cell::Cell::new(false),
             hovered: std::cell::Cell::new(None),
             drag: std::cell::RefCell::new(None),
+            create: std::cell::RefCell::new(None),
         }
     }
 }
@@ -1267,6 +1819,19 @@ impl canvas::Program<Message> for DayCanvas {
                     return Some(canvas::Action::capture());
                 }
 
+                // A new-event drag owns the pointer too, so the hover highlight
+                // stays out of the way while the preview follows it.
+                if let Some(create) = state.create() {
+                    if let Some(point) = cursor.position_in(bounds) {
+                        let head = self.snap_minute(point.y);
+                        if head != create.head_min {
+                            state.set_create(Some(CreateDrag { head_min: head, ..create }));
+                            return Some(canvas::Action::request_redraw().and_capture());
+                        }
+                    }
+                    return Some(canvas::Action::capture());
+                }
+
                 self.track_hover(state, bounds, cursor)
             }
             iced::Event::Mouse(mouse::Event::CursorLeft) => self.track_hover(state, bounds, cursor),
@@ -1292,17 +1857,39 @@ impl canvas::Program<Message> for DayCanvas {
                     return Some(canvas::Action::request_redraw().and_capture());
                 }
 
-                // Empty time closes any open card, which is how clicking away
-                // still works now that there is no dismiss layer.
+                // Empty time either draws out a new event or closes any open
+                // card, which is how clicking away still works now that there
+                // is no dismiss layer.
                 match self.hit(Some(point), bounds.width) {
                     Some(index) => {
                         let id = self.blocks.get(index)?.id.clone();
                         Some(canvas::Action::publish(Message::EventOpened(id)).and_capture())
                     }
+                    None if self.can_create => {
+                        let anchor = self.snap_minute(point.y);
+                        state.set_create(Some(CreateDrag {
+                            anchor_min: anchor,
+                            head_min: anchor,
+                        }));
+                        Some(canvas::Action::request_redraw().and_capture())
+                    }
                     None => Some(canvas::Action::publish(Message::EventClosed).and_capture()),
                 }
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                // A new-event drag is finished first: it never shares the
+                // pointer with a move or resize.
+                if let Some(create) = state.create.take() {
+                    let (start, end) = self.create_range(&create);
+                    return Some(
+                        canvas::Action::publish(Message::EventDraftStarted {
+                            start: self.time_at(start),
+                            end: self.time_at(end),
+                        })
+                        .and_capture(),
+                    );
+                }
+
                 let drag = state.drag.take()?;
 
                 // A press that never moved is a click, not a drag.
@@ -1330,6 +1917,10 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if state.create().is_some() {
+            return mouse::Interaction::Crosshair;
+        }
+
         if let Some(drag) = state.drag() {
             return match drag.mode {
                 DragMode::Move => mouse::Interaction::Grabbing,
@@ -1389,7 +1980,9 @@ impl canvas::Program<Message> for DayCanvas {
 
         let mut overlay = Frame::new(renderer, bounds.size());
         self.draw_needle(&mut overlay);
-        if let Some(drag) = drag {
+        if let Some(create) = state.create() {
+            self.draw_create(&mut overlay, &create);
+        } else if let Some(drag) = drag {
             self.draw_drag(&mut overlay, &drag);
         } else if let Some(index) = self.hit(cursor.position_in(bounds), bounds.width) {
             self.draw_hover(&mut overlay, index);
@@ -1667,6 +2260,83 @@ impl DayCanvas {
         }
     }
 
+    /// The minute-of-day a grid pixel lands on, snapped to the quarter hour
+    /// and clamped to the day.
+    fn snap_minute(&self, y: f32) -> i32 {
+        let minute_height = self.hour_height / 60.0;
+        let minutes = (y / minute_height).round() as i32;
+        let snapped = (minutes as f32 / SNAP_MINUTES as f32).round() as i32 * SNAP_MINUTES;
+        snapped.clamp(0, DAY_MINUTES)
+    }
+
+    /// The span a new-event drag covers.
+    ///
+    /// A click, or a drag too short to be a real span, gets
+    /// [`DEFAULT_DURATION`] from where it started, the way Google Calendar
+    /// does. The span is then clamped so it stays inside the day and never
+    /// inverts.
+    fn create_range(&self, create: &CreateDrag) -> (i32, i32) {
+        let (mut start, mut end) = if create.anchor_min <= create.head_min {
+            (create.anchor_min, create.head_min)
+        } else {
+            (create.head_min, create.anchor_min)
+        };
+
+        if end - start < MIN_DURATION {
+            end = start + DEFAULT_DURATION;
+        }
+
+        start = start.clamp(0, DAY_MINUTES - MIN_DURATION);
+        end = end.clamp(start + MIN_DURATION, DAY_MINUTES);
+        (start, end)
+    }
+
+    /// Draws the new-event preview: a translucent block in the target
+    /// calendar's color, labelled with the span being drawn.
+    fn draw_create(&self, frame: &mut Frame, create: &CreateDrag) {
+        let (start, end) = self.create_range(create);
+        let minute_height = self.hour_height / 60.0;
+        let grid_width = (frame.width() - self.gutter).max(40.0);
+        let bounds = Rectangle {
+            x: self.gutter + EVENT_GAP / 2.0,
+            y: start as f32 * minute_height,
+            width: (grid_width - EVENT_GAP).max(8.0),
+            height: ((end - start) as f32 * minute_height).max(16.0),
+        };
+        let shape = Path::rounded_rectangle(
+            Point::new(bounds.x, bounds.y),
+            Size::new(bounds.width, bounds.height),
+            EVENT_RADIUS.into(),
+        );
+
+        let fill = self.create_color.scale_alpha(0.75);
+        frame.fill(&shape, fill);
+        frame.stroke(
+            &shape,
+            Stroke {
+                style: Style::Solid(Color::BLACK.scale_alpha(0.55)),
+                width: 1.0,
+                ..Stroke::default()
+            },
+        );
+
+        let ink = on_color(fill);
+        let title_size = if self.compact { 11.0 } else { 12.0 };
+        let text_width = (bounds.width - 10.0).max(8.0);
+        fill_glyphs(frame, Text {
+            content: format!("{} – {}", self.clock_label(start), self.clock_label(end)),
+            position: Point::new(bounds.x + 6.0, bounds.y + 3.0),
+            color: ink,
+            size: Pixels(title_size),
+            font: Font::DEFAULT,
+            align_x: iced::alignment::Horizontal::Left.into(),
+            align_y: iced::alignment::Vertical::Top,
+            line_height: text::LineHeight::default(),
+            shaping: text::Shaping::Basic,
+            max_width: text_width,
+        });
+    }
+
     /// The real time a previewed minute-of-day lands on.
     fn time_at(&self, minutes: i32) -> DateTime<Local> {
         let offset = self.day_start_hour as i32 * 60;
@@ -1927,6 +2597,8 @@ mod tests {
             compact: false,
             day_start_hour: 0,
             day: chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+            can_create: true,
+            create_color: Color::WHITE,
         }
     }
 
@@ -2182,6 +2854,63 @@ mod tests {
         let three = late.time_at(0);
         assert_eq!(three.hour(), 3);
         assert_eq!(late.clock_label(0), "03:00");
+    }
+
+    #[test]
+    fn a_click_on_empty_space_gets_a_default_length() {
+        let canvas = canvas_with_one_block();
+        // 9:00 is 540px down at 60px/hour; the press and release are the same
+        // pixel, so this is a click rather than a drag.
+        let create = CreateDrag {
+            anchor_min: canvas.snap_minute(540.0),
+            head_min: canvas.snap_minute(540.0),
+        };
+
+        assert_eq!(canvas.create_range(&create), (9 * 60, 10 * 60));
+    }
+
+    #[test]
+    fn a_drag_on_empty_space_spans_what_was_drawn() {
+        let canvas = canvas_with_one_block();
+        let create = CreateDrag {
+            anchor_min: canvas.snap_minute(540.0),
+            head_min: canvas.snap_minute(660.0),
+        };
+
+        assert_eq!(canvas.create_range(&create), (9 * 60, 11 * 60));
+    }
+
+    #[test]
+    fn a_drag_upwards_still_spans_forwards() {
+        let canvas = canvas_with_one_block();
+        let create = CreateDrag {
+            anchor_min: canvas.snap_minute(660.0),
+            head_min: canvas.snap_minute(540.0),
+        };
+
+        assert_eq!(canvas.create_range(&create), (9 * 60, 11 * 60));
+    }
+
+    #[test]
+    fn a_new_event_never_runs_off_the_end_of_the_day() {
+        let canvas = canvas_with_one_block();
+        // A click at the very foot of the day still fits a full default span.
+        let create = CreateDrag {
+            anchor_min: canvas.snap_minute(24.0 * 60.0),
+            head_min: canvas.snap_minute(24.0 * 60.0),
+        };
+        let (start, end) = canvas.create_range(&create);
+
+        assert!(end <= DAY_MINUTES);
+        assert!(end - start >= MIN_DURATION);
+    }
+
+    #[test]
+    fn the_new_event_ends_snap_to_the_quarter_hour() {
+        let canvas = canvas_with_one_block();
+        // 9:07 lands on 9:00, 9:08 on 9:15.
+        assert_eq!(canvas.snap_minute(9.0 * 60.0 + 7.0), 9 * 60);
+        assert_eq!(canvas.snap_minute(9.0 * 60.0 + 8.0), 9 * 60 + 15);
     }
 
     #[test]

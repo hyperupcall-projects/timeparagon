@@ -426,6 +426,90 @@ pub fn patch_event_time(
     patch(&url, access_token, &body, "Google Calendar")
 }
 
+/// Updates an existing event on Google: title, description, start and end.
+/// Blocking: call it from [`crate::blocking::run`].
+pub fn patch_event(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    title: &str,
+    description: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+    let mut body = serde_json::json!({
+        "summary": title,
+        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
+        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
+    });
+    if !description.is_empty() {
+        body["description"] = serde_json::Value::String(description.to_owned());
+    }
+
+    patch(&url, access_token, &body.to_string(), "Google Calendar")
+}
+
+/// Creates a timed event on Google and returns its id.
+///
+/// Only the fields the add-event popup collects are sent: the title, an
+/// optional description, and the two times. Blocking: call it from
+/// [`crate::blocking::run`].
+pub fn insert_event(
+    access_token: &str,
+    calendar_id: &str,
+    title: &str,
+    description: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<String, String> {
+    let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
+    let mut body = serde_json::json!({
+        "summary": title,
+        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
+        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
+    });
+    if !description.is_empty() {
+        body["description"] = serde_json::Value::String(description.to_owned());
+    }
+
+    let response = post(&url, access_token, &body.to_string(), "Google Calendar")?;
+    let created: CreatedEvent = serde_json::from_str(&response)
+        .map_err(|error| format!("Google Calendar response: {error}"))?;
+
+    if created.id.is_empty() {
+        return Err("Google Calendar did not return the new event".to_owned());
+    }
+    Ok(created.id)
+}
+
+/// Deletes a single event on Google. A successful call returns `204 No
+/// Content` and there is no body to parse. Blocking: call it from
+/// [`crate::blocking::run`].
+pub fn delete_event(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+
+    delete(&url, access_token, "Google Calendar")
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatedEvent {
+    #[serde(default)]
+    id: String,
+}
+
 /// `webViewLink` opens the task in the Google Tasks UI. The API id is the
 /// fallback when that field is missing.
 fn task_link(task: &TaskEntry) -> String {
@@ -669,6 +753,57 @@ fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(),
 
     match result {
         Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, response)) => {
+            let detail = response
+                .into_json::<ApiErrorBody>()
+                .ok()
+                .map(|body| body.error.message)
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| format!("HTTP {code}"));
+            Err(format!("{context}: {detail}"))
+        }
+        Err(error) => Err(format!("{context}: {error}")),
+    }
+}
+
+/// Sends a `DELETE` to Google and discards the response.
+///
+/// A successful deletion comes back as `204 No Content` with no body, so there
+/// is nothing to parse. Blocking: call it from [`crate::blocking::run`].
+fn delete(url: &str, access_token: &str, context: &str) -> Result<(), String> {
+    let result = ureq::request("DELETE", url)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .call();
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, response)) => {
+            let detail = response
+                .into_json::<ApiErrorBody>()
+                .ok()
+                .map(|body| body.error.message)
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| format!("HTTP {code}"));
+            Err(format!("{context}: {detail}"))
+        }
+        Err(error) => Err(format!("{context}: {error}")),
+    }
+}
+
+/// Sends a JSON body to Google and returns the response text.
+///
+/// Used for the one call that needs something back: creating an event, whose
+/// id the caller keeps so the new chip can be drawn without a full sync.
+fn post(url: &str, access_token: &str, body: &str, context: &str) -> Result<String, String> {
+    let result = ureq::post(url)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("Content-Type", "application/json")
+        .send_string(body);
+
+    match result {
+        Ok(response) => response
+            .into_string()
+            .map_err(|error| format!("{context}: {error}")),
         Err(ureq::Error::Status(code, response)) => {
             let detail = response
                 .into_json::<ApiErrorBody>()

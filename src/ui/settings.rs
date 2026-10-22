@@ -17,6 +17,20 @@ use super::layout::Metrics;
 /// it, which at 200px means visibly clipped labels.
 const SCROLLBAR_GUTTER: f32 = 14.0;
 
+/// A calendar offered in the default-calendar picker. The name is shown to
+/// the user; the id is what gets saved as the default.
+#[derive(Clone, PartialEq)]
+struct CalendarOption {
+    id: String,
+    name: String,
+}
+
+impl std::fmt::Display for CalendarOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // The clock lives inside the calendar now, so there is one menu rather
     // than one per tab: everything is set from the same place.
@@ -252,6 +266,47 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             settings.day_start_hour(),
             Message::CalendarDayEndChanged,
         )
+        .into(),
+        metrics,
+    ));
+
+    // The calendar new events are created on. Task lists are excluded since
+    // they hold Google Tasks rather than calendar events.
+    let options: Vec<calendar::Calendar> = state
+        .calendar
+        .calendars
+        .iter()
+        .filter(|calendar| !calendar.is_task_list())
+        .cloned()
+        .collect();
+
+    let selected = options
+        .iter()
+        .find(|calendar| settings.default_calendar.as_deref() == Some(calendar.id.as_str()))
+        .cloned();
+
+    let option_map: Vec<CalendarOption> = options
+        .iter()
+        .map(|calendar| CalendarOption {
+            id: calendar.id.clone(),
+            name: calendar.name.clone(),
+        })
+        .collect();
+
+    let selected_option = selected.map(|calendar| CalendarOption {
+        id: calendar.id.clone(),
+        name: calendar.name.clone(),
+    });
+
+    section = section.push(field(
+        "Default calendar for new events",
+        pick_list(
+            option_map,
+            selected_option,
+            |option: CalendarOption| Message::DefaultCalendarSelected(option.id),
+        )
+        .text_size(metrics.label())
+        .width(Fill)
         .into(),
         metrics,
     ));

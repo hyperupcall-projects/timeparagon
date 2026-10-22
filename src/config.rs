@@ -150,6 +150,11 @@ pub struct CalendarSettings {
     /// shared task blue.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
+    /// The calendar new events are created on, by id. `None` means the primary
+    /// calendar, falling back to the first writable one. Set from the calendar
+    /// settings pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_calendar: Option<String>,
 }
 
 impl Default for CalendarSettings {
@@ -162,6 +167,7 @@ impl Default for CalendarSettings {
             show_tasks: true,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),
+            default_calendar: None,
         }
     }
 }
