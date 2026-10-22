@@ -280,6 +280,36 @@ fn days_to_drop(days: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -
     }
 }
 
+/// The months that should leave the on-disk cache while `current` is in view.
+///
+/// The current month, the month before it and the month after it are never
+/// dropped, and the [`EXTRA_CACHED_DAYS`] closest months beyond that
+/// window survive too. Everything further out goes, furthest first.
+fn months_to_drop(months: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -> Vec<NaiveDate> {
+    let current_month = first_of_month(current);
+    let current_index = current_month.year() as i32 * 12 + current_month.month() as i32;
+
+    let mut far: Vec<NaiveDate> = months
+        .into_iter()
+        .filter(|month| {
+            let m = first_of_month(*month);
+            let index = m.year() as i32 * 12 + m.month() as i32;
+            i64::from((index - current_index).abs()) > ALWAYS_KEPT_DISTANCE
+        })
+        .collect();
+
+    far.sort_by_key(|month| {
+        let m = first_of_month(*month);
+        let index = m.year() as i32 * 12 + m.month() as i32;
+        (index - current_index).abs()
+    });
+    if far.len() <= EXTRA_CACHED_DAYS {
+        Vec::new()
+    } else {
+        far.split_off(EXTRA_CACHED_DAYS)
+    }
+}
+
 /// A task list's color: the user's choice if there is one, otherwise Google's
 /// blue.
 fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
@@ -308,6 +338,9 @@ pub struct Store {
     /// `boot` and a reconnect do: a store built by hand must not read or
     /// rewrite the cache the user's own days live in.
     day_cache: Option<PathBuf>,
+    /// The hour the calendar day ends, used to decide which day an event
+    /// belongs to when reading from or writing to the month cache on disk.
+    day_end_hour: u32,
     pub day: NaiveDate,
     pub last_sync: Option<DateTime<Local>>,
     pub error: Option<String>,
@@ -335,9 +368,9 @@ pub struct Store {
     pub draft: Option<Draft>,
     /// The existing event being edited, if the edit-event popup is open.
     pub edit_draft: Option<EditDraft>,
-    /// The event a delete is being confirmed for, by id. While set, the
-    /// details card is replaced by an "are you sure" prompt so a stray click
-    /// cannot wipe an event.
+    /// The event a delete is being confirmed for, by id. While set, the details
+    /// card is replaced by an "are you sure" prompt so a stray click cannot
+    /// wipe an event.
     pub pending_delete: Option<String>,
 }
 
@@ -358,6 +391,7 @@ impl Store {
             events: Vec::new(),
             cache: HashMap::new(),
             day_cache: None,
+            day_end_hour,
             day,
             last_sync: None,
             error: None,
@@ -376,6 +410,10 @@ impl Store {
     }
 
     /// A store with events already in hand, for tests and screenshots.
+    ///
+    /// The day boundary defaults to midnight (0), which is also the config
+    /// default, so cached days are filed under the same days they were fetched
+    /// for.
     pub fn with_snapshot(snapshot: Snapshot) -> Self {
         Self {
             connection: Connection::SignedIn,
@@ -385,6 +423,7 @@ impl Store {
             events: snapshot.events,
             cache: HashMap::new(),
             day_cache: None,
+            day_end_hour: 0,
             day: snapshot.day,
             last_sync: Some(snapshot.fetched_at),
             error: None,
@@ -422,6 +461,12 @@ impl Store {
         }
 
         self.trim_cache();
+    }
+
+    /// The hour the calendar day ends, used to assign events to days when
+    /// reading from or writing to the month cache on disk.
+    pub fn day_end_hour(&self) -> u32 {
+        self.day_end_hour
     }
 
     /// Moves the day in view, restoring whatever was cached for it.
@@ -478,8 +523,10 @@ impl Store {
     /// from the one in view first. The day in view, the day before it and the
     /// day after it are kept, along with [`EXTRA_CACHED_DAYS`] further days.
     ///
-    /// The days on disk are trimmed by the same rule, so both caches end up
-    /// holding the same days.
+    /// The days in memory are trimmed day by day. The months on disk are
+    /// trimmed month by month: the current month, its neighbours, and
+    /// [`EXTRA_CACHED_DAYS`] further months survive; everything further out
+    /// goes.
     fn trim_cache(&mut self) {
         let current = self.day;
 
@@ -490,14 +537,14 @@ impl Store {
         let Some(directory) = self.day_cache.as_ref() else {
             return;
         };
-        for day in days_to_drop(day_cache::days(directory), current) {
-            day_cache::remove(directory, day);
+        for month in months_to_drop(day_cache::days(directory), current) {
+            day_cache::remove(directory, month);
         }
     }
 
     /// The day's events as an earlier run left them, if it left them.
     fn read_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
-        day_cache::load(self.day_cache.as_ref()?, day)
+        day_cache::load(self.day_cache.as_ref()?, day, self.day_end_hour)
     }
 
     /// Writes one day out, so the run after this one paints it at once.
@@ -506,7 +553,7 @@ impl Store {
             return;
         };
 
-        if let Err(error) = day_cache::save(directory, day, events) {
+        if let Err(error) = day_cache::save(directory, day, events, self.day_end_hour) {
             log::warn!("could not cache {}: {error}", day);
         }
     }
@@ -1539,31 +1586,29 @@ mod tests {
         assert_eq!(second.events, parked, "the day should come back from disk");
     }
 
-    /// The days on disk are trimmed by the same rule as the memory cache.
+    /// The months on disk are trimmed by the same rule as the memory cache.
     #[test]
-    fn days_far_from_the_one_in_view_leave_the_cache_directory() {
+    fn months_far_from_the_one_in_view_leave_the_cache_directory() {
         let scratch = day_cache::Scratch::new("pruning");
         let directory = scratch.path().to_path_buf();
         let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
 
         for offset in -20..=20 {
             let day = today + chrono::Duration::days(i64::from(offset));
-            day_cache::save(&directory, day, &[]).unwrap();
+            day_cache::save(&directory, day, &[], 0).unwrap();
         }
 
         let mut store = Store::with_snapshot(empty_snapshot(today));
         store.cache_days_in(Some(directory.clone()));
 
         let left = day_cache::days(&directory);
-        assert_eq!(left.len(), 13, "the day in view, its neighbours and ten more");
-        for offset in [-6, -1, 0, 1, 6] {
-            let day = today + chrono::Duration::days(i64::from(offset));
-            assert!(left.contains(&day), "day {offset} should stay on disk");
-        }
-        for offset in [-20, -7, 7, 20] {
-            let day = today + chrono::Duration::days(i64::from(offset));
-            assert!(!left.contains(&day), "day {offset} should leave the disk");
-        }
+        // September and October are the current month and its neighbour;
+        // nothing reaches November.
+        assert_eq!(left.len(), 2, "the current month and its neighbour");
+        let september = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        let october = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        assert!(left.contains(&september), "september should stay on disk");
+        assert!(left.contains(&october), "october should stay on disk");
     }
 
     #[test]

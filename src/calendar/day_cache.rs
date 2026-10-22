@@ -2,8 +2,10 @@
 //!
 //! The in-memory cache in [`Store`](super::Store) is gone the moment the app
 //! closes, which leaves a restart staring at an empty grid until its first
-//! sync lands. Writing each day out to the XDG cache directory means a day
-//! that was open yesterday paints as soon as it is opened today.
+//! sync lands. Writing each month out to the XDG cache directory means a day
+//! that was open yesterday paints as soon as it is opened today, and stepping
+//! to another day in the same month reads from the same file instead of
+//! refetching.
 //!
 //! Nothing in here is allowed to fail loudly: a cache that cannot be read or
 //! written costs a re-sync, never the day itself.
@@ -12,17 +14,23 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
-use super::{Details, Event};
+use super::{day_at, Details, Event};
 
-/// One day's events as the cache file holds them.
+/// One month's events as the cache file holds them.
 ///
 /// `Event` cannot carry serde derives of its own because `iced::Color` only
 /// serializes behind a feature, so the color travels as its four channels.
 /// The times go through chrono's own impls, which write RFC 3339.
+#[derive(Serialize, Deserialize)]
+struct SavedMonth {
+    events: Vec<SavedEvent>,
+}
+
+/// One event as the cache file holds it.
 #[derive(Serialize, Deserialize)]
 struct SavedEvent {
     id: String,
@@ -75,8 +83,10 @@ impl From<SavedEvent> for Event {
 }
 
 /// The day's events as an earlier run wrote them, or nothing when no run has
-/// written this day or the file turns out to be unreadable.
-pub fn load(directory: &Path, day: NaiveDate) -> Option<Vec<Event>> {
+/// written this month or the file turns out to be unreadable. Only events
+/// whose start falls within `day`'s window (set by `day_end_hour`) are
+/// returned.
+pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Event>> {
     let path = directory.join(file_name(day));
 
     let bytes = match fs::read(&path) {
@@ -88,8 +98,16 @@ pub fn load(directory: &Path, day: NaiveDate) -> Option<Vec<Event>> {
         }
     };
 
-    match serde_json::from_slice::<Vec<SavedEvent>>(&bytes) {
-        Ok(saved) => Some(saved.into_iter().map(Event::from).collect()),
+    match serde_json::from_slice::<SavedMonth>(&bytes) {
+        Ok(saved) => {
+            let events: Vec<Event> = saved
+                .events
+                .into_iter()
+                .map(Event::from)
+                .filter(|event| day_at(event.start, day_end_hour) == day)
+                .collect();
+            Some(events)
+        }
         Err(error) => {
             log::warn!(
                 "{} could not be parsed, ignoring it: {error}",
@@ -100,25 +118,44 @@ pub fn load(directory: &Path, day: NaiveDate) -> Option<Vec<Event>> {
     }
 }
 
-/// Writes one day out, replacing whatever the file held.
-///
-/// The bytes go through a temporary file that is renamed into place, so a
-/// crash mid-write cannot leave a truncated day behind.
-pub fn save(directory: &Path, day: NaiveDate, events: &[Event]) -> io::Result<()> {
+/// Writes one day's events into the month file, replacing whatever that day
+/// held. The whole month is written back out, so a crash mid-write cannot
+/// leave a truncated month behind.
+pub fn save(
+    directory: &Path,
+    day: NaiveDate,
+    events: &[Event],
+    day_end_hour: u32,
+) -> io::Result<()> {
     fs::create_dir_all(directory)?;
 
-    let saved: Vec<SavedEvent> = events.iter().map(SavedEvent::from).collect();
-    let bytes = serde_json::to_vec(&saved)
+    let path = directory.join(file_name(day));
+
+    // Load the existing month, or start empty.
+    let mut month: SavedMonth = match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(SavedMonth {
+            events: Vec::new(),
+        }),
+        Err(_) => SavedMonth {
+            events: Vec::new(),
+        },
+    };
+
+    // Drop any events already stored for `day`, then add the new ones.
+    month.events.retain(|saved| day_at(saved.start, day_end_hour) != day);
+    month.events.extend(events.iter().map(SavedEvent::from));
+
+    let bytes = serde_json::to_vec(&month)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
-    let path = directory.join(file_name(day));
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, bytes)?;
     fs::rename(&temporary, path)
 }
 
-/// Every day sitting in the directory. Anything not named like a day is left
-/// out rather than guessed at, so a stray file survives its neighbours' trim.
+/// Every month sitting in the directory, as the first day of each month.
+/// Anything not named like a month is left out rather than guessed at, so a
+/// stray file survives its neighbours' trim.
 pub fn days(directory: &Path) -> Vec<NaiveDate> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -133,17 +170,24 @@ pub fn days(directory: &Path) -> Vec<NaiveDate> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
-            NaiveDate::parse_from_str(name.strip_suffix(".json")?, "%Y-%m-%d").ok()
+            let stem = name.strip_suffix(".json")?;
+            let mut parts = stem.split('-');
+            let year = parts.next()?.parse::<i32>().ok()?;
+            let month = parts.next()?.parse::<u32>().ok()?;
+            if parts.next().is_some() {
+                return None;
+            }
+            NaiveDate::from_ymd_opt(year, month, 1)
         })
         .collect()
 }
 
-/// Takes one day out of the directory. Nothing to do when it is not there.
+/// Takes one month out of the directory. Nothing to do when it is not there.
 pub fn remove(directory: &Path, day: NaiveDate) {
     let _ = fs::remove_file(directory.join(file_name(day)));
 }
 
-/// Empties the directory, so every day has to be fetched again.
+/// Empties the directory, so every month has to be fetched again.
 pub fn clear(directory: &Path) {
     match fs::remove_dir_all(directory) {
         Ok(()) => {}
@@ -152,9 +196,9 @@ pub fn clear(directory: &Path) {
     }
 }
 
-/// The file a day is filed under, e.g. `2026-10-08.json`.
+/// The file a month is filed under, e.g. `2026-10.json`.
 fn file_name(day: NaiveDate) -> String {
-    format!("{day}.json")
+    format!("{:04}-{:02}.json", day.year(), day.month())
 }
 
 /// A throwaway directory under the system's temp dir, removed when the test
@@ -171,7 +215,7 @@ impl Scratch {
             .unwrap_or_default();
 
         let path = std::env::temp_dir().join(format!(
-            "timetracker-day-cache-{}-{unique}-{name}",
+            "timetracker-month-cache-{}-{unique}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&path);
@@ -195,60 +239,154 @@ impl Drop for Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use crate::calendar::sample_snapshot;
 
     #[test]
-    fn a_day_round_trips_through_the_directory() {
+    fn a_month_round_trips_through_the_directory() {
         let scratch = Scratch::new("round-trip");
         let snapshot = sample_snapshot();
         let day = snapshot.day;
 
-        save(scratch.path(), day, &snapshot.events).unwrap();
+        save(scratch.path(), day, &snapshot.events, 0).unwrap();
 
-        assert_eq!(load(scratch.path(), day).unwrap(), snapshot.events);
+        assert_eq!(load(scratch.path(), day, 0).unwrap(), snapshot.events);
     }
 
     #[test]
     fn a_day_that_was_never_written_reads_as_nothing() {
         let scratch = Scratch::new("missing");
-
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
-        assert!(load(scratch.path(), day).is_none());
+        assert!(load(scratch.path(), day, 0).is_none());
         assert!(days(scratch.path()).is_empty());
     }
 
     #[test]
-    fn an_unreadable_day_is_ignored_rather_than_raised() {
+    fn an_unreadable_month_is_ignored_rather_than_raised() {
         let scratch = Scratch::new("broken");
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
 
         fs::write(scratch.path().join(file_name(day)), b"not json").unwrap();
 
-        assert!(load(scratch.path(), day).is_none());
-        assert_eq!(days(scratch.path()), vec![day], "it is still a day file");
+        assert!(load(scratch.path(), day, 0).is_none());
+        assert_eq!(days(scratch.path()), vec![day.with_day(1).unwrap()], "it is still a month file");
     }
 
     #[test]
-    fn only_files_named_like_a_day_are_listed() {
+    fn only_files_named_like_a_month_are_listed() {
         let scratch = Scratch::new("listing");
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
 
-        save(scratch.path(), day, &[]).unwrap();
+        save(scratch.path(), day, &[], 0).unwrap();
         fs::write(scratch.path().join("notes.txt"), b"mine").unwrap();
-        fs::write(scratch.path().join("2026-10-09.json.tmp"), b"half a day").unwrap();
+        fs::write(scratch.path().join("2026-10.json.tmp"), b"half a month").unwrap();
 
-        assert_eq!(days(scratch.path()), vec![day]);
+        assert_eq!(days(scratch.path()), vec![day.with_day(1).unwrap()]);
     }
 
     #[test]
-    fn clearing_takes_every_day_with_it() {
+    fn clearing_takes_every_month_with_it() {
         let scratch = Scratch::new("clearing");
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
-        save(scratch.path(), day, &[]).unwrap();
+        save(scratch.path(), day, &[], 0).unwrap();
 
         clear(scratch.path());
 
         assert!(days(scratch.path()).is_empty());
-        assert!(load(scratch.path(), day).is_none());
+        assert!(load(scratch.path(), day, 0).is_none());
+    }
+
+    #[test]
+    fn saving_a_day_keeps_other_days_in_the_same_month() {
+        let scratch = Scratch::new("same-month");
+        let oct_8 = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        let oct_9 = NaiveDate::from_ymd_opt(2026, 10, 9).unwrap();
+
+        let event_a = Event {
+            id: "a".to_owned(),
+            calendar_id: "cal".to_owned(),
+            title: "A".to_owned(),
+            start: Local
+                .with_ymd_and_hms(2026, 10, 8, 10, 0, 0)
+                .single()
+                .unwrap(),
+            end: Local
+                .with_ymd_and_hms(2026, 10, 8, 11, 0, 0)
+                .single()
+                .unwrap(),
+            all_day: false,
+            color: iced::Color::WHITE,
+            completed: false,
+            details: Details::default(),
+        };
+        let event_b = Event {
+            id: "b".to_owned(),
+            calendar_id: "cal".to_owned(),
+            title: "B".to_owned(),
+            start: Local
+                .with_ymd_and_hms(2026, 10, 9, 10, 0, 0)
+                .single()
+                .unwrap(),
+            end: Local
+                .with_ymd_and_hms(2026, 10, 9, 11, 0, 0)
+                .single()
+                .unwrap(),
+            all_day: false,
+            color: iced::Color::WHITE,
+            completed: false,
+            details: Details::default(),
+        };
+
+        save(scratch.path(), oct_8, &[event_a.clone()], 0).unwrap();
+        save(scratch.path(), oct_9, &[event_b.clone()], 0).unwrap();
+
+        assert_eq!(load(scratch.path(), oct_8, 0).unwrap(), vec![event_a]);
+        assert_eq!(load(scratch.path(), oct_9, 0).unwrap(), vec![event_b]);
+    }
+
+    #[test]
+    fn overwriting_a_day_replaces_its_events() {
+        let scratch = Scratch::new("overwrite");
+        let oct_8 = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+
+        let event_a = Event {
+            id: "a".to_owned(),
+            calendar_id: "cal".to_owned(),
+            title: "A".to_owned(),
+            start: Local
+                .with_ymd_and_hms(2026, 10, 8, 10, 0, 0)
+                .single()
+                .unwrap(),
+            end: Local
+                .with_ymd_and_hms(2026, 10, 8, 11, 0, 0)
+                .single()
+                .unwrap(),
+            all_day: false,
+            color: iced::Color::WHITE,
+            completed: false,
+            details: Details::default(),
+        };
+        let event_b = Event {
+            id: "b".to_owned(),
+            calendar_id: "cal".to_owned(),
+            title: "B".to_owned(),
+            start: Local
+                .with_ymd_and_hms(2026, 10, 8, 14, 0, 0)
+                .single()
+                .unwrap(),
+            end: Local
+                .with_ymd_and_hms(2026, 10, 8, 15, 0, 0)
+                .single()
+                .unwrap(),
+            all_day: false,
+            color: iced::Color::WHITE,
+            completed: false,
+            details: Details::default(),
+        };
+
+        save(scratch.path(), oct_8, &[event_a.clone()], 0).unwrap();
+        save(scratch.path(), oct_8, &[event_b.clone()], 0).unwrap();
+
+        assert_eq!(load(scratch.path(), oct_8, 0).unwrap(), vec![event_b]);
     }
 }
