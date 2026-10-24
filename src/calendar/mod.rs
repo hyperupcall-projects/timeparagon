@@ -933,6 +933,26 @@ pub fn set_task_completed(
         .map_err(describe_task_write_error)
 }
 
+/// Deletes a single task instance from Google Tasks.
+///
+/// For a recurring task this removes just the one occurrence identified by
+/// `event_id`; the series and its other instances are untouched.
+pub fn delete_task(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<(), String> {
+    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+
+    let list_id = calendar_id.strip_prefix("tasks:").unwrap_or(calendar_id);
+    let task_id = event_id.strip_prefix("task:").unwrap_or(event_id);
+
+    api::delete_task(&tokens.access_token, list_id, task_id)
+        .map_err(describe_task_write_error)
+}
+
 /// Turns a read-only-token rejection into something a user can act on.
 fn describe_task_write_error(error: String) -> String {
     let lower = error.to_ascii_lowercase();

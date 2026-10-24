@@ -399,6 +399,24 @@ pub fn set_task_completed(
     patch(&url, access_token, body, "Google Tasks")
 }
 
+/// Deletes a single task instance from Google Tasks.
+///
+/// For a recurring task this removes just the one occurrence identified by
+/// `task_id`; the series and its other instances are untouched.
+pub fn delete_task(
+    access_token: &str,
+    list_id: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    let url = format!(
+        "{TASKS}/{}/tasks/{}",
+        urlencoding::encode(list_id),
+        urlencoding::encode(task_id),
+    );
+
+    delete(&url, access_token, "Google Tasks")
+}
+
 /// Moves an event's start and end on Google's side.
 ///
 /// Only the two times are sent, so the title, description and guests are left

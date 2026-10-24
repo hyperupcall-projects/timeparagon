@@ -264,6 +264,12 @@ pub enum Message {
     TaskColorEditorToggled(String),
     /// Give a Google Tasks list a custom color, or `None` to reset it.
     TaskColorPicked(String, Option<iced::Color>),
+    /// Delete a single Google Task instance (one occurrence of a recurring task).
+    TaskDeleteRequested(String),
+    /// The user confirmed the task deletion prompt.
+    TaskDeleteConfirmed(String),
+    /// Google's answer to a single-task deletion.
+    TaskDeleted(String, Result<(), String>),
     GoogleClientIdChanged(String),
     GoogleClientSecretChanged(String),
     GoogleConnectRequested,
@@ -1145,6 +1151,66 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::EventDeleted(_id, Err(error)) => {
             state.calendar.pending_delete = None;
             log::warn!("could not delete the event: {error}");
+            state.calendar.error = Some(error);
+            Task::none()
+        }
+
+        Message::TaskDeleteRequested(id) => {
+            // Only Google Tasks can be deleted this way; calendar events use
+            // EventDeleteRequested instead.
+            let is_task = state
+                .calendar
+                .event(&id)
+                .map(|event| event.is_task())
+                .unwrap_or(false);
+            if !is_task {
+                return Task::none();
+            }
+            state.calendar.pending_delete = Some(id);
+            Task::none()
+        }
+
+        Message::TaskDeleteConfirmed(id) => {
+            let Some(calendar_id) = state
+                .calendar
+                .event(&id)
+                .filter(|event| event.is_task())
+                .map(|event| event.calendar_id.clone())
+            else {
+                state.calendar.pending_delete = None;
+                return Task::none();
+            };
+
+            let client_id = state.config.calendar.client_id.clone();
+            let client_secret = state.config.calendar.client_secret.clone();
+            let request_id = id.clone();
+            state.calendar.error = None;
+
+            blocking::run(move || {
+                calendar::delete_task(
+                    &client_id,
+                    &client_secret,
+                    &calendar_id,
+                    &request_id,
+                )
+            })
+            .map(move |result| Message::TaskDeleted(id.clone(), result))
+        }
+
+        Message::TaskDeleted(id, Ok(())) => {
+            state.calendar.pending_delete = None;
+            // The task instance is gone on Google's side, so drop it from the
+            // day in view. The next sync reconciles the cache.
+            state.calendar.events.retain(|event| event.id != id);
+            if state.calendar.open_event.as_deref() == Some(id.as_str()) {
+                state.calendar.open_event = None;
+            }
+            Task::none()
+        }
+
+        Message::TaskDeleted(_id, Err(error)) => {
+            state.calendar.pending_delete = None;
+            log::warn!("could not delete the task: {error}");
             state.calendar.error = Some(error);
             Task::none()
         }

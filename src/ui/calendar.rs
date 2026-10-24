@@ -865,6 +865,16 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 .style(button::primary)
                 .into(),
         );
+        // Deleting one occurrence of a recurring task leaves the series and its
+        // other instances untouched.
+        let id = event.id.clone();
+        buttons.push(
+            button(text("Delete Instance").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::TaskDeleteRequested(id))
+                .style(button::secondary)
+                .into(),
+        );
     }
 
     if !details.meeting.is_empty() {
@@ -992,14 +1002,26 @@ fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, M
         return iced::widget::Space::new().width(0.0).height(0.0).into();
     };
 
+    let is_task = event.is_task();
+
     // Clicking outside the card puts the prompt away without deleting.
     let dismiss = mouse_area(
         container(iced::widget::Space::new()).width(Fill).height(Fill),
     )
     .on_press(Message::EventDeleteCancelled);
 
-    let title = text("Delete this event?").size(metrics.label() + 1.0);
+    let title = if is_task {
+        text("Delete this instance?").size(metrics.label() + 1.0)
+    } else {
+        text("Delete this event?").size(metrics.label() + 1.0)
+    };
     let event_title = text(event.title.clone()).size(metrics.label()).style(text::secondary);
+
+    let confirm = if is_task {
+        Message::TaskDeleteConfirmed(id.to_owned())
+    } else {
+        Message::EventDeleteConfirmed(id.to_owned())
+    };
 
     let buttons = row![
         button(text("Cancel").size(metrics.label()).center().width(Fill))
@@ -1008,7 +1030,7 @@ fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, M
             .style(button::secondary),
         button(text("Delete").size(metrics.label()).center().width(Fill))
             .width(Fill)
-            .on_press(Message::EventDeleteConfirmed(id.to_owned()))
+            .on_press(confirm)
             .style(button::secondary),
     ]
     .spacing(metrics.spacing)
