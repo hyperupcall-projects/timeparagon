@@ -29,6 +29,8 @@ pub struct Config {
     pub timer: TimerSettings,
     pub alarm: AlarmProfile,
     pub calendar: CalendarSettings,
+    #[serde(default, skip_serializing_if = "crate::task_work::WorkLog::is_empty")]
+    pub task_work: crate::task_work::WorkLog,
     /// The temporary todo scratchpad. It is left out of the file while it is
     /// empty, so a config that never used it stays as it was.
     #[serde(default, skip_serializing_if = "TodoList::is_empty")]
@@ -47,6 +49,7 @@ impl Default for Config {
             timer: TimerSettings::default(),
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
+            task_work: crate::task_work::WorkLog::default(),
             todos: TodoList::default(),
             notepad: Notepad::default(),
         }
@@ -199,6 +202,9 @@ pub struct CalendarSettings {
     pub disabled: Vec<String>,
     /// When false, Google Tasks are hidden and only calendar events show.
     pub show_tasks: bool,
+    pub hide_overdue_tasks: bool,
+    pub time_block_calendar: Option<String>,
+    pub time_block_list: Option<String>,
     /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
     /// to 3 and the day runs 3am to 3am, so the small hours stay with the
     /// evening they belong to. This only moves the view: an event keeps its
@@ -226,6 +232,9 @@ impl Default for CalendarSettings {
             client_secret: String::new(),
             disabled: Vec::new(),
             show_tasks: true,
+            hide_overdue_tasks: false,
+            time_block_calendar: None,
+            time_block_list: None,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),
             default_calendar: None,

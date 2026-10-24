@@ -12,7 +12,7 @@ use iced::{
     mouse,
 };
 
-use crate::app::{Message, Screen, State};
+use crate::app::{Message, State};
 use crate::calendar::{self, Event};
 use crate::calendar::colors::{self, on_color};
 use crate::calendar::layout::{self, Span};
@@ -78,18 +78,16 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut content = column![];
 
     if !state.timer_open {
-        let status = row![
-            text(state.calendar.status_line())
-                .size(metrics.label() - 1.0)
-                .style(if state.calendar.error.is_some() {
-                    text::danger
-                } else {
-                    text::secondary
-                }),
-            tasks_toggle(state, metrics),
-        ]
-        .spacing(metrics.spacing)
-        .align_y(Alignment::Center);
+        let status = column![
+            text(state.calendar.status_line()).size(metrics.label() - 1.0)
+                .style(if state.calendar.error.is_some() { text::danger } else { text::secondary }),
+            row![
+                tasks_toggle(state, metrics),
+                button(text(if state.config.calendar.hide_overdue_tasks { "Show overdue tasks" } else { "Hide overdue tasks" }).size(metrics.label() - 1.0))
+                    .on_press(Message::TimeBlocking(crate::timeblocking::Action::HideOverdue(!state.config.calendar.hide_overdue_tasks)))
+                    .style(button::text),
+            ].spacing(4).align_y(Alignment::Center),
+        ].spacing(2);
 
         content = content.push(header(state, metrics)).push(status);
     }
@@ -251,17 +249,7 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .on_press(message)
         .style(style);
 
-    let todos = button(text("Todos").size(metrics.label()).center())
-        .height(metrics.icon_button())
-        .on_press(Message::ScreenSelected(Screen::Todos))
-        .style(button::secondary);
-
-    // The "what am I doing" line. The caption doubles as the progress readout,
-    // so "2/4" is visible from the calendar without opening the list.
-    let caption = match state.config.todos.position() {
-        Some((position, total)) => format!("Todos {position}/{total}:"),
-        None => "Current todo:".to_owned(),
-    };
+    let caption = "Working on:";
     let input = text_input("what are you doing?", state.current_task())
         .on_input(Message::CurrentTaskChanged)
         .size(metrics.label())
@@ -278,27 +266,32 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
 
-    let task = row![text(caption).size(metrics.label()), input, todos]
+    let task = row![text(caption).size(metrics.label()), input]
         .spacing(metrics.spacing)
         .align_y(Alignment::Center);
 
-    column![status, task].spacing(metrics.spacing).into()
+    let mut body = column![status, task].spacing(metrics.spacing);
+    if let Some(links) = super::links::for_editor(state.current_task(), metrics.label()) {
+        body = body.push(links);
+    }
+    body.into()
 }
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let chips: Vec<Element<'a, Message>> = state
-        .calendar
-        .all_day_events(&state.config.calendar)
-        .map(|event| all_day_chip(event, metrics))
+    let mut events: Vec<_> = state.calendar.all_day_events(&state.config.calendar).collect();
+    events.sort_by_key(|e| (!crate::timeblocking::overdue(e), crate::timeblocking::metadata(&e.details.description).order));
+    let chips: Vec<Element<'a, Message>> = events.into_iter()
+        .filter(|event| !event.is_task() || crate::timeblocking::metadata(&event.details.description).block.as_ref().is_none_or(|key| !state.calendar.events.iter().any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)) || crate::timeblocking::overdue(event))
+        .map(|event| if event.is_task() { super::timeblocking::task_row(state, event, metrics, false) } else { all_day_chip(event, metrics) })
         .collect();
 
     if chips.is_empty() {
-        return text("").size(1.0).into();
+        return mouse_area(container(text("Drop tasks here to schedule this day").size(metrics.label()).style(text::secondary)).width(Fill).padding(4))
+            .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay)).into();
     }
 
-    column(chips)
-        .spacing(4.0)
-        .width(Fill)
+    mouse_area(container(scrollable(column(chips).spacing(4.0).width(Fill))).max_height(180))
+        .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
         .into()
 }
 
@@ -475,6 +468,10 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             // already being written cannot be dragged again until it lands.
             editable: !event.is_task(),
             pending: state.calendar.pending_time(&event.id).is_some(),
+            time_block: crate::timeblocking::is_block(event, &state.config.calendar),
+            tasks: if crate::timeblocking::is_block(event, &state.config.calendar) {
+                crate::timeblocking::assigned(state, event).iter().map(|e| (e.id.clone(), e.title.clone(), crate::timeblocking::metadata(&e.details.description).minutes)).collect()
+            } else { Vec::new() },
         })
         .collect();
 
@@ -504,6 +501,7 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             day,
             can_create,
             create_color,
+            external_drag: state.timeblocking.dragging.is_some(),
         })
         .width(Fill)
         .height(Length::Fixed(height)),
@@ -818,7 +816,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         .unwrap_or("Calendar");
 
     let mut body = column![
-        text(event.title.clone()).size(metrics.label() + 2.0),
+        super::links::text(event.title.clone(), metrics.label() + 2.0),
         text(schedule_line(event)).size(metrics.label()).style(text::secondary),
         detail_line("Calendar", calendar_name.to_owned(), metrics),
     ]
@@ -843,7 +841,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         ));
     }
     if !details.description.is_empty() {
-        body = body.push(detail_line("Description", details.description.clone(), metrics));
+        body = body.push(detail_line("Description", if event.is_task() { crate::timeblocking::description(&details.description) } else { details.description.clone() }, metrics));
     }
 
     // The action buttons sit outside the scrollable, so they stay reachable
@@ -852,6 +850,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
     // A Google Task gets a way to tick it off; events never do.
     if is_task(event) {
+        body = body.push(super::timeblocking::editor(state, event, metrics));
         let label = if event.completed {
             "Mark incomplete"
         } else {
@@ -931,7 +930,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .into(),
     );
 
-    let max_height = (metrics.size.height * 0.42).clamp(140.0, 420.0);
+    let max_height = if event.is_task() { (metrics.size.height * 0.85).clamp(140.0, 720.0) } else { (metrics.size.height * 0.42).clamp(140.0, 420.0) };
     // A button is normally one line of text plus its vertical padding, so
     // reserving that leaves the scroll every pixel the buttons do not need.
     // The reserve is generous enough that a label wrapping at the narrowest
@@ -1115,7 +1114,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     .spacing(4.0)
     .width(Fill);
 
-    let description = column![
+    let mut description = column![
         text("Description")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
@@ -1127,6 +1126,13 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     ]
     .spacing(2.0)
     .width(Fill);
+
+    if let Some(links) = super::links::for_editor(
+        &format!("{}\n{}", draft.title, draft.description),
+        metrics.label(),
+    ) {
+        description = description.push(links);
+    }
 
     let actions = row![
         Space::new().width(Fill),
@@ -1236,7 +1242,7 @@ fn edit_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     .spacing(4.0)
     .width(Fill);
 
-    let description = column![
+    let mut description = column![
         text("Description")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
@@ -1248,6 +1254,13 @@ fn edit_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     ]
     .spacing(2.0)
     .width(Fill);
+
+    if let Some(links) = super::links::for_editor(
+        &format!("{}\n{}", draft.title, draft.description),
+        metrics.label(),
+    ) {
+        description = description.push(links);
+    }
 
     let actions = row![
         Space::new().width(Fill),
@@ -1498,7 +1511,7 @@ fn is_task(event: &Event) -> bool {
 fn detail_line<'a>(label: &'a str, value: String, metrics: &Metrics) -> Element<'a, Message> {
     column![
         text(label).size(metrics.label() - 1.0).style(text::secondary),
-        text(value).size(metrics.label()).width(Fill),
+        super::links::text(value, metrics.label()),
     ]
     .spacing(2.0)
     .width(Fill)
@@ -1685,6 +1698,8 @@ struct Block {
     /// Whether a time change for this event is still being written to Google.
     /// The block is drawn lighter until the write is confirmed.
     pending: bool,
+    tasks: Vec<(String, String, u32)>,
+    time_block: bool,
 }
 
 struct DayCanvas {
@@ -1706,6 +1721,7 @@ struct DayCanvas {
     /// The color the new-event preview is drawn in, taken from the calendar the
     /// event will land on.
     create_color: Color,
+    external_drag: bool,
 }
 
 /// A drag on empty grid space that is drawing out a new event.
@@ -1818,6 +1834,14 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if matches!(event, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))) && self.external_drag {
+            let point = cursor.position_in(bounds)?;
+            let block = self.blocks.iter().find(|b| b.time_block && self.rect_for(b, bounds.width, b.start_min, b.end_min).contains(point));
+            if let Some(block) = block {
+                return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropBlock(block.id.clone()))).and_capture());
+            }
+            return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropDay)).and_capture());
+        }
         match event {
             iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
                 state.shift.set(modifiers.shift());
@@ -1878,6 +1902,24 @@ impl canvas::Program<Message> for DayCanvas {
             iced::Event::Mouse(mouse::Event::CursorLeft) => self.track_hover(state, bounds, cursor),
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
+                for block in &self.blocks {
+                    if !block.time_block { continue; }
+                    let rect = self.block_rect(block, bounds.width);
+                    let (view, edit) = block_actions(rect);
+                    if edit.contains(point) {
+                        return Some(canvas::Action::publish(Message::EventOpened(block.id.clone())).and_capture());
+                    }
+                    if view.contains(point) {
+                        return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::View(block.id.clone()))).and_capture());
+                    }
+                    let x = rect.x + rect.width + 4.0;
+                    if point.x >= x && point.x <= x + rect.width && point.y >= rect.y && point.y < rect.y + block.tasks.len() as f32 * 20.0 {
+                        let index = ((point.y - rect.y) / 20.0) as usize;
+                        if let Some((id, _, _)) = block.tasks.get(index) {
+                            return Some(canvas::Action::publish(if point.x < x + 16.0 { Message::TimeBlocking(crate::timeblocking::Action::Drag(id.clone())) } else { Message::EventOpened(id.clone()) }).and_capture());
+                        }
+                    }
+                }
 
                 // A press on a draggable block starts a drag. The click that
                 // opens the details card is decided on release, so a press that
@@ -2084,6 +2126,23 @@ impl DayCanvas {
                 block.color
             };
             frame.fill(&shape, fill);
+            if block.time_block {
+                let total: u32 = block.tasks.iter().map(|t| t.2).sum();
+                let duration = (block.end_min - block.start_min).max(1) as f32;
+                let occupied = (total as f32 / duration).min(1.0);
+                frame.fill_rectangle(Point::new(block_bounds.x, block_bounds.y), Size::new(block_bounds.width, block_bounds.height * occupied), Color::from_rgba(0.15,0.15,0.15,0.28));
+                let mut elapsed = 0;
+                for (i, (_, title, minutes)) in block.tasks.iter().enumerate() {
+                    elapsed += minutes;
+                    let over = elapsed as f32 > duration;
+                    let y = block_bounds.y + i as f32 * 20.0;
+                    let x = block_bounds.x + block_bounds.width + 4.0;
+                    if over { frame.fill_rectangle(Point::new(x,y), Size::new(block_bounds.width,19.0), Color::from_rgba(0.9,0.2,0.15,0.22)); }
+                    let label = format!("○ {} · {}m", title, minutes);
+                    let label = fit_lines(&label, 11.0, block_bounds.width - 6.0, 1).into_iter().next().unwrap_or_default();
+                    fill_glyphs(frame, Text { content: label, position: Point::new(x + 3.0,y + 2.0), color: if over { Color::from_rgb8(220,65,55) } else { Color::from_rgb8(125,125,125) }, size: Pixels(11.0), ..Text::default() });
+                }
+            }
             frame.stroke(
                 &shape,
                 Stroke {
@@ -2095,7 +2154,20 @@ impl DayCanvas {
 
             let ink = on_color(fill);
             let title_size = if self.compact { 11.0 } else { 12.0 };
-            draw_block_label(frame, block_bounds, &block.title, &block.when, ink, title_size);
+            let mut label_bounds = block_bounds;
+            if block.time_block {
+                if block_bounds.width >= 160.0 { label_bounds.width -= 78.0; }
+                else { label_bounds.y += 22.0; label_bounds.height = (label_bounds.height - 22.0).max(0.0); }
+            }
+            if label_bounds.height >= 14.0 {
+                draw_block_label(frame, label_bounds, &block.title, &block.when, ink, title_size);
+            }
+            if block.time_block {
+                for (label, bounds) in [("View", block_actions(block_bounds).0), ("Edit", block_actions(block_bounds).1)] {
+                    frame.fill(&Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()), Color::WHITE.scale_alpha(0.27));
+                    fill_glyphs(frame, Text { content: label.into(), position: Point::new(bounds.center_x(), bounds.center_y()), color: ink, size: Pixels(10.0), align_x: iced::alignment::Horizontal::Center.into(), align_y: iced::alignment::Vertical::Center, ..Text::default() });
+                }
+            }
         }
     }
 
@@ -2361,7 +2433,9 @@ impl DayCanvas {
     }
 
     fn block_rect(&self, block: &Block, width: f32) -> Rectangle {
-        self.rect_for(block, width, block.start_min, block.end_min)
+        let mut rect = self.rect_for(block, width, block.start_min, block.end_min);
+        if block.time_block { rect.width = (rect.width - 6.0) * 0.5; }
+        rect
     }
 
     /// The rectangle a block occupies for a given pair of times, so the drag
@@ -2379,6 +2453,15 @@ impl DayCanvas {
             height: ((end_min - start_min) as f32 * minute_height).max(16.0),
         }
     }
+}
+
+/// View and Edit share the event's top-right corner, in that order.
+fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
+    let width = 36.0_f32.min(((bounds.width - 6.0) / 2.0).max(1.0));
+    let height = 18.0_f32.min((bounds.height - 4.0).max(1.0));
+    let edit = Rectangle { x: bounds.x + bounds.width - width - 2.0, y: bounds.y + 2.0, width, height };
+    let view = Rectangle { x: edit.x - width - 2.0, ..edit };
+    (view, edit)
 }
 
 /// Blends a color toward white, for the lighter shade an unconfirmed time
@@ -2695,6 +2778,11 @@ fn cache_key(
         hash = hash.wrapping_mul(31).wrapping_add(block.color.a.to_bits() as u64);
         // An unconfirmed write changes the shade, so it has to retrace too.
         hash = hash.wrapping_mul(31).wrapping_add(u64::from(block.pending));
+        hash = hash.wrapping_mul(31).wrapping_add(u64::from(block.time_block));
+        for (id, title, minutes) in &block.tasks {
+            hash = hash.wrapping_mul(31).wrapping_add(u64::from(*minutes));
+            for byte in id.bytes().chain(title.bytes()) { hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte)); }
+        }
         for byte in block.title.bytes() {
             hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte));
         }
@@ -2724,6 +2812,40 @@ fn zoom_steps(delta: mouse::ScrollDelta) -> f32 {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    #[test]
+    fn time_block_view_and_edit_buttons_dispatch_different_actions() {
+        for view in [true, false] {
+            let mut canvas = canvas_with_one_block();
+            canvas.blocks[0].time_block = true;
+            let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
+            let (view_rect, edit_rect) = block_actions(bounds);
+            assert!(view_rect.x < edit_rect.x);
+            let element: Element<'_, Message> = canvas_widget(canvas).width(240).height(1440).into();
+            let mut ui = iced_test::Simulator::with_size(iced_test::core::Settings::default(),Size::new(240.0,1440.0),element);
+            ui.point_at(if view { view_rect.center() } else { edit_rect.center() });
+            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+            let messages: Vec<_> = ui.into_messages().collect();
+            if view {
+                assert!(messages.iter().any(|m| matches!(m,Message::TimeBlocking(crate::timeblocking::Action::View(id)) if id == "standup")));
+                assert!(!messages.iter().any(|m| matches!(m,Message::EventOpened(_))));
+            } else { assert!(messages.iter().any(|m| matches!(m,Message::EventOpened(id) if id == "standup"))); }
+        }
+    }
+
+    #[test]
+    fn a_task_released_over_a_time_block_assigns_it_instead_of_creating_an_event() {
+        let mut canvas = canvas_with_one_block();
+        canvas.blocks[0].time_block = true;
+        canvas.external_drag = true;
+        let element: Element<'_, Message> = canvas_widget(canvas).width(240).height(1440).into();
+        let mut ui = iced_test::Simulator::with_size(iced_test::core::Settings::default(), Size::new(240.0,1440.0), element);
+        ui.point_at(Point::new(90.0,550.0));
+        ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::DropBlock(id)) if id == "standup")));
+        assert!(!messages.iter().any(|m| matches!(m, Message::EventDraftStarted { .. })));
+    }
 
     #[test]
     fn hour_labels_match_google_calendar() {
@@ -2804,6 +2926,8 @@ mod tests {
                 color: Color::WHITE,
                 editable: true,
                 pending: false,
+                tasks: Vec::new(),
+                time_block: false,
             }],
             needle: None,
             hour_height: 60.0,
@@ -2813,6 +2937,7 @@ mod tests {
             day: chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
             can_create: true,
             create_color: Color::WHITE,
+            external_drag: false,
         }
     }
 
@@ -2832,6 +2957,8 @@ mod tests {
             },
             editable: true,
             pending: false,
+            tasks: Vec::new(),
+            time_block: false,
         };
 
         let key = cache_key(

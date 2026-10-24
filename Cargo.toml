@@ -27,6 +27,7 @@ iced = { version = "0.14", default-features = false, features = [
     "image",
 ] }
 log = "0.4.34"
+linkify = "0.11"
 notify-rust = "4.18.0"
 pipewire = { version = "0.10.1", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
@@ -70,3 +71,7 @@ iced_test = "0.14"
 [[example]]
 name = "screenshots"
 path = "assets/examples/screenshots.rs"
+
+# Keep synchronous native resizes in sync with the viewport and render surface.
+[patch.crates-io]
+iced_winit = { path = "vendor/iced_winit" }

@@ -4,7 +4,7 @@
 //! typed. The size of it is the size of the text on this page and nothing
 //! else: the rest of the interface is left as it is drawn.
 
-use iced::widget::{button, column, row, text, text_editor, Space};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
 use iced::{Element, Fill, Length};
 
 use crate::app::{Message, State};
@@ -51,15 +51,16 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .push(Space::new().width(Fill))
         .push(text_size(state, metrics));
 
-    column![
-        controls,
-        editor,
-    ]
-    .spacing(metrics.spacing)
-    .padding(metrics.padding)
-    .width(Fill)
-    .height(Fill)
-    .into()
+    let mut body = column![controls, editor];
+    if let Some(links) = super::links::for_editor(&state.config.notepad.text, metrics.label()) {
+        body = body.push(container(scrollable(links).height(Length::Shrink)).max_height(100.0));
+    }
+
+    body.spacing(metrics.spacing)
+        .padding(metrics.padding)
+        .width(Fill)
+        .height(Fill)
+        .into()
 }
 
 /// The control that makes the text on the page bigger or smaller.

@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result as AnyhowResult};
 
-use iced::advanced::widget::{operate, operation};
 use iced::keyboard::{self, Key};
 use iced::widget::text_editor;
 use iced::{Element, Point, Size, Subscription, Task, Theme, window};
@@ -49,6 +48,7 @@ const NEAR_EVENT_START: i64 = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Calendar,
+    Backlog,
     /// The notepad: a page of free text kept between sessions.
     Notepad,
     Settings,
@@ -58,8 +58,6 @@ pub enum Screen {
     /// page because it changes the timer rather than the calendar, and reached
     /// from the clock itself.
     TimerSettings,
-    /// The temporary todo scratchpad, reached from the clock.
-    Todos,
 }
 
 /// A flash overlay that is currently on screen.
@@ -127,6 +125,7 @@ pub struct State {
 
     pub screen: Screen,
     pub main_window: Option<window::Id>,
+    pub main_size: Size,
     /// Receiver for show/hide commands from the panel daemon, when this process
     /// is the side panel.
     pub panel_command_rx: Option<mpsc::Receiver<PanelCommand>>,
@@ -155,10 +154,12 @@ pub struct State {
     pub notepad: text_editor::Content<iced::Renderer>,
 
     pub calendar: calendar::Store,
+    pub timeblocking: crate::timeblocking::Workspace,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    TimeBlocking(crate::timeblocking::Action),
     Tick(Instant),
     FlashFrame(Instant),
 
@@ -176,20 +177,6 @@ pub enum Message {
     /// is armed with how long it is meant to take (when it has a length).
     CurrentTaskPicked(String, Option<Duration>),
 
-    /// Add a new, empty item to the scratchpad and put the cursor in it.
-    TodoAdded,
-    /// The text of the scratchpad item at this index was edited.
-    TodoTextChanged(usize, String),
-    /// Remove the scratchpad item at this index.
-    TodoRemoved(usize),
-    /// Move the scratchpad item at this index up or down by this many places.
-    TodoMoved(usize, i32),
-    /// Indent or outdent the scratchpad item at this index by this many levels.
-    TodoIndented(usize, i32),
-    /// Make the scratchpad item at this index the one being worked on.
-    TodoSelected(usize),
-    /// Throw the whole scratchpad away.
-    TodosCleared,
     /// The notepad was edited.
     NotepadEdited(text_editor::Action),
     /// The text on the notepad was made bigger or smaller, by a number of
@@ -255,6 +242,7 @@ pub enum Message {
     CalendarToggled(String, bool),
     CalendarSyncRequested,
     CalendarSynced(Result<calendar::Snapshot, String>),
+    CalendarSyncedAt(u64, Result<calendar::Snapshot, String>),
     CalendarTick,
     OpenGoogleCalendar,
     EventOpened(String),
@@ -392,6 +380,7 @@ impl State {
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
             main_window: None,
+            main_size: Size::new(config.window.width, config.window.height),
             panel_command_rx: None,
             panel_config: None,
             panel_expected_close: false,
@@ -404,17 +393,13 @@ impl State {
             config,
             notepad,
             calendar: calendar::Store::new(day_end_hour),
+            timeblocking: crate::timeblocking::Workspace::default(),
         }
     }
 
-    /// What the clock is working on: the current scratchpad item when there is
-    /// one, otherwise the free-text task. Keeping this in one place is what
-    /// lets the line beside the clock edit whichever of the two is in play.
+    /// The free-text label for the running timer.
     pub fn current_task(&self) -> &str {
-        self.config.todos.current().map_or(
-            self.config.timer.current_task.as_str(),
-            |todo| todo.text.as_str(),
-        )
+        &self.config.timer.current_task
     }
 
     /// Replaces the notepad's text, as if it had been typed.
@@ -563,6 +548,7 @@ fn window_icon() -> Option<window::Icon> {
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
+        Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::Tick(now) => {
             state.now = now;
 
@@ -647,45 +633,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([queue_save(state), sync_tracks(state)])
         }
 
-        Message::TodoAdded => {
-            let index = state.config.todos.add(String::new());
-            let _ = queue_save(state);
-
-            // The new item is empty, so the cursor is put in it rather than
-            // making the user find it.
-            operate(operation::focusable::focus(ui::todos::input_id(index)))
-        }
-
-        Message::TodoTextChanged(index, text) => {
-            state.config.todos.set_text(index, text);
-            queue_save(state)
-        }
-
-        Message::TodoRemoved(index) => {
-            state.config.todos.remove(index);
-            queue_save(state)
-        }
-
-        Message::TodoMoved(index, delta) => {
-            state.config.todos.move_item(index, delta);
-            queue_save(state)
-        }
-
-        Message::TodoIndented(index, delta) => {
-            state.config.todos.indent(index, delta);
-            queue_save(state)
-        }
-
-        Message::TodoSelected(index) => {
-            state.config.todos.set_current(index);
-            queue_save(state)
-        }
-
-        Message::TodosCleared => {
-            state.config.todos.clear();
-            queue_save(state)
-        }
-
         Message::NotepadEdited(action) => {
             state.notepad.perform(action);
 
@@ -738,7 +685,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // exactly where the user scrolled it to.
             state.calendar.menu_open = false;
             state.screen = screen;
-            Task::none()
+            crate::timeblocking::close(state)
         }
 
         Message::Dismiss => dismiss(state),
@@ -1006,6 +953,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            state.main_size = size;
             log::debug!("window is now {}x{}", size.width, size.height);
 
             // The panel's geometry is not the user's saved window, so it must
@@ -1014,7 +962,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            state.config.window.width = size.width;
+            state.config.window.width = if state.timeblocking.original_width.is_some() { (size.width - 400.0).max(MIN_SIZE.width) } else { size.width };
+            if state.timeblocking.original_width.is_some() { state.timeblocking.original_width = Some(state.config.window.width); }
             state.config.window.height = size.height;
 
             queue_save(state)
@@ -1029,6 +978,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
                 // Closing the clock quits, even though a daemon would
                 // otherwise keep running with no windows left.
+                if !state.config.task_work.is_empty() {
+                    let config = state.config.clone();
+                    return blocking::run(move || config.save()).then(|_| iced::exit());
+                }
                 return iced::exit();
             }
 
@@ -1066,6 +1019,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::CalendarSyncRequested => sync_calendar(state),
 
+        Message::CalendarSyncedAt(revision, result) => {
+            if revision != state.timeblocking.revision {
+                state.calendar.sync = SyncState::Idle;
+                return sync_calendar(state);
+            }
+            Task::done(Message::CalendarSynced(result))
+        }
         Message::CalendarSynced(Ok(snapshot)) => {
             // The user may have stepped to another day while this was in
             // flight. The events are for the day they left, so drop them and
@@ -1077,6 +1037,17 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
             state.calendar.apply_snapshot(snapshot);
             state.calendar.apply_task_colors(&state.config.calendar);
+            // Completing a task in another Google client also ends its work session.
+            let completed_key = state.config.task_work.active().and_then(|session| {
+                state.calendar.events.iter().any(|e| e.is_task() && e.completed && crate::timeblocking::task_key(e) == session.task_key)
+                    .then(|| session.task_key.clone())
+            });
+            if let Some(key) = completed_key {
+                let now = chrono::Utc::now();
+                state.config.task_work.stop(&key, now);
+                state.timeblocking.work_now = Some(now);
+                return queue_save(state);
+            }
             Task::none()
         }
 
@@ -1101,6 +1072,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventOpened(id) => {
             state.calendar.menu_open = false;
+            if let Some(event) = state.calendar.event(&id) {
+                if crate::timeblocking::is_block(event, &state.config.calendar) {
+                    state.calendar.open_event = None;
+                    return crate::timeblocking::open(state, id);
+                }
+                if event.is_task() {
+                    state.timeblocking.estimate = crate::timeblocking::metadata(&event.details.description).minutes.to_string();
+                    state.timeblocking.date = if event.start.date_naive() == crate::timeblocking::UNDATED { state.calendar.day.to_string() } else { event.start.date_naive().to_string() };
+                }
+            }
             state.calendar.open_event = Some(id);
             // Recorded during this click, before the message is handled.
             state.calendar.details_below = ui::calendar::click_was_in_the_top_half();
@@ -1248,6 +1229,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskDeleteConfirmed(id) => {
+            if state.timeblocking.busy.contains(&id) { return Task::none(); }
+            state.timeblocking.revision += 1;
             let Some(calendar_id) = state
                 .calendar
                 .event(&id)
@@ -1293,6 +1276,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskToggled(id) => {
+            if state.timeblocking.busy.contains(&id) { return Task::none(); }
+            state.timeblocking.revision += 1;
             let Some((calendar_id, previous)) = state
                 .calendar
                 .event(&id)
@@ -1304,7 +1289,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
             // Update the chip straight away, then put it back if Google
             // refuses the write.
+            state.timeblocking.busy.insert(id.clone());
             let completed = !previous;
+            if completed && let Some(task) = state.calendar.event(&id) {
+                state.config.task_work.stop(&crate::timeblocking::task_key(task), chrono::Utc::now());
+                state.timeblocking.work_now = Some(chrono::Utc::now());
+                let _ = queue_save(state);
+            }
             if let Some(event) = state.calendar.event_mut(&id) {
                 event.completed = completed;
             }
@@ -1326,9 +1317,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             .map(move |result| Message::TaskCompletionSaved(id.clone(), previous, result))
         }
 
-        Message::TaskCompletionSaved(_, _, Ok(())) => Task::none(),
+        Message::TaskCompletionSaved(id, _, Ok(())) => {
+            state.timeblocking.busy.remove(&id);
+            state.timeblocking.revision += 1;
+            state.calendar.invalidate_other_days();
+            Task::none()
+        },
 
         Message::TaskCompletionSaved(id, previous, Err(error)) => {
+            state.timeblocking.busy.remove(&id);
+            state.timeblocking.revision += 1;
             if let Some(event) = state.calendar.event_mut(&id) {
                 event.completed = previous;
             }
@@ -1749,6 +1747,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         window::close_events().map(Message::WindowClosed),
         window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
         keyboard::listen().map(map_key),
+        iced::event::listen_with(|event, status, _| {
+            if status == iced::event::Status::Ignored && matches!(event, iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))) {
+                Some(Message::TimeBlocking(crate::timeblocking::Action::CancelDrag))
+            } else { None }
+        }),
     ];
 
     // The clock only ticks when it is actually running, which is what keeps
@@ -1768,6 +1771,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(iced::time::every(NEEDLE_TICK).map(|_| Message::CalendarTick));
     }
 
+    if state.timeblocking.focus.is_some() || state.config.task_work.active().is_some() {
+        subscriptions.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::TimeBlocking(crate::timeblocking::Action::WorkTick)));
+    }
     if state.calendar.is_signed_in() {
         subscriptions.push(
             iced::time::every(state.config.calendar.sync_every())
@@ -1826,6 +1832,12 @@ fn key_message(
 ) -> Option<Message> {
     use keyboard::key::Named;
 
+    if state.timeblocking.focus.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(crate::timeblocking::Action::CloseView)),
+            _ => None,
+        };
+    }
     if modifiers.command() {
         return match key.as_ref() {
             Key::Character(",") => Some(Message::ScreenSelected(Screen::Settings)),
@@ -1849,6 +1861,8 @@ fn key_message(
             if state.calendar.open_event.is_some() {
                 state.calendar.open_event = None;
                 None
+            } else if state.timeblocking.block.is_some() {
+                Some(Message::TimeBlocking(crate::timeblocking::Action::Close))
             } else if state.calendar.menu_open {
                 state.calendar.menu_open = false;
                 None
@@ -1969,10 +1983,7 @@ fn dismiss(state: &mut State) -> Task<Message> {
 /// to the free-text task, which is the behaviour the line had before there were
 /// any todos.
 fn set_current_task(state: &mut State, task: String) {
-    match state.config.todos.current_mut() {
-        Some(todo) => todo.text = task,
-        None => state.config.timer.current_task = task,
-    }
+    state.config.timer.current_task = task;
 }
 
 /// Marks the config dirty.
@@ -1981,7 +1992,7 @@ fn set_current_task(state: &mut State, task: String) {
 /// would be a config write per pixel too. The flag turns on a subscription in
 /// [`subscription`] that fires the write once things have settled, and edits
 /// made while it is pending are all captured by that one write.
-fn queue_save(state: &mut State) -> Task<Message> {
+pub(crate) fn queue_save(state: &mut State) -> Task<Message> {
     state.save_queued = true;
 
     Task::none()
@@ -2053,7 +2064,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 }
 
 fn sync_calendar(state: &mut State) -> Task<Message> {
-    if !state.calendar.is_signed_in() || state.calendar.is_busy() {
+    if !state.calendar.is_signed_in() || state.calendar.is_busy() || !state.timeblocking.busy.is_empty() {
         return Task::none();
     }
 
@@ -2066,10 +2077,11 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     let day = state.calendar.day;
     let day_end_hour = state.config.calendar.day_start_hour();
 
+    let revision = state.timeblocking.revision;
     blocking::run(move || {
         calendar::sync_day(&client_id, &client_secret, &disabled, day, day_end_hour)
     })
-    .map(Message::CalendarSynced)
+    .map(move |result| Message::CalendarSyncedAt(revision, result))
 }
 
 fn level(always_on_top: bool) -> window::Level {
@@ -2254,93 +2266,6 @@ mod tests {
 
         assert_eq!(state.config.timer.current_task, "Team offsite");
         assert_eq!(state.timer.target(), before);
-    }
-
-    #[test]
-    fn adding_a_todo_makes_it_the_current_task() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(0, "write the report".into()));
-
-        assert_eq!(state.config.todos.len(), 1);
-        assert_eq!(state.current_task(), "write the report");
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn editing_the_current_task_edits_the_current_todo() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(1, "second".into()));
-
-        // The line beside the clock edits whichever item is current, not the
-        // free-text task, which stays empty.
-        let _ = update(&mut state, Message::CurrentTaskChanged("second, revised".into()));
-
-        assert_eq!(state.config.todos.items()[1].text, "second, revised");
-        assert!(state.config.timer.current_task.is_empty());
-    }
-
-    #[test]
-    fn selecting_a_todo_changes_what_the_clock_is_working_on() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(1, "second".into()));
-
-        let _ = update(&mut state, Message::TodoSelected(1));
-
-        assert_eq!(state.current_task(), "second");
-        assert_eq!(state.config.todos.position(), Some((2, 2)));
-    }
-
-    #[test]
-    fn picking_an_upcoming_item_names_the_current_todo() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
-
-        let _ = update(
-            &mut state,
-            Message::CurrentTaskPicked("Standup".into(), Some(Duration::from_secs(30 * 60))),
-        );
-
-        assert_eq!(state.config.todos.items()[0].text, "Standup");
-        assert_eq!(state.timer.target(), Some(Duration::from_secs(30 * 60)));
-    }
-
-    #[test]
-    fn reordering_and_indenting_a_todo_is_remembered() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(0, "first".into()));
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoTextChanged(1, "second".into()));
-
-        let _ = update(&mut state, Message::TodoMoved(1, -1));
-        let _ = update(&mut state, Message::TodoIndented(1, 1));
-
-        assert_eq!(state.config.todos.items()[0].text, "second");
-        assert_eq!(state.config.todos.items()[1].indent, 1);
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn removing_and_clearing_todos_is_remembered() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = update(&mut state, Message::TodoAdded);
-        let _ = update(&mut state, Message::TodoAdded);
-
-        let _ = update(&mut state, Message::TodoRemoved(0));
-        assert_eq!(state.config.todos.len(), 1);
-
-        let _ = update(&mut state, Message::TodosCleared);
-        assert!(state.config.todos.is_empty());
-        assert_eq!(state.current_task(), "");
     }
 
     #[test]

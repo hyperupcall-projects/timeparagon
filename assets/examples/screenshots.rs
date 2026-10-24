@@ -163,7 +163,7 @@ fn main() {
             });
 
             count += shoot(directory, theme, Size::new(width, 720.0), "todos", |state| {
-                state.screen = Screen::Todos;
+                state.screen = Screen::Backlog;
 
                 // The sample events are in the past, so a couple are moved to
                 // later today to give the "Coming up" list something to show.

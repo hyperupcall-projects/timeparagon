@@ -9,9 +9,11 @@ pub mod controls;
 pub mod digits;
 pub mod flash;
 pub mod layout;
+pub mod links;
 pub mod notepad;
 pub mod settings;
-pub mod todos;
+pub mod timeblocking;
+mod timeblocking_focus;
 
 use std::time::Duration;
 
@@ -49,22 +51,23 @@ pub fn view(state: &State) -> Element<'_, Message> {
             ]
             .into(),
             (Screen::SetTime, _) => set_time(state, &metrics),
-            // The scratchpad takes the whole window rather than sitting beside
-            // the calendar: it is a place to think, not a place to watch the
-            // clock from.
-            (Screen::Todos, _) => todos::view(state, &metrics),
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
             (Screen::Notepad, _) => notepad::view(state, &metrics),
+            (Screen::Backlog, _) => timeblocking::backlog(state, &metrics),
+            (Screen::Calendar, _) if state.timeblocking.block.is_some() => row![
+                container(calendar::view(state, &metrics)).width(Fill),
+                container(timeblocking::panel(state, &metrics)).width(400),
+            ].into(),
             (Screen::Calendar, _) => calendar::view(state, &metrics),
         };
 
         // The tabs are the window's navigation, so they sit above whatever is
         // on show rather than inside it.
-        column![tabs(state, &metrics), content]
-            .width(Fill)
-            .height(Fill)
-            .into()
+        let base = column![tabs(state, &metrics), content].width(Fill).height(Fill);
+        if state.timeblocking.focus.is_some() {
+            iced::widget::stack![base, timeblocking::focus_overlay(state, &metrics)].into()
+        } else { base.into() }
     })
     .into()
 }
@@ -85,7 +88,8 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     container(
         row![
             tab(notepad_name, notepad, Screen::Notepad, metrics),
-            tab(calendar_name, !notepad && !settings, Screen::Calendar, metrics),
+            tab(calendar_name, state.screen == Screen::Calendar, Screen::Calendar, metrics),
+            tab(if metrics.breakpoint.is_compact() { "Back" } else { "Backlog" }, state.screen == Screen::Backlog, Screen::Backlog, metrics),
             tab(settings_name, settings, Screen::Settings, metrics),
         ]
         .spacing(metrics.spacing)

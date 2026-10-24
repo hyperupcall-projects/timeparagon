@@ -126,7 +126,7 @@ fn apply_times(snapshot: &mut Snapshot, times: &TimeTable) -> usize {
 
     let mut promoted = 0;
     for event in snapshot.events.iter_mut() {
-        if !event.is_task() || !event.all_day {
+        if !event.is_task() || !event.all_day || event.start.date_naive() != snapshot.day || crate::timeblocking::metadata(&event.details.description).block.is_some() {
             continue;
         }
         let Some(list) = names.get(event.calendar_id.as_str()) else {

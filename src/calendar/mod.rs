@@ -505,6 +505,10 @@ impl Store {
     ///
     /// The day boundary moving changes which events a day holds, so the cache
     /// no longer describes the days filed under it.
+    pub fn invalidate_other_days(&mut self) {
+        self.cache.clear();
+        if let Some(directory) = self.day_cache.as_ref() { day_cache::clear(directory); }
+    }
     pub fn forget_cached_days(&mut self) {
         self.cache.clear();
         self.events.clear();
@@ -716,7 +720,7 @@ impl Store {
     /// calendar, and failing that the first writable one. Task lists are never
     /// offered, since they hold Google Tasks rather than events.
     pub fn default_calendar_id(&self, settings: &CalendarSettings) -> Option<String> {
-        if let Some(id) = settings.default_calendar.as_ref()
+        if let Some(id) = settings.time_block_calendar.as_ref().or(settings.default_calendar.as_ref())
             && self
                 .calendars
                 .iter()
@@ -786,7 +790,10 @@ impl Store {
         &'a self,
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
-        self.visible_events(settings).filter(|event| event.all_day)
+        self.visible_events(settings).filter(|event| event.all_day && (!event.is_task() ||
+            (event.start.date_naive() != crate::timeblocking::UNDATED &&
+             (event.start.date_naive() == self.day ||
+              (!settings.hide_overdue_tasks && !event.completed && event.start.date_naive() < Local::now().date_naive())))))
     }
 
     pub fn timed_events<'a>(

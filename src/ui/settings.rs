@@ -311,6 +311,19 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
+    section = section.push(heading("Time Blocking", metrics));
+    for (label, tasks) in [("Google Tasks list for assigned tasks", true), ("Calendar for time blocks", false)] {
+        let options: Vec<CalendarOption> = state.calendar.calendars.iter()
+            .filter(|c| c.is_task_list() == tasks)
+            .map(|c| CalendarOption { id: c.id.clone(), name: c.name.clone() }).collect();
+        let selected_id = if tasks { &settings.time_block_list } else { &settings.time_block_calendar };
+        let selected = options.iter().find(|o| Some(&o.id) == selected_id.as_ref()).cloned();
+        section = section.push(field(label, pick_list(options, selected, move |o: CalendarOption| {
+            Message::TimeBlocking(if tasks { crate::timeblocking::Action::List(o.id) } else { crate::timeblocking::Action::Calendar(o.id) })
+        }).text_size(metrics.label()).width(Fill).into(), metrics));
+    }
+    section = section.push(text("Create blocks on this calendar. Drag tasks onto a block to plan your day. Undated tasks appear in Backlog.").size(metrics.label()).style(text::secondary));
+
     indent(section.into(), metrics)
 }
 

@@ -238,6 +238,8 @@ const TASKS: &str = "https://tasks.googleapis.com/tasks/v1/lists";
 struct TaskLists {
     #[serde(default)]
     items: Vec<TaskListEntry>,
+    #[serde(default, rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,7 +280,12 @@ fn fetch_tasks(
     access_token: &str,
     day: NaiveDate,
 ) -> Result<(Vec<Calendar>, Vec<Event>, Option<String>), String> {
-    let lists: TaskLists = get(TASK_LISTS, access_token)?;
+    let mut lists: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100"), access_token)?;
+    while let Some(token) = lists.next_page_token.take() {
+        let next: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100&pageToken={}", urlencoding::encode(&token)), access_token)?;
+        lists.items.extend(next.items);
+        lists.next_page_token = next.next_page_token;
+    }
     let color = colors::TASK;
     let mut calendars = Vec::new();
     let mut events = Vec::new();
@@ -309,19 +316,15 @@ fn fetch_task_items(
     list_id: &str,
     calendar_id: &str,
     color: Color,
-    day: NaiveDate,
+    _day: NaiveDate,
 ) -> Result<Vec<Event>, String> {
-    let due_min = format!("{day}T00:00:00.000Z");
-    let due_max = format!("{}T00:00:00.000Z", day.succ_opt().unwrap_or(day));
     let mut page_token: Option<String> = None;
     let mut events = Vec::new();
 
     loop {
         let mut url = format!(
-            "{TASKS}/{}/tasks?showCompleted=true&showHidden=false&maxResults=100&dueMin={}&dueMax={}",
+            "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100",
             urlencoding::encode(list_id),
-            urlencoding::encode(&due_min),
-            urlencoding::encode(&due_max),
         );
         if let Some(token) = &page_token {
             url.push_str("&pageToken=");
@@ -329,8 +332,18 @@ fn fetch_task_items(
         }
 
         let page: TaskPage = get(&url, access_token)?;
-        for task in page.items {
-            if let Some(event) = parse_task(task, calendar_id, color, day) {
+        for mut task in page.items {
+            // Keep completed block tasks in the focused timeline after sync/restart.
+            if task.status.as_deref() == Some("completed") && crate::timeblocking::metadata(&task.notes).block.is_none() { continue; }
+            let normalized = crate::timeblocking::notes(&task.notes, &crate::timeblocking::metadata(&task.notes))?;
+            if normalized != task.notes {
+                let url = format!("{TASKS}/{}/tasks/{}", urlencoding::encode(list_id), urlencoding::encode(&task.id));
+                patch(&url, access_token, &serde_json::json!({"notes":normalized}).to_string(), "Google Tasks tracking")?;
+                task.notes = normalized;
+            }
+            let due = task.due.as_deref().and_then(task_due_date)
+                .unwrap_or(crate::timeblocking::UNDATED);
+            if let Some(event) = parse_task(task, calendar_id, color, due) {
                 events.push(event);
             }
         }
@@ -345,7 +358,7 @@ fn fetch_task_items(
 }
 
 fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) -> Option<Event> {
-    let due = task.due.as_deref().and_then(task_due_date)?;
+    let due = task.due.as_deref().and_then(task_due_date).unwrap_or(crate::timeblocking::UNDATED);
     if due != day {
         return None;
     }
@@ -367,7 +380,7 @@ fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) 
         color,
         completed,
         details: crate::calendar::Details {
-            description: plain_text(&task.notes),
+            description: task.notes,
             link,
             ..crate::calendar::Details::default()
         },
@@ -704,25 +717,79 @@ fn person_label(person: Option<&Person>, with_response: bool) -> String {
 }
 
 /// Google descriptions are plain text or a small amount of HTML.
+/// Keep anchor destinations as text so the shared link renderer can open them.
 fn plain_text(value: &str) -> String {
     let mut text = String::with_capacity(value.len());
-    let mut in_tag = false;
-    for ch in value.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => text.push(ch),
-            _ => {}
+    let mut rest = value;
+    let mut anchor: Option<(String, usize)> = None;
+    while let Some(start) = rest.find('<') {
+        text.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find('>').map(|end| start + end) else {
+            text.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let tag = rest[start + 1..end].trim();
+        let name = tag.split_whitespace().next().unwrap_or("");
+        if name.eq_ignore_ascii_case("a") {
+            anchor = html_href(&tag[name.len()..]).map(|url| (url, text.len()));
+        } else if name.eq_ignore_ascii_case("/a") {
+            if let Some((url, label_start)) = anchor.take() {
+                let url = decode_entities(&url);
+                if decode_entities(text[label_start..].trim()) != url {
+                    text.push_str(" (");
+                    text.push_str(&url);
+                    text.push(')');
+                }
+            }
+        } else if ["br", "br/", "/p", "/div", "/li"].iter().any(|name| tag.eq_ignore_ascii_case(name)) {
+            text.push('\n');
+        } else if tag.starts_with("https://") || tag.starts_with("http://") {
+            text.push('<');
+            text.push_str(tag);
+            text.push('>');
         }
+        rest = &rest[end + 1..];
     }
+    text.push_str(rest);
+    decode_entities(&text).trim().to_owned()
+}
+
+/// Read quoted or unquoted HTML attributes without confusing data-href or
+/// another attribute's value with the actual destination.
+fn html_href(mut attributes: &str) -> Option<String> {
+    while !attributes.trim_start().is_empty() {
+        attributes = attributes.trim_start();
+        let end = attributes.find(|ch: char| ch.is_whitespace() || ch == '=').unwrap_or(attributes.len());
+        let name = &attributes[..end];
+        attributes = attributes[end..].trim_start();
+        if !attributes.starts_with('=') {
+            continue;
+        }
+        attributes = attributes[1..].trim_start();
+        let (value, rest) = if let Some(quote) = attributes.chars().next().filter(|ch| *ch == '\'' || *ch == '"') {
+            let tail = &attributes[1..];
+            let end = tail.find(quote).unwrap_or(tail.len());
+            (&tail[..end], tail.get(end + 1..).unwrap_or(""))
+        } else {
+            let end = attributes.find(char::is_whitespace).unwrap_or(attributes.len());
+            (&attributes[..end], &attributes[end..])
+        };
+        if name.eq_ignore_ascii_case("href") {
+            return Some(value.to_owned());
+        }
+        attributes = rest;
+    }
+    None
+}
+
+fn decode_entities(text: &str) -> String {
     text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&#39;", "'")
         .replace("&quot;", "\"")
-        .trim()
-        .to_owned()
+        .replace("&amp;", "&")
 }
 
 fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (String, String) {
@@ -735,7 +802,7 @@ fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (String, String) {
     )
 }
 
-fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str) -> Result<T, String> {
+pub(crate) fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str) -> Result<T, String> {
     let result = ureq::get(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Accept", "application/json")
@@ -763,7 +830,7 @@ fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str) -> Result<
 /// `context` names the API in the error, so a failed write reads as coming
 /// from Calendar or Tasks rather than from whichever call site happened to
 /// share this helper.
-fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), String> {
+pub(crate) fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), String> {
     let result = ureq::request("PATCH", url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
@@ -812,7 +879,7 @@ fn delete(url: &str, access_token: &str, context: &str) -> Result<(), String> {
 ///
 /// Used for the one call that needs something back: creating an event, whose
 /// id the caller keeps so the new chip can be drawn without a full sync.
-fn post(url: &str, access_token: &str, body: &str, context: &str) -> Result<String, String> {
+pub(crate) fn post(url: &str, access_token: &str, body: &str, context: &str) -> Result<String, String> {
     let result = ureq::post(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
@@ -842,6 +909,20 @@ pub fn color_or_default(value: Option<Color>) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptions_keep_html_link_targets_and_line_breaks() {
+        assert_eq!(
+            plain_text("<p>Join <a href=\"https://example.org/?a=1&amp;b=2\">the meeting</a></p><br>Bring notes"),
+            "Join the meeting (https://example.org/?a=1&b=2)\n\nBring notes"
+        );
+        assert_eq!(
+            plain_text("<A title='more info' HREF='https://example.org'>https://example.org</A>"),
+            "https://example.org"
+        );
+        assert_eq!(plain_text("<a href=https://example.org>Visit</a>"), "Visit (https://example.org)");
+        assert_eq!(plain_text("See <https://example.org>"), "See <https://example.org>");
+    }
 
     #[test]
     fn all_day_events_use_exclusive_ends() {

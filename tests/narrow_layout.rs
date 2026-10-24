@@ -733,48 +733,7 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
     Ok(())
 }
 
-/// The calendar shows what is being worked on and how far through the
-/// scratchpad it is, without the list having to be opened.
-#[test]
-fn the_calendar_shows_the_current_todo_and_its_progress() {
-    let mut state = state();
-    state.screen = Screen::Calendar;
-
-    for text in ["first", "second", "third", "fourth"] {
-        state.config.todos.add(text);
-    }
-    state.config.todos.set_current(1);
-
-    let mut ui = render(&state, Size::new(320.0, 600.0));
-
-    assert!(ui.find("Todos 2/4:").is_ok(), "the progress is missing");
-}
-
-/// The way into the scratchpad sits beside the task line, so it is one tap from
-/// the calendar rather than buried behind the clock.
-#[test]
-fn the_calendar_offers_a_way_into_the_todos() -> Result<(), Error> {
-    let mut state = state();
-    state.screen = Screen::Calendar;
-
-    let mut ui = render(&state, Size::new(260.0, 600.0));
-    assert!(ui.find("Todos").is_ok(), "the way into the todos is missing");
-
-    let _ = ui.click("Todos")?;
-    let messages: Vec<Message> = ui.into_messages().collect();
-
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::ScreenSelected(Screen::Todos))),
-        "expected the todos button to open the scratchpad, got {messages:?}"
-    );
-
-    Ok(())
-}
-
-/// With the clock open the footer offers only the way back, so the scratchpad
-/// is not one tap away from inside the timer.
+/// The open clock keeps its way back to the calendar.
 #[test]
 fn the_timer_view_offers_only_a_way_back() {
     let mut state = state();
@@ -786,68 +745,7 @@ fn the_timer_view_offers_only_a_way_back() {
     assert!(ui.find("Todos").is_err(), "the scratchpad button should be gone");
 }
 
-/// The scratchpad takes the whole window and offers only the way back, so the
-/// clock is not in view while the list is being rearranged.
-#[test]
-fn the_todos_view_offers_only_a_way_back() {
-    let mut state = state();
-    state.screen = Screen::Todos;
-    state.timer.set_target(Some(Duration::from_secs(300)));
-
-    let mut ui = render(&state, Size::new(420.0, 600.0));
-
-    assert!(ui.find("Go back").is_ok(), "the way back is missing");
-    assert!(ui.find("of 5:00").is_err(), "the timer should not be in view");
-}
-
-/// Every control the scratchpad needs has to be reachable at 200px, including
-/// the ones that only appear once there is an item to act on.
-#[test]
-fn the_todos_screen_is_usable_at_two_hundred_pixels() {
-    let mut state = state();
-    state.screen = Screen::Todos;
-    state.config.todos.add("write the report");
-    state.config.todos.add("send the email");
-
-    let mut ui = render(&state, Size::new(200.0, 600.0));
-
-    for label in ["Todos", "Go back", "Clear", "+ Add todo", "↑", "↓", "→", "←", "✕"] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
-    }
-}
-
-/// The "Coming up" list lives on the todo page now, so the calendar's next few
-/// things are one tap from the scratchpad.
-#[test]
-fn the_todos_page_lists_what_is_coming_up() {
-    let mut state = state();
-    state.screen = Screen::Todos;
-
-    // The sample events are in the past, so one is moved to later today.
-    let mut snapshot = timetracker::calendar::sample_snapshot();
-    let soon = chrono::Local::now() + chrono::Duration::minutes(30);
-    snapshot.events[1].start = soon;
-    snapshot.events[1].end = soon + chrono::Duration::minutes(30);
-    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
-
-    let mut ui = render(&state, Size::new(200.0, 600.0));
-
-    // The heading only appears when there is something to show, so finding it
-    // is enough to know the list made it onto the page.
-    assert!(ui.find("Coming up").is_ok(), "the coming-up list is missing");
-}
-
-/// An empty scratchpad still has to render, and offer the way to start one.
-#[test]
-fn an_empty_scratchpad_offers_a_way_to_start() {
-    let mut state = state();
-    state.screen = Screen::Todos;
-
-    let mut ui = render(&state, Size::new(200.0, 400.0));
-
-    assert!(ui.find("+ Add todo").is_ok(), "the way to add the first todo is missing");
-}
-
+/// Calendar connection and sync controls remain available in settings.
 #[test]
 fn the_settings_pane_includes_calendar_sync_controls() {
     let mut state = state();
@@ -977,4 +875,240 @@ fn typing_in_the_notepad_is_kept() -> Result<(), Error> {
     assert_eq!(state.config.notepad.text, "milk");
 
     Ok(())
+}
+
+fn timeblocking_state() -> State {
+    use timetracker::timeblocking::{Metadata, notes, block_key, UNDATED};
+    let mut state = state();
+    let mut snapshot = timetracker::calendar::sample_snapshot();
+    snapshot.day = Local::now().date_naive();
+    state.config.calendar.time_block_calendar = Some("work".into());
+    state.config.calendar.time_block_list = Some("tasks:list".into());
+    let block = snapshot.events.iter_mut().find(|e| e.id == "standup").unwrap();
+    block.start = chrono::Local::now().date_naive().and_hms_opt(1,0,0).unwrap().and_local_timezone(Local).unwrap();
+    block.end = block.start + chrono::Duration::hours(1);
+    let key = block_key(block);
+    let mut task = block.clone();
+    task.id = "task:planned".into(); task.calendar_id = "tasks:list".into(); task.title = "Write proposal".into(); task.all_day = true;
+    task.details.description = notes("Proposal notes", &Metadata { block: Some(key), minutes: 90, order: 1 }).unwrap();
+    snapshot.events.push(task.clone());
+    task.id = "task:backlog".into(); task.title = "Research outline".into();
+    task.start = UNDATED.and_hms_opt(0,0,0).unwrap().and_local_timezone(Local).unwrap();
+    task.end = task.start + chrono::Duration::days(1);
+    task.details.description = notes("", &Metadata::default()).unwrap();
+    snapshot.events.push(task.clone());
+    task.id = "task:overdue".into(); task.title = "Send invoice".into();
+    task.start = Local::now() - chrono::Duration::days(8); task.end = task.start + chrono::Duration::days(1);
+    snapshot.events.push(task);
+    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+    state
+}
+
+#[test]
+fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() {
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
+    assert_eq!(state.timeblocking.original_width, Some(260.0));
+    assert!(state.calendar.open_event.is_none());
+    let mut ui = render(&state, Size::new(660.0, 720.0));
+    for label in ["90m planned / 60m available", "Write proposal", "Available tasks"] {
+        assert!(ui.find(label).is_ok(), "missing {label}");
+    }
+    // Generate a preview only when explicitly requested for visual inspection.
+    if std::env::var_os("TB_PREVIEW").is_some() {
+        ui.snapshot(&iced::Theme::Light).unwrap().matches_image(std::path::Path::new("/tmp/timeblocking-preview")).unwrap();
+    }
+    drop(ui);
+    let _ = app::update(&mut state, Message::ScreenSelected(Screen::Backlog));
+    assert!(state.timeblocking.block.is_none());
+    assert_eq!(state.timeblocking.original_width, None);
+}
+
+#[test]
+fn backlog_shows_only_undated_incomplete_google_tasks_and_opens_rescheduling() -> Result<(), Error> {
+    let mut state = timeblocking_state();
+    state.screen = Screen::Backlog;
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Write proposal").is_err());
+    assert!(ui.find("Send invoice").is_err());
+    let _ = ui.click("Reschedule")?;
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(messages.iter().any(|m| matches!(m, Message::EventOpened(id) if id == "task:backlog")));
+    let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    for label in ["Due date", "Save estimate", "Move to Backlog"] { assert!(ui.find(label).is_ok()); }
+    Ok(())
+}
+
+#[test]
+fn overdue_tasks_can_be_hidden_without_hiding_backlog_or_events() {
+    let mut state = timeblocking_state();
+    assert!(state.calendar.all_day_events(&state.config.calendar).any(|e| e.id == "task:overdue"));
+    assert!(!state.calendar.all_day_events(&state.config.calendar).any(|e| e.id == "task:backlog"));
+    let _ = app::update(&mut state, Message::TimeBlocking(timetracker::timeblocking::Action::HideOverdue(true)));
+    assert!(!state.calendar.all_day_events(&state.config.calendar).any(|e| e.id == "task:overdue"));
+    assert!(state.calendar.event("task:backlog").is_some());
+    assert!(state.calendar.event("standup").is_some());
+}
+
+#[test]
+fn the_calendar_has_backlog_and_overdue_controls_and_no_todos_menu() -> Result<(), Error> {
+    let state = state();
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+    assert!(ui.find("Todos").is_err());
+    assert!(ui.find("Hide overdue tasks").is_ok());
+    let _ = ui.click("Backlog")?;
+    assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog))));
+    Ok(())
+}
+
+#[test]
+fn task_drag_handles_start_a_drag_and_task_rows_accept_a_drop() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let state = timeblocking_state();
+    let task = state.calendar.event("task:backlog").unwrap();
+    let metrics = timetracker::ui::layout::Metrics::of(Size::new(400.0, 70.0));
+    let mut ui = at(Size::new(400.0, 70.0), timetracker::ui::timeblocking::task_row(&state, task, &metrics, false));
+    let _ = ui.click("⠿")?;
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(Action::Drag(id)) if id == "task:backlog")));
+    assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(Action::DropTask(id)) if id == "task:backlog")));
+    Ok(())
+}
+
+#[test]
+fn invalid_rescheduling_keeps_the_task_and_reports_the_date_problem() {
+    let mut state = timeblocking_state();
+    state.timeblocking.date = "not a date".into();
+    let before = state.calendar.event("task:backlog").unwrap().clone();
+    let _ = app::update(&mut state, Message::TimeBlocking(timetracker::timeblocking::Action::Reschedule("task:backlog".into())));
+    assert_eq!(state.calendar.event("task:backlog"), Some(&before));
+    assert!(state.timeblocking.busy.is_empty());
+    assert!(state.calendar.error.as_deref().unwrap().contains("YYYY-MM-DD"));
+}
+
+#[test]
+fn a_sync_started_before_a_task_edit_cannot_replace_the_edited_tasks() {
+    let mut state = timeblocking_state();
+    state.timeblocking.revision = 2;
+    let _ = app::update(&mut state, Message::CalendarSyncedAt(1, Ok(timetracker::calendar::sample_snapshot())));
+    assert!(state.calendar.event("task:planned").is_some());
+    assert!(state.calendar.event("task:backlog").is_some());
+}
+
+fn focus_state() -> State {
+    use timetracker::timeblocking::{self as tb, Action};
+    let mut state = timeblocking_state();
+    let now = chrono::Utc::now();
+    let block = state.calendar.event_mut("standup").unwrap();
+    block.start = (now - chrono::Duration::minutes(20)).with_timezone(&Local);
+    block.end = block.start + chrono::Duration::hours(1);
+    let block_key = tb::block_key(block);
+    let planned = state.calendar.event_mut("task:planned").unwrap();
+    let mut meta = tb::metadata(&planned.details.description);
+    meta.minutes = 30;
+    planned.details.description = tb::notes(&planned.details.description,&meta).unwrap();
+    let key = tb::task_key(planned);
+    let mut second = planned.clone();
+    second.id = "task:second".into(); second.title = "Review the draft".into();
+    meta.minutes = 20; meta.order = 2;
+    second.details.description = tb::notes("",&meta).unwrap();
+    state.calendar.add_event(second.clone());
+    second.id = "task:done".into(); second.title = "Gather references".into(); second.completed = true;
+    meta.order = 3;
+    second.details.description = tb::notes("",&meta).unwrap();
+    state.calendar.add_event(second);
+    state.config.task_work.start(key,"Write proposal".into(),Some(block_key),now-chrono::Duration::minutes(31));
+    let _ = app::update(&mut state,Message::TimeBlocking(Action::View("standup".into())));
+    state
+}
+
+#[test]
+fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
+    let mut state = focus_state();
+    assert_eq!(state.timeblocking.focus.as_deref(),Some("standup"));
+    assert!(state.timeblocking.block.is_none());
+    assert!(state.timeblocking.original_width.is_none());
+    let mut ui = render(&state,Size::new(900.0,720.0));
+    for label in ["FOCUS · TIME BLOCK", "Write proposal", "Review the draft", "Gather references", "Start", "Stop", "Complete", "Completed ✓"] {
+        assert!(ui.find(label).is_ok(),"missing {label}");
+    }
+    if std::env::var_os("FOCUS_PREVIEW").is_some() {
+        ui.snapshot(&iced::Theme::Light).unwrap().matches_image(std::path::Path::new("/tmp/focus-preview")).unwrap();
+    }
+    drop(ui);
+    let _ = app::update(&mut state,Message::TimeBlocking(timetracker::timeblocking::Action::CloseView));
+    assert!(state.timeblocking.focus.is_none());
+    assert!(state.config.task_work.active().is_some(),"closing the view should retain the running task");
+}
+
+#[test]
+fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
+    use timetracker::timeblocking::{self as tb, Action};
+    let mut state = focus_state();
+    let key = tb::task_key(state.calendar.event("task:planned").unwrap());
+    let _ = app::update(&mut state,Message::TaskToggled("task:planned".into()));
+    assert!(!state.config.task_work.running(&key));
+    assert!(state.calendar.event("task:planned").unwrap().completed);
+    let block = state.calendar.event("standup").unwrap();
+    assert!(tb::assigned_all(&state,block).iter().any(|e| e.id == "task:planned"));
+    let elapsed = state.config.task_work.seconds(&key,chrono::Utc::now());
+    assert!(elapsed >= 31*60);
+    assert_eq!(elapsed,state.config.task_work.seconds(&key,chrono::Utc::now()+chrono::Duration::days(1)));
+    let saved = toml::to_string(&state.config).unwrap();
+    let restored: Config = toml::from_str(&saved).unwrap();
+    assert_eq!(restored.task_work,state.config.task_work);
+    let _ = app::update(&mut state,Message::TimeBlocking(Action::StartWork("task:done".into())));
+    assert!(state.config.task_work.active().is_none(),"completed tasks cannot start a timer");
+}
+
+#[test]
+fn start_and_stop_are_local_and_do_not_change_google_task_status() {
+    use timetracker::timeblocking::{self as tb, Action};
+    let mut state = focus_state();
+    let second = state.calendar.event("task:second").unwrap();
+    let key = tb::task_key(second);
+    let _ = app::update(&mut state,Message::TimeBlocking(Action::StartWork("task:second".into())));
+    assert!(state.config.task_work.running(&key));
+    assert_eq!(state.config.task_work.sessions.iter().filter(|s| s.stopped_at.is_none()).count(),1);
+    let _ = app::update(&mut state,Message::TimeBlocking(Action::StopWork("task:second".into())));
+    assert!(state.config.task_work.active().is_none());
+    assert!(!state.calendar.event("task:second").unwrap().completed);
+    assert!(state.timeblocking.busy.is_empty());
+}
+
+#[test]
+fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(),Error> {
+    let state = focus_state();
+    let mut ui = render(&state,Size::new(900.0,720.0));
+    let _ = ui.click("Timer")?;
+    assert!(!ui.into_messages().any(|m| matches!(m,Message::TimerOpened)));
+    Ok(())
+}
+
+#[test]
+fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(),Error> {
+    use timetracker::timeblocking::Action;
+    for width in [200.0,320.0,900.0] {
+        let state = focus_state();
+        let mut ui = render(&state,Size::new(width,720.0));
+        let _ = ui.click("Stop")?;
+        assert!(ui.into_messages().any(|m| matches!(m,Message::TimeBlocking(Action::StopWork(id)) if id == "task:planned")),"Stop did not work at {width}px");
+    }
+    Ok(())
+}
+
+#[test]
+fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
+    let mut state = focus_state();
+    let mut snapshot = timetracker::calendar::sample_snapshot();
+    snapshot.day = state.calendar.day;
+    snapshot.events = state.calendar.events.clone();
+    snapshot.events.iter_mut().find(|e| e.id == "task:planned").unwrap().completed = true;
+    let _ = app::update(&mut state,Message::CalendarSynced(Ok(snapshot)));
+    assert!(state.config.task_work.active().is_none());
+    let block = state.calendar.event("standup").unwrap();
+    assert!(timetracker::timeblocking::assigned_all(&state,block).iter().any(|e| e.id == "task:planned" && e.completed));
 }

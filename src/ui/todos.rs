@@ -164,13 +164,17 @@ fn item<'a>(
     // The controls sit under the text rather than beside it: even on a wide
     // window this pane is a narrow column next to the calendar, and a single
     // line would leave the text field almost no room.
-    let line = column![
+    let mut line = column![
         row![marker, input, remove]
             .spacing(metrics.spacing)
             .align_y(Center),
         controls().width(Fill),
     ]
     .spacing(2.0);
+
+    if let Some(links) = super::links::for_editor(&todo.text, metrics.label()) {
+        line = line.push(links);
+    }
 
     container(line)
         .padding(Padding {
