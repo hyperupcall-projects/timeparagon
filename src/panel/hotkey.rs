@@ -27,6 +27,8 @@ const ACTION_FRIENDLY: &str = "Toggle Side Panel";
 /// action's default binding (what "Reset" in System Settings restores).
 const SET_PRESENT: u32 = 0x2;
 const IS_DEFAULT: u32 = 0x8;
+/// Apply an explicit user edit instead of reloading the saved binding.
+const NO_AUTOLOADING: u32 = 0x4;
 
 /// Messages sent from the D-Bus thread to the Wayland event loop.
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +59,9 @@ trait KGlobalAccel {
         flags: u32,
     ) -> zbus::Result<Vec<(Vec<i32>,)>>;
 
+    #[zbus(name = "shortcutKeys")]
+    fn shortcut_keys(&self, action_id: &[&str]) -> zbus::Result<Vec<(Vec<i32>,)>>;
+
     #[zbus(name = "getComponent")]
     fn get_component(&self, component_unique: &str) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 }
@@ -73,6 +78,33 @@ trait Component {
         action_unique: &str,
         timestamp: i64,
     ) -> zbus::Result<()>;
+}
+
+/// Changes the running panel's binding. KGlobalAccel persists it across daemon
+/// restarts; startup deliberately respects that saved binding.
+pub fn rebind(spec: &str) -> Result<()> {
+    let combined = parse_shortcut(spec)?;
+    let conn = zbus::blocking::Connection::session()
+        .context("Could not connect to the desktop session")?;
+    let kga = KGlobalAccelProxyBlocking::new(&conn)?;
+    // Do not create an action owned by this temporary connection: the panel
+    // daemon must already own it and be listening for presses.
+    kga.get_component(COMPONENT)
+        .context("Side panel unavailable. Start timetracker-panel.service and try again")?;
+    let action_id = [COMPONENT, ACTION, COMPONENT_FRIENDLY, ACTION_FRIENDLY];
+    let keys = [(encode_sequence(combined),)];
+    let previous = kga
+        .shortcut_keys(&action_id)
+        .context("Could not read the current side panel shortcut")?;
+    let applied = kga
+        .set_shortcut_keys(&action_id, &keys, SET_PRESENT | NO_AUTOLOADING)
+        .context("Could not change the side panel shortcut")?;
+    if applied != keys {
+        kga.set_shortcut_keys(&action_id, &previous, SET_PRESENT | NO_AUTOLOADING)
+            .context("Shortcut unavailable, and restoring the previous shortcut failed")?;
+        anyhow::bail!("Shortcut unavailable. It may already be used by another application; try another combination");
+    }
+    Ok(())
 }
 
 /// Spawns the background thread that registers the shortcut and forwards
@@ -158,15 +190,17 @@ fn parse_shortcut(spec: &str) -> Result<i32> {
 
     for raw in spec.split('+') {
         let part = raw.trim();
-        if part.is_empty() {
-            continue;
-        }
+        anyhow::ensure!(!part.is_empty(), "Shortcut contains an empty key");
         match part.to_ascii_lowercase().as_str() {
             "meta" | "super" | "logo" | "win" => modifiers |= META,
             "ctrl" | "control" => modifiers |= CTRL,
             "alt" => modifiers |= ALT,
             "shift" => modifiers |= SHIFT,
             other => {
+                anyhow::ensure!(
+                    key.is_none(),
+                    "Use exactly one key with optional modifiers"
+                );
                 key = Some(key_code(other).ok_or_else(|| {
                     anyhow!("unsupported key '{other}' in shortcut '{spec}'")
                 })?);
@@ -175,6 +209,10 @@ fn parse_shortcut(spec: &str) -> Result<i32> {
     }
 
     let key = key.ok_or_else(|| anyhow!("shortcut '{spec}' does not contain a key"))?;
+    anyhow::ensure!(
+        modifiers != 0 || (0x0100_0030..=0x0100_003b).contains(&key),
+        "Use Ctrl, Alt, Shift or Meta with the key, or use F1–F12"
+    );
     Ok(modifiers | key)
 }
 
@@ -263,6 +301,21 @@ mod tests {
         let default = PanelConfig::default();
 
         assert_eq!(parse_shortcut(&default.shortcut).unwrap(), 0x1000_0055);
+    }
+
+    #[test]
+    fn custom_combinations_and_function_keys_parse() {
+        assert_eq!(parse_shortcut("Ctrl+Alt+T").unwrap(), 0x0c00_0054);
+        assert_eq!(parse_shortcut(" super + shift + u ").unwrap(), 0x1200_0055);
+        assert_eq!(parse_shortcut("F2").unwrap(), 0x0100_0031);
+        assert_eq!(parse_shortcut("Meta+Space").unwrap(), 0x1000_0020);
+    }
+
+    #[test]
+    fn malformed_or_unmodified_typing_keys_are_rejected() {
+        for spec in ["", "Meta", "Meta+", "Ctrl++T", "Meta+U+T", "U", "Space", "Meta+Unknown"] {
+            assert!(parse_shortcut(spec).is_err(), "{spec:?} should be rejected");
+        }
     }
 
     #[test]

@@ -27,7 +27,7 @@ mod config;
 mod hotkey;
 
 pub use config::{PanelConfig, Side};
-pub use hotkey::HotkeyEvent;
+pub use hotkey::{HotkeyEvent, rebind};
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;

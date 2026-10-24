@@ -37,6 +37,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         heading("Appearance", metrics),
         appearance(state, metrics),
+        heading("Side panel", metrics),
+        side_panel(state, metrics),
         heading("Google Calendar", metrics),
         calendar(state, metrics),
     ]
@@ -178,6 +180,35 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ]
     .spacing(metrics.spacing)
     .into()
+}
+
+fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let mut input = text_input("e.g. Meta+U", &state.panel_shortcut_input).size(metrics.label());
+    let mut apply = button(
+        text(if state.panel_shortcut_busy { "Applying…" } else { "Apply shortcut" })
+            .size(metrics.label()).center().width(Fill),
+    ).width(Fill);
+    if !state.panel_shortcut_busy {
+        input = input.on_input(Message::PanelShortcutChanged)
+            .on_submit(Message::PanelShortcutApply);
+        if !state.panel_shortcut_input.trim().is_empty() {
+            apply = apply.on_press(Message::PanelShortcutApply);
+        }
+    }
+    let mut section = column![
+        field("New shortcut", input.into(), metrics),
+        text("Opens or hides the side panel. Default: Meta+U. Combine Ctrl, Alt, Shift or Meta with a letter, number or named key (e.g. Space or F2).")
+            .size(metrics.label()).style(text::secondary),
+        apply,
+    ].spacing(metrics.spacing);
+    if let Some(result) = &state.panel_shortcut_result {
+        section = section.push(match result {
+            Ok(shortcut) => text(format!("Shortcut set to {shortcut}"))
+                .size(metrics.label()).style(text::success),
+            Err(error) => text(error).size(metrics.label()).style(text::danger),
+        });
+    }
+    indent(section.into(), metrics)
 }
 
 fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {

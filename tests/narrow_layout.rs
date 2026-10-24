@@ -141,6 +141,9 @@ fn the_settings_pane_is_usable_at_two_hundred_pixels() {
         "Done",
         // Appearance.
         "Theme",
+        // Side panel.
+        "New shortcut",
+        "Apply shortcut",
         // Google Calendar.
         "OAuth client ID",
         "Sync every 15 minutes",
