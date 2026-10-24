@@ -1,7 +1,12 @@
 //! State, messages and the update loop.
 
+use std::io::Read;
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result as AnyhowResult};
 
 use iced::advanced::widget::{operate, operation};
 use iced::keyboard::{self, Key};
@@ -72,6 +77,14 @@ pub struct Sidebar {
     pub side: panel::Side,
 }
 
+/// A command sent from the panel daemon to the panel process over its IPC
+/// socket, telling it to show or hide its window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelCommand {
+    Show,
+    Hide,
+}
+
 impl Flash {
     /// How opaque the overlay should be right now, or `None` once it is done.
     ///
@@ -114,6 +127,14 @@ pub struct State {
 
     pub screen: Screen,
     pub main_window: Option<window::Id>,
+    /// Receiver for show/hide commands from the panel daemon, when this process
+    /// is the side panel.
+    pub panel_command_rx: Option<mpsc::Receiver<PanelCommand>>,
+    /// The panel config, kept so the window can be reopened after being closed.
+    pub panel_config: Option<crate::panel::PanelConfig>,
+    /// Set when the panel window is closed programmatically (to hide), so that
+    /// `WindowClosed` does not exit the process.
+    pub panel_expected_close: bool,
     pub flash: Option<Flash>,
     /// True while a sound or flash is still asking to be dismissed.
     pub alarm_active: bool,
@@ -222,6 +243,8 @@ pub enum Message {
     WindowClosed(window::Id),
     WindowResized(window::Id, Size),
     FlashFinished,
+    /// A poll tick that checks for show/hide commands from the panel daemon.
+    PanelCommandPolled,
 
     KeyPressed(Key, keyboard::Modifiers),
     /// An event we deliberately do not act on, such as a key release or a
@@ -369,6 +392,9 @@ impl State {
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
             main_window: None,
+            panel_command_rx: None,
+            panel_config: None,
+            panel_expected_close: false,
             flash: None,
             alarm_active: false,
             audio: Audio::new(),
@@ -437,6 +463,22 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
         width: panel.width as f32,
         side: panel.side,
     });
+
+    state.panel_config = Some(panel.clone());
+
+    let (tx, rx) = mpsc::channel();
+    state.panel_command_rx = Some(rx);
+
+    if let Some(socket_path) = crate::panel::panel_socket_path() {
+        std::thread::Builder::new()
+            .name("panel-ipc".into())
+            .spawn(move || {
+                if let Err(error) = panel_ipc_listener(socket_path, tx) {
+                    log::error!("panel IPC listener stopped: {error:#}");
+                }
+            })
+            .expect("failed to spawn the panel IPC listener");
+    }
 
     let (_id, open) = window::open(sidebar_settings(&panel));
 
@@ -879,6 +921,36 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::PanelCommandPolled => {
+            let Some(command) = state
+                .panel_command_rx
+                .as_ref()
+                .and_then(|rx| rx.try_recv().ok())
+            else {
+                return Task::none();
+            };
+
+            match command {
+                PanelCommand::Show => {
+                    if state.main_window.is_some() {
+                        return Task::none(); // already visible
+                    }
+                    let Some(panel) = &state.panel_config else {
+                        return Task::none();
+                    };
+                    let (_id, open) = window::open(sidebar_settings(panel));
+                    open.map(Message::WindowOpened)
+                }
+                PanelCommand::Hide => {
+                    let Some(id) = state.main_window else {
+                        return Task::none(); // already hidden
+                    };
+                    state.panel_expected_close = true;
+                    window::close(id)
+                }
+            }
+        }
+
         Message::WindowOpened(id) => {
             state.main_window = Some(id);
 
@@ -950,6 +1022,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::WindowClosed(id) => {
             if state.main_window == Some(id) {
+                if state.panel_expected_close {
+                    state.panel_expected_close = false;
+                    state.main_window = None;
+                    return Task::none();
+                }
                 // Closing the clock quits, even though a daemon would
                 // otherwise keep running with no windows left.
                 return iced::exit();
@@ -1714,6 +1791,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
             .push(iced::time::every(config::SAVE_DEBOUNCE).map(|_| Message::SaveRequested));
     }
 
+    // The side panel polls for show/hide commands from the panel daemon.
+    if state.panel_command_rx.is_some() {
+        subscriptions.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::PanelCommandPolled));
+    }
+
     Subscription::batch(subscriptions)
 }
 
@@ -2002,6 +2084,37 @@ fn level(always_on_top: bool) -> window::Level {
 /// narrow that the layout folds below the minimum it supports.
 fn launch_width(monitor_width: f32) -> f32 {
     (monitor_width * 2.0 / 3.0).max(MIN_SIZE.width)
+}
+
+/// Listens on the panel IPC socket and forwards show/hide commands to the
+/// main thread via `tx`. Runs in a background thread spawned by `boot_sidebar`.
+fn panel_ipc_listener(socket_path: PathBuf, tx: mpsc::Sender<PanelCommand>) -> AnyhowResult<()> {
+    // Remove any stale socket from a previous run.
+    let _ = std::fs::remove_file(&socket_path);
+
+    let listener = UnixListener::bind(&socket_path)
+        .with_context(|| format!("failed to bind panel socket at {}", socket_path.display()))?;
+
+    log::info!("panel IPC socket listening at {}", socket_path.display());
+
+    for stream in listener.incoming() {
+        let mut stream = stream.context("failed to accept panel IPC connection")?;
+        let mut buffer = [0u8; 16];
+        match stream.read(&mut buffer) {
+            Ok(0) => continue, // client disconnected without sending
+            Ok(n) => {
+                let command = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                match command.as_str() {
+                    "show" => { let _ = tx.send(PanelCommand::Show); }
+                    "hide" => { let _ = tx.send(PanelCommand::Hide); }
+                    _ => log::warn!("unknown panel IPC command: {command:?}"),
+                }
+            }
+            Err(error) => log::warn!("failed to read panel IPC command: {error}"),
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
