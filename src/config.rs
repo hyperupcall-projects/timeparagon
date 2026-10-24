@@ -33,6 +33,10 @@ pub struct Config {
     /// empty, so a config that never used it stays as it was.
     #[serde(default, skip_serializing_if = "TodoList::is_empty")]
     pub todos: TodoList,
+    /// The notepad's page. It is left out of the file while it is blank, so a
+    /// config that never used it stays as it was.
+    #[serde(default, skip_serializing_if = "Notepad::is_empty")]
+    pub notepad: Notepad,
 }
 
 impl Default for Config {
@@ -44,6 +48,7 @@ impl Default for Config {
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
             todos: TodoList::default(),
+            notepad: Notepad::default(),
         }
     }
 }
@@ -65,6 +70,62 @@ impl Default for Appearance {
             follow_system: false,
         }
     }
+}
+
+/// The notepad: a page of free text that is kept between sessions.
+///
+/// It lives in the config file rather than in a document of its own, so there
+/// is exactly one place the app reads and writes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Notepad {
+    /// What is written on the page.
+    #[serde(default)]
+    pub text: String,
+    /// How large the text on the page is, as a percentage of the size it is
+    /// drawn at by default.
+    #[serde(default = "default_font_size")]
+    pub font_size: u8,
+}
+
+impl Default for Notepad {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            font_size: default_font_size(),
+        }
+    }
+}
+
+impl Notepad {
+    /// The smallest the text on the page may be.
+    pub const MIN_FONT_SIZE: u8 = 60;
+
+    /// The largest the text on the page may be.
+    pub const MAX_FONT_SIZE: u8 = 250;
+
+    /// How much one press of the size buttons changes it.
+    pub const FONT_SIZE_STEP: u8 = 10;
+
+    /// Whether the page is untouched, which is what keeps it out of the file.
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.font_size == default_font_size()
+    }
+
+    /// The size of the text on the page, as a multiplier.
+    ///
+    /// It is clamped, so that a hand-edited config cannot ask for text that
+    /// will not fit on the screen.
+    pub fn font_scale(&self) -> f32 {
+        let size = self.font_size.clamp(Self::MIN_FONT_SIZE, Self::MAX_FONT_SIZE);
+
+        f32::from(size) / 100.0
+    }
+}
+
+/// The size the notepad's text is drawn at unless it is changed.
+fn default_font_size() -> u8 {
+    100
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -619,6 +680,51 @@ mod tests {
     fn an_empty_scratchpad_is_left_out_of_the_config_file() {
         let text = toml::to_string_pretty(&Config::default()).unwrap();
         assert!(!text.contains("todos"), "got {text:?}");
+    }
+
+    #[test]
+    fn a_notepad_survives_a_round_trip() {
+        let mut config = Config::default();
+        config.notepad.text = "remember the milk\nand the bread".to_owned();
+        config.notepad.font_size = 150;
+
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+
+        assert_eq!(parsed.notepad.text, config.notepad.text);
+        assert_eq!(parsed.notepad.font_size, 150);
+    }
+
+    #[test]
+    fn a_blank_notepad_is_left_out_of_the_config_file() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(!text.contains("notepad"), "got {text:?}");
+    }
+
+    #[test]
+    fn a_notepad_with_a_size_of_its_own_is_kept() {
+        let mut config = Config::default();
+        config.notepad.font_size = 150;
+
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+
+        assert_eq!(parsed.notepad.font_size, 150);
+    }
+
+    #[test]
+    fn the_notepad_text_size_is_clamped_to_what_fits() {
+        let tiny = Notepad {
+            font_size: 10,
+            ..Notepad::default()
+        };
+        let huge = Notepad {
+            font_size: 250,
+            ..Notepad::default()
+        };
+
+        assert_eq!(tiny.font_scale(), f32::from(Notepad::MIN_FONT_SIZE) / 100.0);
+        assert_eq!(huge.font_scale(), f32::from(Notepad::MAX_FONT_SIZE) / 100.0);
     }
 
     #[test]

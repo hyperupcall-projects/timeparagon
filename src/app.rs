@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use iced::advanced::widget::{operate, operation};
 use iced::keyboard::{self, Key};
+use iced::widget::text_editor;
 use iced::{Element, Point, Size, Subscription, Task, Theme, window};
 
 use chrono::{DateTime, Local};
@@ -43,6 +44,8 @@ const NEAR_EVENT_START: i64 = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Calendar,
+    /// The notepad: a page of free text kept between sessions.
+    Notepad,
     Settings,
     /// The pane for choosing the target time.
     SetTime,
@@ -123,6 +126,13 @@ pub struct State {
     /// schedule one save per pixel.
     save_queued: bool,
 
+    /// The notepad's text as the editor widget holds it.
+    ///
+    /// The widget keeps its own copy so the cursor and the selection survive
+    /// a redraw; the config keeps the saved copy, and the two are reconciled
+    /// on every edit.
+    pub notepad: text_editor::Content<iced::Renderer>,
+
     pub calendar: calendar::Store,
 }
 
@@ -159,6 +169,11 @@ pub enum Message {
     TodoSelected(usize),
     /// Throw the whole scratchpad away.
     TodosCleared,
+    /// The notepad was edited.
+    NotepadEdited(text_editor::Action),
+    /// The text on the notepad was made bigger or smaller, by a number of
+    /// percentage points.
+    NotepadFontSizeChanged(i32),
     /// Unfold the clock inside the calendar and set it going.
     TimerOpened,
     /// Fold the clock away again; a timer that is running keeps going.
@@ -336,6 +351,10 @@ impl State {
     pub fn new(config: Config, catalog: Catalog) -> Self {
         let day_end_hour = config.calendar.day_start_hour();
 
+        // The editor is seeded with the saved text, so the notepad opens on
+        // what was written last time.
+        let notepad = text_editor::Content::with_text(&config.notepad.text);
+
         Self {
             timer: Timer::new(config.timer.last_duration()),
             now: Instant::now(),
@@ -351,6 +370,7 @@ impl State {
             save_queued: false,
             catalog,
             config,
+            notepad,
             calendar: calendar::Store::new(day_end_hour),
         }
     }
@@ -363,6 +383,17 @@ impl State {
             self.config.timer.current_task.as_str(),
             |todo| todo.text.as_str(),
         )
+    }
+
+    /// Replaces the notepad's text, as if it had been typed.
+    ///
+    /// The editor holds its own copy of the text so that the cursor survives a
+    /// redraw, so this puts the same text in both places.
+    pub fn set_notepad(&mut self, text: impl Into<String>) {
+        let text = text.into();
+
+        self.notepad = text_editor::Content::with_text(&text);
+        self.config.notepad.text = text;
     }
 }
 
@@ -604,6 +635,27 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::TodosCleared => {
             state.config.todos.clear();
+            queue_save(state)
+        }
+
+        Message::NotepadEdited(action) => {
+            state.notepad.perform(action);
+
+            // The editor is the one holding the text while it is being typed,
+            // so the saved copy is taken from it after every change.
+            state.config.notepad.text = state.notepad.text();
+
+            queue_save(state)
+        }
+
+        Message::NotepadFontSizeChanged(delta) => {
+            let size = state.config.notepad.font_size;
+            let next = size
+                .saturating_add_signed(delta as i8)
+                .clamp(config::Notepad::MIN_FONT_SIZE, config::Notepad::MAX_FONT_SIZE);
+
+            state.config.notepad.font_size = next;
+
             queue_save(state)
         }
 
@@ -1609,34 +1661,59 @@ fn map_key(event: keyboard::Event) -> Message {
 }
 
 fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<Message> {
+    match key_message(state, key, modifiers) {
+        Some(message) => Task::done(message),
+        None => Task::none(),
+    }
+}
+
+/// What a key press means, if anything.
+///
+/// Kept apart from the task it turns into, so that what a key does can be
+/// looked at without running anything.
+fn key_message(
+    state: &mut State,
+    key: Key,
+    modifiers: keyboard::Modifiers,
+) -> Option<Message> {
     use keyboard::key::Named;
 
     if modifiers.command() {
         return match key.as_ref() {
-            Key::Character(",") => Task::done(Message::ScreenSelected(Screen::Settings)),
-            _ => Task::none(),
+            Key::Character(",") => Some(Message::ScreenSelected(Screen::Settings)),
+            _ => None,
+        };
+    }
+
+    // The notepad is for writing, so the shortcuts that drive the clock are
+    // left off while it is on show: a space would otherwise start the timer
+    // halfway through a word.
+    if state.screen == Screen::Notepad {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::ScreenSelected(Screen::Calendar)),
+            _ => None,
         };
     }
 
     match key.as_ref() {
-        Key::Named(Named::Space) => Task::done(Message::StartPause),
+        Key::Named(Named::Space) => Some(Message::StartPause),
         Key::Named(Named::Escape) => {
             if state.calendar.open_event.is_some() {
                 state.calendar.open_event = None;
-                Task::none()
+                None
             } else if state.calendar.menu_open {
                 state.calendar.menu_open = false;
-                Task::none()
+                None
             } else if state.alarm_active {
-                Task::done(Message::Dismiss)
+                Some(Message::Dismiss)
             } else if state.screen != Screen::Calendar {
-                Task::done(Message::ScreenSelected(Screen::Calendar))
+                Some(Message::ScreenSelected(Screen::Calendar))
             } else {
-                Task::none()
+                None
             }
         }
-        Key::Character("r") => Task::done(Message::Reset),
-        _ => Task::none(),
+        Key::Character("r") => Some(Message::Reset),
+        _ => None,
     }
 }
 
@@ -2085,6 +2162,125 @@ mod tests {
         let _ = update(&mut state, Message::TodosCleared);
         assert!(state.config.todos.is_empty());
         assert_eq!(state.current_task(), "");
+    }
+
+    #[test]
+    fn the_notepad_keeps_what_was_written() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        for letter in "milk".chars() {
+            let _ = update(
+                &mut state,
+                Message::NotepadEdited(text_editor::Action::Edit(text_editor::Edit::Insert(
+                    letter,
+                ))),
+            );
+        }
+
+        assert_eq!(state.config.notepad.text, "milk");
+        assert!(state.save_queued);
+    }
+
+    #[test]
+    fn the_notepad_opens_on_what_was_written_last_time() {
+        let mut config = Config::default();
+        config.notepad.text = "remember the milk".to_owned();
+
+        let state = State::new(config, Catalog::built_in());
+
+        assert_eq!(state.notepad.text(), "remember the milk");
+    }
+
+    #[test]
+    fn the_notepad_text_size_is_remembered() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        assert_eq!(state.config.notepad.font_size, 100);
+
+        let _ = update(&mut state, Message::NotepadFontSizeChanged(10));
+        assert_eq!(state.config.notepad.font_size, 110);
+
+        let _ = update(&mut state, Message::NotepadFontSizeChanged(-20));
+        assert_eq!(state.config.notepad.font_size, 90);
+        assert!(state.save_queued);
+    }
+
+    #[test]
+    fn the_notepad_text_size_stops_at_the_ends_of_its_range() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        for _ in 0..40 {
+            let _ = update(&mut state, Message::NotepadFontSizeChanged(10));
+        }
+        assert_eq!(
+            state.config.notepad.font_size,
+            config::Notepad::MAX_FONT_SIZE
+        );
+
+        for _ in 0..40 {
+            let _ = update(&mut state, Message::NotepadFontSizeChanged(-10));
+        }
+        assert_eq!(
+            state.config.notepad.font_size,
+            config::Notepad::MIN_FONT_SIZE
+        );
+    }
+
+    #[test]
+    fn the_notepad_is_a_tab_of_its_own() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let _ = update(&mut state, Message::ScreenSelected(Screen::Notepad));
+        assert_eq!(state.screen, Screen::Notepad);
+
+        let _ = update(&mut state, Message::ScreenSelected(Screen::Calendar));
+        assert_eq!(state.screen, Screen::Calendar);
+    }
+
+    #[test]
+    fn the_clock_shortcuts_are_left_off_while_writing() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.screen = Screen::Notepad;
+
+        let space = key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Space),
+            keyboard::Modifiers::default(),
+        );
+        let reset = key_message(
+            &mut state,
+            Key::Character("r".into()),
+            keyboard::Modifiers::default(),
+        );
+
+        assert!(space.is_none(), "a space would start the clock mid-word");
+        assert!(reset.is_none(), "an r would reset the clock mid-word");
+
+        // Escape still leaves the page.
+        let escape = key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Escape),
+            keyboard::Modifiers::default(),
+        );
+        assert!(
+            matches!(escape, Some(Message::ScreenSelected(Screen::Calendar))),
+            "escape should leave the notepad"
+        );
+    }
+
+    #[test]
+    fn the_clock_shortcuts_still_work_on_the_calendar() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+
+        let space = key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Space),
+            keyboard::Modifiers::default(),
+        );
+
+        assert!(
+            matches!(space, Some(Message::StartPause)),
+            "a space should start the clock on the calendar"
+        );
     }
 
     #[test]

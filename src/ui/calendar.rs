@@ -26,6 +26,19 @@ const EVENT_GAP: f32 = 2.0;
 const EVENT_RADIUS: f32 = 4.0;
 const NEEDLE_RADIUS: f32 = 5.5;
 
+/// The gap between a block's left edge and the text inside it.
+const BLOCK_PADDING: f32 = 6.0;
+/// The gap between a block's right edge and the text inside it.
+const BLOCK_PADDING_RIGHT: f32 = 4.0;
+/// The gap above a block's first line of text.
+const BLOCK_TOP: f32 = 3.0;
+/// The gap between a block's title and the time label under it.
+const BLOCK_GAP: f32 = 2.0;
+/// The mark that says a title was cut short to fit its block.
+const ELLIPSIS: &str = "…";
+/// The width a paragraph is measured at, wide enough that nothing wraps.
+const MEASURE_WIDTH: f32 = 100_000.0;
+
 /// How close to a block's top or bottom edge a press has to land to resize it
 /// rather than move it. The middle of the block is always the move handle.
 const EDGE_GRAB: f32 = 8.0;
@@ -112,10 +125,13 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     stack![content, overlay].into()
 }
 
-/// The top of the calendar: the month picker, the day in view, the calendars
-/// menu and the way into settings. The day sits between the month picker and
-/// the menu, and tapping the month opens a picker where a day can be chosen
-/// directly instead of stepping with arrows.
+/// The top of the calendar: the month picker, the day in view and the way
+/// into the calendar menu.
+///
+/// The day sits between the month picker and the menu, and takes whatever room
+/// is left over, so the whole date is readable even when the text is large.
+/// The settings are reached through the menu rather than from here, because a
+/// narrow window has room for one button beside the day and not for two.
 fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
     let heading = calendar::day_heading(state.calendar.day, today);
@@ -132,17 +148,13 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         button::secondary
     });
 
-    let menu = button(text("Calendars").size(metrics.label()).center())
+    let menu = button(text("Menu").size(metrics.label()).center())
         .on_press(Message::CalendarMenuToggled)
         .style(if state.calendar.menu_open {
             button::primary
         } else {
             button::secondary
         });
-
-    let settings = button(text("Settings").size(metrics.label()).center())
-        .on_press(Message::ScreenSelected(crate::app::Screen::Settings))
-        .style(button::secondary);
 
     let day = text(heading)
         .size(metrics.label() + 1.0)
@@ -153,11 +165,10 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .center()
         .width(Fill);
 
-    let top = row![month, day, menu, settings]
+    row![month, day, menu]
         .spacing(metrics.spacing)
-        .align_y(Alignment::Center);
-
-    top.into()
+        .align_y(Alignment::Center)
+        .into()
 }
 
 /// A square button for stepping a day or a month at a time.
@@ -173,8 +184,16 @@ fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Elemen
 
 /// The vertical space the header row takes, so an overlay can start below
 /// it rather than over it.
-fn header_offset(metrics: &Metrics) -> f32 {
-    metrics.padding + metrics.icon_button() + metrics.spacing
+///
+/// The header is put away with the clock, so the space it takes goes with it.
+fn header_offset(state: &State, metrics: &Metrics) -> f32 {
+    let mut offset = metrics.padding;
+
+    if !state.timer_open {
+        offset += metrics.icon_button() + metrics.spacing;
+    }
+
+    offset
 }
 
 /// The small switch beside the sync line: the same setting the menu and the
@@ -658,7 +677,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(header_offset(metrics)),
+        iced::widget::Space::new().height(header_offset(state, metrics)),
         container(card).padding(metrics.padding).width(Fill),
     ]
     .width(Fill);
@@ -734,7 +753,7 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(header_offset(metrics)),
+        iced::widget::Space::new().height(header_offset(state, metrics)),
         container(card).padding(metrics.padding).width(Fill),
     ]
     .width(Fill);
@@ -2054,41 +2073,7 @@ impl DayCanvas {
 
             let ink = on_color(fill);
             let title_size = if self.compact { 11.0 } else { 12.0 };
-            let text_width = (block_bounds.width - 10.0).max(8.0);
-            let title_top = block_bounds.y + 3.0;
-            fill_glyphs(frame, Text {
-                content: block.title.clone(),
-                position: Point::new(block_bounds.x + 6.0, title_top),
-                color: ink,
-                size: Pixels(title_size),
-                font: Font::DEFAULT,
-                align_x: iced::alignment::Horizontal::Left.into(),
-                align_y: iced::alignment::Vertical::Top,
-                line_height: text::LineHeight::default(),
-                shaping: text::Shaping::Basic,
-                max_width: text_width,
-            });
-
-            // The time sits under the title, so it has to clear however many
-            // lines the title wrapped to rather than a fixed one-line offset.
-            let when_size = title_size - 1.0;
-            let when_top = title_top + wrapped_height(&block.title, title_size, text_width) + 2.0;
-            if block_bounds.height >= 28.0
-                && when_top + when_size <= block_bounds.y + block_bounds.height - 2.0
-            {
-                fill_glyphs(frame, Text {
-                    content: block.when.clone(),
-                    position: Point::new(block_bounds.x + 6.0, when_top),
-                    color: ink.scale_alpha(0.85),
-                    size: Pixels(when_size),
-                    font: Font::DEFAULT,
-                    align_x: iced::alignment::Horizontal::Left.into(),
-                    align_y: iced::alignment::Vertical::Top,
-                    line_height: text::LineHeight::default(),
-                    shaping: text::Shaping::Basic,
-                    max_width: text_width,
-                });
-            }
+            draw_block_label(frame, block_bounds, &block.title, &block.when, ink, title_size);
         }
     }
 
@@ -2156,20 +2141,6 @@ impl DayCanvas {
 
         let ink = on_color(fill);
         let title_size = if self.compact { 11.0 } else { 12.0 };
-        let text_width = (bounds.width - 10.0).max(8.0);
-        let title_top = bounds.y + 3.0;
-        fill_glyphs(frame, Text {
-            content: block.title.clone(),
-            position: Point::new(bounds.x + 6.0, title_top),
-            color: ink,
-            size: Pixels(title_size),
-            font: Font::DEFAULT,
-            align_x: iced::alignment::Horizontal::Left.into(),
-            align_y: iced::alignment::Vertical::Top,
-            line_height: text::LineHeight::default(),
-            shaping: text::Shaping::Basic,
-            max_width: text_width,
-        });
 
         // The label shows the time the event will land on, not the one it had.
         let when = format!(
@@ -2177,22 +2148,7 @@ impl DayCanvas {
             self.clock_label(drag.preview_start),
             self.clock_label(drag.preview_end)
         );
-        let when_size = title_size - 1.0;
-        let when_top = title_top + wrapped_height(&block.title, title_size, text_width) + 2.0;
-        if bounds.height >= 28.0 && when_top + when_size <= bounds.y + bounds.height - 2.0 {
-            fill_glyphs(frame, Text {
-                content: when,
-                position: Point::new(bounds.x + 6.0, when_top),
-                color: ink.scale_alpha(0.85),
-                size: Pixels(when_size),
-                font: Font::DEFAULT,
-                align_x: iced::alignment::Horizontal::Left.into(),
-                align_y: iced::alignment::Vertical::Top,
-                line_height: text::LineHeight::default(),
-                shaping: text::Shaping::Basic,
-                max_width: text_width,
-            });
-        }
+        draw_block_label(frame, bounds, &block.title, &when, ink, title_size);
     }
 
     /// Which block is under the pointer, and which part of it was grabbed.
@@ -2322,10 +2278,11 @@ impl DayCanvas {
 
         let ink = on_color(fill);
         let title_size = if self.compact { 11.0 } else { 12.0 };
-        let text_width = (bounds.width - 10.0).max(8.0);
+        let text_width = (bounds.width - BLOCK_PADDING - BLOCK_PADDING_RIGHT).max(8.0);
+        let label = format!("{} – {}", self.clock_label(start), self.clock_label(end));
         fill_glyphs(frame, Text {
-            content: format!("{} – {}", self.clock_label(start), self.clock_label(end)),
-            position: Point::new(bounds.x + 6.0, bounds.y + 3.0),
+            content: fit_line(&label, title_size, text_width),
+            position: Point::new(bounds.x + BLOCK_PADDING, bounds.y + 3.0),
             color: ink,
             size: Pixels(title_size),
             font: Font::DEFAULT,
@@ -2427,27 +2384,262 @@ fn fill_glyphs(frame: &mut Frame, text: impl Into<Text>) {
     text.draw_with(|glyph, color| frame.fill(&glyph, color));
 }
 
-/// The height a title occupies once wrapped to `max_width`.
+/// Draws a block's title and the time under it, inside the block.
 ///
-/// The time label is drawn below the title, so a title that wraps to two lines
-/// would otherwise have the time run straight through it. Measuring the
-/// paragraph keeps the label clear of however many lines the title takes.
-fn wrapped_height(content: &str, size: f32, max_width: f32) -> f32 {
+/// A Google summary is free text: it can be longer than the event it names,
+/// it can bring its own line breaks, and it can hold a word too wide for the
+/// block on its own. The title is broken into the lines that fit and cut
+/// short with an ellipsis when there are more of them than the block has
+/// room for, so a label never reaches past the edge of the event it belongs
+/// to and lands on top of the ones below it.
+fn draw_block_label(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    title: &str,
+    when: &str,
+    ink: Color,
+    title_size: f32,
+) {
+    let when_size = title_size - 1.0;
+    let title_line = line_height(title_size);
+    let when_line = line_height(when_size);
+    let text_width = (bounds.width - BLOCK_PADDING - BLOCK_PADDING_RIGHT).max(8.0);
+
+    let (top, room) = text_room(bounds.height, title_size);
+    let title_top = bounds.y + top;
+
+    let lines = fit_lines(title, title_size, text_width, room);
+
+    for (index, line) in lines.iter().enumerate() {
+        fill_glyphs(frame, Text {
+            content: line.clone(),
+            position: Point::new(
+                bounds.x + BLOCK_PADDING,
+                title_top + index as f32 * title_line,
+            ),
+            color: ink,
+            size: Pixels(title_size),
+            font: Font::DEFAULT,
+            align_x: iced::alignment::Horizontal::Left.into(),
+            align_y: iced::alignment::Vertical::Top,
+            line_height: text::LineHeight::default(),
+            shaping: text::Shaping::Basic,
+            max_width: text_width,
+        });
+    }
+
+    // The time sits under the title, so it has to clear however many lines
+    // the title took rather than a fixed one-line offset.
+    let when_top = title_top + lines.len() as f32 * title_line + BLOCK_GAP;
+    if when_top + when_line <= bounds.y + bounds.height
+        && let Some(when) = time_label(when, when_size, text_width)
+    {
+        fill_glyphs(frame, Text {
+            content: when,
+            position: Point::new(bounds.x + BLOCK_PADDING, when_top),
+            color: ink.scale_alpha(0.85),
+            size: Pixels(when_size),
+            font: Font::DEFAULT,
+            align_x: iced::alignment::Horizontal::Left.into(),
+            align_y: iced::alignment::Vertical::Top,
+            line_height: text::LineHeight::default(),
+            shaping: text::Shaping::Basic,
+            max_width: text_width,
+        });
+    }
+}
+
+/// The time to write under a title, if there is one that fits.
+///
+/// A block too narrow for the whole range keeps its start time, which is the
+/// half that says when the event is.
+fn time_label(when: &str, size: f32, width: f32) -> Option<String> {
+    if text_width_of(when, size) <= width {
+        return Some(when.to_owned());
+    }
+
+    when
+        .split_once(" – ")
+        .filter(|(start, _)| text_width_of(start, size) <= width)
+        .map(|(start, _)| start.to_owned())
+}
+
+/// The gap above a block's first line of text, and how many lines fit below it.
+///
+/// The gap shrinks on a short block, so that a line of text still fits inside
+/// it rather than hanging over the edge.
+fn text_room(height: f32, size: f32) -> (f32, usize) {
+    let line = line_height(size);
+    let top = (height - line).clamp(0.0, BLOCK_TOP);
+
+    (top, ((height - top) / line).floor().max(0.0) as usize)
+}
+
+/// The lines of a title that fit in `room` lines of `width`.
+///
+/// A title that needs more lines than the block has room for is cut short and
+/// marked with an ellipsis, so that it stays inside the block.
+fn fit_lines(title: &str, size: f32, width: f32, room: usize) -> Vec<String> {
+    if room == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = wrap_title(title, size, width);
+
+    if lines.len() > room {
+        lines.truncate(room);
+
+        if let Some(last) = lines.last_mut() {
+            *last = cut_line(last, size, width);
+        }
+    }
+
+    lines
+}
+
+/// Breaks a title into the lines it takes inside a block `width` wide.
+///
+/// Words are broken at the character level when they are too wide to sit on a
+/// line of their own, so that no line reaches past the edge of the block.
+fn wrap_title(title: &str, size: f32, width: f32) -> Vec<String> {
+    // A title that fits on one line is the common case, and it costs a single
+    // measurement.
+    if !title.contains('\n') && text_width_of(title, size) <= width {
+        return vec![title.to_owned()];
+    }
+
+    let mut lines = Vec::new();
+
+    for source in title.split('\n') {
+        let mut line = String::new();
+
+        for word in source.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{line} {word}")
+            };
+
+            if text_width_of(&candidate, size) <= width {
+                line = candidate;
+                continue;
+            }
+
+            // The word does not fit on the line being built, so that line is
+            // finished off and the word goes on one of its own.
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+
+            if text_width_of(word, size) <= width {
+                line = word.to_owned();
+                continue;
+            }
+
+            // The word is too wide for a line of its own as well, so it is
+            // broken up at the character level rather than left to reach past
+            // the edge of the block.
+            let pieces = break_word(word, size, width);
+            let last = pieces.len().saturating_sub(1);
+
+            for (index, piece) in pieces.into_iter().enumerate() {
+                if index == last {
+                    line = piece;
+                } else {
+                    lines.push(piece);
+                }
+            }
+        }
+
+        lines.push(line);
+    }
+
+    lines
+}
+
+/// Breaks a word too wide for a line into the pieces that fit.
+fn break_word(word: &str, size: f32, width: f32) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut piece = String::new();
+
+    for character in word.chars() {
+        let candidate = format!("{piece}{character}");
+
+        if !piece.is_empty() && text_width_of(&candidate, size) > width {
+            pieces.push(std::mem::take(&mut piece));
+        }
+
+        piece.push(character);
+    }
+
+    if !piece.is_empty() {
+        pieces.push(piece);
+    }
+
+    pieces
+}
+
+/// A line with an ellipsis on the end, cut short enough to fit `width`.
+fn cut_line(line: &str, size: f32, width: f32) -> String {
+    let characters: Vec<char> = line.chars().collect();
+
+    // The longest run of the line that still leaves room for the ellipsis.
+    let (mut low, mut high) = (0usize, characters.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        let candidate: String = characters[..middle].iter().collect();
+
+        if text_width_of(&format!("{candidate}{ELLIPSIS}"), size) <= width {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+
+    let prefix: String = characters[..low].iter().collect();
+    format!("{prefix}{ELLIPSIS}")
+}
+
+/// A line as it fits `width`, cut short with an ellipsis when it does not.
+fn fit_line(line: &str, size: f32, width: f32) -> String {
+    if text_width_of(line, size) <= width {
+        line.to_owned()
+    } else {
+        cut_line(line, size, width)
+    }
+}
+
+/// The height of one line of text at `size`.
+fn line_height(size: f32) -> f32 {
+    text::LineHeight::default().to_absolute(Pixels(size)).0
+}
+
+/// The width a string takes on a single line.
+fn text_width_of(content: &str, size: f32) -> f32 {
+    use iced::advanced::text::Paragraph as _;
+
+    paragraph(content, size, MEASURE_WIDTH).min_width()
+}
+
+/// A paragraph laid out for measuring.
+///
+/// The width is wide enough that nothing wraps, so the paragraph measures the
+/// text as it is written rather than as it would be broken up.
+fn paragraph(content: &str, size: f32, width: f32) -> iced::advanced::graphics::text::Paragraph {
     use iced::advanced::graphics::text::Paragraph;
     use iced::advanced::text::Paragraph as _;
 
     Paragraph::with_text(iced::advanced::text::Text {
         content,
-        bounds: Size::new(max_width, f32::INFINITY),
+        bounds: Size::new(width, f32::INFINITY),
         size: Pixels(size),
         line_height: text::LineHeight::default(),
         font: Font::DEFAULT,
         align_x: iced::advanced::text::Alignment::Left,
         align_y: iced::alignment::Vertical::Top,
         shaping: text::Shaping::Basic,
-        wrapping: text::Wrapping::default(),
+        wrapping: text::Wrapping::None,
     })
-    .min_height()
 }
 
 /// Everything the cached geometry is drawn from, so a rebuilt [`Block`] with a
@@ -2700,13 +2892,13 @@ mod tests {
         // The time label is placed below the title using this measurement, so a
         // title that wraps to two lines has to report more than one line's
         // height or the time would be drawn through the second line.
-        let one_line = wrapped_height("Standup", 12.0, 200.0);
-        let two_lines = wrapped_height("Programming Team Meeting", 12.0, 90.0);
+        let one_line = wrap_title("Standup", 12.0, 200.0);
+        let two_lines = wrap_title("Programming Team Meeting", 12.0, 90.0);
 
-        assert!(one_line > 0.0);
+        assert_eq!(one_line.len(), 1);
         assert!(
-            two_lines > one_line,
-            "a wrapped title ({two_lines}) should be taller than a single line ({one_line})"
+            two_lines.len() > one_line.len(),
+            "a wrapped title should take more lines than a single one"
         );
     }
 
@@ -2922,5 +3114,114 @@ mod tests {
         assert_eq!(lighter.a, color.a);
         // White cannot get any lighter.
         assert_eq!(lighten(Color::WHITE), Color::WHITE);
+    }
+
+    #[test]
+    fn a_block_only_holds_as_many_lines_as_it_has_room_for() {
+        // A one-hour block at the default zoom is 48 pixels tall, which holds
+        // two lines of a 12 pixel title.
+        let (top, room) = text_room(48.0, 12.0);
+        assert_eq!(room, 2);
+        assert!(top + room as f32 * line_height(12.0) <= 48.0);
+
+        // The shortest block still holds a single line, and the gap above it
+        // shrinks so that the line fits inside.
+        let (top, room) = text_room(16.0, 12.0);
+        assert_eq!(room, 1);
+        assert!(top + room as f32 * line_height(12.0) <= 16.0);
+
+        // A block with no room at all holds nothing.
+        let (_, room) = text_room(4.0, 12.0);
+        assert_eq!(room, 0);
+    }
+
+    #[test]
+    fn a_title_that_fits_stays_on_one_line() {
+        let lines = wrap_title("Standup", 12.0, 200.0);
+
+        assert_eq!(lines, vec!["Standup".to_owned()]);
+    }
+
+    #[test]
+    fn every_wrapped_line_stays_inside_the_block() {
+        // A title with a line break of its own, a word too long for the block
+        // and a word that only just fits.
+        let title = "17-4 HW10/22 (Thu)2pm: L18\nReading.Inaka vs Tokai-->Changed\nfrom the L18 department store";
+        let width = 120.0;
+
+        for line in wrap_title(title, 12.0, width) {
+            assert!(
+                text_width_of(&line, 12.0) <= width,
+                "{line:?} is wider than the block"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_too_long_for_the_block_is_broken_up() {
+        let word = "Supercalifragilisticexpialidociousandthensomemoreletters";
+        let width = 120.0;
+
+        let lines = wrap_title(word, 12.0, width);
+
+        assert!(lines.len() > 1, "the word should have been broken up");
+        for line in &lines {
+            assert!(text_width_of(line, 12.0) <= width, "{line:?} is too wide");
+        }
+    }
+
+    #[test]
+    fn a_title_too_long_for_the_block_is_cut_short_with_an_ellipsis() {
+        let title = "17-4 HW10/22 (Thu)2pm: L18 Reading.Inaka vs Tokai-->Changed from the L18 department store";
+
+        let lines = fit_lines(title, 12.0, 120.0, 2);
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines.last().expect("a last line").ends_with(ELLIPSIS));
+        for line in &lines {
+            assert!(text_width_of(line, 12.0) <= 120.0, "{line:?} is too wide");
+        }
+    }
+
+    #[test]
+    fn a_title_with_no_room_is_not_drawn_at_all() {
+        let lines = fit_lines("Standup", 12.0, 120.0, 0);
+
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn a_title_that_fits_is_left_alone() {
+        let title = "Standup";
+
+        let lines = fit_lines(title, 12.0, 200.0, 3);
+
+        assert_eq!(lines, vec!["Standup".to_owned()]);
+    }
+
+    #[test]
+    fn a_line_that_does_not_fit_is_cut_with_an_ellipsis() {
+        let line = fit_line("01:00 – 02:00", 11.0, 40.0);
+
+        assert!(line.ends_with(ELLIPSIS));
+        assert!(text_width_of(&line, 11.0) <= 40.0);
+    }
+
+    #[test]
+    fn a_narrow_block_keeps_the_start_of_the_time() {
+        // The whole range fits.
+        assert_eq!(
+            time_label("09:15 – 11:00", 11.0, 200.0),
+            Some("09:15 – 11:00".to_owned())
+        );
+
+        // Too narrow for the range, but the start time still fits.
+        assert_eq!(
+            time_label("09:15 – 11:00", 11.0, 40.0),
+            Some("09:15".to_owned())
+        );
+
+        // Too narrow for either, so there is no time at all.
+        assert_eq!(time_label("09:15 – 11:00", 11.0, 12.0), None);
     }
 }

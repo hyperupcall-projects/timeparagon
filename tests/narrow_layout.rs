@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use chrono::Local;
-use iced::{Element, Size};
+use iced::{Element, Point, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
@@ -331,7 +331,7 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Calendars", "Team offsite", "Timer"] {
+    for label in ["Menu", "Team offsite", "Timer"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -353,7 +353,7 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
         );
     }
 
-    for label in ["Oct ▾", "Calendars"] {
+    for label in ["Oct ▾", "Menu"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 
@@ -423,6 +423,46 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
     for label in ["Calendars", "Show Google Tasks", "Personal", "Work", "Tasks", "Sync now", "Open Google Calendar"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
     }
+}
+
+/// The tabs along the top are the way between the pages, so all three of them
+/// have to be there: the notepad, the calendar and the settings.
+#[test]
+fn the_tabs_carry_the_notepad_the_calendar_and_the_settings() {
+    let state = state();
+
+    // A narrow window has room for shorter names, but all three tabs are
+    // still there.
+    let mut narrow = render(&state, Size::new(200.0, 500.0));
+    for label in ["Notes", "Cal", "Setup"] {
+        assert!(narrow.find(label).is_ok(), "{label:?} is missing from the tabs");
+    }
+
+    let mut wide = render(&state, Size::new(420.0, 500.0));
+    for label in ["Notepad", "Calendar", "Settings"] {
+        assert!(wide.find(label).is_ok(), "{label:?} is missing from the tabs");
+    }
+}
+
+/// The settings tab opens the settings, which is where it belongs now.
+#[test]
+fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
+    let state = state();
+    let mut ui = render(&state, Size::new(420.0, 600.0));
+
+    let _ = ui.click("Settings")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::ScreenSelected(Screen::Settings)
+        )),
+        "clicking the tab produced {messages:?}"
+    );
+
+    Ok(())
 }
 
 /// A Google Tasks list is the one kind of calendar whose color can be
@@ -823,4 +863,118 @@ fn the_settings_pane_includes_calendar_sync_controls() {
     ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from settings");
     }
+}
+
+/// The notepad is a tab of its own, along the top and to the left of the
+/// calendar, and it has to be reachable at every width.
+#[test]
+fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
+    for width in WIDTHS {
+        let state = state();
+
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+
+        let notepad = if width < 260.0 { "Notes" } else { "Notepad" };
+        assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
+
+        let calendar = if width < 260.0 { "Cal" } else { "Calendar" };
+        assert!(ui.find(calendar).is_ok(), "the way back is missing at {width}px");
+    }
+}
+
+/// The notepad tab opens the notepad.
+#[test]
+fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
+    let state = state();
+    let mut ui = render(&state, Size::new(420.0, 600.0));
+
+    let _ = ui.click("Notepad")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::ScreenSelected(Screen::Notepad)
+        )),
+        "clicking the tab produced {messages:?}"
+    );
+
+    Ok(())
+}
+
+/// The notepad page offers the way back and the size control, and neither of
+/// them may be lost in a narrow window.
+#[test]
+fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
+    let mut state = state();
+    state.screen = Screen::Notepad;
+
+    let mut ui = render(&state, Size::new(200.0, 600.0));
+
+    for label in ["Notes", "Cal", "A-", "A+", "100%"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
+    }
+}
+
+/// The size control belongs to the notepad, so it changes the size of the
+/// text on the page and nothing else.
+#[test]
+fn the_text_size_can_be_changed_from_the_notepad() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Notepad;
+
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+
+    let _ = ui.click("A+")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::NotepadFontSizeChanged(10))),
+        "clicking A+ produced {messages:?}"
+    );
+
+    Ok(())
+}
+
+/// The size of the text is the notepad's own, so the rest of the interface is
+/// left as it is drawn.
+#[test]
+fn the_settings_pane_has_no_text_size() {
+    let mut state = state();
+    state.screen = Screen::Settings;
+
+    let mut ui = render(&state, Size::new(200.0, 400.0));
+
+    assert!(ui.find("Text size").is_err(), "the text size should be the notepad's");
+    assert!(ui.find("A-").is_err(), "the size buttons should be on the notepad");
+}
+
+/// Typing in the notepad has to be kept: the editor's actions have to reach
+/// the state, and the state has to reach the config that is saved.
+#[test]
+fn typing_in_the_notepad_is_kept() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Notepad;
+
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+
+    // Put the cursor in the page, which is what focuses the editor, and then
+    // type into it.
+    ui.point_at(Point::new(100.0, 400.0));
+    ui.simulate(iced_test::simulator::click());
+    ui.typewrite("milk");
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    for message in messages {
+        let _ = app::update(&mut state, message);
+    }
+
+    assert_eq!(state.config.notepad.text, "milk");
+
+    Ok(())
 }

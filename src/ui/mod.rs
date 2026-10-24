@@ -9,13 +9,14 @@ pub mod controls;
 pub mod digits;
 pub mod flash;
 pub mod layout;
+pub mod notepad;
 pub mod settings;
 pub mod todos;
 
 use std::time::Duration;
 
 use iced::widget::{button, column, container, responsive, row, scrollable, text};
-use iced::{Center, Element, Fill, Length};
+use iced::{Center, Element, Fill, Length, Padding};
 
 use crate::alarm;
 use crate::app::{Message, Screen, State};
@@ -27,7 +28,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     responsive(move |size| {
         let metrics = Metrics::of(size);
 
-        match (state.screen, metrics.breakpoint) {
+        let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
             // A settings or set-time pane beside a 200px calendar would leave
             // neither any room, so below Wide they take over the window.
             (Screen::Settings, Breakpoint::Wide) => row![
@@ -52,10 +53,82 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // the calendar: it is a place to think, not a place to watch the
             // clock from.
             (Screen::Todos, _) => todos::view(state, &metrics),
+            // The notepad takes the whole window for the same reason: it is
+            // somewhere to write, not somewhere to watch the clock from.
+            (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::Calendar, _) => calendar::view(state, &metrics),
-        }
+        };
+
+        // The tabs are the window's navigation, so they sit above whatever is
+        // on show rather than inside it.
+        column![tabs(state, &metrics), content]
+            .width(Fill)
+            .height(Fill)
+            .into()
     })
     .into()
+}
+
+/// The tabs along the top of the window: the notepad, the calendar and the
+/// settings.
+///
+/// The calendar is the page everything else is measured against, so it stays
+/// lit while a settings pane is open beside it.
+pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = matches!(state.screen, Screen::Settings | Screen::TimerSettings);
+    let notepad = state.screen == Screen::Notepad;
+    let (notepad_name, calendar_name, settings_name) = tab_names(metrics);
+
+    // The tabs sit against the top of the window, with the padding of the
+    // page below them keeping the gap. A tab strip is worth 30px of a 240px
+    // window, and every pixel of it comes out of the day grid.
+    container(
+        row![
+            tab(notepad_name, notepad, Screen::Notepad, metrics),
+            tab(calendar_name, !notepad && !settings, Screen::Calendar, metrics),
+            tab(settings_name, settings, Screen::Settings, metrics),
+        ]
+        .spacing(metrics.spacing)
+        .align_y(Center),
+    )
+    .padding(Padding {
+        left: metrics.padding,
+        right: metrics.padding,
+        top: 0.0,
+        bottom: 0.0,
+    })
+    .width(Fill)
+    .into()
+}
+
+/// The names on the three tabs.
+///
+/// The narrowest window has room for three of them only when their names are
+/// short, so the compact layout uses shorter ones.
+fn tab_names(metrics: &Metrics) -> (&'static str, &'static str, &'static str) {
+    if metrics.breakpoint.is_compact() {
+        ("Notes", "Cal", "Setup")
+    } else {
+        ("Notepad", "Calendar", "Settings")
+    }
+}
+
+/// One tab, lit when it is the page on show.
+fn tab<'a>(
+    label: &'a str,
+    active: bool,
+    screen: Screen,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    button(text(label).size(metrics.label()).center())
+        .height(metrics.icon_button())
+        .on_press(Message::ScreenSelected(screen))
+        .style(if active {
+            button::primary
+        } else {
+            button::secondary
+        })
+        .into()
 }
 
 /// A settings-style page: a title with a way back, over a scrolling body.
@@ -79,6 +152,8 @@ pub(crate) fn page<'a>(
     ]
     .spacing(metrics.spacing)
     .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill)
     .into()
 }
 

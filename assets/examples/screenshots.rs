@@ -99,6 +99,49 @@ fn main() {
                 );
             });
 
+            // A Google summary is free text, and it is often far longer than
+            // the event it names. This one brings its own line breaks and a
+            // word too wide for the block, so the labels can be seen staying
+            // inside their boxes.
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "calendar-long-title",
+                |state| {
+                    state.screen = Screen::Calendar;
+
+                    let mut snapshot = timetracker::calendar::sample_snapshot();
+                    let day = snapshot.day;
+                    let at = |hour, minute| {
+                        day.and_hms_opt(hour, minute, 0)
+                            .and_then(|naive| naive.and_local_timezone(chrono::Local).single())
+                            .expect("a local time")
+                    };
+                    let work = snapshot
+                        .calendars
+                        .iter()
+                        .find(|calendar| calendar.id == "work")
+                        .expect("the work calendar");
+
+                    // A quarter of an hour is barely a line of text, which is
+                    // the case that used to spill over the events below it.
+                    snapshot.events.push(timetracker::calendar::Event {
+                        id: "long-title".into(),
+                        calendar_id: work.id.clone(),
+                        title: "17-4 HW10/22 (Thu)2pm: L18\nReading.Inaka vs Tokai-->Changed\nfrom the L18 department store\nSupercalifragilisticexpialidocious".into(),
+                        start: at(7, 0),
+                        end: at(7, 15),
+                        all_day: false,
+                        color: work.color,
+                        completed: false,
+                        details: Default::default(),
+                    });
+
+                    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+                },
+            );
+
             count += shoot(directory, theme, Size::new(width, 720.0), "calendar-month", |state| {
                 state.screen = Screen::Calendar;
                 state.calendar = timetracker::calendar::Store::with_snapshot(
@@ -138,6 +181,45 @@ fn main() {
                 state.config.todos.add("Send it round");
                 state.config.todos.set_current(1);
             });
+
+            count += shoot(directory, theme, Size::new(width, 720.0), "notepad", |state| {
+                state.screen = Screen::Notepad;
+                state.set_notepad(
+                    "Things to sort out before Friday:\n\n- the draft\n- the numbers\n- who is picking up the room",
+                );
+            });
+
+            // The text at its largest, which is the size the narrow layout has
+            // to survive.
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "notepad-large",
+                |state| {
+                    state.screen = Screen::Notepad;
+                    state.config.notepad.font_size =
+                        timetracker::config::Notepad::MAX_FONT_SIZE;
+                    state.set_notepad(
+                        "Things to sort out before Friday:\n\n- the draft\n- the numbers".to_owned(),
+                    );
+                },
+            );
+
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "notepad-small",
+                |state| {
+                    state.screen = Screen::Notepad;
+                    state.config.notepad.font_size =
+                        timetracker::config::Notepad::MIN_FONT_SIZE;
+                    state.set_notepad(
+                        "Things to sort out before Friday:\n\n- the draft\n- the numbers".to_owned(),
+                    );
+                },
+            );
         }
     }
 
