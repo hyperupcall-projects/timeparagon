@@ -97,6 +97,17 @@ say "Installed binary:  $binary"
 install -m 0755 "$built_panel" "$panel_binary"
 say "Installed binary:  $panel_binary"
 
+# The optional browser helper must travel with the app: desktop launchers do
+# not inherit a shell's PATH or the checkout's working directory.
+bridge=$repo_root/tools/tasks-bridge/tasks-bridge
+if [ -x "$bridge" ]; then
+    install -m 0755 "$bridge" "$bin_dir/tasks-bridge"
+    say "Installed helper:  $bin_dir/tasks-bridge"
+else
+    say "Task times helper is not built. Tasks may appear without times."
+    say "Run 'deno task compile' in tools/tasks-bridge, then rerun this installer."
+fi
+
 # --- Install the desktop entry and icon ------------------------------------
 mkdir -p "$app_dir" "$icon_dir"
 sed "s|@EXEC@|$binary|g" "$script_dir/timetracker.desktop.in" \

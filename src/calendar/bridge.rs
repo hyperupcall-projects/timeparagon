@@ -33,7 +33,6 @@ pub type TimeTable = HashMap<(String, String), Option<(u32, u32)>>;
 
 #[derive(serde::Deserialize)]
 struct Report {
-    #[serde(default)]
     tasks: Vec<Row>,
 }
 
@@ -51,23 +50,23 @@ struct Row {
 
 /// The helper's document format is `list` + `title` + `time` + `ambiguous`.
 /// Everything else it emits is for a human reading the JSON.
-fn parse_report(bytes: &[u8]) -> Option<TimeTable> {
-    let report: Report = match serde_json::from_slice(bytes) {
-        Ok(report) => report,
-        Err(error) => {
-            log::warn!("tasks-bridge returned unreadable JSON: {error}");
-            return None;
-        }
-    };
+fn parse_report(bytes: &[u8]) -> Result<TimeTable, String> {
+    let report: Report = serde_json::from_slice(bytes)
+        .map_err(|error| format!("tasks-bridge returned an invalid task report: {error}"))?;
+    let total = report.tasks.len();
+    let mut ambiguous = 0;
+    let mut invalid = 0;
 
     let mut times: TimeTable = HashMap::new();
     for row in report.tasks {
         // A time with no AM/PM is not trusted: a wrong time on the grid is
         // worse than a chip that stays all-day.
         if row.ambiguous {
+            ambiguous += 1;
             continue;
         }
         let Some((hour, minute)) = row.time.as_deref().and_then(parse_hhmm) else {
+            invalid += usize::from(row.time.is_some());
             continue;
         };
         let Some(list) = row.list.as_deref().map(normalize) else {
@@ -93,7 +92,12 @@ fn parse_report(bytes: &[u8]) -> Option<TimeTable> {
         }
     }
 
-    Some(times)
+    let conflicts = times.values().filter(|time| time.is_none()).count();
+    log::info!(
+        "tasks-bridge report: {total} rows, {} usable times, {ambiguous} ambiguous, {invalid} invalid, {conflicts} conflicting pairs",
+        times.len() - conflicts
+    );
+    Ok(times)
 }
 
 fn normalize(value: &str) -> String {
@@ -165,7 +169,11 @@ fn apply_times(snapshot: &mut Snapshot, times: &TimeTable) -> usize {
 /// sync: anything missing simply leaves the affected tasks all-day.
 pub fn promote_task_times(snapshot: &mut Snapshot) {
     // Do not start a browser when there is nothing it could tell us.
-    if !snapshot.calendars.iter().any(|calendar| calendar.is_task_list()) {
+    if !snapshot
+        .calendars
+        .iter()
+        .any(|calendar| calendar.is_task_list())
+    {
         return;
     }
     if !snapshot
@@ -176,26 +184,49 @@ pub fn promote_task_times(snapshot: &mut Snapshot) {
         return;
     }
 
-    let Some(bytes) = run_helper("fetch") else {
-        return;
-    };
-    let Some(times) = parse_report(&bytes) else {
-        return;
-    };
+    let result = run_helper("fetch").and_then(|bytes| parse_report(&bytes));
+    finish_fetch(snapshot, result);
+}
 
-    let promoted = apply_times(snapshot, &times);
-    if promoted > 0 {
-        log::info!("tasks-bridge placed {promoted} task(s) at their scheduled time");
-    } else {
-        log::debug!("tasks-bridge had no times for this day's tasks");
+fn finish_fetch(snapshot: &mut Snapshot, result: Result<TimeTable, String>) {
+    match result {
+        Ok(times) => {
+            let promoted = apply_times(snapshot, &times);
+            log::info!("tasks-bridge placed {promoted} task(s) at their scheduled time");
+            if promoted == 0 {
+                log::info!(
+                    "tasks-bridge had no matching times for this day's tasks ({} usable pairs in report)",
+                    times.values().filter(|time| time.is_some()).count()
+                );
+            }
+        }
+        Err(error) => {
+            log::warn!("task times unavailable: {error}");
+            let notice = format!("Task times unavailable: {error}");
+            snapshot.notice = Some(match snapshot.notice.take() {
+                Some(existing) => format!("{existing}\n{notice}"),
+                None => notice,
+            });
+        }
     }
 }
 
-/// Runs `tasks-bridge <subcommand>`, trying each place the helper might be
-/// installed. The "show me a window" escape hatch is stripped, so nothing but
-/// [`signin`] can put a browser on screen.
-fn run_helper(subcommand: &str) -> Option<Vec<u8>> {
-    for candidate in helper_candidates() {
+/// Runs the helper headlessly. A configured path is authoritative: a typo must
+/// be reported rather than silently falling back to a different installation.
+fn run_helper(subcommand: &str) -> Result<Vec<u8>, String> {
+    run_candidates(
+        subcommand,
+        helper_candidates(),
+        std::env::var_os("TIMETRACKER_TASKS_BRIDGE").is_some(),
+    )
+}
+
+fn run_candidates(
+    subcommand: &str,
+    candidates: Vec<PathBuf>,
+    explicit: bool,
+) -> Result<Vec<u8>, String> {
+    for candidate in candidates {
         let mut command = Command::new(&candidate);
         command
             .arg(subcommand)
@@ -203,34 +234,61 @@ fn run_helper(subcommand: &str) -> Option<Vec<u8>> {
             .stdin(Stdio::null());
 
         match command.output() {
-            Ok(output) if output.status.success() => return Some(output.stdout),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if output.status.code() == Some(3) {
-                    log::info!("tasks-bridge {subcommand}: not signed in");
-                } else {
-                    log::warn!("tasks-bridge {subcommand} failed: {}", stderr.trim());
-                }
-                return None;
+            Ok(output) if output.status.success() => {
+                log::info!("tasks-bridge {subcommand}: using {}", candidate.display());
+                return Ok(output.stdout);
             }
-            // Not this one; try the next.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Ok(output) => {
+                if output.status.code() == Some(3) {
+                    return Err(format!(
+                        "Google Tasks browser profile is not signed in. Run `{} signin`, then close that window and retry.",
+                        candidate.display()
+                    ));
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!(
+                    "{} {subcommand} exited with {}: {}",
+                    candidate.display(),
+                    output.status,
+                    stderr.trim()
+                ));
+            }
+            Err(error) if !explicit && error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                log::warn!("could not run tasks-bridge at {candidate:?}: {error}");
-                return None;
+                return Err(format!(
+                    "Could not run tasks-bridge at {}: {error}",
+                    candidate.display()
+                ));
             }
         }
     }
 
-    log::debug!("tasks-bridge helper not found");
-    None
+    Err("tasks-bridge helper was not found. Build it with `deno task compile` in tools/tasks-bridge and install it beside TimeTracker, or set TIMETRACKER_TASKS_BRIDGE to its executable path.".to_owned())
+}
+
+/// Performs the installation, browser sign-in, and fetch checks without opening
+/// the desktop app. Does not print task titles, cookies, or the raw report.
+pub fn check_task_times() -> Result<String, String> {
+    match std::env::var_os("TIMETRACKER_TASKS_BRIDGE") {
+        Some(path) => log::info!("TIMETRACKER_TASKS_BRIDGE={}", PathBuf::from(path).display()),
+        None => log::info!(
+            "TIMETRACKER_TASKS_BRIDGE is unset; checking beside the app, checkout, and PATH"
+        ),
+    }
+    run_helper("status")?;
+    let times = parse_report(&run_helper("fetch")?)?;
+    let usable = times.values().filter(|time| time.is_some()).count();
+    let conflicts = times.len() - usable;
+    Ok(format!(
+        "Google Tasks browser profile is signed in. Fetch succeeded: {usable} usable task times, {conflicts} conflicting list/title pairs. See logs for report counts; no times can also mean the browser returned only date-only tasks."
+    ))
 }
 
 /// Whether the helper is installed and its browser profile is signed in.
 ///
 /// Blocking: call it from [`crate::blocking::run`].
 pub fn signed_in() -> bool {
-    run_helper("status").is_some()
+    run_helper("status").is_ok()
 }
 
 /// Opens a normal Chrome window for the user to sign into Google Tasks.
@@ -254,7 +312,9 @@ pub fn signin() -> Result<(), String> {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(format!("could not run tasks-bridge at {candidate:?}: {error}"));
+                return Err(format!(
+                    "could not run tasks-bridge at {candidate:?}: {error}"
+                ));
             }
         }
     }
@@ -266,7 +326,7 @@ fn helper_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(path) = std::env::var_os("TIMETRACKER_TASKS_BRIDGE") {
-        candidates.push(PathBuf::from(path));
+        return vec![PathBuf::from(path)];
     }
 
     if let Ok(exe) = std::env::current_exe() {
@@ -301,7 +361,7 @@ fn helper_candidates() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calendar::{colors, Calendar, Event};
+    use crate::calendar::{Calendar, Event, colors};
     use chrono::{Duration, NaiveDate, Timelike};
 
     fn day() -> NaiveDate {
@@ -353,10 +413,12 @@ mod tests {
 
     #[test]
     fn a_reported_time_is_keyed_by_list_and_title() {
-        let times = report(
-            r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":false}"#,
+        let times =
+            report(r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":false}"#);
+        assert_eq!(
+            times.get(&("my tasks".to_owned(), "stand-up".to_owned())),
+            Some(&Some((9, 30)))
         );
-        assert_eq!(times.get(&("my tasks".to_owned(), "stand-up".to_owned())), Some(&Some((9, 30))));
     }
 
     #[test]
@@ -367,9 +429,8 @@ mod tests {
 
     #[test]
     fn an_ambiguous_time_is_not_used() {
-        let times = report(
-            r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":true}"#,
-        );
+        let times =
+            report(r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":true}"#);
         assert!(times.is_empty());
     }
 
@@ -379,15 +440,17 @@ mod tests {
             r#"{"list":"My Tasks","title":"Stand-up","time":"09:30"},
                {"list":"My Tasks","title":"Stand-up","time":"10:00"}"#,
         );
-        assert_eq!(times.get(&("my tasks".to_owned(), "stand-up".to_owned())), Some(&None));
+        assert_eq!(
+            times.get(&("my tasks".to_owned(), "stand-up".to_owned())),
+            Some(&None)
+        );
     }
 
     #[test]
     fn a_matching_task_becomes_a_timed_block() {
         let mut snapshot = snapshot_with(task_event(day(), "Stand-up"));
-        let times = report(
-            r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":false}"#,
-        );
+        let times =
+            report(r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":false}"#);
 
         assert_eq!(apply_times(&mut snapshot, &times), 1);
 
@@ -395,7 +458,10 @@ mod tests {
         assert!(!event.all_day);
         assert_eq!(event.start.hour(), 9);
         assert_eq!(event.start.minute(), 30);
-        assert_eq!(event.end, event.start + Duration::minutes(TASK_BLOCK_MINUTES));
+        assert_eq!(
+            event.end,
+            event.start + Duration::minutes(TASK_BLOCK_MINUTES)
+        );
     }
 
     #[test]
@@ -414,9 +480,8 @@ mod tests {
         let mut event = task_event(day(), "Stand-up");
         event.calendar_id = "tasks:other".to_owned();
         let mut snapshot = snapshot_with(event);
-        let times = report(
-            r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":false}"#,
-        );
+        let times =
+            report(r#"{"list":"My Tasks","title":"Stand-up","time":"09:30","ambiguous":false}"#);
 
         assert_eq!(apply_times(&mut snapshot, &times), 0);
         assert!(snapshot.events[0].all_day);
@@ -428,12 +493,86 @@ mod tests {
         event.id = "event:abc".to_owned();
         event.calendar_id = "someone@example.com".to_owned();
         let mut snapshot = snapshot_with(event);
-        let times = report(
-            r#"{"list":"Someone","title":"Stand-up","time":"09:30","ambiguous":false}"#,
-        );
+        let times =
+            report(r#"{"list":"Someone","title":"Stand-up","time":"09:30","ambiguous":false}"#);
 
         assert_eq!(apply_times(&mut snapshot, &times), 0);
         assert!(snapshot.events[0].all_day);
+    }
+
+    #[test]
+    fn invalid_reports_are_distinct_from_a_successful_empty_report() {
+        assert!(parse_report(b"not json").is_err());
+        assert!(parse_report(b"{}").is_err());
+        assert!(parse_report(br#"{"tasks":[]}"#).unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_fetch_surfaces_the_reason_without_losing_other_notices() {
+        let mut snapshot = snapshot_with(task_event(day(), "Stand-up"));
+        snapshot.notice = Some("Another sync warning".into());
+        finish_fetch(&mut snapshot, Err("helper missing".into()));
+        let notice = snapshot.notice.unwrap();
+        assert!(notice.contains("Another sync warning"));
+        assert!(notice.contains("Task times unavailable: helper missing"));
+        assert!(snapshot.events[0].all_day);
+    }
+
+    #[test]
+    fn a_successful_date_only_report_does_not_raise_a_failure() {
+        let mut snapshot = snapshot_with(task_event(day(), "Stand-up"));
+        finish_fetch(
+            &mut snapshot,
+            Ok(report(
+                r#"{"list":"My Tasks","title":"Stand-up","time":null}"#,
+            )),
+        );
+        assert!(snapshot.notice.is_none());
+        assert!(snapshot.events[0].all_day);
+    }
+
+    #[test]
+    fn helper_execution_reports_discovery_auth_and_process_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("timetracker-bridge-check-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let missing = directory.join("missing");
+        assert!(
+            run_candidates("fetch", vec![missing.clone()], false)
+                .unwrap_err()
+                .contains("not found")
+        );
+        assert!(
+            run_candidates("fetch", vec![missing.clone()], true)
+                .unwrap_err()
+                .contains("Could not run")
+        );
+
+        let helper = directory.join("helper");
+        for (script, expected) in [
+            ("#!/bin/sh\nexit 3\n", "not signed in"),
+            (
+                "#!/bin/sh\necho 'Chrome failed' >&2\nexit 2\n",
+                "Chrome failed",
+            ),
+        ] {
+            std::fs::write(&helper, script).unwrap();
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let error =
+                run_candidates("fetch", vec![missing.clone(), helper.clone()], false).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\n[ -z \"$TASKS_BRIDGE_HEADED\" ] || exit 2\nprintf '{\"tasks\":[]}'\n",
+        )
+        .unwrap();
+        let bytes = run_candidates("fetch", vec![missing.clone(), helper.clone()], false).unwrap();
+        assert!(parse_report(&bytes).unwrap().is_empty());
+        // An explicitly configured missing executable must not fall through.
+        assert!(run_candidates("fetch", vec![missing, helper], true).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     /// The real thing: find the helper, run it headless, read its JSON.
@@ -447,7 +586,10 @@ mod tests {
     fn the_helper_reports_times_when_it_is_installed() {
         let bytes = run_helper("fetch").expect("the helper should be found and signed in");
         let times = parse_report(&bytes).expect("a readable report");
-        assert!(!times.is_empty(), "expected the signed-in account to have a timed task");
+        assert!(
+            !times.is_empty(),
+            "expected the signed-in account to have a timed task"
+        );
     }
 
     #[test]
@@ -460,6 +602,9 @@ mod tests {
         let found = helper_candidates().into_iter().find(|path| path.exists());
         std::env::set_current_dir(original).expect("the original directory");
 
-        assert!(found.is_some(), "tasks-bridge should be found from any directory");
+        assert!(
+            found.is_some(),
+            "tasks-bridge should be found from any directory"
+        );
     }
 }

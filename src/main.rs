@@ -6,15 +6,31 @@ use timetracker::app;
 type Boot = fn() -> (app::State, iced::Task<app::Message>);
 
 fn main() -> iced::Result {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("timetracker=info"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
+        .init();
+
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--check-task-times")
+    {
+        match timetracker::calendar::bridge::check_task_times() {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("Task time check failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
 
     // The same binary is both the main window and the side panel; the switch
     // is how `timetracker-panel` opens a panel instance of the real app.
     let sidebar = std::env::args().skip(1).any(|arg| arg == "--sidebar");
-    let boot: Boot = if sidebar { app::boot_sidebar } else { app::boot };
+    let boot: Boot = if sidebar {
+        app::boot_sidebar
+    } else {
+        app::boot
+    };
 
     // A daemon rather than an application: it opens no window on its own, so
     // the clock and the flash overlay are peers, and it does not quit the

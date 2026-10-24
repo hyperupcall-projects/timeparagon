@@ -61,6 +61,9 @@ The app looks for the helper in this order and uses the first that runs:
 4. `tools/tasks-bridge/tasks-bridge` relative to the working directory
 5. `tasks-bridge` on `PATH`
 
+An explicit `TIMETRACKER_TASKS_BRIDGE` is authoritative. If that executable
+cannot run, the app reports its error instead of using another installation.
+
 The helper binary is **not** committed (see `.gitignore`).
 
 **No window, ever, during a sync.** `fetch` and `status` are headless, and the
@@ -77,9 +80,10 @@ Rust API in `src/calendar/bridge.rs`:
 
 Behaviour when things are missing — all of it non-fatal, tasks stay all-day:
 
-- the helper is not installed → skipped, logged at debug;
-- the profile is not signed in (exit 3) → skipped, logged at info;
-- the helper errors → logged at warn;
+- the helper is not installed → a calendar notice explains how to build/install it;
+- the profile is not signed in (exit 3) → a calendar notice asks you to sign in;
+- the helper errors or returns invalid JSON → a calendar notice includes the failure;
+- these failures are logged at warn, while successful fetch and matching counts are logged at info;
 - no task lists, or no all-day tasks on the day → the browser is not started at all.
 
 **Matching.** The DOM only exposes the web app's internal id, so a row is matched
@@ -90,22 +94,52 @@ for the same pair, no time is trusted and the task stays all-day.
 scheduled task is drawn as a 30-minute block: `TASK_BLOCK_MINUTES` in
 `src/calendar/bridge.rs`.
 
-## Permissions are measured, not guessed
+## Check missing task times
 
-```
-deno compile \
-  --allow-run --allow-read --allow-write --allow-env \
-  --allow-sys=homedir,osRelease,uid \
-  --output tasks-bridge main.ts
+Build the app, then run the same binary you normally launch:
+
+```sh
+timetracker --check-task-times
 ```
 
-- **No `--allow-net`.** The browser process does the network; the Playwright
-  driver talks to it over a pipe. Verified by loading `tasks.google.com` from a
-  binary compiled without the net grant.
-- **`--allow-sys` keys are the exact minimum found by bisection.** `homedir`
-  (Chrome channel lookup), `osRelease` (Playwright's WSL check), `uid`
-  (Playwright's root check). `userInfo`, `hostname`, `networkInterfaces` and the
-  rest were *not* needed.
+This runs without opening the desktop UI. It checks helper discovery, runs
+`status` to verify the dedicated browser profile, then runs `fetch` and validates
+its JSON. It exits nonzero on failure with the reason and prints a summary on
+success. Logs identify the selected helper and count usable, ambiguous, invalid,
+and conflicting times without printing task titles or the raw JSON. A successful
+fetch with zero usable times may contain only date-only tasks; it does not prove
+that every API task was found in the browser. Per-sync logs report how many times
+matched the current day's tasks.
+
+For an installed service, inspect its environment and logs too: a terminal's
+`PATH` and `TIMETRACKER_TASKS_BRIDGE` may differ from the desktop's environment.
+
+```sh
+journalctl --user -u timetracker.service -n 100 --no-pager
+```
+
+To inspect the raw helper output manually, run `tasks-bridge status` and
+`tasks-bridge fetch`. Exit code 3 means the dedicated profile needs sign-in:
+run `tasks-bridge signin`, finish signing in, and close the Chrome window before
+retrying. Keep raw fetch output private because it contains task titles.
+
+The installer copies an already compiled helper beside TimeTracker; first run
+`deno task compile` in `tools/tasks-bridge`, then rerun `packaging/install.sh`.
+It warns when the helper is missing. No cached times are substituted on failure.
+
+## Deno runtime permissions
+
+```sh
+deno task compile
+# equivalent to: deno compile --allow-all --output tasks-bridge main.ts
+```
+
+The run tasks and compiled helper use `--allow-all`. With Deno 2.9.7,
+Playwright 1.63.0 probes `/proc/sys/fs/binfmt_misc/WSLInterop` during import;
+Deno requires full permissions for that path even when `--allow-read` is granted.
+The previous read/write/run/env/sys grants fail before Chrome can launch.
+The helper runs as the current user and launches Chrome with the dedicated
+profile described below. Only run helper code you trust.
 
 ## Security
 
