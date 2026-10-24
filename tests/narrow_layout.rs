@@ -978,3 +978,36 @@ fn typing_in_the_notepad_is_kept() -> Result<(), Error> {
 
     Ok(())
 }
+
+#[test]
+fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
+    for width in WIDTHS {
+        let mut state = state();
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        ui.click(if width < 260.0 { "Keep" } else { "Keep Notes" })?;
+        assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes))));
+        state.screen = Screen::KeepNotes;
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        for label in ["Refresh", "Reconnect", "Active", "Labels"] {
+            assert!(ui.find(label).is_ok(), "{label} missing at {width}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn keep_edit_opens_the_selected_note() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::KeepNotes;
+    state.keep.snapshot.notes.push(timetracker::keep::Note {
+        id: "test-note".into(),
+        url: "https://keep.google.com/#NOTE/test-note".into(),
+        title: "Example".into(),
+        description: "Body".into(),
+        ..Default::default()
+    });
+    let mut ui = render(&state, Size::new(260.0, 720.0));
+    ui.click("Edit")?;
+    assert!(ui.into_messages().any(|m| matches!(m, Message::KeepEdit(url) if url == "https://keep.google.com/#NOTE/test-note")));
+    Ok(())
+}

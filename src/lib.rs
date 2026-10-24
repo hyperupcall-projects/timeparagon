@@ -15,6 +15,7 @@ pub mod calendar;
 pub mod config;
 pub mod engine;
 pub mod hex;
+pub mod keep;
 pub mod notify;
 pub mod panel;
 pub mod theme;

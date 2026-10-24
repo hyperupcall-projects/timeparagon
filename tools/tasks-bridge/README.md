@@ -90,22 +90,14 @@ for the same pair, no time is trusted and the task stays all-day.
 scheduled task is drawn as a 30-minute block: `TASK_BLOCK_MINUTES` in
 `src/calendar/bridge.rs`.
 
-## Permissions are measured, not guessed
+## Runtime permissions
 
-```
-deno compile \
-  --allow-run --allow-read --allow-write --allow-env \
-  --allow-sys=homedir,osRelease,uid \
-  --output tasks-bridge main.ts
-```
-
-- **No `--allow-net`.** The browser process does the network; the Playwright
-  driver talks to it over a pipe. Verified by loading `tasks.google.com` from a
-  binary compiled without the net grant.
-- **`--allow-sys` keys are the exact minimum found by bisection.** `homedir`
-  (Chrome channel lookup), `osRelease` (Playwright's WSL check), `uid`
-  (Playwright's root check). `userInfo`, `hostname`, `networkInterfaces` and the
-  rest were *not* needed.
+The helper uses `--allow-all` for running and compiling. Deno 2.9.7 rejects
+Playwright 1.63's WSL detection probe of `/proc/sys/fs/binfmt_misc/WSLInterop`
+under the previous individual grants, even with an explicit read grant. The
+older minimal-permission recipe was verified on Deno 2.7 and no longer works
+with this runtime. This helper therefore runs as trusted local code with the
+same access as its Chrome subprocess; it must only run from a trusted checkout.
 
 ## Security
 
@@ -301,3 +293,45 @@ If Google restyles Tasks, re-run `deno task dump`. It writes
 `~/.local/share/timetracker/tasks-bridge/dumps/` (`aria.txt`, `page.html`,
 `candidates.json`) so the shapes above can be re-checked against reality rather
 than assumed.
+
+## Google Keep
+
+The same binary, launcher, dedicated profile and manual sign-in support Keep:
+
+- `deno task keep-fetch` emits `{ notes, warnings }`, reading active and
+  archived notes (excluding Trash).
+- `deno task keep-signin` opens ordinary Chrome on Keep, then verifies the
+  session after the user closes it.
+- Rebuild with `deno task compile` after upgrading; an older helper does not
+  recognize Keep commands. Copy the rebuilt binary alongside `timetracker`
+  for an installed app, or set `TIMETRACKER_TASKS_BRIDGE`.
+
+All commands acquire an OS file lock next to the profile, so Tasks and Keep
+cannot launch competing browser processes, including across app instances.
+Only sign-in shows a browser window. A complete Keep read opens each note's
+viewer without typing or changing note properties, captures its full rendered
+content and direct `#NOTE/...` URL, then closes the viewer. Notes are identified
+by that URL, so duplicate titles remain separate. Large collections take longer
+because Keep exposes note URLs through the viewer. Previously shared cards
+that Keep itself will not open are retained with a warning and a link to the
+containing Keep page.
+
+`keep.ts` uses selectors measured against the signed-in Keep UI. Lazy-loaded
+cards are scrolled to a stable end, and broken selectors or timeouts fail the
+refresh rather than silently replacing the last snapshot with partial results.
+Google can change this interface; failures should be reported and reverified.
+
+The native screen searches title/body text locally with substring matches before
+word-level fuzzy matches (one edit for 4–7 characters, two for longer words,
+including transpositions). Labels and Active/All/Archived filters intersect with
+the query. An empty query preserves pinned-first browser order. It refreshes on
+entry and via Refresh, with no periodic browser launches.
+
+Each note's original preview preserves the actual rendered colors, background
+art, rich text, checklist state, media, reminder/sharing chips and timestamps.
+Readable text offers wrapping text and metadata in narrow windows. Preview
+images and extracted text live in application memory, never in the settings
+file or a persistent notes cache. The previews are read-only; Edit opens that
+specific note in the default browser using the app's existing URL launcher.
+Sign into the matching account in that browser if necessary. Media playback,
+editing and note actions remain on Google's website.

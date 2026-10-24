@@ -97,6 +97,14 @@ say "Installed binary:  $binary"
 install -m 0755 "$built_panel" "$panel_binary"
 say "Installed binary:  $panel_binary"
 
+# Keep and scheduled Tasks share this optional browser helper.
+if [ -x "$repo_root/tools/tasks-bridge/tasks-bridge" ]; then
+    install -m 0755 "$repo_root/tools/tasks-bridge/tasks-bridge" "$bin_dir/tasks-bridge"
+    say "Installed browser helper: $bin_dir/tasks-bridge"
+else
+    say "Build tools/tasks-bridge with deno task compile to enable Google Keep."
+fi
+
 # --- Install the desktop entry and icon ------------------------------------
 mkdir -p "$app_dir" "$icon_dir"
 sed "s|@EXEC@|$binary|g" "$script_dir/timetracker.desktop.in" \

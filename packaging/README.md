@@ -121,3 +121,12 @@ To run the panel without installing it, build and launch the daemon directly:
 ```sh
 cargo run --release --bin timetracker-panel
 ```
+
+## Google Keep browser helper
+
+Build `tools/tasks-bridge` with `deno task compile` before installing to include
+Google Keep and scheduled Tasks support. The installer copies the compiled
+`tasks-bridge` alongside the application; the uninstaller removes it. The app
+reuses the dedicated Google browser profile. See
+[the helper README](../tools/tasks-bridge/README.md#google-keep) for sign-in,
+runtime permissions, and the read-only Keep integration.

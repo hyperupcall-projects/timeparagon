@@ -10,6 +10,7 @@ pub mod digits;
 pub mod flash;
 pub mod layout;
 pub mod notepad;
+pub mod keep;
 pub mod settings;
 pub mod todos;
 
@@ -55,6 +56,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Todos, _) => todos::view(state, &metrics),
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
+            (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::Calendar, _) => calendar::view(state, &metrics),
         };
@@ -70,7 +72,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 /// The tabs along the top of the window: the notepad, the calendar and the
-/// settings.
+/// settings, alongside Google Keep.
 ///
 /// The calendar is the page everything else is measured against, so it stays
 /// lit while a settings pane is open beside it.
@@ -82,23 +84,34 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     // The tabs sit against the top of the window, with the padding of the
     // page below them keeping the gap. A tab strip is worth 30px of a 240px
     // window, and every pixel of it comes out of the day grid.
-    container(
-        row![
-            tab(notepad_name, notepad, Screen::Notepad, metrics),
-            tab(calendar_name, !notepad && !settings, Screen::Calendar, metrics),
-            tab(settings_name, settings, Screen::Settings, metrics),
-        ]
-        .spacing(metrics.spacing)
-        .align_y(Center),
-    )
-    .padding(Padding {
-        left: metrics.padding,
-        right: metrics.padding,
-        top: 0.0,
-        bottom: 0.0,
-    })
-    .width(Fill)
-    .into()
+    let navigation = row![
+        tab(notepad_name, notepad, Screen::Notepad, metrics),
+        tab(calendar_name, !notepad && !settings && state.screen != Screen::KeepNotes, Screen::Calendar, metrics),
+        tab(settings_name, settings, Screen::Settings, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Center);
+    let keep = tab(
+        if metrics.breakpoint.is_compact() { "Keep" } else { "Keep Notes" },
+        state.screen == Screen::KeepNotes,
+        Screen::KeepNotes,
+        metrics,
+    );
+    let navigation: Element<'a, Message> =
+        if !metrics.breakpoint.is_compact() && metrics.size.width < 420.0 {
+            column![navigation, keep].spacing(metrics.spacing).into()
+        } else {
+            navigation.push(keep).into()
+        };
+    container(navigation)
+        .padding(Padding {
+            left: metrics.padding,
+            right: metrics.padding,
+            top: 0.0,
+            bottom: 0.0,
+        })
+        .width(Fill)
+        .into()
 }
 
 /// The names on the three tabs.
@@ -122,6 +135,7 @@ fn tab<'a>(
 ) -> Element<'a, Message> {
     button(text(label).size(metrics.label()).center())
         .height(metrics.icon_button())
+        .padding(if metrics.breakpoint.is_compact() { 4.0 } else { 5.0 })
         .on_press(Message::ScreenSelected(screen))
         .style(if active {
             button::primary

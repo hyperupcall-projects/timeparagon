@@ -262,7 +262,7 @@ pub fn signin() -> Result<(), String> {
     Err("the tasks-bridge helper was not found".to_owned())
 }
 
-fn helper_candidates() -> Vec<PathBuf> {
+pub(crate) fn helper_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(path) = std::env::var_os("TIMETRACKER_TASKS_BRIDGE") {
