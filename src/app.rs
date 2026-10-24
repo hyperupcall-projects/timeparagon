@@ -690,9 +690,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::ScreenSelected(screen) => {
-            // Settings and Set Time sit on top of the calendar rather than
-            // replacing it, so coming back out of one leaves the day grid
-            // exactly where the user scrolled it to.
+            // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
             state.screen = screen;
             crate::timeblocking::close(state)

@@ -130,7 +130,7 @@ fn the_target_readout_sheds_the_hours_group_when_it_has_to() {
 /// switched on, which is a stronger claim than the presence of the toggle:
 /// it means the whole expanded section fits and laid out.
 #[test]
-fn the_settings_pane_is_usable_at_two_hundred_pixels() {
+fn the_settings_tab_is_usable_at_two_hundred_pixels() {
     let mut state = state();
     state.screen = Screen::Settings;
 
@@ -138,7 +138,6 @@ fn the_settings_pane_is_usable_at_two_hundred_pixels() {
 
     for label in [
         "Settings",
-        "Done",
         // Appearance.
         "Theme",
         // Side panel.
@@ -264,18 +263,20 @@ fn rendering_never_panics_at_any_size() {
     }
 }
 
-/// The widest layout puts the settings beside the calendar rather than over
-/// it, so both are on screen at once.
+/// Settings occupy their own tab at every width.
 #[test]
-fn the_wide_layout_shows_the_clock_and_the_settings_together() {
+fn the_settings_tab_uses_the_whole_window() {
     let mut state = state();
     state.screen = Screen::Settings;
     state.timer_open = true;
 
-    let mut ui = render(&state, Size::new(900.0, 600.0));
-
-    assert!(ui.find("Start").is_ok(), "the clock is missing");
-    assert!(ui.find("Theme").is_ok(), "the settings are missing");
+    for width in [200.0, 420.0, 900.0] {
+        let mut ui = render(&state, Size::new(width, 600.0));
+        assert!(ui.find("Start").is_err(), "the clock is visible at {width}px");
+        assert!(ui.find("Done").is_err(), "settings have a Done button at {width}px");
+        assert!(ui.find("Show Google Tasks").is_err(), "settings have a task toggle at {width}px");
+        assert!(ui.find("Theme").is_ok(), "the settings are missing at {width}px");
+    }
 }
 
 /// The calendar keeps the day it already has on screen while a fresh sync is
@@ -1114,4 +1115,22 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
     assert!(state.config.task_work.active().is_none());
     let block = state.calendar.event("standup").unwrap();
     assert!(timetracker::timeblocking::assigned_all(&state,block).iter().any(|e| e.id == "task:planned" && e.completed));
+}
+
+#[test]
+fn an_unconfigured_event_offers_a_direct_way_to_enable_its_time_block_controls() -> Result<(),Error> {
+    use timetracker::timeblocking::{self as tb,Action};
+    let mut state = timeblocking_state();
+    state.config.calendar.time_block_calendar = None;
+    let _ = app::update(&mut state,Message::EventOpened("standup".into()));
+    assert!(!tb::is_block(state.calendar.event("standup").unwrap(),&state.config.calendar));
+    let mut ui = render(&state,Size::new(420.0,720.0));
+    let _ = ui.click("Use this calendar for time blocks")?;
+    let action = ui.into_messages().find(|m| matches!(m,Message::TimeBlocking(Action::Calendar(_)))).expect("calendar selection action");
+    let _ = app::update(&mut state,action);
+    assert!(tb::is_block(state.calendar.event("standup").unwrap(),&state.config.calendar));
+    assert!(state.calendar.open_event.is_none());
+    assert!(state.timeblocking.block.is_none());
+    assert!(state.timeblocking.original_width.is_none());
+    Ok(())
 }

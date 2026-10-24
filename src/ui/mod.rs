@@ -31,14 +31,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         let metrics = Metrics::of(size);
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
-            // A settings or set-time pane beside a 200px calendar would leave
-            // neither any room, so below Wide they take over the window.
-            (Screen::Settings, Breakpoint::Wide) => row![
-                container(calendar::view(state, &metrics)).width(Length::FillPortion(2)),
-                container(settings::view(state, &metrics)).width(Length::FillPortion(3)),
-            ]
-            .into(),
             (Screen::Settings, _) => settings::view(state, &metrics),
+            // The alarm and set-time panes need the whole window below Wide.
             (Screen::TimerSettings, Breakpoint::Wide) => row![
                 container(calendar::view(state, &metrics)).width(Length::FillPortion(2)),
                 container(settings::timer_view(state, &metrics)).width(Length::FillPortion(3)),
@@ -75,8 +69,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 /// The tabs along the top of the window: the notepad, the calendar and the
 /// settings.
 ///
-/// The calendar is the page everything else is measured against, so it stays
-/// lit while a settings pane is open beside it.
+/// Each tab is lit when its page is on show.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = matches!(state.screen, Screen::Settings | Screen::TimerSettings);
     let notepad = state.screen == Screen::Notepad;

@@ -1,7 +1,7 @@
-//! The settings pane, including the timer-hits-zero menu.
+//! The settings tab and the timer-hits-zero menu.
 
 use iced::widget::{
-    button, column, container, pick_list, row, slider, text, text_input, toggler,
+    button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };
 use iced::{Center, Element, Fill, Length};
 
@@ -49,7 +49,15 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     })
     .width(Fill);
 
-    super::page("Settings", content.into(), metrics)
+    column![
+        text("Settings").size(metrics.label() + 3.0),
+        scrollable(content).height(Fill).width(Fill),
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill)
+    .into()
 }
 
 /// What happens when the clock reaches zero.
@@ -256,13 +264,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         }
         connect
     };
-
-    section = section.push(switch(
-        "Show Google Tasks",
-        settings.show_tasks,
-        Message::ShowTasksToggled,
-        metrics,
-    ));
 
     section = section.push(action);
 

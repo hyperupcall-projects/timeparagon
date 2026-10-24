@@ -281,6 +281,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::Calendar(id) => {
             state.config.calendar.time_block_calendar = Some(id);
+            // Reveal the newly enabled View/Edit controls without opening a sidebar.
+            state.calendar.open_event = None;
             return crate::app::queue_save(state);
         }
         Action::List(id) => {

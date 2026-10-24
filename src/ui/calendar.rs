@@ -823,6 +823,13 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .spacing(metrics.spacing)
     .width(Fill);
 
+    if !event.is_task() && !event.all_day && state.config.calendar.time_block_calendar.is_none() {
+        body = body.push(button(text("Use this calendar for time blocks").size(metrics.label()).center())
+            .width(Fill)
+            .on_press(Message::TimeBlocking(crate::timeblocking::Action::Calendar(event.calendar_id.clone())))
+            .style(button::primary));
+    }
+
     let details = &event.details;
     if !is_task(event) && !details.status.is_empty() {
         body = body.push(detail_line("Status", details.status.clone(), metrics));
