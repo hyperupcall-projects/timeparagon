@@ -1134,3 +1134,55 @@ fn an_unconfigured_event_offers_a_direct_way_to_enable_its_time_block_controls()
     assert!(state.timeblocking.original_width.is_none());
     Ok(())
 }
+
+#[test]
+fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
+    for width in WIDTHS {
+        let mut state = state();
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        ui.click(if width < 260.0 { "Keep" } else { "Keep Notes" })?;
+        assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes))));
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        ui.click(if width < 260.0 { "Back" } else { "Backlog" })?;
+        assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog))));
+        state.screen = Screen::KeepNotes;
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        for label in ["Refresh", "Reconnect", "Active", "Labels"] {
+            assert!(ui.find(label).is_ok(), "{label} missing at {width}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn keep_edit_opens_the_selected_note() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::KeepNotes;
+    state.keep.snapshot.notes.push(timetracker::keep::Note {
+        id: "test-note".into(),
+        url: "https://keep.google.com/#NOTE/test-note".into(),
+        title: "Example".into(),
+        description: "Body".into(),
+        ..Default::default()
+    });
+    let mut ui = render(&state, Size::new(260.0, 720.0));
+    ui.click("Edit")?;
+    assert!(ui.into_messages().any(|m| matches!(m, Message::KeepEdit(url) if url == "https://keep.google.com/#NOTE/test-note")));
+    Ok(())
+}
+
+#[test]
+fn switching_to_keep_closes_time_block_views_and_starts_refresh() {
+    let mut state = focus_state();
+    state.timeblocking.block = Some("standup".into());
+    state.timeblocking.original_width = Some(260.0);
+    state.timeblocking.dragging = Some("task:planned".into());
+    let _ = app::update(&mut state, Message::ScreenSelected(Screen::KeepNotes));
+    assert_eq!(state.screen, Screen::KeepNotes);
+    assert!(state.timeblocking.block.is_none());
+    assert!(state.timeblocking.focus.is_none());
+    assert!(state.timeblocking.original_width.is_none());
+    assert!(state.timeblocking.dragging.is_none());
+    assert!(state.keep.loading);
+    assert!(state.config.task_work.active().is_some());
+}

@@ -51,6 +51,7 @@ pub enum Screen {
     Backlog,
     /// The notepad: a page of free text kept between sessions.
     Notepad,
+    KeepNotes,
     Settings,
     /// The pane for choosing the target time.
     SetTime,
@@ -159,6 +160,7 @@ pub struct State {
 
     pub calendar: calendar::Store,
     pub timeblocking: crate::timeblocking::Workspace,
+    pub keep: crate::keep::Store,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +194,15 @@ pub enum Message {
     TimerClosed,
 
     ScreenSelected(Screen),
+    KeepRefresh,
+    KeepSignin,
+    KeepLoaded(Result<crate::keep::Snapshot, String>),
+    KeepSignedIn(Result<(), String>),
+    KeepQueryChanged(String),
+    KeepLabelChanged(Option<String>),
+    KeepTextToggled(String),
+    KeepScopeChanged(crate::keep::Scope),
+    KeepEdit(String),
     Dismiss,
 
     ThemeSelected(String),
@@ -402,6 +413,7 @@ impl State {
             catalog,
             config,
             notepad,
+            keep: crate::keep::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
             timeblocking: crate::timeblocking::Workspace::default(),
         }
@@ -693,7 +705,48 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
             state.screen = screen;
-            crate::timeblocking::close(state)
+            let close = crate::timeblocking::close(state);
+            if screen == Screen::KeepNotes {
+                Task::batch([close, refresh_keep(state)])
+            } else {
+                close
+            }
+        }
+
+        Message::KeepRefresh => refresh_keep(state),
+        Message::KeepSignin => {
+            if state.keep.loading { return Task::none(); }
+            state.keep.loading = true;
+            state.keep.error = None;
+            blocking::run(crate::keep::signin).map(Message::KeepSignedIn)
+        }
+        Message::KeepSignedIn(result) => {
+            state.keep.loading = false;
+            match result {
+                Ok(()) => refresh_keep(state),
+                Err(error) => { state.keep.error = Some(error); Task::none() }
+            }
+        }
+        Message::KeepLoaded(result) => {
+            state.keep.loading = false;
+            match result {
+                Ok(snapshot) => { state.keep.snapshot = snapshot; state.keep.error = None; }
+                Err(error) => state.keep.error = Some(error),
+            }
+            Task::none()
+        }
+        Message::KeepQueryChanged(query) => { state.keep.query = query; Task::none() }
+        Message::KeepLabelChanged(label) => { state.keep.label = label; Task::none() }
+        Message::KeepTextToggled(id) => {
+            if !state.keep.text_view.remove(&id) { state.keep.text_view.insert(id); }
+            Task::none()
+        }
+        Message::KeepScopeChanged(scope) => { state.keep.scope = scope; Task::none() }
+        Message::KeepEdit(url) => {
+            if url.starts_with("https://keep.google.com/") {
+                if let Err(error) = calendar::oauth::open_in_browser(&url) { state.keep.error = Some(error); }
+            }
+            Task::none()
         }
 
         Message::Dismiss => dismiss(state),
@@ -1882,7 +1935,7 @@ fn key_message(
     // The notepad is for writing, so the shortcuts that drive the clock are
     // left off while it is on show: a space would otherwise start the timer
     // halfway through a word.
-    if state.screen == Screen::Notepad {
+    if matches!(state.screen, Screen::Notepad | Screen::KeepNotes) {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::ScreenSelected(Screen::Calendar)),
             _ => None,
@@ -2831,4 +2884,34 @@ mod tests {
         assert!(state.calendar.pending_time("task:deep").is_none());
         assert_ne!(state.calendar.event("task:deep").unwrap().start, start);
     }
+    #[test]
+    fn keep_search_does_not_trigger_timer_shortcuts() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.screen = Screen::KeepNotes;
+        assert!(key_message(&mut state, Key::Named(keyboard::key::Named::Space), keyboard::Modifiers::default()).is_none());
+        assert!(matches!(key_message(&mut state, Key::Named(keyboard::key::Named::Escape), keyboard::Modifiers::default()), Some(Message::ScreenSelected(Screen::Calendar))));
+    }
+
+    #[test]
+    fn keep_failed_refresh_preserves_last_snapshot_and_filters() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.keep.snapshot.notes.push(crate::keep::Note { title: "Saved".into(), ..Default::default() });
+        state.keep.query = "saved".into();
+        state.keep.loading = true;
+        let _ = update(&mut state, Message::KeepLoaded(Err("Reconnect".into())));
+        assert!(!state.keep.loading);
+        assert_eq!(state.keep.snapshot.notes[0].title, "Saved");
+        assert_eq!(state.keep.query, "saved");
+        assert_eq!(state.keep.error.as_deref(), Some("Reconnect"));
+    }
+
+}
+
+fn refresh_keep(state: &mut State) -> Task<Message> {
+    if state.keep.loading {
+        return Task::none();
+    }
+    state.keep.loading = true;
+    state.keep.error = None;
+    blocking::run(crate::keep::fetch).map(Message::KeepLoaded)
 }

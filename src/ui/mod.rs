@@ -11,6 +11,7 @@ pub mod flash;
 pub mod layout;
 pub mod links;
 pub mod notepad;
+pub mod keep;
 pub mod settings;
 pub mod timeblocking;
 mod timeblocking_focus;
@@ -47,6 +48,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::SetTime, _) => set_time(state, &metrics),
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
+            (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &metrics),
             (Screen::Calendar, _) if state.timeblocking.block.is_some() => row![
@@ -66,8 +68,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .into()
 }
 
-/// The tabs along the top of the window: the notepad, the calendar and the
-/// settings.
+/// The tabs along the top of the window: notepad, calendar, backlog,
+/// settings, and Google Keep.
 ///
 /// Each tab is lit when its page is on show.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -75,33 +77,45 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let notepad = state.screen == Screen::Notepad;
     let (notepad_name, calendar_name, settings_name) = tab_names(metrics);
 
-    // The tabs sit against the top of the window, with the padding of the
-    // page below them keeping the gap. A tab strip is worth 30px of a 240px
-    // window, and every pixel of it comes out of the day grid.
-    container(
-        row![
-            tab(notepad_name, notepad, Screen::Notepad, metrics),
-            tab(calendar_name, state.screen == Screen::Calendar, Screen::Calendar, metrics),
-            tab(if metrics.breakpoint.is_compact() { "Back" } else { "Backlog" }, state.screen == Screen::Backlog, Screen::Backlog, metrics),
-            tab(settings_name, settings, Screen::Settings, metrics),
-        ]
-        .spacing(metrics.spacing)
-        .align_y(Center),
-    )
-    .padding(Padding {
-        left: metrics.padding,
-        right: metrics.padding,
-        top: 0.0,
-        bottom: 0.0,
-    })
-    .width(Fill)
-    .into()
+    // Compact tabs share one row to preserve the day grid's height in a
+    // 240px window. Full labels wrap onto two rows at normal widths.
+    let spacing = if metrics.breakpoint.is_compact() { 2.0 } else { metrics.spacing };
+    let navigation = row![
+        tab(notepad_name, notepad, Screen::Notepad, metrics),
+        tab(calendar_name, state.screen == Screen::Calendar, Screen::Calendar, metrics),
+        tab(if metrics.breakpoint.is_compact() { "Back" } else { "Backlog" }, state.screen == Screen::Backlog, Screen::Backlog, metrics),
+    ]
+    .spacing(spacing)
+    .align_y(Center);
+    let settings = tab(settings_name, settings, Screen::Settings, metrics);
+    let keep = tab(
+        if metrics.breakpoint.is_compact() { "Keep" } else { "Keep Notes" },
+        state.screen == Screen::KeepNotes,
+        Screen::KeepNotes,
+        metrics,
+    );
+    let navigation: Element<'a, Message> =
+        if !metrics.breakpoint.is_compact() && metrics.size.width < 420.0 {
+            column![navigation, row![settings, keep].spacing(metrics.spacing)]
+                .spacing(metrics.spacing)
+                .into()
+        } else {
+            navigation.push(settings).push(keep).into()
+        };
+    container(navigation)
+        .padding(Padding {
+            left: metrics.padding,
+            right: metrics.padding,
+            top: 0.0,
+            bottom: 0.0,
+        })
+        .width(Fill)
+        .into()
 }
 
-/// The names on the three tabs.
+/// The names on the main tabs.
 ///
-/// The narrowest window has room for three of them only when their names are
-/// short, so the compact layout uses shorter ones.
+/// The compact layout uses shorter names to keep navigation reachable.
 fn tab_names(metrics: &Metrics) -> (&'static str, &'static str, &'static str) {
     if metrics.breakpoint.is_compact() {
         ("Notes", "Cal", "Setup")
@@ -119,6 +133,7 @@ fn tab<'a>(
 ) -> Element<'a, Message> {
     button(text(label).size(metrics.label()).center())
         .height(metrics.icon_button())
+        .padding(if metrics.breakpoint.is_compact() { 2.0 } else { 5.0 })
         .on_press(Message::ScreenSelected(screen))
         .style(if active {
             button::primary

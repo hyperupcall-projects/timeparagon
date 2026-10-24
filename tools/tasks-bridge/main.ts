@@ -14,7 +14,10 @@
 
 import { chromium } from "npm:playwright@1.63.0";
 
-const TASKS_URL = Deno.env.get("TASKS_BRIDGE_URL") ?? "https://tasks.google.com/";
+const KEEP_COMMAND = (Deno.args[0] ?? "").startsWith("keep-");
+const TASKS_URL = KEEP_COMMAND
+  ? "https://keep.google.com/"
+  : Deno.env.get("TASKS_BRIDGE_URL") ?? "https://tasks.google.com/";
 const HEADED = Deno.env.get("TASKS_BRIDGE_HEADED") === "1";
 
 // The Tasks UI is locale-formatted. Pinning the locale makes the strings we
@@ -80,14 +83,19 @@ async function authState(ctx: Ctx): Promise<Auth> {
   let onAppHost = false;
   for (const p of ctx.pages()) {
     const url = p.url();
-    if (url === "" || url.startsWith("about:") || url.startsWith("chrome")) continue;
+    if (url === "" || url.startsWith("about:") || url.startsWith("chrome")) {
+      continue;
+    }
     if (url.includes("accounts.google.com")) return "signed-out";
     const signIn = await p
       .locator('#identifierId, input[name="identifier"]')
       .count()
       .catch(() => 0);
     if (signIn > 0) return "signed-out";
-    if (url.startsWith("https://tasks.google.com")) onAppHost = true;
+    if (
+      url.startsWith("https://tasks.google.com") ||
+      (KEEP_COMMAND && url.startsWith("https://keep.google.com"))
+    ) onAppHost = true;
   }
   return onAppHost ? "signed-in" : "unknown";
 }
@@ -105,7 +113,8 @@ async function waitForAuth(ctx: Ctx, timeoutMs: number): Promise<Auth> {
   return last;
 }
 
-const ROW_SELECTOR = Deno.env.get("TASKS_BRIDGE_ROW_SELECTOR") ?? '[role="listitem"]';
+const ROW_SELECTOR = Deno.env.get("TASKS_BRIDGE_ROW_SELECTOR") ??
+  '[role="listitem"]';
 
 type Parsed = { hhmm: string; ambiguous: boolean };
 
@@ -224,7 +233,9 @@ async function cmdSignin(): Promise<void> {
   // a session that is already authenticated.
   const chrome = Deno.env.get("TASKS_BRIDGE_CHROME") ?? "google-chrome";
   console.error(
-    `Opening Chrome with a dedicated profile. Sign in, wait for Google Tasks\n` +
+    `Opening Chrome with a dedicated profile. Sign in, wait for Google ${
+      KEEP_COMMAND ? "Keep" : "Tasks"
+    }\n` +
       `to load, then close that window.\n` +
       `  profile: ${dir}\n` +
       `  chrome:  ${chrome}`,
@@ -262,7 +273,16 @@ async function cmdSignin(): Promise<void> {
   const page = await primaryPage(ctx);
   await page.goto(TASKS_URL, { waitUntil: "domcontentloaded" });
   const state = await waitForAuth(ctx, 20_000);
-  await ctx.close();
+  if (KEEP_COMMAND) {
+    try {
+      const { waitForKeep } = await import("./keep.ts");
+      await waitForKeep(page);
+    } finally {
+      await ctx.close();
+    }
+  } else {
+    await ctx.close();
+  }
 
   if (state !== "signed-in") {
     console.error(`Still not signed in (${state}).`);
@@ -312,7 +332,10 @@ async function cmdDump(): Promise<void> {
   await Deno.mkdir(dir, { recursive: true });
 
   // Accessibility tree first: it names roles/labels without obfuscated classes.
-  await Deno.writeTextFile(`${dir}/aria.txt`, await page.locator("body").ariaSnapshot());
+  await Deno.writeTextFile(
+    `${dir}/aria.txt`,
+    await page.locator("body").ariaSnapshot(),
+  );
   await Deno.writeTextFile(`${dir}/page.html`, await page.content());
 
   // Everything that looks like a time or an id, so the real selector is found
@@ -323,7 +346,9 @@ async function cmdDump(): Promise<void> {
     for (const el of Array.from(document.querySelectorAll("*"))) {
       const attrs: Record<string, string> = {};
       for (const a of Array.from(el.attributes)) attrs[a.name] = a.value;
-      const attrBlob = Object.entries(attrs).map(([k, v]) => `${k}=${v}`).join(" ");
+      const attrBlob = Object.entries(attrs).map(([k, v]) => `${k}=${v}`).join(
+        " ",
+      );
       const text = (el.textContent ?? "").trim();
       const hit = TIME.exec(text)?.[1] ?? TIME.exec(attrBlob)?.[1] ?? null;
       const idLike = Object.keys(attrs).some((k) =>
@@ -348,7 +373,9 @@ async function cmdDump(): Promise<void> {
   );
   await ctx.close();
 
-  console.log(JSON.stringify({ wrote: dir, candidates: candidates.length }, null, 2));
+  console.log(
+    JSON.stringify({ wrote: dir, candidates: candidates.length }, null, 2),
+  );
 }
 
 async function cmdFetch(): Promise<void> {
@@ -384,13 +411,17 @@ async function cmdFetch(): Promise<void> {
 
   // Time-of-day only: the app already has the date from the API. JSON on
   // stdout, everything else on stderr, so this stays pipeable.
-  console.log(JSON.stringify({
-    selector: ROW_SELECTOR,
-    count: tasks.length,
-    withTime: tasks.filter((t) => t.time).length,
-    tasks,
-    warnings,
-  }, null, 2));
+  console.log(JSON.stringify(
+    {
+      selector: ROW_SELECTOR,
+      count: tasks.length,
+      withTime: tasks.filter((t) => t.time).length,
+      tasks,
+      warnings,
+    },
+    null,
+    2,
+  ));
 }
 
 async function cmdSelftest(): Promise<void> {
@@ -413,25 +444,54 @@ async function cmdSelftest(): Promise<void> {
   }));
 }
 
+// Serialize every Tasks/Keep process sharing this profile (also across app
+// instances). OS advisory locks release automatically if a process crashes.
+await Deno.mkdir(profileDir(), { recursive: true, mode: 0o700 });
+const lock = await Deno.open(`${profileDir()}.bridge-lock`, {
+  create: true,
+  write: true,
+  mode: 0o600,
+});
+await lock.lock(true);
 const command = Deno.args[0] ?? "selftest";
-switch (command) {
-  case "signin":
-    await cmdSignin();
-    break;
-  case "status":
-    await cmdStatus();
-    break;
-  case "dump":
-    await cmdDump();
-    break;
-  case "fetch":
-    await cmdFetch();
-    break;
-  case "selftest":
-    await cmdSelftest();
-    break;
-  default:
-    console.error(`Unknown command: ${command}`);
-    console.error("Commands: signin | status | dump | fetch | selftest");
-    Deno.exit(2);
+try {
+  switch (command) {
+    case "keep-fetch": {
+      const ctx = await launch(true);
+      try {
+        const { fetchKeep } = await import("./keep.ts");
+        console.log(JSON.stringify(await fetchKeep(ctx)));
+      } finally {
+        await ctx.close();
+      }
+      break;
+    }
+    case "keep-signin":
+    case "signin":
+      await cmdSignin();
+      break;
+    case "status":
+      await cmdStatus();
+      break;
+    case "dump":
+      await cmdDump();
+      break;
+    case "fetch":
+      await cmdFetch();
+      break;
+    case "selftest":
+      await cmdSelftest();
+      break;
+    default:
+      console.error(`Unknown command: ${command}`);
+      console.error(
+        "Commands: signin | status | dump | fetch | selftest | keep-fetch | keep-signin",
+      );
+      Deno.exit(2);
+  }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  Deno.exitCode = 2;
+} finally {
+  lock.close();
 }
