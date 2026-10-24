@@ -25,6 +25,12 @@ packaging/install.sh --no-enable  # install the unit but do not start it
 packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 ```
 
+For Google Task times, compile the optional helper first with `deno task compile`
+in `tools/tasks-bridge`. The installer copies the compiled `tasks-bridge` beside
+TimeTracker and warns if it has not been built. Sign into its dedicated profile
+with `~/.local/bin/tasks-bridge signin`, close the Chrome window, then verify with
+`~/.local/bin/timetracker --check-task-times` (adjust paths for `--prefix`).
+
 To remove it again:
 
 ```sh
