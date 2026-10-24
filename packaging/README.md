@@ -60,8 +60,10 @@ settings, just in a narrow window. Pressing `Meta+U` again closes it.
 
 The shortcut is owned by `timetracker-panel`, a small daemon that does nothing
 but register the key through KDE's KGlobalAccel and start or stop the panel
-instance. It appears in **System Settings → Shortcuts**, where it can be rebound
-without editing a file. The daemon must be running for the shortcut to exist:
+instance. To rebind it, open **Settings → Side panel** in TimeTracker, enter a
+combination such as `Meta+Shift+U` or `Ctrl+Alt+T`, and select **Apply shortcut**.
+The change takes effect immediately and KDE remembers it across restarts. The
+action also appears in KDE **System Settings → Shortcuts**. The daemon must be running for the shortcut to exist:
 
 ```sh
 systemctl --user status timetracker-panel.service

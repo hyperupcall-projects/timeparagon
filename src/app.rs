@@ -143,6 +143,10 @@ pub struct State {
     /// The last thing that went wrong with a sound, shown in settings.
     pub audio_error: Option<String>,
 
+    pub panel_shortcut_input: String,
+    pub panel_shortcut_busy: bool,
+    pub panel_shortcut_result: Option<Result<String, String>>,
+
     /// Set while a config write is already queued, so a slider drag does not
     /// schedule one save per pixel.
     save_queued: bool,
@@ -206,6 +210,9 @@ pub enum Message {
     ThemeSelected(String),
     FollowSystemToggled(bool),
     AlwaysOnTopToggled(bool),
+    PanelShortcutChanged(String),
+    PanelShortcutApply,
+    PanelShortcutApplied(Result<String, String>),
 
     NotificationToggled(bool),
     NotificationSummaryChanged(String),
@@ -399,6 +406,9 @@ impl State {
             alarm_active: false,
             audio: Audio::new(),
             audio_error: None,
+            panel_shortcut_input: String::new(),
+            panel_shortcut_busy: false,
+            panel_shortcut_result: None,
             save_queued: false,
             catalog,
             config,
@@ -742,6 +752,32 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::Dismiss => dismiss(state),
+
+        Message::PanelShortcutChanged(value) => {
+            state.panel_shortcut_input = value;
+            state.panel_shortcut_result = None;
+            Task::none()
+        }
+
+        Message::PanelShortcutApply => {
+            if state.panel_shortcut_busy || state.panel_shortcut_input.trim().is_empty() {
+                return Task::none();
+            }
+            state.panel_shortcut_busy = true;
+            state.panel_shortcut_result = None;
+            let shortcut = state.panel_shortcut_input.trim().to_owned();
+            blocking::run(move || {
+                panel::rebind(&shortcut).map_err(|error| format!("{error:#}"))?;
+                Ok(shortcut)
+            })
+            .map(Message::PanelShortcutApplied)
+        }
+
+        Message::PanelShortcutApplied(result) => {
+            state.panel_shortcut_busy = false;
+            state.panel_shortcut_result = Some(result);
+            Task::none()
+        }
 
         Message::ThemeSelected(name) => {
             state.config.appearance.theme = name;
