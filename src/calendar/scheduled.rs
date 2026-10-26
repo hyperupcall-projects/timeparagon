@@ -361,7 +361,8 @@ pub trait Remote {
         list: Option<&str>,
     ) -> Result<(String, String), String>;
     fn move_task(&self, link: &Link, destination: &str) -> Result<Value, String>;
-    fn set_day(&self, link: &Link, day: chrono::NaiveDate) -> Result<(), String>;
+    fn backlog_list(&self, list: Option<&str>) -> Result<String, String>;
+    fn set_day(&self, link: &Link, day: Option<chrono::NaiveDate>) -> Result<(), String>;
     fn save_event(
         &self,
         task: &Event,
@@ -396,11 +397,23 @@ impl Remote for Google<'_> {
         )
         .map_err(|e| e.message)
     }
-    fn set_day(&self, link: &Link, day: chrono::NaiveDate) -> Result<(), String> {
+    fn backlog_list(&self, list: Option<&str>) -> Result<String, String> {
+        match list {
+            Some(id) => Ok(id.trim_start_matches("tasks:").to_owned()),
+            None => find_or_create(
+                self.token,
+                api::TASK_LISTS,
+                api::TASK_LISTS,
+                "title",
+                "Not Time Blocked",
+            ),
+        }
+    }
+    fn set_day(&self, link: &Link, day: Option<chrono::NaiveDate>) -> Result<(), String> {
         api::patch(
             &link.task_url(),
             self.token,
-            &json!({"due": format!("{day}T00:00:00.000Z")}).to_string(),
+            &json!({"due": day.map(|day| format!("{day}T00:00:00.000Z"))}).to_string(),
             "Schedule Google Task",
         )
     }

@@ -80,9 +80,10 @@ pub fn task_row<'a>(
                 .style(text::secondary),
         );
     }
-    if let Ok(Some(date)) = crate::calendar::deadline::read(&task.details.description) {
+    if let Ok(Some(deadline)) = crate::calendar::deadline::read_deadline(&task.details.description)
+    {
         content = content.push(
-            text(format!("DUE: {date}"))
+            text(deadline.to_string())
                 .size(metrics.label() - 1.0)
                 .style(if overdue {
                     text::danger
@@ -155,7 +156,7 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     );
     body = body.push(
         text_input(
-            "YYYY-MM-DD (blank clears deadline)",
+            "YYYY-MM-DD or YYYY-MM-DD HH:MM (blank clears deadline)",
             &state.timeblocking.deadline,
         )
         .on_input(|v| msg(Action::Deadline(v)))
@@ -184,7 +185,7 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         .spacing(6),
     );
     body = body.push(schedule).push(day).push(backlog);
-    if let Err(error) = crate::calendar::deadline::read(&task.details.description) {
+    if let Err(error) = crate::calendar::deadline::check(&task.details.description) {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
     body.into()
@@ -236,9 +237,18 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     body = body.push(text("Available tasks").size(16));
     body = body.push(
         row![
-            text("Only today").size(metrics.label()).width(Fill),
-            toggler(state.timeblocking.available_today)
-                .on_toggle(|only| msg(Action::AvailableToday(only))),
+            text("All tasks").size(metrics.label()).width(Fill),
+            toggler(state.timeblocking.available_all)
+                .on_toggle(|all| msg(Action::AvailableAll(all))),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
+    );
+    body = body.push(
+        row![
+            text("Show planned tasks").size(metrics.label()).width(Fill),
+            toggler(state.timeblocking.available_planned)
+                .on_toggle(|show| msg(Action::AvailablePlanned(show))),
         ]
         .spacing(8)
         .align_y(iced::Center),
@@ -253,18 +263,27 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .width(Fill),
     );
     let query = state.timeblocking.available_query.trim().to_lowercase();
-    let today_only = state.timeblocking.available_today;
+    let all_tasks = state.timeblocking.available_all;
     let available: Vec<_> = state
         .calendar
         .events
         .iter()
         .filter(|event| event.is_task() && !event.completed && tb::metadata(event).block.is_none())
+        .filter(|event| {
+            state.timeblocking.available_planned
+                || (event.all_day
+                    && tb::in_backlog(event)
+                    && !matches!(
+                        crate::calendar::deadline::read_due_time(&event.details.description),
+                        Ok(Some(_))
+                    ))
+        })
         .filter(|event| query.is_empty() || event.title.to_lowercase().contains(&query))
-        .filter(|event| !today_only || tb::on_today(event))
+        .filter(|event| all_tasks || tb::on_today(event))
         .collect();
     if available.is_empty() && !query.is_empty() {
         body = body.push(text("No matching tasks").style(text::secondary));
-    } else if available.is_empty() && today_only {
+    } else if available.is_empty() && !all_tasks {
         body = body.push(text("No tasks for today").style(text::secondary));
     }
     for task in available {
@@ -278,7 +297,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     mouse_area(
         container(scrollable(body))
             .padding(16)
-            .width(Length::Fixed(tb::PANEL_WIDTH))
+            .width(Fill)
             .height(Fill),
     )
     .on_release(msg(Action::DropBlock(block_id)))

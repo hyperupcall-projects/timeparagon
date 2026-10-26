@@ -770,10 +770,10 @@ fn the_calendar_view_shows_the_clock_status() {
     assert!(ui.find("of 5:00").is_ok(), "the target is missing");
 }
 
-/// The day view says how many of that day's tasks still have no time block.
-/// Undated tasks and tasks on other days stay out of the count.
+/// The day view counts tasks without a time or time block. Tasks on the grid
+/// via DUE_TIME, undated tasks, and tasks on other days stay out of the count.
 #[test]
-fn the_calendar_shows_how_many_tasks_are_not_time_blocked() -> Result<(), Error> {
+fn the_calendar_shows_how_many_tasks_are_not_planned() -> Result<(), Error> {
     let mut state = timeblocking_state();
     let day = state.calendar.day;
     let mut task = state.calendar.event("task:backlog").unwrap().clone();
@@ -786,10 +786,25 @@ fn the_calendar_shows_how_many_tasks_are_not_time_blocked() -> Result<(), Error>
         .and_local_timezone(Local)
         .unwrap();
     task.end = task.start + chrono::Duration::days(1);
+    state.calendar.add_event(task.clone());
+
+    task.id = "task:due-time".into();
+    task.title = "Already on the calendar".into();
+    task.details.description = "DUE_TIME: 09:30".into();
+    timetracker::calendar::deadline::place(&mut task, 30);
+    assert!(!task.all_day);
+    // A due time places the task on the grid without a time-block assignment.
+    assert!(timetracker::timeblocking::in_backlog(&task));
     state.calendar.add_event(task);
+    assert!(
+        state
+            .calendar
+            .timed_events(&state.config.calendar)
+            .any(|event| event.id == "task:due-time")
+    );
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
-    assert!(ui.find("1 task not time-blocked").is_ok());
+    assert!(ui.find("1 task not planned").is_ok());
     assert!(ui.find("Show tasks").is_err());
     assert!(ui.find("Hide tasks").is_err());
     assert!(ui.find("Hide overdue tasks").is_err());
@@ -799,8 +814,8 @@ fn the_calendar_shows_how_many_tasks_are_not_time_blocked() -> Result<(), Error>
 
     state.calendar.day = day.pred_opt().unwrap();
     let mut ui = render(&state, Size::new(260.0, 600.0));
-    assert!(ui.find("0 tasks not time-blocked").is_ok());
-    assert!(ui.find("1 task not time-blocked").is_err());
+    assert!(ui.find("0 tasks not planned").is_ok());
+    assert!(ui.find("1 task not planned").is_err());
 
     Ok(())
 }
@@ -864,7 +879,7 @@ fn the_settings_pane_includes_calendar_sync_controls() {
     for label in [
         "Google Calendar",
         "OAuth client ID",
-        "Resync calendar data",
+        "Resync calendar and tasks data",
         "Sync every 15 minutes",
         "Day ends at midnight",
     ] {
@@ -874,14 +889,14 @@ fn the_settings_pane_includes_calendar_sync_controls() {
 
 /// Resync is the settings way to throw away cached days and fetch again.
 #[test]
-fn resync_calendar_data_is_offered_once_signed_in() -> Result<(), Error> {
+fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Settings;
     state.calendar.connection = timetracker::calendar::Connection::SignedIn;
 
     let mut ui = render(&state, Size::new(420.0, 1400.0));
 
-    let _ = ui.click("Resync calendar data")?;
+    let _ = ui.click("Resync calendar and tasks data")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
     assert!(
@@ -1099,7 +1114,8 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
         "Planned Tasks",
         "Write proposal",
         "Available tasks",
-        "Only today",
+        "All tasks",
+        "Show planned tasks",
         "Search available tasks…",
     ] {
         assert!(ui.find(label).is_ok(), "missing {label}");
@@ -1136,6 +1152,10 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
     use timetracker::timeblocking::Action;
     let mut state = timeblocking_state();
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableAll(true)),
+    );
     let mut ui = render(&state, Size::new(900.0, 900.0));
     let _ = ui.click("Edit time block")?;
     assert!(ui.into_messages().any(|message| matches!(
@@ -1194,6 +1214,10 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
     use timetracker::timeblocking::Action;
     let mut state = timeblocking_state();
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableAll(true)),
+    );
     let mut ui = render(&state, Size::new(900.0, 1000.0));
     assert!(ui.find("Research outline").is_ok());
     assert!(ui.find("Send invoice").is_ok());
@@ -1228,7 +1252,103 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
 }
 
 #[test]
-fn available_tasks_can_be_limited_to_today() -> Result<(), Error> {
+fn available_tasks_hide_due_times_until_show_planned_is_enabled() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let mut state = timeblocking_state();
+    let mut task = state.calendar.event("task:backlog").unwrap().clone();
+    task.id = "task:due-time".into();
+    task.title = "Scheduled call".into();
+    task.start = state
+        .calendar
+        .day
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
+    task.end = task.start + chrono::Duration::days(1);
+    task.details.description = "DUE_TIME: 09:30".into();
+    timetracker::calendar::deadline::place(&mut task, 30);
+    assert!(!task.all_day);
+    state.calendar.add_event(task);
+
+    // Check the field itself, including when the task has no due day yet.
+    let mut task = state.calendar.event("task:backlog").unwrap().clone();
+    task.id = "task:undated-due-time".into();
+    task.title = "Undated call".into();
+    task.details.description = "DUE_TIME: 10:00".into();
+    state.calendar.add_event(task);
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableAll(true)),
+    );
+
+    // Render just the panel so a task on the calendar cannot mask list filtering.
+    let size = Size::new(400.0, 1500.0);
+    let metrics = timetracker::ui::layout::Metrics::of(size);
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Scheduled call").is_err());
+    assert!(ui.find("Undated call").is_err());
+    let all = ui.find("All tasks")?.bounds();
+    let planned = ui.find("Show planned tasks")?.bounds();
+    assert!(planned.y > all.y);
+    ui.point_at(Point::new(
+        planned.x + planned.width + 20.0,
+        planned.center().y,
+    ));
+    ui.simulate(iced_test::simulator::click());
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::TimeBlocking(Action::AvailablePlanned(true))
+    )));
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailablePlanned(true)),
+    );
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
+    assert!(ui.find("Scheduled call").is_ok());
+    assert!(ui.find("Undated call").is_ok());
+    assert!(ui.find("Research outline").is_ok());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableAll(false)),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableQuery("CALL".into())),
+    );
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
+    assert!(ui.find("Scheduled call").is_ok());
+    assert!(ui.find("Undated call").is_err());
+    assert!(ui.find("Research outline").is_err());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailablePlanned(false)),
+    );
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
+    assert!(ui.find("Scheduled call").is_err());
+    assert!(ui.find("No matching tasks").is_ok());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailablePlanned(true)),
+    );
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::Close));
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    assert!(!state.timeblocking.available_planned);
+    assert!(!state.timeblocking.available_all);
+    Ok(())
+}
+
+#[test]
+fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error> {
     use timetracker::timeblocking::Action;
     let mut state = timeblocking_state();
     let today = Local::now().date_naive();
@@ -1252,10 +1372,14 @@ fn available_tasks_can_be_limited_to_today() -> Result<(), Error> {
     task.end = task.start + chrono::Duration::days(1);
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
 
-    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    let size = Size::new(400.0, 1000.0);
+    let metrics = timetracker::ui::layout::Metrics::of(size);
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
+    assert!(!state.timeblocking.available_all);
     assert!(ui.find("Research outline").is_ok());
-    assert!(ui.find("Plan Friday").is_ok());
-    let label = ui.find("Only today")?;
+    assert!(ui.find("Plan Friday").is_err());
+    assert!(ui.find("Send invoice").is_err());
+    let label = ui.find("All tasks")?;
     let bounds = label.bounds();
     ui.point_at(Point::new(
         bounds.x + bounds.width + 20.0,
@@ -1264,26 +1388,28 @@ fn available_tasks_can_be_limited_to_today() -> Result<(), Error> {
     ui.simulate(iced_test::simulator::click());
     assert!(
         ui.into_messages()
-            .any(|message| matches!(message, Message::TimeBlocking(Action::AvailableToday(true))))
+            .any(|message| matches!(message, Message::TimeBlocking(Action::AvailableAll(true))))
     );
 
     let _ = app::update(
         &mut state,
-        Message::TimeBlocking(Action::AvailableToday(true)),
+        Message::TimeBlocking(Action::AvailableAll(true)),
     );
-    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
     assert!(ui.find("Research outline").is_ok());
-    assert!(ui.find("Plan Friday").is_err());
+    assert!(ui.find("Plan Friday").is_ok());
+    assert!(ui.find("Send invoice").is_ok());
     assert!(ui.find("Write proposal").is_ok());
     drop(ui);
 
     let _ = app::update(
         &mut state,
-        Message::TimeBlocking(Action::AvailableToday(false)),
+        Message::TimeBlocking(Action::AvailableAll(false)),
     );
-    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    let mut ui = at(size, timetracker::ui::timeblocking::panel(&state, &metrics));
     assert!(ui.find("Research outline").is_ok());
-    assert!(ui.find("Plan Friday").is_ok());
+    assert!(ui.find("Plan Friday").is_err());
+    assert!(ui.find("Send invoice").is_err());
     Ok(())
 }
 
@@ -1474,7 +1600,7 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(260.0, 600.0));
     assert!(ui.find("Todos").is_err());
-    assert!(ui.find("0 tasks not time-blocked").is_ok());
+    assert!(ui.find("0 tasks not planned").is_ok());
     let _ = ui.click("Backlog")?;
     assert!(
         ui.into_messages()

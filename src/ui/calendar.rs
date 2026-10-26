@@ -76,14 +76,14 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut content = column![];
 
     if !state.timer_open {
-        let unblocked = unblocked_task_count(state);
-        let mut unblocked_line = text(unblocked_tasks_label(unblocked))
+        let unplanned = unplanned_task_count(state);
+        let mut unplanned_line = text(unplanned_tasks_label(unplanned))
             .size(metrics.label() + 9.0)
             .width(Fill);
-        if unblocked == 0 {
-            unblocked_line = unblocked_line.style(text::secondary);
+        if unplanned == 0 {
+            unplanned_line = unplanned_line.style(text::secondary);
         } else {
-            unblocked_line = unblocked_line.font(Font {
+            unplanned_line = unplanned_line.font(Font {
                 weight: Weight::Bold,
                 ..Font::DEFAULT
             });
@@ -96,7 +96,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 } else {
                     text::secondary
                 }),
-            unblocked_line,
+            unplanned_line,
         ]
         .spacing(2);
 
@@ -208,24 +208,29 @@ fn header_offset(state: &State, metrics: &Metrics) -> f32 {
     offset
 }
 
-/// Tasks on the day in view that still have no time block.
+/// Tasks on the day in view that have neither a time nor a time block.
 ///
-/// Undated backlog tasks and tasks filed on another day stay out of the count.
-fn unblocked_task_count(state: &State) -> usize {
+/// Timed tasks (including those placed by DUE_TIME), undated backlog tasks,
+/// and tasks filed on another day stay out of the count.
+fn unplanned_task_count(state: &State) -> usize {
     let day = state.calendar.day;
     state
         .calendar
         .events
         .iter()
-        .filter(|event| event.start.date_naive() == day && crate::timeblocking::in_backlog(event))
+        .filter(|event| {
+            event.all_day
+                && event.start.date_naive() == day
+                && crate::timeblocking::in_backlog(event)
+        })
         .count()
 }
 
-fn unblocked_tasks_label(count: usize) -> String {
+fn unplanned_tasks_label(count: usize) -> String {
     if count == 1 {
-        "1 task not time-blocked".to_owned()
+        "1 task not planned".to_owned()
     } else {
-        format!("{count} tasks not time-blocked")
+        format!("{count} tasks not planned")
     }
 }
 

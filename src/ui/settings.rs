@@ -303,7 +303,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let resync_label = if state.calendar.is_busy() {
         "Syncing…"
     } else {
-        "Resync calendar data"
+        "Resync calendar and tasks data"
     };
     let mut resync = button(
         text(resync_label)
@@ -425,6 +425,37 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics,
         ));
     }
+    let mut backlog_options = vec![CalendarOption {
+        id: String::new(),
+        name: "Default: Not Time Blocked".to_owned(),
+    }];
+    backlog_options.extend(
+        state
+            .calendar
+            .calendars
+            .iter()
+            .filter(|c| c.is_task_list())
+            .map(|c| CalendarOption {
+                id: c.id.clone(),
+                name: c.name.clone(),
+            }),
+    );
+    let selected = backlog_options
+        .iter()
+        .find(|option| settings.backlog_list.as_deref().unwrap_or("") == option.id)
+        .cloned();
+    section = section.push(field(
+        "Google Tasks list for backlog tasks",
+        pick_list(backlog_options, selected, |option: CalendarOption| {
+            Message::TimeBlocking(crate::timeblocking::Action::BacklogDestination(
+                (!option.id.is_empty()).then_some(option.id),
+            ))
+        })
+        .text_size(metrics.label())
+        .width(Fill)
+        .into(),
+        metrics,
+    ));
     let options: Vec<CalendarOption> = state
         .calendar
         .calendars
@@ -449,7 +480,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
-    section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. The Tasks calendar and Has Time list are created on first use if needed. Deadlines use the first description line: DUE: YYYY-MM-DD. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+    section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. Moving a task to Backlog also moves it to the selected backlog list. The Tasks calendar, Has Time list, and Not Time Blocked backlog list are created on first use if needed. Task notes can start with reserved lines: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }

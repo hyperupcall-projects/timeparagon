@@ -52,8 +52,10 @@ pub struct Workspace {
     pub todo_open: bool,
     /// Text that narrows the available tasks under the open time block.
     pub available_query: String,
-    /// When set, available tasks are limited to the current day.
-    pub available_today: bool,
+    /// Include tasks from all dates instead of only the current day.
+    pub available_all: bool,
+    /// Include tasks that already have a due time or calendar schedule.
+    pub available_planned: bool,
     pub dragging: Option<String>,
     pub busy: std::collections::HashSet<String>,
     /// Text that narrows the backlog by task title or list name.
@@ -81,6 +83,7 @@ pub enum Action {
     DropTime(DateTime<Local>),
     RefreshBlock(String),
     List(String),
+    BacklogDestination(Option<String>),
     Close,
     Details(String),
     CancelDrag,
@@ -110,8 +113,10 @@ pub enum Action {
     AddTodo(String),
     /// The available-tasks search box changed.
     AvailableQuery(String),
-    /// Show only available tasks dated today, or every unassigned task.
-    AvailableToday(bool),
+    /// Include available tasks from all dates, or only tasks dated today.
+    AvailableAll(bool),
+    /// Include planned tasks in the available-tasks list.
+    AvailablePlanned(bool),
     Drag(String),
     DropBlock(String),
     DropTask(String),
@@ -247,17 +252,18 @@ pub fn on_today(event: &Event) -> bool {
 pub fn overdue(event: &Event) -> bool {
     event.is_task()
         && !event.completed
-        && calendar::deadline::read(&event.details.description)
+        && calendar::deadline::read_deadline(&event.details.description)
             .ok()
             .flatten()
-            .is_some_and(|date| date < Local::now().date_naive())
+            .is_some_and(|deadline| deadline.is_past(Local::now().naive_local()))
 }
 pub fn close(state: &mut State) -> Task<Message> {
     state.timeblocking.block = None;
     state.timeblocking.focus = None;
     state.timeblocking.dragging = None;
     state.timeblocking.available_query.clear();
-    state.timeblocking.available_today = false;
+    state.timeblocking.available_all = false;
+    state.timeblocking.available_planned = false;
     // A save still in flight keeps the draft so its result can land on the same field.
     if !state.timeblocking.busy.contains(ADDING_TODO) {
         state.timeblocking.todo_open = false;
@@ -293,7 +299,8 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
         state.timeblocking.todo_draft.clear();
         state.timeblocking.todo_error = None;
         state.timeblocking.available_query.clear();
-        state.timeblocking.available_today = false;
+        state.timeblocking.available_all = false;
+        state.timeblocking.available_planned = false;
     }
     state.timeblocking.focus = None;
     state.timeblocking.block = Some(id);
@@ -433,8 +440,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             let date = if input.is_empty() {
                 None
             } else {
-                match calendar::deadline::parse_date(input) {
-                    Ok(date) => Some(date),
+                match calendar::deadline::parse_input(input) {
+                    Ok(deadline) => Some(deadline),
                     Err(error) => {
                         state.calendar.error = Some(error);
                         return Task::none();
@@ -478,6 +485,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::List(id) => {
             state.config.calendar.time_block_list = Some(id);
+            return crate::app::queue_save(state);
+        }
+        Action::BacklogDestination(id) => {
+            state.config.calendar.backlog_list = id;
             return crate::app::queue_save(state);
         }
         Action::Close => return close(state),
@@ -731,8 +742,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.available_query = query;
             return Task::none();
         }
-        Action::AvailableToday(only) => {
-            state.timeblocking.available_today = only;
+        Action::AvailableAll(all) => {
+            state.timeblocking.available_all = all;
+            return Task::none();
+        }
+        Action::AvailablePlanned(show) => {
+            state.timeblocking.available_planned = show;
             return Task::none();
         }
     };
@@ -888,7 +903,7 @@ fn new_todo_event(
 enum Change {
     Title(String),
     Estimate(u32),
-    Deadline(Option<NaiveDate>),
+    Deadline(Option<calendar::deadline::Deadline>),
     Backlog,
     Day(NaiveDate),
     Block(String, DateTime<Local>, DateTime<Local>),
@@ -1040,9 +1055,9 @@ fn save(
             data.metadata.minutes = minutes;
             database.save(&task, &data)?;
         }
-        Change::Deadline(date) => {
+        Change::Deadline(deadline) => {
             let token = access(settings)?;
-            let notes = calendar::deadline::write(&task.details.description, date);
+            let notes = calendar::deadline::write(&task.details.description, deadline);
             let base = task_url(&task)?;
             calendar::api::patch(
                 &base,
@@ -1063,33 +1078,19 @@ fn save(
         }
         Change::Backlog | Change::Day(_) => {
             let day = if let Change::Day(day) = change {
-                day
+                Some(day)
             } else {
-                UNDATED
+                None
             };
             let token = access(settings)?;
-            // Delete only the calendar block, preserving the task and deadline.
-            if let Some(link) = &data.metadata.schedule {
-                calendar::scheduled::remove(&token, link)?;
-            }
-            let body = serde_json::json!({"due": if day == UNDATED { serde_json::Value::Null }
-                else { serde_json::json!(format!("{day}T00:00:00.000Z")) }});
-            calendar::api::patch(
-                &task_url(&task)?,
-                &token,
-                &body.to_string(),
-                "Schedule task day",
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                settings,
+                &calendar::scheduled::Google { token: &token },
+                day,
             )?;
-            data.metadata.block = None;
-            data.metadata.schedule = None;
-            task.details.scheduled = None;
-            task.all_day = true;
-            task.start = Local
-                .from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
-                .earliest()
-                .ok_or("Invalid local date")?;
-            task.end = task.start + chrono::Duration::days(1);
-            database.save(&task, &data)?;
         }
         Change::Block(key, start, _end) => {
             data.metadata.block = Some(key);
@@ -1157,6 +1158,68 @@ fn save(
     }
     task.details.task_data = Some(data);
     Ok(task)
+}
+
+/// Remove the schedule, then move backlog tasks while retaining their local ID.
+/// Day-only rescheduling keeps the current Google Tasks list.
+fn unschedule_with(
+    task: &mut Event,
+    data: &mut crate::task_db::TaskData,
+    database: &mut crate::task_db::Database,
+    settings: &CalendarSettings,
+    remote: &impl calendar::scheduled::Remote,
+    day: Option<NaiveDate>,
+) -> Result<(), String> {
+    // Resolve/create the list before changing the task's existing schedule.
+    let destination = if day.is_none() {
+        Some(remote.backlog_list(settings.backlog_list.as_deref())?)
+    } else {
+        None
+    };
+    let mut link = match &data.metadata.schedule {
+        Some(link) => link.clone(),
+        None => calendar::scheduled::Link::new(String::new(), task)?,
+    };
+    if data.metadata.schedule.is_some() {
+        remote.remove_event(&link)?;
+    }
+    remote.set_day(&link, day)?;
+    data.metadata.block = None;
+    data.metadata.schedule = None;
+    task.details.scheduled = None;
+    task.all_day = true;
+    let day = day.unwrap_or(UNDATED);
+    task.start = Local
+        .from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
+        .earliest()
+        .ok_or("Invalid local date")?;
+    task.end = task.start + chrono::Duration::days(1);
+    calendar::deadline::place(task, data.metadata.minutes);
+    // If moving lists fails, sync still sees the successfully cleared schedule.
+    database.save(task, data)?;
+    if let Some(destination) = destination.filter(|destination| *destination != link.list_id) {
+        let response = remote.move_task(&link, &destination)?;
+        link.task_id = response["id"]
+            .as_str()
+            .ok_or("Google did not return the moved task ID")?
+            .to_owned();
+        task.id = format!("task:{}", link.task_id);
+        task.calendar_id = format!("tasks:{destination}");
+        task.details.link = response["webViewLink"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                format!(
+                    "https://tasks.google.com/task/{}",
+                    urlencoding::encode(&link.task_id)
+                )
+            });
+        task.color = settings
+            .task_color(&task.calendar_id)
+            .unwrap_or(calendar::colors::TASK);
+        database.save(task, data)?;
+    }
+    Ok(())
 }
 
 fn task_url(task: &Event) -> Result<String, String> {
@@ -1259,7 +1322,7 @@ fn schedule_with(
         database.save(task, data)?;
     }
     // The native Tasks date is the planned day, never the description deadline.
-    remote.set_day(&link, start.date_naive())?;
+    remote.set_day(&link, Some(start.date_naive()))?;
     remote.save_event(task, &link, start, end).map_err(|e| {
         format!("Task saved, but its calendar block could not be saved: {e}. Sync or retry.")
     })?;
@@ -1312,7 +1375,14 @@ mod tests {
                 serde_json::json!({"id":"moved-task", "webViewLink":"https://tasks.google.com/task/moved-task"}),
             )
         }
-        fn set_day(&self, link: &calendar::scheduled::Link, _day: NaiveDate) -> Result<(), String> {
+        fn backlog_list(&self, _list: Option<&str>) -> Result<String, String> {
+            unreachable!("Scheduling does not use the backlog list")
+        }
+        fn set_day(
+            &self,
+            link: &calendar::scheduled::Link,
+            _day: Option<NaiveDate>,
+        ) -> Result<(), String> {
             assert_eq!(link.task_id, "moved-task");
             self.calls.borrow_mut().push("day".into());
             Ok(())
@@ -1426,6 +1496,268 @@ mod tests {
         assert_eq!(task.end, end);
         drop(database);
         std::fs::remove_file(scratch).unwrap();
+    }
+
+    #[derive(Default)]
+    struct BacklogGoogle {
+        calls: std::cell::RefCell<Vec<String>>,
+        fail_move: std::cell::Cell<bool>,
+        fail_remove: std::cell::Cell<bool>,
+    }
+
+    impl calendar::scheduled::Remote for BacklogGoogle {
+        fn destinations(
+            &self,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<(String, String), String> {
+            panic!("Returning to the backlog must not create a calendar")
+        }
+        fn backlog_list(&self, list: Option<&str>) -> Result<String, String> {
+            let list = list
+                .unwrap_or("tasks:not-time-blocked")
+                .trim_start_matches("tasks:");
+            self.calls.borrow_mut().push(format!("list:{list}"));
+            Ok(list.to_owned())
+        }
+        fn move_task(
+            &self,
+            link: &calendar::scheduled::Link,
+            destination: &str,
+        ) -> Result<serde_json::Value, String> {
+            self.calls
+                .borrow_mut()
+                .push(format!("move:{}:{destination}", link.task_id));
+            if self.fail_move.get() {
+                return Err("Move failed".into());
+            }
+            Ok(serde_json::json!({"id": "backlog-task"}))
+        }
+        fn set_day(
+            &self,
+            link: &calendar::scheduled::Link,
+            day: Option<NaiveDate>,
+        ) -> Result<(), String> {
+            self.calls
+                .borrow_mut()
+                .push(format!("day:{}:{day:?}", link.task_id));
+            Ok(())
+        }
+        fn save_event(
+            &self,
+            _: &Event,
+            _: &calendar::scheduled::Link,
+            _: DateTime<Local>,
+            _: DateTime<Local>,
+        ) -> Result<(), String> {
+            panic!("Returning to the backlog must not write a calendar event")
+        }
+        fn remove_event(&self, _: &calendar::scheduled::Link) -> Result<(), String> {
+            self.calls.borrow_mut().push("remove".into());
+            if self.fail_remove.get() {
+                Err("Calendar is offline".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn backlog_moves_scheduled_and_existing_backlog_tasks_to_the_default_or_custom_list() {
+        for (scheduled, destination) in [(true, None), (false, Some("tasks:custom-backlog"))] {
+            let mut task = calendar::sample_snapshot().events.remove(0);
+            task.id = "task:original-task".into();
+            task.calendar_id = "tasks:has-time".into();
+            task.details.description =
+                "DEADLINE: 2026-12-31\nDUE_TIME: 09:00\nKeep these notes.".into();
+            task.details.task_data = None;
+            let original = task.clone();
+            let mut database =
+                crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+            let mut data = database.import(&task).unwrap();
+            data.metadata.minutes = 45;
+            data.metadata.order = 123;
+            if scheduled {
+                data.metadata.block = Some("work/block".into());
+                data.metadata.schedule =
+                    Some(calendar::scheduled::Link::new("calendar".into(), &task).unwrap());
+            }
+            database.save(&task, &data).unwrap();
+            let local_id = data.id;
+            let settings = CalendarSettings {
+                backlog_list: destination.map(str::to_owned),
+                ..Default::default()
+            };
+            let remote = BacklogGoogle::default();
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                &settings,
+                &remote,
+                None,
+            )
+            .unwrap();
+            task.details.task_data = Some(data.clone());
+            let destination = destination.unwrap_or("tasks:not-time-blocked");
+            assert_eq!(task.calendar_id, destination);
+            assert_eq!(task.id, "task:backlog-task");
+            assert_eq!(
+                task.details.link,
+                "https://tasks.google.com/task/backlog-task"
+            );
+            assert_eq!(task.title, original.title);
+            assert_eq!(task.details.description, original.details.description);
+            assert_eq!(task_key(&task), local_id.to_string());
+            assert_eq!(data.metadata.minutes, 45);
+            assert_eq!(data.metadata.order, 123);
+            assert!(data.metadata.block.is_none());
+            assert!(data.metadata.schedule.is_none());
+            assert!(task.details.scheduled.is_none());
+            assert!(task.all_day);
+            assert_eq!(task.start.date_naive(), UNDATED);
+            assert!(in_backlog(&task));
+            assert_eq!(database.lookup(&original).unwrap(), Some(data.clone()));
+            assert_eq!(database.lookup(&task).unwrap(), Some(data.clone()));
+            let calls = remote.calls.borrow().clone();
+            assert_eq!(calls.iter().any(|call| call == "remove"), scheduled);
+            assert!(calls.iter().any(|call| call == "day:original-task:None"));
+            assert!(calls.last().unwrap().starts_with("move:original-task:"));
+
+            // Repeating the action on a task already on the target list does not move it again.
+            remote.calls.borrow_mut().clear();
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                &settings,
+                &remote,
+                None,
+            )
+            .unwrap();
+            assert!(
+                !remote
+                    .calls
+                    .borrow()
+                    .iter()
+                    .any(|call| call.starts_with("move:"))
+            );
+        }
+    }
+
+    #[test]
+    fn a_day_only_change_keeps_the_google_tasks_list() {
+        let mut task = calendar::sample_snapshot().events.remove(0);
+        task.id = "task:original-task".into();
+        task.calendar_id = "tasks:has-time".into();
+        let mut database =
+            crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+        let mut data = database.import(&task).unwrap();
+        data.metadata.schedule =
+            Some(calendar::scheduled::Link::new("calendar".into(), &task).unwrap());
+        let remote = BacklogGoogle::default();
+        let day = NaiveDate::from_ymd_opt(2026, 12, 1).unwrap();
+        unschedule_with(
+            &mut task,
+            &mut data,
+            &mut database,
+            &CalendarSettings::default(),
+            &remote,
+            Some(day),
+        )
+        .unwrap();
+        assert_eq!(task.id, "task:original-task");
+        assert_eq!(task.calendar_id, "tasks:has-time");
+        assert_eq!(task.start.date_naive(), day);
+        assert_eq!(
+            *remote.calls.borrow(),
+            ["remove", "day:original-task:Some(2026-12-01)"]
+        );
+    }
+
+    #[test]
+    fn a_failed_backlog_move_can_retry_and_calendar_failure_leaves_the_task_untouched() {
+        let mut task = calendar::sample_snapshot().events.remove(0);
+        task.id = "task:original-task".into();
+        task.calendar_id = "tasks:has-time".into();
+        let mut database =
+            crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+        let mut data = database.import(&task).unwrap();
+        data.metadata.block = Some("work/block".into());
+        data.metadata.schedule =
+            Some(calendar::scheduled::Link::new("calendar".into(), &task).unwrap());
+        database.save(&task, &data).unwrap();
+        let remote = BacklogGoogle::default();
+        remote.fail_remove.set(true);
+        let original = task.clone();
+        let original_data = data.clone();
+        let settings = CalendarSettings::default();
+        assert!(
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                &settings,
+                &remote,
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(task, original);
+        assert_eq!(data, original_data);
+        assert_eq!(remote.calls.borrow().len(), 2); // Resolve list, then delete calendar event.
+
+        remote.fail_remove.set(false);
+        remote.fail_move.set(true);
+        assert!(
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                &settings,
+                &remote,
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(task.calendar_id, "tasks:has-time");
+        let persisted = database.lookup(&original).unwrap().unwrap();
+        assert!(persisted.metadata.block.is_none());
+        assert!(persisted.metadata.schedule.is_none());
+        assert_eq!(persisted.id, original_data.id);
+        remote.fail_move.set(false);
+        unschedule_with(
+            &mut task,
+            &mut data,
+            &mut database,
+            &settings,
+            &remote,
+            None,
+        )
+        .unwrap();
+        assert_eq!(task.calendar_id, "tasks:not-time-blocked");
+        assert_eq!(
+            database.lookup(&task).unwrap().unwrap().id,
+            original_data.id
+        );
+    }
+
+    #[test]
+    fn backlog_destination_setting_can_be_customized_and_reset() {
+        let mut state = estimate_state();
+        assert_eq!(state.config.calendar.backlog_list, None);
+        let _ = update(
+            &mut state,
+            Action::BacklogDestination(Some("tasks:custom".into())),
+        );
+        let serialized = toml::to_string(&state.config).unwrap();
+        let restored: crate::config::Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            restored.calendar.backlog_list.as_deref(),
+            Some("tasks:custom")
+        );
+        let _ = update(&mut state, Action::BacklogDestination(None));
+        assert_eq!(state.config.calendar.backlog_list, None);
     }
 
     #[test]

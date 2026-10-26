@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install TimeTracker as a desktop application.
 #
-# This builds the release binary, drops it on your PATH, registers a desktop
+# This builds the debug binary, drops it on your PATH, registers a desktop
 # entry and icon so it shows up in the application menu, and installs a
 # systemd *user* service so the timer daemon starts with your graphical
 # session.
@@ -12,7 +12,7 @@
 #   packaging/install.sh [--prefix DIR] [--no-build] [--no-enable] [--help]
 #
 #   --prefix DIR   Install the binary under DIR/bin (default: ~/.local)
-#   --no-build     Use an existing target/release/timetracker instead of
+#   --no-build     Use an existing target/debug/timetracker instead of
 #                  building it
 #   --no-enable    Install the systemd unit but do not enable/start it
 #   --help         Show this message
@@ -74,17 +74,17 @@ say() { printf '%s\n' "$*"; }
 
 # --- Build -----------------------------------------------------------------
 if [ "$build" -eq 1 ]; then
-    say "Building release binary..."
-    ( cd "$repo_root" && cargo build --release )
+    say "Building debug binaries..."
+    ( cd "$repo_root" && cargo build )
 fi
 
-built=$repo_root/target/release/timetracker
+built=$repo_root/target/debug/timetracker
 if [ ! -x "$built" ]; then
     echo "install.sh: $built not found; run without --no-build" >&2
     exit 1
 fi
 
-built_panel=$repo_root/target/release/timetracker-panel
+built_panel=$repo_root/target/debug/timetracker-panel
 if [ ! -x "$built_panel" ]; then
     echo "install.sh: $built_panel not found; run without --no-build" >&2
     exit 1

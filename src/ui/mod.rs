@@ -20,7 +20,7 @@ mod timeblocking_focus;
 use std::time::Duration;
 
 use iced::widget::{button, column, container, responsive, row, scrollable, text};
-use iced::{Center, Element, Fill, Length, Padding};
+use iced::{Center, Element, Fill, Length, Padding, Size};
 
 use crate::alarm;
 use crate::app::{Message, Screen, State};
@@ -56,14 +56,27 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Calendar, _) => {
                 // Keep the calendar at the same place in the widget tree when
                 // the block editor opens or closes, preserving its scroll state.
-                let mut content = row![container(calendar::view(state, &metrics)).width(Fill)];
-                if state.timeblocking.block.is_some() {
-                    content = content.push(
-                        container(timeblocking::panel(state, &metrics))
-                            .width(crate::timeblocking::PANEL_WIDTH),
-                    );
+                match state
+                    .timeblocking
+                    .block
+                    .is_some()
+                    .then_some(state.timeblocking.original_width)
+                    .flatten()
+                {
+                    // The calendar keeps the width it had before the editor
+                    // opened, and the editor takes whatever the window gained.
+                    Some(base) => {
+                        let pane = base.min(size.width);
+                        let calendar_metrics = Metrics::of(Size::new(pane, size.height));
+                        row![
+                            container(calendar::view(state, &calendar_metrics))
+                                .width(Length::Fixed(pane)),
+                            container(timeblocking::panel(state, &metrics)).width(Fill),
+                        ]
+                        .into()
+                    }
+                    None => row![container(calendar::view(state, &metrics)).width(Fill)].into(),
                 }
-                content.into()
             }
         };
 

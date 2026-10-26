@@ -1343,15 +1343,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                         } else {
                             event.start.date_naive().to_string()
                         };
-                    state.timeblocking.deadline = event
-                        .details
-                        .description
-                        .lines()
-                        .next()
-                        .and_then(|line| line.strip_prefix("DUE:"))
-                        .unwrap_or("")
-                        .trim()
-                        .to_owned();
+                    state.timeblocking.deadline =
+                        calendar::deadline::input_text(&event.details.description);
                     state.timeblocking.start_time = if event.all_day {
                         "09:00".into()
                     } else {

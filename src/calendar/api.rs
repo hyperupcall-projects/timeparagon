@@ -220,7 +220,7 @@ pub fn fetch_day(
                     database.save(event, data)?;
                 }
             }
-            if let Err(error) = super::deadline::read(&event.details.description) {
+            if let Err(error) = super::deadline::check(&event.details.description) {
                 append_notice(&mut notice, &format!("{}: {error}", event.title));
             }
         }
@@ -579,6 +579,9 @@ fn fetch_task_items(
                 )?;
             }
             event.details.description = cleaned;
+            // A DUE_TIME line gives a task that is only dated a place on the
+            // grid; a Calendar-backed schedule overrides it in `scheduled::merge`.
+            super::deadline::place(&mut event, data.metadata.minutes);
             event.details.task_data = Some(data);
             events.push(event);
         }

@@ -1,6 +1,6 @@
 # Installing TimeTracker as a desktop application
 
-`install.sh` builds the release binary and registers TimeTracker with your
+`install.sh` builds the debug binaries and registers TimeTracker with your
 desktop session:
 
 - the binary goes to `~/.local/bin/timetracker` (override with `--prefix`);
@@ -20,7 +20,7 @@ Nothing needs root; everything lives under your home directory.
 
 ```sh
 packaging/install.sh              # build, install, enable and start
-packaging/install.sh --no-build   # reuse target/release/timetracker
+packaging/install.sh --no-build   # reuse binaries in target/debug
 packaging/install.sh --no-enable  # install the unit but do not start it
 packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 ```
@@ -32,8 +32,19 @@ Google Tasks and Calendar sync use the public Google APIs and require no
 browser helper. In Settings, choose a calendar for scheduled task events and
 a Google Tasks list for scheduled tasks, or let the first scheduling operation
 create/reuse **Tasks** and **Has Time**. Reconnect Google once to authorize
-calendar creation. Task deadlines are stored on the first description line as
-`DUE: YYYY-MM-DD`; moving a time block preserves that deadline. Completing a
+calendar creation. Google Tasks only stores a day for a task, so times and
+deadlines live in reserved lines at the top of the task's notes (the first
+line that isn't one of these starts your own notes):
+
+```text
+DEADLINE: 2026-10-30 17:00   deadline, day and time
+DUE: 2026-10-30              deadline, day only (DEADLINE wins if both exist)
+DUE_TIME: 09:30              show the task at 09:30 on its due day
+```
+
+`DUE_TIME` uses the task's Google due day and lasts as long as its estimate
+(30 minutes if none). A task scheduled through the app takes its time from
+Calendar instead. Moving a time block preserves the deadline. Completing a
 task retains its Calendar event and work history.
 
 Google Keep still uses the optional helper described below.
