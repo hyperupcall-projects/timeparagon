@@ -29,6 +29,7 @@ pub struct Config {
     pub timer: TimerSettings,
     pub alarm: AlarmProfile,
     pub calendar: CalendarSettings,
+    pub projects: ProjectsSettings,
     #[serde(default, skip_serializing_if = "crate::task_work::WorkLog::is_empty")]
     pub task_work: crate::task_work::WorkLog,
     /// The temporary todo scratchpad. It is left out of the file while it is
@@ -49,6 +50,7 @@ impl Default for Config {
             timer: TimerSettings::default(),
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
+            projects: ProjectsSettings::default(),
             task_work: crate::task_work::WorkLog::default(),
             todos: TodoList::default(),
             notepad: Notepad::default(),
@@ -179,6 +181,14 @@ impl TimerSettings {
     pub fn presets(&self) -> impl Iterator<Item = Duration> + '_ {
         self.presets_secs.iter().copied().map(Duration::from_secs)
     }
+}
+
+/// The fold/// The optional folder whose immediate subdirectories appear in the Projects tab.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectsSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory: Option<PathBuf>,
 }
 
 /// Google Calendar connection and which calendars are shown on the calendar.

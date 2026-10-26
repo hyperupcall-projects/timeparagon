@@ -126,6 +126,8 @@ pub struct State {
     pub recorder: tracks::Recorder,
 
     pub screen: Screen,
+    /// Immediate subdirectories of the Projects folder, refreshed when opened.
+    pub projects: Option<Result<Vec<String>, String>>,
     pub main_window: Option<window::Id>,
     pub main_size: Size,
     /// Receiver for show/hide commands from the panel daemon, when this process
@@ -191,6 +193,7 @@ pub enum Message {
     TimerClosed,
 
     ScreenSelected(Screen),
+    ProjectsLoaded(Result<Vec<String>, String>),
     KeepRefresh,
     KeepSignin,
     KeepLoaded(Result<crate::keep::Snapshot, String>),
@@ -394,6 +397,7 @@ impl State {
             timer_open: false,
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
+            projects: None,
             main_window: None,
             main_size: Size::new(config.window.width, config.window.height),
             panel_command_rx: None,
@@ -427,6 +431,30 @@ impl State {
         self.notepad = text_editor::Content::with_text(&text);
         self.config.notepad.text = text;
     }
+}
+
+fn refresh_projects(state: &mut State) -> Task<Message> {
+    state.projects = None;
+    let Some(directory) = state.config.projects.directory.clone()
+        .filter(|directory| !directory.as_os_str().is_empty())
+    else {
+        state.projects = Some(Ok(Vec::new()));
+        return Task::none();
+    };
+    blocking::run(move || load_projects(&directory).map_err(|error| error.to_string()))
+        .map(Message::ProjectsLoaded)
+}
+
+fn load_projects(directory: &std::path::Path) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 pub fn boot() -> (State, Task<Message>) {
@@ -682,11 +710,18 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.menu_open = false;
             state.screen = screen;
             let close = crate::timeblocking::close(state);
-            if screen == Screen::KeepNotes {
+            if screen == Screen::Projects {
+                Task::batch([close, refresh_projects(state)])
+            } else if screen == Screen::KeepNotes {
                 Task::batch([close, refresh_keep(state)])
             } else {
                 close
             }
+        }
+
+        Message::ProjectsLoaded(result) => {
+            state.projects = Some(result);
+            Task::none()
         }
 
         Message::KeepRefresh => refresh_keep(state),
@@ -943,6 +978,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             if previous.calendar != state.config.calendar {
                 tasks.push(sync_calendar(state));
+            }
+            if previous.projects != state.config.projects && state.screen == Screen::Projects {
+                tasks.push(refresh_projects(state));
             }
             log::info!("reloaded config from disk");
             Task::batch(tasks)

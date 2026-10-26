@@ -455,7 +455,7 @@ fn the_tabs_keep_the_requested_groups() {
 }
 
 #[test]
-fn projects_opens_a_blank_view() -> Result<(), Error> {
+fn projects_lists_directory_names() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(200.0, 500.0));
     ui.click("Projects")?;
@@ -464,7 +464,23 @@ fn projects_opens_a_blank_view() -> Result<(), Error> {
         .expect("Projects should select its view");
     let _ = app::update(&mut state, message);
     assert_eq!(state.screen, Screen::Projects);
+    assert_eq!(state.projects, Some(Ok(Vec::new())));
     let mut ui = render(&state, Size::new(200.0, 500.0));
+    assert!(ui.find("Loading projects…").is_err());
+    assert!(ui.find("No project directories found.").is_err());
+    drop(ui);
+    state.config.projects.directory = Some(std::env::temp_dir());
+    let _ = app::update(&mut state, Message::ScreenSelected(Screen::Projects));
+    let mut ui = render(&state, Size::new(200.0, 500.0));
+    assert!(ui.find("Loading projects…").is_ok());
+    drop(ui);
+    let _ = app::update(&mut state, Message::ProjectsLoaded(Ok(vec![
+        "Personal".into(),
+        "School".into(),
+    ])));
+    let mut ui = render(&state, Size::new(200.0, 500.0));
+    assert!(ui.find("Personal").is_ok());
+    assert!(ui.find("School").is_ok());
     assert!(ui.find("Timer").is_err());
     assert!(ui.find("Theme").is_err());
     assert!(ui.find("Calendar").is_ok());
