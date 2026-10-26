@@ -13,12 +13,29 @@ use crate::config::CalendarSettings;
 use crate::hex;
 
 const CALENDAR_LIST: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
-const EVENTS: &str = "https://www.googleapis.com/calendar/v3/calendars";
+pub(crate) const EVENTS: &str = "https://www.googleapis.com/calendar/v3/calendars";
+
+pub(crate) fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build())
+}
+
+fn append_notice(notice: &mut Option<String>, message: &str) {
+    match notice {
+        Some(existing) => { existing.push('\n'); existing.push_str(message); }
+        None => *notice = Some(message.to_owned()),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct CalendarList {
     #[serde(default)]
     items: Vec<CalendarListEntry>,
+    #[serde(default, rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +89,8 @@ struct EventEntry {
     attendees: Vec<Person>,
     #[serde(default, rename = "conferenceData")]
     conference: Option<Conference>,
+    #[serde(default, rename = "extendedProperties")]
+    extended_properties: serde_json::Value,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -127,23 +146,69 @@ pub fn fetch_day(
     disabled: &[String],
     day: NaiveDate,
     day_end_hour: u32,
+    tasks_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     let mut calendars = fetch_calendars(access_token)?;
-    let mut events = Vec::new();
-
-    // Every calendar is fetched; the hamburger menu hides by ID in the
-    // view so toggling one back on does not need another round trip.
+    // Task refresh and independent calendar requests overlap. Bound concurrency
+    // so an account with many calendars does not open an unbounded worker pool.
     let _ = disabled;
-    for calendar in &calendars {
-        events.extend(fetch_events(access_token, calendar, day, day_end_hour)?);
-    }
-
-    let (task_calendars, task_events, notice) = match fetch_tasks(access_token, day) {
+    let (mut events, task_result) = std::thread::scope(|scope| -> Result<_, String> {
+        let tasks = scope.spawn(|| fetch_tasks(access_token, day));
+        let mut events = Vec::new();
+        for chunk in calendars.chunks(4) {
+            let workers: Vec<_> = chunk.iter().map(|calendar| {
+                scope.spawn(move || fetch_events(access_token, calendar, day, day_end_hour))
+            }).collect();
+            for worker in workers {
+                events.extend(worker.join().map_err(|_| "Calendar worker failed")??);
+            }
+        }
+        Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
+    })?;
+    let (task_calendars, task_events, mut notice) = match task_result {
         Ok(tasks) => tasks,
         Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
     };
+    // Fetch app-owned task blocks independently of the day. This makes a task
+    // scheduled on another day/device stay scheduled in Backlog and block views.
+    let mut linked_calendars: std::collections::HashSet<String> = task_events.iter()
+        .filter_map(|task| crate::timeblocking::metadata(task).schedule.map(|link| link.calendar_id))
+        .collect();
+    linked_calendars.extend(tasks_calendar.map(str::to_owned));
+    linked_calendars.extend(calendars.iter().filter(|c| c.name == "Tasks").map(|c| c.id.clone()));
+    let mut loaded_calendars = std::collections::HashSet::new();
+    for calendar in calendars.iter().filter(|c| linked_calendars.contains(&c.id)) {
+        match fetch_scheduled_events(access_token, calendar) {
+            Ok(linked) => {
+                loaded_calendars.insert(calendar.id.clone());
+                let ids: std::collections::HashSet<_> = linked.iter().map(|e| e.id.as_str()).collect();
+                events.retain(|e| e.calendar_id != calendar.id || !ids.contains(e.id.as_str()));
+                events.extend(linked);
+            }
+            Err(error) => append_notice(&mut notice, &error),
+        }
+    }
+    let (merged, changes) = super::scheduled::merge(events, task_events, &loaded_calendars);
+    events = merged;
+    let mut database = crate::task_db::open()?;
+    for event in &events {
+        if event.is_task() {
+            if let Some(data) = &event.details.task_data {
+                if database.lookup(event)?.as_ref() != Some(data) {
+                    database.save(event, data)?;
+                }
+            }
+            if let Err(error) = super::deadline::read(&event.details.description) {
+                append_notice(&mut notice, &format!("{}: {error}", event.title));
+            }
+        }
+    }
+    for (link, body) in changes {
+        if let Err(error) = super::scheduled::request("PATCH", &link.event_url(), access_token, Some(&body)) {
+            append_notice(&mut notice, &format!("Could not update a task's calendar event: {}", error.message));
+        }
+    }
     calendars.extend(task_calendars);
-    events.extend(task_events);
     events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
 
     Ok(Snapshot {
@@ -156,7 +221,12 @@ pub fn fetch_day(
 }
 
 fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
-    let list: CalendarList = get(CALENDAR_LIST, access_token)?;
+    let mut list: CalendarList = get(CALENDAR_LIST, access_token)?;
+    while let Some(token) = list.next_page_token.take() {
+        let next: CalendarList = get(&format!("{CALENDAR_LIST}?pageToken={}", urlencoding::encode(&token)), access_token)?;
+        list.items.extend(next.items);
+        list.next_page_token = next.next_page_token;
+    }
 
     let mut calendars: Vec<Calendar> = list
         .items
@@ -230,8 +300,82 @@ fn fetch_events(
     Ok(events)
 }
 
-const TASK_LISTS: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lists";
-const TASKS: &str = "https://tasks.googleapis.com/tasks/v1/lists";
+pub(crate) const TASK_LISTS: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lists";
+pub(crate) const TASKS: &str = "https://tasks.googleapis.com/tasks/v1/lists";
+
+#[derive(Default)]
+struct TaskCache {
+    token: String,
+    lists: std::collections::HashMap<String, CachedTasks>,
+}
+struct CachedTasks {
+    since: DateTime<Utc>,
+    items: std::collections::HashMap<String, TaskEntry>,
+}
+
+/// Fetch changes since the previous request, including deletions and tasks
+/// completed by Google's clients. Capture the watermark before fetching and
+/// overlap it so pagination and coarse timestamps cannot lose a change.
+fn cached_task_items(access_token: &str, list: &str) -> Result<Vec<TaskEntry>, String> {
+    static CACHE: std::sync::Mutex<Option<TaskCache>> = std::sync::Mutex::new(None);
+    let mut guard = CACHE.lock().map_err(|_| "Task cache is unavailable")?;
+    let cache = guard.get_or_insert_with(TaskCache::default);
+    if cache.token != access_token {
+        cache.token = access_token.to_owned();
+        cache.lists.clear();
+    }
+    let since = cache.lists.get(list).map(|cached| cached.since - chrono::Duration::seconds(2));
+    let watermark = Utc::now();
+    let mut page_token: Option<String> = None;
+    let mut changes = Vec::new();
+    loop {
+        let mut url = format!("{TASKS}/{}/tasks?showCompleted=true&showHidden=true&showDeleted=true&maxResults=100", urlencoding::encode(list));
+        if let Some(since) = since {
+            url.push_str("&updatedMin=");
+            url.push_str(&urlencoding::encode(&since.to_rfc3339()));
+        }
+        if let Some(token) = &page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(token));
+        }
+        let page: TaskPage = get(&url, access_token)?;
+        changes.extend(page.items);
+        page_token = page.next_page_token;
+        if page_token.is_none() { break; }
+    }
+    let cached = cache.lists.entry(list.to_owned()).or_insert_with(|| CachedTasks {
+        since: watermark, items: Default::default(),
+    });
+    for task in changes {
+        if task.deleted { cached.items.remove(&task.id); }
+        else { cached.items.insert(task.id.clone(), task); }
+    }
+    cached.since = watermark;
+    Ok(cached.items.values().cloned().collect())
+}
+
+fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec<Event>, String> {
+    let mut page_token: Option<String> = None;
+    let mut events = Vec::new();
+    loop {
+        let mut url = format!("{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&maxResults=250", urlencoding::encode(&calendar.id));
+        if let Some(token) = &page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(token));
+        }
+        let page: EventList = get(&url, access_token)?;
+        for entry in page.items {
+            if entry.status.as_deref() != Some("cancelled") {
+                if let Some(event) = parse_event(entry, calendar, Local::now().date_naive()) {
+                    events.push(event);
+                }
+            }
+        }
+        page_token = page.next_page_token;
+        if page_token.is_none() { break; }
+    }
+    Ok(events)
+}
 
 
 #[derive(Debug, Deserialize)]
@@ -257,8 +401,10 @@ struct TaskPage {
     next_page_token: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct TaskEntry {
+    #[serde(default)]
+    deleted: bool,
     #[serde(default)]
     id: String,
     #[serde(default)]
@@ -318,39 +464,28 @@ fn fetch_task_items(
     color: Color,
     _day: NaiveDate,
 ) -> Result<Vec<Event>, String> {
-    let mut page_token: Option<String> = None;
+    let tasks = cached_task_items(access_token, list_id)?;
+    let mut database = crate::task_db::open()?;
     let mut events = Vec::new();
-
-    loop {
-        let mut url = format!(
-            "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100",
-            urlencoding::encode(list_id),
-        );
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
-
-        let page: TaskPage = get(&url, access_token)?;
-        for mut task in page.items {
-            // Keep completed block tasks in the focused timeline after sync/restart.
-            if task.status.as_deref() == Some("completed") && crate::timeblocking::metadata(&task.notes).block.is_none() { continue; }
-            let normalized = crate::timeblocking::notes(&task.notes, &crate::timeblocking::metadata(&task.notes))?;
-            if normalized != task.notes {
-                let url = format!("{TASKS}/{}/tasks/{}", urlencoding::encode(list_id), urlencoding::encode(&task.id));
-                patch(&url, access_token, &serde_json::json!({"notes":normalized}).to_string(), "Google Tasks tracking")?;
-                task.notes = normalized;
+    for task in tasks {
+        let due = task.due.as_deref().and_then(task_due_date)
+            .unwrap_or(crate::timeblocking::UNDATED);
+        if let Some(mut event) = parse_task(task, calendar_id, color, due) {
+            // A cached task only needs a lookup; avoid a write transaction per
+            // unchanged task on every day navigation.
+            let data = match database.lookup(&event)? {
+                Some(data) => data,
+                None => database.import(&event)?,
+            };
+            let cleaned = crate::timeblocking::description(&event.details.description);
+            if cleaned != event.details.description {
+                let id = event.id.strip_prefix("task:").ok_or("Invalid task ID")?;
+                let url = format!("{TASKS}/{}/tasks/{}", urlencoding::encode(list_id), urlencoding::encode(id));
+                patch(&url, access_token, &serde_json::json!({"notes":cleaned}).to_string(), "Migrate Google Tasks metadata")?;
             }
-            let due = task.due.as_deref().and_then(task_due_date)
-                .unwrap_or(crate::timeblocking::UNDATED);
-            if let Some(event) = parse_task(task, calendar_id, color, due) {
-                events.push(event);
-            }
-        }
-
-        match page.next_page_token {
-            Some(next) => page_token = Some(next),
-            None => break,
+            event.details.description = cleaned;
+            event.details.task_data = Some(data);
+            events.push(event);
         }
     }
 
@@ -359,7 +494,7 @@ fn fetch_task_items(
 
 fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) -> Option<Event> {
     let due = task.due.as_deref().and_then(task_due_date).unwrap_or(crate::timeblocking::UNDATED);
-    if due != day {
+    if task.deleted || task.id.is_empty() || due != day {
         return None;
     }
 
@@ -389,8 +524,7 @@ fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) 
 
 /// Flips a task between complete and not in Google Tasks.
 ///
-/// The tasks scope is read/write, so this is one of the two places the app
-/// changes anything on Google's side. Blocking: call it from
+/// Requires the read/write tasks scope. Blocking: call it from
 /// [`crate::blocking::run`].
 pub fn set_task_completed(
     access_token: &str,
@@ -602,7 +736,9 @@ fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option
         .as_deref()
         .and_then(colors::event)
         .unwrap_or(calendar.color);
-    let details = details_of(&entry);
+    let mut details = details_of(&entry);
+    details.scheduled = super::scheduled::Link::from_properties(&calendar.id, &entry.id, &entry.extended_properties);
+    let completed = entry.extended_properties["private"]["ttCompleted"].as_str() == Some("true");
 
     Some(Event {
         id: entry.id,
@@ -616,7 +752,7 @@ fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option
         end: end_dt,
         all_day,
         color,
-        completed: false,
+        completed,
         details,
     })
 }
@@ -666,6 +802,8 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
     };
 
     crate::calendar::Details {
+        task_data: None,
+        scheduled: None,
         location: entry.location.trim().to_owned(),
         description: plain_text(&entry.description),
         status: match entry.status.as_deref() {
@@ -803,7 +941,7 @@ fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (String, String) {
 }
 
 pub(crate) fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str) -> Result<T, String> {
-    let result = ureq::get(url)
+    let result = agent().get(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Accept", "application/json")
         .call();
@@ -831,7 +969,7 @@ pub(crate) fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str)
 /// from Calendar or Tasks rather than from whichever call site happened to
 /// share this helper.
 pub(crate) fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), String> {
-    let result = ureq::request("PATCH", url)
+    let result = agent().request("PATCH", url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
         .send_string(body);
@@ -856,7 +994,7 @@ pub(crate) fn patch(url: &str, access_token: &str, body: &str, context: &str) ->
 /// A successful deletion comes back as `204 No Content` with no body, so there
 /// is nothing to parse. Blocking: call it from [`crate::blocking::run`].
 fn delete(url: &str, access_token: &str, context: &str) -> Result<(), String> {
-    let result = ureq::request("DELETE", url)
+    let result = agent().request("DELETE", url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .call();
 
@@ -880,7 +1018,7 @@ fn delete(url: &str, access_token: &str, context: &str) -> Result<(), String> {
 /// Used for the one call that needs something back: creating an event, whose
 /// id the caller keeps so the new chip can be drawn without a full sync.
 pub(crate) fn post(url: &str, access_token: &str, body: &str, context: &str) -> Result<String, String> {
-    let result = ureq::post(url)
+    let result = agent().post(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
         .send_string(body);
@@ -1041,6 +1179,7 @@ mod tests {
     fn a_task_due_at_utc_midnight_stays_on_that_calendar_day() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         let task = TaskEntry {
+            deleted: false,
             id: "abc".into(),
             title: "File taxes".into(),
             notes: String::new(),
@@ -1062,6 +1201,7 @@ mod tests {
     fn a_task_for_another_day_is_left_out() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         let task = TaskEntry {
+            deleted: false,
             id: "abc".into(),
             title: "Tomorrow".into(),
             notes: String::new(),

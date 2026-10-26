@@ -97,15 +97,17 @@ say "Installed binary:  $binary"
 install -m 0755 "$built_panel" "$panel_binary"
 say "Installed binary:  $panel_binary"
 
-# Keep and scheduled Tasks share this optional browser helper. Desktop
+# Google Keep uses this optional browser helper. Task sync uses Google APIs. Desktop
 # launchers do not inherit a shell's PATH or the checkout's working directory.
-bridge=$repo_root/tools/tasks-bridge/tasks-bridge
+bridge=$repo_root/tools/keep-bridge/keep-bridge
 if [ -x "$bridge" ]; then
-    install -m 0755 "$bridge" "$bin_dir/tasks-bridge"
-    say "Installed helper:  $bin_dir/tasks-bridge"
+    install -m 0755 "$bridge" "$bin_dir/keep-bridge"
+    # Retire the helper name used by earlier installations.
+    rm -f "$bin_dir/tasks-bridge"
+    say "Installed helper:  $bin_dir/keep-bridge"
 else
-    say "Browser helper is not built. Google Keep and task times require it."
-    say "Run 'deno task compile' in tools/tasks-bridge, then rerun this installer."
+    say "Browser helper is not built. Google Keep requires it; task sync does not."
+    say "Run 'deno task compile' in tools/keep-bridge, then rerun this installer."
 fi
 
 # --- Install the desktop entry and icon ------------------------------------
@@ -186,8 +188,10 @@ if [ "$enable" -eq 1 ]; then
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload
         systemctl --user enable --now timetracker.service
-        systemctl --user enable --now timetracker-panel.service
-        say "Enabled and started: timetracker.service, timetracker-panel.service"
+        systemctl --user enable timetracker-panel.service
+        systemctl --user restart timetracker-panel.service
+        say "Enabled and started: timetracker.service"
+        say "Enabled and restarted: timetracker-panel.service"
     else
         say "systemctl not found; enable the units yourself with:"
         say "  systemctl --user enable --now timetracker.service timetracker-panel.service"

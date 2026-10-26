@@ -30,7 +30,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         let done = tasks.iter().filter(|e| e.completed).count();
         let planned: u64 = tasks
             .iter()
-            .map(|e| u64::from(tb::metadata(&e.details.description).minutes))
+            .map(|e| u64::from(tb::metadata(e).minutes))
             .sum();
         let header = column![
             row![
@@ -182,7 +182,7 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
     let slots: Vec<f32> = tasks
         .iter()
         .map(|e| {
-            let minutes = tb::metadata(&e.details.description).minutes;
+            let minutes = tb::metadata(e).minutes;
             if minutes == 0 {
                 15.0 * 60.0
             } else {
@@ -263,7 +263,7 @@ fn task_card<'a>(
     let log = &state.config.task_work;
     let running = log.running(&key);
     let seconds = log.seconds(&key, now);
-    let minutes = tb::metadata(&task.details.description).minutes;
+    let minutes = tb::metadata(task).minutes;
     let overtime = minutes > 0 && seconds > u64::from(minutes) * 60;
     let busy = state.timeblocking.busy.contains(&task.id);
     let mut completion = button(
@@ -323,7 +323,8 @@ fn task_card<'a>(
     let mut details = column![
         heading,
         row![clock, Space::new().width(Fill)].align_y(iced::Center),
-        estimate
+        estimate,
+        super::timeblocking::estimate_button(state, task, 12.0)
     ]
     .spacing(4);
     if !task.completed {

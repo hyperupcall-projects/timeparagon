@@ -49,6 +49,7 @@ const NEAR_EVENT_START: i64 = 10;
 pub enum Screen {
     Calendar,
     Backlog,
+    Projects,
     /// The notepad: a page of free text kept between sessions.
     Notepad,
     KeepNotes,
@@ -150,6 +151,8 @@ pub struct State {
     /// Set while a config write is already queued, so a slider drag does not
     /// schedule one save per pixel.
     save_queued: bool,
+    /// Last disk snapshot, including our own writes, to ignore save echoes.
+    disk_config: Config,
 
     /// The notepad's text as the editor widget holds it.
     ///
@@ -176,12 +179,6 @@ pub enum Message {
     DurationAdjusted(i64),
     /// Clear the target so the clock counts up without an alarm.
     TargetCleared,
-    /// The "what am I doing" line beside the clock was edited, or filled in
-    /// from one of the upcoming items in the timer view.
-    CurrentTaskChanged(String),
-    /// An upcoming item was picked: it becomes the current task, and the clock
-    /// is armed with how long it is meant to take (when it has a length).
-    CurrentTaskPicked(String, Option<Duration>),
 
     /// The notepad was edited.
     NotepadEdited(text_editor::Action),
@@ -200,7 +197,6 @@ pub enum Message {
     KeepSignedIn(Result<(), String>),
     KeepQueryChanged(String),
     KeepLabelChanged(Option<String>),
-    KeepTextToggled(String),
     KeepScopeChanged(crate::keep::Scope),
     KeepEdit(String),
     Dismiss,
@@ -236,6 +232,7 @@ pub enum Message {
     NotificationPosted(Result<(), String>),
     ConfigSaved(Result<(), String>),
     SaveRequested,
+    ConfigReloaded(Config),
     TracksSaved(Result<(), String>),
     /// Rewrite the track the running timer has open, so a crash cannot lose
     /// more than the time since the last write.
@@ -410,6 +407,7 @@ impl State {
             panel_shortcut_busy: false,
             panel_shortcut_result: None,
             save_queued: false,
+            disk_config: config.clone(),
             catalog,
             config,
             notepad,
@@ -417,11 +415,6 @@ impl State {
             calendar: calendar::Store::new(day_end_hour),
             timeblocking: crate::timeblocking::Workspace::default(),
         }
-    }
-
-    /// The free-text label for the running timer.
-    pub fn current_task(&self) -> &str {
-        &self.config.timer.current_task
     }
 
     /// Replaces the notepad's text, as if it had been typed.
@@ -544,6 +537,7 @@ fn boot_state() -> State {
     // is deliberately not part of `State::new`: a state built by hand in a
     // test must not read or rewrite the user's cache.
     state.calendar.cache_days_in(config::cache_days_dir());
+    state.keep.cache_in(config::cache_keep_path());
 
     // The same goes for the time tracks: the file is the user's own, so only
     // a real boot is allowed to pick it up.
@@ -637,24 +631,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([queue_save(state), sync_tracks(state)])
         }
 
-        Message::CurrentTaskChanged(task) => {
-            set_current_task(state, task);
-            queue_save(state)
-        }
-
-        Message::CurrentTaskPicked(task, span) => {
-            set_current_task(state, task);
-
-            // An all-day entry has no length of its own, so it only names the
-            // task and leaves the target as it was.
-            if let Some(span) = span {
-                state.timer.set_target(Some(span));
-                state.config.timer.last_duration_secs = span.as_secs();
-            }
-
-            Task::batch([queue_save(state), sync_tracks(state)])
-        }
-
         Message::NotepadEdited(action) => {
             state.notepad.perform(action);
 
@@ -737,10 +713,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::KeepQueryChanged(query) => { state.keep.query = query; Task::none() }
         Message::KeepLabelChanged(label) => { state.keep.label = label; Task::none() }
-        Message::KeepTextToggled(id) => {
-            if !state.keep.text_view.remove(&id) { state.keep.text_view.insert(id); }
-            Task::none()
-        }
         Message::KeepScopeChanged(scope) => { state.keep.scope = scope; Task::none() }
         Message::KeepEdit(url) => {
             if url.starts_with("https://keep.google.com/") {
@@ -923,8 +895,65 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::SaveRequested => {
+        Message::ConfigReloaded(config) => {
+            if config == state.disk_config {
+                return Task::none();
+            }
+            state.disk_config = config.clone();
+            if config == state.config {
+                return Task::none();
+            }
+            let previous = std::mem::replace(&mut state.config, config);
+            // An external edit wins over a save that has not started yet.
             state.save_queued = false;
+            if previous.notepad.text != state.config.notepad.text {
+                state.notepad = text_editor::Content::with_text(&state.config.notepad.text);
+            }
+            if previous.timer.last_duration_secs != state.config.timer.last_duration_secs {
+                state.timer.set_target(state.config.timer.last_duration());
+            }
+            state.audio.set_gain(state.config.alarm.sound.gain());
+            state.calendar.apply_task_colors(&state.config.calendar);
+            if previous.calendar.day_start_hour() != state.config.calendar.day_start_hour() {
+                let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+                state.calendar.set_day(day, day);
+                state.calendar.forget_cached_days();
+            }
+            let mut tasks = Vec::new();
+            if state.sidebar.is_none() {
+                if let Some(id) = state.main_window {
+                    if previous.window.always_on_top != state.config.window.always_on_top {
+                        tasks.push(window::set_level(id, level(state.config.window.always_on_top)));
+                    }
+                    if previous.window.width != state.config.window.width
+                        || previous.window.height != state.config.window.height
+                    {
+                        let extra = if state.timeblocking.original_width.is_some() {
+                            state.timeblocking.original_width = Some(state.config.window.width);
+                            400.0
+                        } else {
+                            0.0
+                        };
+                        tasks.push(window::resize(
+                            id,
+                            Size::new(state.config.window.width + extra, state.config.window.height),
+                        ));
+                    }
+                }
+            }
+            if previous.calendar != state.config.calendar {
+                tasks.push(sync_calendar(state));
+            }
+            log::info!("reloaded config from disk");
+            Task::batch(tasks)
+        }
+
+        Message::SaveRequested => {
+            if !state.save_queued {
+                return Task::none();
+            }
+            state.save_queued = false;
+            state.disk_config = state.config.clone();
             let config = state.config.clone();
 
             blocking::run(move || config.save().map_err(|error| error.to_string()))
@@ -1113,7 +1142,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             Task::done(Message::CalendarSynced(result))
         }
-        Message::CalendarSynced(Ok(snapshot)) => {
+        Message::CalendarSynced(Ok(mut snapshot)) => {
             // The user may have stepped to another day while this was in
             // flight. The events are for the day they left, so drop them and
             // fetch the day now in view rather than snapping the view back.
@@ -1122,6 +1151,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 return sync_calendar(state);
             }
 
+            if let Some(notice) = state.timeblocking.sync_notice.take() {
+                snapshot.notice = Some(match snapshot.notice.take() {
+                    Some(existing) => format!("{notice}\n{existing}"),
+                    None => notice,
+                });
+            }
             state.calendar.apply_snapshot(snapshot);
             state.calendar.apply_task_colors(&state.config.calendar);
             // Completing a task in another Google client also ends its work session.
@@ -1165,8 +1200,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                     return crate::timeblocking::open(state, id);
                 }
                 if event.is_task() {
-                    state.timeblocking.estimate = crate::timeblocking::metadata(&event.details.description).minutes.to_string();
                     state.timeblocking.date = if event.start.date_naive() == crate::timeblocking::UNDATED { state.calendar.day.to_string() } else { event.start.date_naive().to_string() };
+                    state.timeblocking.deadline = event.details.description.lines().next()
+                        .and_then(|line| line.strip_prefix("DUE:")).unwrap_or("").trim().to_owned();
+                    state.timeblocking.start_time = if event.all_day { "09:00".into() } else { calendar::clock_label(event.start) };
+                    state.timeblocking.end_time = if event.all_day { "09:30".into() } else { calendar::clock_label(event.end) };
                 }
             }
             state.calendar.open_event = Some(id);
@@ -1188,8 +1226,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventTimeChanged { id, start, end } => {
-            // Tasks are Google Tasks, not calendar events, and have no time to
-            // move. The grid does not offer the drag, but guard the write too.
+            if state.calendar.event(&id).is_some_and(|event| event.is_task()) {
+                return crate::timeblocking::update(state, crate::timeblocking::Action::Schedule(id, start, end));
+            }
             let Some(calendar_id) = state
                 .calendar
                 .event(&id)
@@ -1225,7 +1264,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventTimeSaved(id, Ok(())) => {
             state.calendar.confirm_time_change(&id);
-            Task::none()
+            crate::timeblocking::update(state, crate::timeblocking::Action::RefreshBlock(id))
         }
 
         Message::EventTimeSaved(id, Err(error)) => {
@@ -1316,7 +1355,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskDeleteConfirmed(id) => {
-            if state.timeblocking.busy.contains(&id) { return Task::none(); }
+            if !state.timeblocking.busy.is_empty() { return Task::none(); }
             state.timeblocking.revision += 1;
             let Some(calendar_id) = state
                 .calendar
@@ -1363,16 +1402,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskToggled(id) => {
-            if state.timeblocking.busy.contains(&id) { return Task::none(); }
+            if !state.timeblocking.busy.is_empty() { return Task::none(); }
             state.timeblocking.revision += 1;
-            let Some((calendar_id, previous)) = state
-                .calendar
-                .event(&id)
-                .filter(|event| event.is_task())
-                .map(|event| (event.calendar_id.clone(), event.completed))
-            else {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()).cloned() else {
                 return Task::none();
             };
+            let previous = task.completed;
 
             // Update the chip straight away, then put it back if Google
             // refuses the write.
@@ -1389,17 +1424,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
-            let request_id = id.clone();
             state.calendar.error = None;
 
             blocking::run(move || {
-                calendar::set_task_completed(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                    completed,
-                )
+                calendar::set_linked_task_completed(&client_id, &client_secret, &task, completed)
             })
             .map(move |result| Message::TaskCompletionSaved(id.clone(), previous, result))
         }
@@ -1408,7 +1436,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.timeblocking.busy.remove(&id);
             state.timeblocking.revision += 1;
             state.calendar.invalidate_other_days();
-            Task::none()
+            Task::done(Message::CalendarSyncRequested)
         },
 
         Message::TaskCompletionSaved(id, previous, Err(error)) => {
@@ -1831,6 +1859,7 @@ pub fn title(state: &State, window: window::Id) -> String {
 
 pub fn subscription(state: &State) -> Subscription<Message> {
     let mut subscriptions = vec![
+        config::watch().map(Message::ConfigReloaded),
         window::close_events().map(Message::WindowClosed),
         window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
         keyboard::listen().map(map_key),
@@ -1919,6 +1948,12 @@ fn key_message(
 ) -> Option<Message> {
     use keyboard::key::Named;
 
+    if state.timeblocking.estimate_task.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(crate::timeblocking::Action::CloseEstimate)),
+            _ => None,
+        };
+    }
     if state.timeblocking.focus.is_some() {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(crate::timeblocking::Action::CloseView)),
@@ -2063,16 +2098,6 @@ fn dismiss(state: &mut State) -> Task<Message> {
     }
 }
 
-/// Points the clock at a new task.
-///
-/// When the scratchpad has a current item, the text lands there, so the line
-/// beside the clock edits the step being worked on. With no scratchpad it goes
-/// to the free-text task, which is the behaviour the line had before there were
-/// any todos.
-fn set_current_task(state: &mut State, task: String) {
-    state.config.timer.current_task = task;
-}
-
 /// Marks the config dirty.
 ///
 /// Dragging a slider produces a message per pixel; without the debounce that
@@ -2165,8 +2190,9 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     let day_end_hour = state.config.calendar.day_start_hour();
 
     let revision = state.timeblocking.revision;
+    let tasks_calendar = state.config.calendar.tasks_calendar.clone();
     blocking::run(move || {
-        calendar::sync_day(&client_id, &client_secret, &disabled, day, day_end_hour)
+        calendar::sync_day(&client_id, &client_secret, &disabled, day, day_end_hour, tasks_calendar.as_deref())
     })
     .map(move |result| Message::CalendarSyncedAt(revision, result))
 }
@@ -2226,6 +2252,33 @@ mod tests {
             started: Instant::now(),
             settings,
         }
+    }
+
+    #[test]
+    fn external_config_updates_live_state_and_cancels_pending_save() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.save_queued = true;
+        let mut external = state.config.clone();
+        external.notepad.text = "edited outside the app".into();
+        external.appearance.theme = "Ocean".into();
+        external.timer.last_duration_secs = 900;
+        external.calendar.day_end_hour = 3;
+        let _ = update(&mut state, Message::ConfigReloaded(external.clone()));
+        assert_eq!(state.config, external);
+        assert_eq!(state.notepad.text(), "edited outside the app");
+        assert_eq!(state.timer.target(), Some(Duration::from_secs(900)));
+        assert!(!state.save_queued);
+    }
+
+    #[test]
+    fn own_save_echo_does_not_undo_newer_unsaved_edits() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let saved = state.disk_config.clone();
+        state.config.notepad.text = "new unsaved text".into();
+        state.save_queued = true;
+        let _ = update(&mut state, Message::ConfigReloaded(saved));
+        assert_eq!(state.config.notepad.text, "new unsaved text");
+        assert!(state.save_queued);
     }
 
     #[test]
@@ -2310,49 +2363,6 @@ mod tests {
 
         assert!(!state.config.calendar.show_tasks);
         assert!(state.save_queued);
-    }
-
-    #[test]
-    fn editing_the_current_task_is_remembered() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        assert!(state.config.timer.current_task.is_empty());
-
-        let _ = update(
-            &mut state,
-            Message::CurrentTaskChanged("Write the report".into()),
-        );
-
-        assert_eq!(state.config.timer.current_task, "Write the report");
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn picking_an_upcoming_item_names_it_and_arms_the_clock() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let _ = update(
-            &mut state,
-            Message::CurrentTaskPicked("Standup".into(), Some(Duration::from_secs(30 * 60))),
-        );
-
-        assert_eq!(state.config.timer.current_task, "Standup");
-        assert_eq!(state.timer.target(), Some(Duration::from_secs(30 * 60)));
-        assert_eq!(state.config.timer.last_duration_secs, 30 * 60);
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn picking_an_all_day_item_leaves_the_target_alone() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let before = state.timer.target();
-
-        let _ = update(
-            &mut state,
-            Message::CurrentTaskPicked("Team offsite".into(), None),
-        );
-
-        assert_eq!(state.config.timer.current_task, "Team offsite");
-        assert_eq!(state.timer.target(), before);
     }
 
     #[test]
@@ -2861,7 +2871,7 @@ mod tests {
     }
 
     #[test]
-    fn a_task_cannot_be_dragged() {
+    fn a_task_time_change_uses_task_scheduling_instead_of_a_calendar_event_write() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
 
@@ -2882,8 +2892,18 @@ mod tests {
         );
 
         assert!(state.calendar.pending_time("task:deep").is_none());
+        assert!(state.timeblocking.busy.contains("task:deep"));
         assert_ne!(state.calendar.event("task:deep").unwrap().start, start);
     }
+    #[test]
+    fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.timeblocking.focus = Some("standup".into());
+        state.timeblocking.estimate_task = Some("task:deep".into());
+        assert!(key_message(&mut state, Key::Named(keyboard::key::Named::Space), keyboard::Modifiers::default()).is_none());
+        assert!(matches!(key_message(&mut state, Key::Named(keyboard::key::Named::Escape), keyboard::Modifiers::default()), Some(Message::TimeBlocking(crate::timeblocking::Action::CloseEstimate))));
+    }
+
     #[test]
     fn keep_search_does_not_trigger_timer_shortcuts() {
         let mut state = State::new(Config::default(), Catalog::built_in());
@@ -2913,5 +2933,6 @@ fn refresh_keep(state: &mut State) -> Task<Message> {
     }
     state.keep.loading = true;
     state.keep.error = None;
-    blocking::run(crate::keep::fetch).map(Message::KeepLoaded)
+    let cache_path = state.keep.cache_path();
+    blocking::run(move || crate::keep::fetch(cache_path)).map(Message::KeepLoaded)
 }

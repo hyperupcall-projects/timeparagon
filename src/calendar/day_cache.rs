@@ -100,10 +100,29 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
 
     match serde_json::from_slice::<SavedMonth>(&bytes) {
         Ok(saved) => {
+            let database = crate::config::project_dirs()
+                .map(|dirs| dirs.data_local_dir().join("tasks.sqlite3"))
+                .filter(|path| path.exists())
+                .and_then(|path| crate::task_db::Database::open(&path).map_err(|e| log::warn!("Cannot load local task data: {e}")).ok());
             let events: Vec<Event> = saved
                 .events
                 .into_iter()
                 .map(Event::from)
+                .map(|mut event| {
+                    if event.is_task() {
+                        if let Some(database) = &database {
+                            match database.lookup(&event) {
+                                Ok(Some(data)) => {
+                                    event.details.task_data = Some(data);
+                                    event.details.description = crate::timeblocking::description(&event.details.description);
+                                }
+                                Err(error) => log::warn!("Cannot load local task data: {error}"),
+                                _ => {}
+                            }
+                        }
+                    }
+                    event
+                })
                 .filter(|event| day_at(event.start, day_end_hour) == day)
                 .collect();
             Some(events)

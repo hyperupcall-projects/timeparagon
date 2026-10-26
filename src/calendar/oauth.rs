@@ -24,7 +24,7 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // the day grid can drag an event's time. Tasks is read/write so the details
 // card can tick a task off. A token minted before events were writable lacks
 // the `calendar.events` scope, so a write is refused until the user reconnects.
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks";
+const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks";
 
 /// How long we wait for the browser to come back with a code.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(180);

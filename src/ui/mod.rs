@@ -15,6 +15,7 @@ pub mod keep;
 pub mod settings;
 pub mod timeblocking;
 mod timeblocking_focus;
+mod task_drag;
 
 use std::time::Duration;
 
@@ -51,77 +52,81 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &metrics),
-            (Screen::Calendar, _) if state.timeblocking.block.is_some() => row![
-                container(calendar::view(state, &metrics)).width(Fill),
-                container(timeblocking::panel(state, &metrics)).width(400),
-            ].into(),
-            (Screen::Calendar, _) => calendar::view(state, &metrics),
+            (Screen::Projects, _) => container(iced::widget::Space::new())
+                .width(Fill)
+                .height(Fill)
+                .into(),
+            (Screen::Calendar, _) => {
+                // Keep the calendar at the same place in the widget tree when
+                // the block editor opens or closes, preserving its scroll state.
+                let mut content = row![container(calendar::view(state, &metrics)).width(Fill)];
+                if state.timeblocking.block.is_some() {
+                    content = content.push(container(timeblocking::panel(state, &metrics)).width(400));
+                }
+                content.into()
+            }
         };
 
         // The tabs are the window's navigation, so they sit above whatever is
         // on show rather than inside it.
         let base = column![tabs(state, &metrics), content].width(Fill).height(Fill);
+        // Adding/removing a wrapper resets the state of all its descendants.
+        // Keep one stack with the calendar first, and append active dialogs.
+        let mut layers = vec![base.into()];
         if state.timeblocking.focus.is_some() {
-            iced::widget::stack![base, timeblocking::focus_overlay(state, &metrics)].into()
-        } else { base.into() }
+            layers.push(timeblocking::focus_overlay(state, &metrics));
+        }
+        if state.timeblocking.estimate_task.is_some() {
+            layers.push(timeblocking::estimate_overlay(state, &metrics));
+        }
+        iced::widget::stack(layers).into()
     })
     .into()
 }
 
-/// The tabs along the top of the window: notepad, calendar, backlog,
-/// settings, and Google Keep.
-///
-/// Each tab is lit when its page is on show.
+/// Navigation grouped by purpose, with Settings replacing the main view.
+/// Narrow windows stack the tabs within each group to keep full names visible.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let settings = matches!(state.screen, Screen::Settings | Screen::TimerSettings);
-    let notepad = state.screen == Screen::Notepad;
-    let (notepad_name, calendar_name, settings_name) = tab_names(metrics);
+    let settings_active = matches!(state.screen, Screen::Settings | Screen::TimerSettings);
+    let spacing = if metrics.size.width < 720.0 { 2.0 } else { metrics.spacing };
+    let calendar = tab("Calendar", state.screen == Screen::Calendar, Screen::Calendar, metrics);
+    let backlog = tab("Backlog", state.screen == Screen::Backlog, Screen::Backlog, metrics);
+    let projects = tab("Projects", state.screen == Screen::Projects, Screen::Projects, metrics);
+    let notepad = tab("Notepad", state.screen == Screen::Notepad, Screen::Notepad, metrics);
+    let keep = tab("Keep", state.screen == Screen::KeepNotes, Screen::KeepNotes, metrics);
+    let settings = tab("Settings", settings_active, Screen::Settings, metrics);
 
-    // Compact tabs share one row to preserve the day grid's height in a
-    // 240px window. Full labels wrap onto two rows at normal widths.
-    let spacing = if metrics.breakpoint.is_compact() { 2.0 } else { metrics.spacing };
-    let navigation = row![
-        tab(notepad_name, notepad, Screen::Notepad, metrics),
-        tab(calendar_name, state.screen == Screen::Calendar, Screen::Calendar, metrics),
-        tab(if metrics.breakpoint.is_compact() { "Back" } else { "Backlog" }, state.screen == Screen::Backlog, Screen::Backlog, metrics),
-    ]
-    .spacing(spacing)
-    .align_y(Center);
-    let settings = tab(settings_name, settings, Screen::Settings, metrics);
-    let keep = tab(
-        if metrics.breakpoint.is_compact() { "Keep" } else { "Keep Notes" },
-        state.screen == Screen::KeepNotes,
-        Screen::KeepNotes,
-        metrics,
-    );
-    let navigation: Element<'a, Message> =
-        if !metrics.breakpoint.is_compact() && metrics.size.width < 420.0 {
-            column![navigation, row![settings, keep].spacing(metrics.spacing)]
-                .spacing(metrics.spacing)
-                .into()
+    let (left, middle, right): (Element<'a, Message>, Element<'a, Message>, Element<'a, Message>) =
+        if metrics.size.width < 720.0 {
+            (
+                column![calendar, backlog].spacing(spacing).into(),
+                column![notepad, keep].spacing(spacing).align_x(Center).into(),
+                column![settings, projects].spacing(spacing).align_x(iced::Right).into(),
+            )
         } else {
-            navigation.push(settings).push(keep).into()
+            (
+                row![calendar, backlog, projects].spacing(spacing).into(),
+                row![notepad, keep].spacing(spacing).into(),
+                settings,
+            )
         };
-    container(navigation)
-        .padding(Padding {
-            left: metrics.padding,
-            right: metrics.padding,
-            top: 0.0,
-            bottom: 0.0,
-        })
-        .width(Fill)
-        .into()
-}
 
-/// The names on the main tabs.
-///
-/// The compact layout uses shorter names to keep navigation reachable.
-fn tab_names(metrics: &Metrics) -> (&'static str, &'static str, &'static str) {
-    if metrics.breakpoint.is_compact() {
-        ("Notes", "Cal", "Setup")
-    } else {
-        ("Notepad", "Calendar", "Settings")
-    }
+    container(
+        row![
+            container(left).width(Fill).align_left(Fill),
+            container(middle).width(Fill).center_x(Fill),
+            container(right).width(Fill).align_right(Fill),
+        ]
+        .spacing(spacing),
+    )
+    .padding(Padding {
+        left: metrics.padding,
+        right: metrics.padding,
+        top: 0.0,
+        bottom: 0.0,
+    })
+    .width(Fill)
+    .into()
 }
 
 /// One tab, lit when it is the page on show.
@@ -132,8 +137,8 @@ fn tab<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     button(text(label).size(metrics.label()).center())
-        .height(metrics.icon_button())
-        .padding(if metrics.breakpoint.is_compact() { 2.0 } else { 5.0 })
+        .height(if metrics.breakpoint.is_compact() { 16.0 } else { metrics.icon_button() })
+        .padding(if metrics.breakpoint.is_compact() { Padding::from([0.0, 2.0]) } else { Padding::from(5.0) })
         .on_press(Message::ScreenSelected(screen))
         .style(if active {
             button::primary

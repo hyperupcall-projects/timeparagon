@@ -1,0 +1,19 @@
+{
+  "name": "keep-bridge",
+  "version": "0.1.0",
+  "exports": "./main.ts",
+  "nodeModulesDir": "auto",
+  "compilerOptions": {
+    "lib": [
+      "deno.ns",
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ]
+  },
+  "tasks": {
+    "compile": "deno compile --allow-all --output keep-bridge main.ts",
+    "keep-fetch": "deno run --allow-all main.ts keep-fetch",
+    "keep-signin": "deno run --allow-all main.ts keep-signin"
+  }
+}

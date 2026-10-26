@@ -5,21 +5,16 @@
 //! controls, which is what keeps reordering and indenting a one-tap affair
 //! rather than a mode to enter.
 
-use chrono::Local;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Center, Element, Fill, Length, Padding};
 
 use crate::app::{Message, Screen, State};
-use crate::calendar;
 use crate::todos::Todo;
 
 use super::layout::Metrics;
 
 /// How far one indent level pushes an item in.
 const INDENT_STEP: f32 = 14.0;
-
-/// How many upcoming items the todo view offers as one-tap answers.
-const UPCOMING_LIMIT: usize = 4;
 
 /// The id of the text field for the item at this index.
 ///
@@ -51,7 +46,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
 
     body = body.push(add_button(metrics));
-    body = body.push(coming_up(state, metrics));
 
     // The way back sits at the foot of the page, the same place the clock puts
     // its own, so leaving either view is always the same gesture.
@@ -73,49 +67,6 @@ fn go_back_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
         .on_press(Message::ScreenSelected(Screen::Calendar))
         .style(button::secondary)
         .into()
-}
-
-/// The next few things on the calendar, offered as one-tap answers to "what am
-/// I doing". Tapping one fills the current todo in, where it can still be
-/// edited.
-fn coming_up<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let items = calendar::upcoming(
-        state.calendar.visible_events(&state.config.calendar),
-        Local::now(),
-        UPCOMING_LIMIT,
-    );
-
-    if items.is_empty() {
-        return text("").size(1.0).into();
-    }
-
-    let mut list = column![text("Coming up").size(metrics.label()).style(text::secondary)]
-        .spacing(2.0)
-        .width(Fill);
-
-    for event in items {
-        let label = if event.all_day {
-            event.title.clone()
-        } else {
-            format!("{}  {}", calendar::clock_label(event.start), event.title)
-        };
-
-        // An all-day entry has no length to arm the clock with, so it only
-        // names the task.
-        let span = (event.end - event.start)
-            .to_std()
-            .ok()
-            .filter(|span| !span.is_zero());
-
-        list = list.push(
-            button(text(label).size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::CurrentTaskPicked(event.title.clone(), span))
-                .style(button::secondary),
-        );
-    }
-
-    list.into()
 }
 
 /// One item: the marker that makes it current, its text, and the controls that

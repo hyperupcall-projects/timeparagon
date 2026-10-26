@@ -25,12 +25,18 @@ packaging/install.sh --no-enable  # install the unit but do not start it
 packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 ```
 
-For Google Task times, compile the optional helper first with `deno task compile`
-in `tools/tasks-bridge`. The installer copies the compiled `tasks-bridge` beside
-TimeTracker and warns if it has not been built. Sign into its dedicated profile
-with `~/.local/bin/tasks-bridge signin`, close the Chrome window, then verify with
-`~/.local/bin/timetracker --check-task-times` (adjust paths for `--prefix`).
+The installer restarts `timetracker-panel.service` so updates take effect
+immediately, unless `--no-enable` is passed.
 
+Google Tasks and Calendar sync use the public Google APIs and require no
+browser helper. In Settings, choose a calendar for scheduled task events and
+a Google Tasks list for scheduled tasks, or let the first scheduling operation
+create/reuse **Tasks** and **Has Time**. Reconnect Google once to authorize
+calendar creation. Task deadlines are stored on the first description line as
+`DUE: YYYY-MM-DD`; moving a time block preserves that deadline. Completing a
+task retains its Calendar event and work history.
+
+Google Keep still uses the optional helper described below.
 To remove it again:
 
 ```sh
@@ -132,9 +138,9 @@ cargo run --release --bin timetracker-panel
 
 ## Google Keep browser helper
 
-Build `tools/tasks-bridge` with `deno task compile` before installing to include
-Google Keep and scheduled Tasks support. The installer copies the compiled
-`tasks-bridge` alongside the application; the uninstaller removes it. The app
+Build `tools/keep-bridge` with `deno task compile` before installing to include
+Google Keep support. The installer copies the compiled
+`keep-bridge` alongside the application; the uninstaller removes it. The app
 reuses the dedicated Google browser profile. See
-[the helper README](../tools/tasks-bridge/README.md#google-keep) for sign-in,
+[the helper README](../tools/keep-bridge/README.md#google-keep) for sign-in,
 runtime permissions, and the read-only Keep integration.

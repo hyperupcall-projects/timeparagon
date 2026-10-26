@@ -1,6 +1,11 @@
 //! Read-only Google Keep snapshots, obtained through the shared browser helper.
 use base64::Engine;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+
+mod cache;
+mod metadata;
+pub use metadata::Metadata;
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Snapshot {
@@ -25,7 +30,27 @@ pub struct Note {
     pub archived: bool,
     pub checklist: Vec<Item>,
     pub metadata: Vec<String>,
+    pub details: Metadata,
+    pub body: Vec<TextRun>,
 }
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct TextRun {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+}
+
+impl Note {
+    pub fn parsed_metadata(&self) -> Metadata {
+        let mut details = self.details.clone();
+        details.parse(&self.metadata, &self.labels);
+        details
+    }
+}
+
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Item {
     pub text: String,
@@ -46,10 +71,22 @@ pub struct Store {
     pub error: Option<String>,
     pub query: String,
     pub label: Option<String>,
-    pub text_view: std::collections::HashSet<String>,
     pub scope: Scope,
+    cache_path: Option<PathBuf>,
 }
 impl Store {
+    /// Only real app startup opts into disk access; test stores stay isolated.
+    pub fn cache_in(&mut self, path: Option<PathBuf>) {
+        self.cache_path = path;
+        if let Some(snapshot) = self.cache_path.as_deref().and_then(cache::load) {
+            self.snapshot = snapshot;
+        }
+    }
+
+    pub fn cache_path(&self) -> Option<PathBuf> {
+        self.cache_path.clone()
+    }
+
     pub fn visible(&self) -> Vec<&Note> {
         let mut notes: Vec<_> = self
             .snapshot
@@ -151,9 +188,13 @@ fn edit_distance(a: &str, b: &str) -> usize {
     }
     d[a.len()][b.len()]
 }
-pub fn fetch() -> Result<Snapshot, String> {
+pub fn fetch(cache_path: Option<PathBuf>) -> Result<Snapshot, String> {
     let bytes = run("keep-fetch")?;
-    let mut snapshot: Snapshot = serde_json::from_slice(&bytes)
+    cache::accept(&bytes, cache_path.as_deref())
+}
+
+fn decode(bytes: &[u8]) -> Result<Snapshot, String> {
+    let mut snapshot: Snapshot = serde_json::from_slice(bytes)
         .map_err(|e| format!("Keep returned an invalid snapshot: {e}"))?;
     for note in &mut snapshot.notes {
         if let Some(preview) = note.preview.take() {
@@ -169,9 +210,10 @@ pub fn signin() -> Result<(), String> {
     run("keep-signin").map(|_| ())
 }
 fn run(subcommand: &str) -> Result<Vec<u8>, String> {
-    for path in crate::calendar::bridge::helper_candidates() {
+    for path in helper_candidates() {
         match Command::new(&path)
             .arg(subcommand)
+            .env_remove("KEEP_BRIDGE_HEADED")
             .env_remove("TASKS_BRIDGE_HEADED")
             .stdin(Stdio::null())
             .output()
@@ -180,19 +222,57 @@ fn run(subcommand: &str) -> Result<Vec<u8>, String> {
             Ok(output) => {
                 let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
                 return Err(if detail.contains("Unknown command") {
-                    "The Google browser helper needs rebuilding: run deno task compile in tools/tasks-bridge.".into()
+                    "The Google Keep helper needs rebuilding: run deno task compile in tools/keep-bridge.".into()
                 } else if detail.is_empty() {
-                    format!("The Google browser helper exited with {}", output.status)
+                    format!("The Google Keep helper exited with {}", output.status)
                 } else {
                     detail
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("Could not launch the Google browser helper: {e}")),
+            Err(e) => return Err(format!("Could not launch the Google Keep helper: {e}")),
         }
     }
-    Err("Google browser helper is missing. Build it with `deno task compile` in tools/tasks-bridge, then reconnect.".into())
+    Err("Google Keep helper is missing. Build it with `deno task compile` in tools/keep-bridge, then reconnect.".into())
 }
+fn helper_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(path) = std::env::var_os("TIMETRACKER_KEEP_BRIDGE")
+        .or_else(|| std::env::var_os("TIMETRACKER_TASKS_BRIDGE")) {
+        return vec![PathBuf::from(path)];
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(PathBuf::from);
+
+        // Installed: beside the application binary.
+        if let Some(dir) = &dir {
+            candidates.push(dir.join("keep-bridge"));
+        }
+
+        // Run from a checkout: the app is `<crate>/target/{debug,release}/app`
+        // and a test binary is `<crate>/target/debug/deps/test`, so walk up a
+        // few levels. This keeps discovery independent of the working
+        // directory, which a launcher or IDE does not set to the crate root.
+        for _ in 0..3 {
+            dir = dir.and_then(|parent| parent.parent().map(PathBuf::from));
+            if let Some(dir) = &dir {
+                candidates.push(dir.join("tools/keep-bridge/keep-bridge"));
+            }
+        }
+    }
+
+    // Running with the crate root as the working directory.
+    candidates.push(PathBuf::from("tools/keep-bridge/keep-bridge"));
+
+    // Last resort: anything named `keep-bridge` on PATH.
+    candidates.push(PathBuf::from("keep-bridge"));
+
+    candidates
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

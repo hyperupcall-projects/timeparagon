@@ -249,12 +249,6 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .on_press(message)
         .style(style);
 
-    let caption = "Working on:";
-    let input = text_input("what are you doing?", state.current_task())
-        .on_input(Message::CurrentTaskChanged)
-        .size(metrics.label())
-        .width(Fill);
-
     // Each button sits at the end of the line it belongs to, so the "of 30:00"
     // tucks in beside the count-up to leave the clock button room.
     let status = row![
@@ -266,22 +260,14 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
 
-    let task = row![text(caption).size(metrics.label()), input]
-        .spacing(metrics.spacing)
-        .align_y(Alignment::Center);
-
-    let mut body = column![status, task].spacing(metrics.spacing);
-    if let Some(links) = super::links::for_editor(state.current_task(), metrics.label()) {
-        body = body.push(links);
-    }
-    body.into()
+    status.into()
 }
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut events: Vec<_> = state.calendar.all_day_events(&state.config.calendar).collect();
-    events.sort_by_key(|e| (!crate::timeblocking::overdue(e), crate::timeblocking::metadata(&e.details.description).order));
+    events.sort_by_key(|e| (!crate::timeblocking::overdue(e), crate::timeblocking::metadata(e).order));
     let chips: Vec<Element<'a, Message>> = events.into_iter()
-        .filter(|event| !event.is_task() || crate::timeblocking::metadata(&event.details.description).block.as_ref().is_none_or(|key| !state.calendar.events.iter().any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)) || crate::timeblocking::overdue(event))
+        .filter(|event| !event.is_task() || crate::timeblocking::metadata(event).block.as_ref().is_none_or(|key| !state.calendar.events.iter().any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)) || crate::timeblocking::overdue(event))
         .map(|event| if event.is_task() { super::timeblocking::task_row(state, event, metrics, false) } else { all_day_chip(event, metrics) })
         .collect();
 
@@ -457,20 +443,18 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         .zip(packed.iter())
         .map(|((event, span), slot)| Block {
             id: event.id.clone(),
-            title: event.title.clone(),
+            title: if event.is_task() && event.completed { format!("✓ {}", event.title) } else { event.title.clone() },
             when: calendar::event_time_label(event),
             start_min: span.start_min,
             end_min: span.end_min,
             column: slot.column,
             columns: slot.columns,
             color: event.color,
-            // A Google Task has no time to move, and an event whose time is
-            // already being written cannot be dragged again until it lands.
-            editable: !event.is_task(),
-            pending: state.calendar.pending_time(&event.id).is_some(),
+            editable: !event.is_task() || event.details.scheduled.is_some(),
+            pending: state.calendar.pending_time(&event.id).is_some() || state.timeblocking.busy.contains(&event.id),
             time_block: crate::timeblocking::is_block(event, &state.config.calendar),
             tasks: if crate::timeblocking::is_block(event, &state.config.calendar) {
-                crate::timeblocking::assigned(state, event).iter().map(|e| (e.id.clone(), e.title.clone(), crate::timeblocking::metadata(&e.details.description).minutes)).collect()
+                crate::timeblocking::assigned(state, event).iter().map(|e| (e.id.clone(), e.title.clone(), crate::timeblocking::metadata(e).minutes)).collect()
             } else { Vec::new() },
         })
         .collect();
@@ -1699,8 +1683,7 @@ struct Block {
     column: usize,
     columns: usize,
     color: Color,
-    /// Whether the block can be dragged. Google Tasks cannot: they have no
-    /// time of their own to move.
+    /// Timed task blocks and calendar events can both be dragged.
     editable: bool,
     /// Whether a time change for this event is still being written to Google.
     /// The block is drawn lighter until the write is confirmed.
@@ -1794,6 +1777,7 @@ struct DrawState {
     /// The new-event drag in progress, if any. Kept out of the grid cache for
     /// the same reason as `drag`.
     create: std::cell::RefCell<Option<CreateDrag>>,
+    task_press: Option<(String, Point)>,
 }
 
 impl DrawState {
@@ -1827,6 +1811,7 @@ impl Default for DrawState {
             hovered: std::cell::Cell::new(None),
             drag: std::cell::RefCell::new(None),
             create: std::cell::RefCell::new(None),
+            task_press: None,
         }
     }
 }
@@ -1842,12 +1827,18 @@ impl canvas::Program<Message> for DayCanvas {
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         if matches!(event, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))) && self.external_drag {
+            state.task_press = None;
             let point = cursor.position_in(bounds)?;
+            if let Some(id) = self.task_at(point, bounds.width) {
+                return Some(canvas::Action::publish(Message::TimeBlocking(
+                    crate::timeblocking::Action::DropTask(id.to_owned()),
+                )).and_capture());
+            }
             let block = self.blocks.iter().find(|b| b.time_block && self.rect_for(b, bounds.width, b.start_min, b.end_min).contains(point));
             if let Some(block) = block {
                 return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropBlock(block.id.clone()))).and_capture());
             }
-            return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropDay)).and_capture());
+            return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropTime(self.time_at(self.snap_minute(point.y))))).and_capture());
         }
         match event {
             iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
@@ -1876,6 +1867,16 @@ impl canvas::Program<Message> for DayCanvas {
                 )
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if let Some((id, origin)) = &state.task_press {
+                    if cursor.position().is_some_and(|point| point.distance(*origin) >= 4.0) {
+                        let id = id.clone();
+                        state.task_press = None;
+                        return Some(canvas::Action::publish(Message::TimeBlocking(
+                            crate::timeblocking::Action::Drag(id),
+                        )).and_capture());
+                    }
+                    return Some(canvas::Action::capture());
+                }
                 // A drag owns the pointer until it is released, so the hover
                 // highlight stays out of the way while the block follows it.
                 if let Some(drag) = state.drag() {
@@ -1919,13 +1920,11 @@ impl canvas::Program<Message> for DayCanvas {
                     if view.contains(point) {
                         return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::View(block.id.clone()))).and_capture());
                     }
-                    let x = rect.x + rect.width + 4.0;
-                    if point.x >= x && point.x <= x + rect.width && point.y >= rect.y && point.y < rect.y + block.tasks.len() as f32 * 20.0 {
-                        let index = ((point.y - rect.y) / 20.0) as usize;
-                        if let Some((id, _, _)) = block.tasks.get(index) {
-                            return Some(canvas::Action::publish(if point.x < x + 16.0 { Message::TimeBlocking(crate::timeblocking::Action::Drag(id.clone())) } else { Message::EventOpened(id.clone()) }).and_capture());
-                        }
-                    }
+                }
+
+                if let Some(id) = self.task_at(point, bounds.width) {
+                    state.task_press = Some((id.to_owned(), cursor.position()?));
+                    return Some(canvas::Action::request_redraw().and_capture());
                 }
 
                 // A press on a draggable block starts a drag. The click that
@@ -1967,6 +1966,13 @@ impl canvas::Program<Message> for DayCanvas {
                 }
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if let Some((id, origin)) = state.task_press.take() {
+                    return if cursor.position().is_some_and(|point| point.distance(origin) < 4.0) {
+                        Some(canvas::Action::publish(Message::EventOpened(id)).and_capture())
+                    } else {
+                        Some(canvas::Action::capture())
+                    };
+                }
                 // A new-event drag is finished first: it never shares the
                 // pointer with a move or resize.
                 if let Some(create) = state.create.take() {
@@ -2007,6 +2013,9 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.external_drag {
+            return mouse::Interaction::Grabbing;
+        }
         if state.create().is_some() {
             return mouse::Interaction::Crosshair;
         }
@@ -2018,6 +2027,19 @@ impl canvas::Program<Message> for DayCanvas {
                     mouse::Interaction::ResizingVertically
                 }
             };
+        }
+
+        if let Some(point) = cursor.position_in(bounds) {
+            for block in self.blocks.iter().filter(|block| block.time_block) {
+                let (view, edit) = block_actions(self.block_rect(block, bounds.width));
+                if view.contains(point) || edit.contains(point) {
+                    return mouse::Interaction::Pointer;
+                }
+            }
+        }
+
+        if cursor.position_in(bounds).and_then(|point| self.task_at(point, bounds.width)).is_some() {
+            return mouse::Interaction::Grab;
         }
 
         match cursor
@@ -2271,6 +2293,21 @@ impl DayCanvas {
         };
 
         Some((index, mode))
+    }
+
+    /// The task row beside a time block, including its title and estimate.
+    fn task_at(&self, point: Point, width: f32) -> Option<&str> {
+        self.blocks.iter().filter(|block| block.time_block).find_map(|block| {
+            let rect = self.block_rect(block, width);
+            let rows = Rectangle {
+                x: rect.x + rect.width + 4.0,
+                y: rect.y,
+                width: rect.width,
+                height: block.tasks.len() as f32 * 20.0,
+            };
+            if !rows.contains(point) { return None; }
+            block.tasks.get(((point.y - rows.y) / 20.0) as usize).map(|task| task.0.as_str())
+        })
     }
 
     /// Whether the block at this index can be dragged at all.
@@ -2852,6 +2889,34 @@ mod tests {
         let messages: Vec<_> = ui.into_messages().collect();
         assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::DropBlock(id)) if id == "standup")));
         assert!(!messages.iter().any(|m| matches!(m, Message::EventDraftStarted { .. })));
+    }
+
+    #[test]
+    fn task_rows_drag_from_the_title_and_estimate_and_show_grab_cursors() {
+        for fraction in [0.1, 0.5, 0.95] {
+            let mut canvas = canvas_with_one_block();
+            canvas.blocks[0].time_block = true;
+            canvas.blocks[0].tasks = vec![("task".into(), "Task title".into(), 30)];
+            let bounds = Rectangle::new(Point::ORIGIN, Size::new(600.0, 1440.0));
+            let rect = canvas.block_rect(&canvas.blocks[0], bounds.width);
+            let start = Point::new(rect.x + rect.width + 4.0 + fraction * rect.width, rect.y + 10.0);
+            let cursor = mouse::Cursor::Available(start);
+            assert_eq!(canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor), mouse::Interaction::Grab);
+            canvas.external_drag = true;
+            assert_eq!(canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor), mouse::Interaction::Grabbing);
+            canvas.external_drag = false;
+            let element: Element<'_, Message> = canvas_widget(canvas).width(600).height(1440).into();
+            let mut ui = iced_test::Simulator::with_size(iced_test::core::Settings::default(), bounds.size(), element);
+            ui.point_at(start);
+            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
+            let position = Point::new(start.x, start.y + 10.0);
+            ui.point_at(position);
+            ui.simulate([iced::Event::Mouse(mouse::Event::CursorMoved { position })]);
+            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+            let messages: Vec<_> = ui.into_messages().collect();
+            assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::Drag(id)) if id == "task")));
+            assert!(!messages.iter().any(|m| matches!(m, Message::EventOpened(_))));
+        }
     }
 
     #[test]

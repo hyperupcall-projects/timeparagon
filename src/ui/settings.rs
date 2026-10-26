@@ -344,7 +344,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ));
 
     section = section.push(heading("Time Blocking", metrics));
-    for (label, tasks) in [("Google Tasks list for assigned tasks", true), ("Calendar for time blocks", false)] {
+    for (label, tasks) in [("Google Tasks list for scheduled tasks (default: Has Time)", true), ("Calendar for time blocks", false)] {
         let options: Vec<CalendarOption> = state.calendar.calendars.iter()
             .filter(|c| c.is_task_list() == tasks)
             .map(|c| CalendarOption { id: c.id.clone(), name: c.name.clone() }).collect();
@@ -354,7 +354,14 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             Message::TimeBlocking(if tasks { crate::timeblocking::Action::List(o.id) } else { crate::timeblocking::Action::Calendar(o.id) })
         }).text_size(metrics.label()).width(Fill).into(), metrics));
     }
-    section = section.push(text("Create blocks on this calendar. Drag tasks onto a block to plan your day. Undated tasks appear in Backlog.").size(metrics.label()).style(text::secondary));
+    let options: Vec<CalendarOption> = state.calendar.calendars.iter()
+        .filter(|c| !c.is_task_list())
+        .map(|c| CalendarOption { id: c.id.clone(), name: c.name.clone() }).collect();
+    let selected = options.iter().find(|o| settings.tasks_calendar.as_deref() == Some(o.id.as_str())).cloned();
+    section = section.push(field("Calendar for scheduled tasks (default: Tasks)",
+        pick_list(options, selected, |o: CalendarOption| Message::TimeBlocking(crate::timeblocking::Action::TaskCalendar(o.id)))
+            .text_size(metrics.label()).width(Fill).into(), metrics));
+    section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. The Tasks calendar and Has Time list are created on first use if needed. Deadlines use the first description line: DUE: YYYY-MM-DD. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }

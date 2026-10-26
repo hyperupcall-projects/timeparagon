@@ -2,7 +2,8 @@
 //! should not have to know about.
 
 pub mod api;
-pub mod bridge;
+pub mod deadline;
+pub mod scheduled;
 pub mod colors;
 mod day_cache;
 pub mod layout;
@@ -61,7 +62,7 @@ pub struct Event {
     pub end: DateTime<Local>,
     pub all_day: bool,
     pub color: Color,
-    /// A finished Google Task. Calendar events are never completed.
+    /// A finished Google Task, including its retained calendar representation.
     pub completed: bool,
     pub details: Details,
 }
@@ -225,6 +226,8 @@ fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Details {
+    pub scheduled: Option<scheduled::Link>,
+    pub task_data: Option<crate::task_db::TaskData>,
     pub location: String,
     pub description: String,
     pub status: String,
@@ -318,7 +321,7 @@ fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
 
 /// Gives a Google Tasks event its list's color, leaving calendar events alone.
 fn recolor_task(event: &mut Event, settings: &CalendarSettings) {
-    if event.calendar_id.starts_with("tasks:") {
+    if event.calendar_id.starts_with("tasks:") && event.details.scheduled.is_none() {
         event.color = task_color(settings, &event.calendar_id);
     }
 }
@@ -649,6 +652,7 @@ impl Store {
             // is a block on the grid, so it stays put alongside the events.
             .filter(move |event| settings.show_tasks || !event.is_task() || !event.all_day)
             .filter(|event| self.calendar_enabled(&event.calendar_id, settings))
+            .filter(|event| event.details.scheduled.as_ref().is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings)))
     }
 
     /// The event with this id, if it is still loaded.
@@ -791,16 +795,17 @@ impl Store {
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
         self.visible_events(settings).filter(|event| event.all_day && (!event.is_task() ||
-            (event.start.date_naive() != crate::timeblocking::UNDATED &&
-             (event.start.date_naive() == self.day ||
-              (!settings.hide_overdue_tasks && !event.completed && event.start.date_naive() < Local::now().date_naive())))))
+            (event.start.date_naive() != crate::timeblocking::UNDATED && event.start.date_naive() == self.day)
+            || (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event))))
     }
 
     pub fn timed_events<'a>(
         &'a self,
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
-        self.visible_events(settings).filter(|event| !event.all_day)
+        let start = at_clock(self.day, settings.day_start_hour(), 0);
+        let end = at_clock(self.day.succ_opt().unwrap_or(self.day), settings.day_start_hour(), 0);
+        self.visible_events(settings).filter(move |event| !event.all_day && event.start < end && event.end > start)
     }
 
     pub fn status_line(&self) -> String {
@@ -906,15 +911,11 @@ pub fn sync_day(
     disabled: &[String],
     day: NaiveDate,
     day_end_hour: u32,
+    tasks_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let mut snapshot = api::fetch_day(&tokens.access_token, disabled, day, day_end_hour)?;
-    // Tasks come back as all-day chips because the API has no time for them.
-    // If the browser helper is installed and signed in, the scheduled ones get
-    // their real time here.
-    bridge::promote_task_times(&mut snapshot);
-    Ok(snapshot)
+    api::fetch_day(&tokens.access_token, disabled, day, day_end_hour, tasks_calendar)
 }
 
 pub fn disconnect() {
@@ -938,6 +939,34 @@ pub fn set_task_completed(
 
     api::set_task_completed(&tokens.access_token, list_id, task_id, completed)
         .map_err(describe_task_write_error)
+}
+
+/// Completion retains the event and updates its visual completion marker.
+/// If Calendar refuses the update, restore Tasks so the optimistic UI can
+/// truthfully roll back as well.
+pub fn set_linked_task_completed(
+    client_id: &str,
+    client_secret: &str,
+    task: &Event,
+    completed: bool,
+) -> Result<(), String> {
+    let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let list = task.calendar_id.strip_prefix("tasks:").ok_or("Invalid task list")?;
+    let id = task.id.strip_prefix("task:").ok_or("Invalid task")?;
+    api::set_task_completed(&tokens.access_token, list, id, completed).map_err(describe_task_write_error)?;
+    if let Some(link) = &task.details.scheduled {
+        let mut updated = task.clone();
+        updated.completed = completed;
+        if let Err(error) = scheduled::request("PATCH", &link.event_url(), &tokens.access_token,
+            Some(&scheduled::content(&updated, link))) {
+            return match api::set_task_completed(&tokens.access_token, list, id, task.completed) {
+                Ok(()) => Err(format!("Calendar completion could not be saved; the task was restored: {}", error.message)),
+                Err(rollback) => Err(format!("Calendar completion failed: {}. Restoring the task also failed: {rollback}. Sync before retrying.", error.message)),
+            };
+        }
+    }
+    Ok(())
 }
 
 /// Deletes a single task instance from Google Tasks.
@@ -1343,7 +1372,7 @@ mod tests {
             completed: false,
             details: Details::default(),
         });
-        // A task the browser gave a time to is a block on the grid, so the
+        // A scheduled task is a block on the grid, so the
         // switch leaves it alone.
         snapshot.events.push(Event {
             id: "task:def".into(),

@@ -22,7 +22,7 @@ use crate::todos::TodoList;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Config {
     pub appearance: Appearance,
     pub window: Window,
@@ -57,7 +57,7 @@ impl Default for Config {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Appearance {
     /// The name of the selected theme, matching what the picker shows.
     pub theme: String,
@@ -80,7 +80,7 @@ impl Default for Appearance {
 /// It lives in the config file rather than in a document of its own, so there
 /// is exactly one place the app reads and writes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Notepad {
     /// What is written on the page.
     #[serde(default)]
@@ -120,7 +120,9 @@ impl Notepad {
     /// It is clamped, so that a hand-edited config cannot ask for text that
     /// will not fit on the screen.
     pub fn font_scale(&self) -> f32 {
-        let size = self.font_size.clamp(Self::MIN_FONT_SIZE, Self::MAX_FONT_SIZE);
+        let size = self
+            .font_size
+            .clamp(Self::MIN_FONT_SIZE, Self::MAX_FONT_SIZE);
 
         f32::from(size) / 100.0
     }
@@ -132,7 +134,7 @@ fn default_font_size() -> u8 {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Window {
     pub width: f32,
     pub height: f32,
@@ -150,17 +152,13 @@ impl Default for Window {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct TimerSettings {
     /// The target time the timer is armed with on startup, in seconds.
     /// 0 means no target, i.e. a plain count-up.
     pub last_duration_secs: u64,
     /// Preset chips, in seconds.
     pub presets_secs: Vec<u64>,
-    /// What the user is working on right now, shown beside the clock. It is
-    /// free text so it can be corrected or replaced as the moment changes, and
-    /// the upcoming items in the timer view fill it in with one tap.
-    pub current_task: String,
 }
 
 impl Default for TimerSettings {
@@ -168,7 +166,6 @@ impl Default for TimerSettings {
         Self {
             last_duration_secs: 300,
             presets_secs: vec![60, 300, 600, 1500, 3000],
-            current_task: String::new(),
         }
     }
 }
@@ -186,7 +183,7 @@ impl TimerSettings {
 
 /// Google Calendar connection and which calendars are shown on the calendar.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct CalendarSettings {
     /// How often to pull events, in minutes. 15 is Google's own default-ish
     /// cadence and is what we ship with.
@@ -205,6 +202,8 @@ pub struct CalendarSettings {
     pub hide_overdue_tasks: bool,
     pub time_block_calendar: Option<String>,
     pub time_block_list: Option<String>,
+    /// Calendar for individual scheduled task events; independent of container blocks.
+    pub tasks_calendar: Option<String>,
     /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
     /// to 3 and the day runs 3am to 3am, so the small hours stay with the
     /// evening they belong to. This only moves the view: an event keeps its
@@ -235,6 +234,7 @@ impl Default for CalendarSettings {
             hide_overdue_tasks: false,
             time_block_calendar: None,
             time_block_list: None,
+            tasks_calendar: None,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),
             default_calendar: None,
@@ -251,7 +251,9 @@ impl CalendarSettings {
     pub const MAX_DAY_END_HOUR: u32 = 5;
 
     pub fn sync_every(&self) -> Duration {
-        let minutes = self.sync_minutes.clamp(Self::MIN_SYNC_MINUTES, Self::MAX_SYNC_MINUTES);
+        let minutes = self
+            .sync_minutes
+            .clamp(Self::MIN_SYNC_MINUTES, Self::MAX_SYNC_MINUTES);
         Duration::from_secs(u64::from(minutes) * 60)
     }
 
@@ -295,7 +297,7 @@ impl CalendarSettings {
 
 /// Everything that happens when the timer reaches zero.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct AlarmProfile {
     pub notification: Notification,
     pub sound: Sound,
@@ -305,7 +307,7 @@ pub struct AlarmProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Notification {
     pub enabled: bool,
     pub summary: String,
@@ -351,7 +353,7 @@ impl std::fmt::Display for Urgency {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Sound {
     pub enabled: bool,
     pub choice: SoundChoice,
@@ -422,7 +424,7 @@ impl std::fmt::Display for SoundChoice {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Flash {
     pub enabled: bool,
     pub color: HexColor,
@@ -500,6 +502,11 @@ pub fn cache_days_dir() -> Option<PathBuf> {
     Some(project_dirs()?.cache_dir().join("days"))
 }
 
+/// Last successful Keep snapshot, including original card previews.
+pub fn cache_keep_path() -> Option<PathBuf> {
+    Some(project_dirs()?.cache_dir().join("keep").join("notes.json"))
+}
+
 impl Config {
     /// Reads the config, falling back to defaults for anything unreadable.
     pub fn load() -> Self {
@@ -509,7 +516,7 @@ impl Config {
         };
 
         match fs::read_to_string(&path) {
-            Ok(contents) => match toml::from_str(&contents) {
+            Ok(contents) => match Self::parse(&contents) {
                 Ok(config) => config,
                 Err(error) => {
                     log::warn!(
@@ -527,6 +534,28 @@ impl Config {
         }
     }
 
+    /// Accept fields written by other app versions, reporting their paths.
+    fn parse(contents: &str) -> Result<Self, toml::de::Error> {
+        Self::parse_with_ignored(contents, |path| {
+            log::warn!("ignoring unknown config field: {path}");
+        })
+    }
+
+    fn parse_with_ignored(
+        contents: &str,
+        mut ignored: impl FnMut(String),
+    ) -> Result<Self, toml::de::Error> {
+        serde_ignored::deserialize(toml::de::Deserializer::parse(contents)?, |path| {
+            ignored(path.to_string());
+        })
+    }
+
+    /// Unlike startup, a failed live read must keep the current settings.
+    fn read_from(path: &Path) -> io::Result<Self> {
+        let contents = fs::read_to_string(path)?;
+        Self::parse(&contents).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
     pub fn save(&self) -> io::Result<()> {
         let path = config_path().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "no config directory available")
@@ -537,6 +566,99 @@ impl Config {
 
         write_atomically(&path, contents.as_bytes())
     }
+}
+
+/// Watch the directory, not the inode: editors and our own saves replace the
+/// file by renaming a temporary file. The native watcher does no idle polling.
+pub fn watch() -> iced::Subscription<Config> {
+    iced::Subscription::run(config_changes)
+}
+
+fn config_changes() -> impl iced::futures::Stream<Item = Config> {
+    config_changes_at(config_path())
+}
+
+fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item = Config> {
+    iced::stream::channel(16, async move |mut output| {
+        use iced::futures::{SinkExt, StreamExt};
+        let Some(path) = path else { return };
+        let Some(parent) = path.parent() else { return };
+        let (sender, mut receiver) = iced::futures::channel::mpsc::unbounded();
+        let (events, event_rx) = std::sync::mpsc::channel();
+        let watched_path = path.clone();
+        let mut watcher =
+            match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                match event {
+                    Ok(event)
+                        if event.paths.iter().any(|path| path == &watched_path)
+                            && matches!(
+                                event.kind,
+                                notify::EventKind::Create(_)
+                                    | notify::EventKind::Modify(_)
+                                    | notify::EventKind::Remove(_)
+                            ) =>
+                    {
+                        let _ = events.send(());
+                    }
+                    Err(error) => log::warn!("config watcher error: {error}"),
+                    _ => {}
+                }
+            }) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    log::warn!("could not create config watcher: {error}");
+                    return;
+                }
+            };
+        if let Err(error) = fs::create_dir_all(parent).and_then(|()| {
+            notify::Watcher::watch(&mut watcher, parent, notify::RecursiveMode::NonRecursive)
+                .map_err(io::Error::other)
+        }) {
+            log::warn!("could not watch {}: {error}", parent.display());
+            return;
+        }
+        let reload_path = path.clone();
+        let worker = std::thread::Builder::new()
+            .name("timetracker-config-watch".into())
+            .spawn(move || {
+                while event_rx.recv().is_ok() {
+                    // Wait for the write burst to settle: a truncate-and-write
+                    // editor can otherwise briefly look like a valid empty config.
+                    loop {
+                        match event_rx.recv_timeout(Duration::from_millis(150)) {
+                            Ok(()) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                    match Config::read_from(&reload_path) {
+                        Ok(config) => {
+                            if sender.unbounded_send(config).is_err() {
+                                return;
+                            }
+                        }
+                        Err(error) => log::warn!(
+                            "could not reload {}; keeping current settings: {error}",
+                            reload_path.display()
+                        ),
+                    }
+                }
+            });
+        if let Err(error) = worker {
+            log::warn!("could not start config reload worker: {error}");
+            return;
+        }
+        // Close the gap between startup's read and installing the watcher.
+        if let Ok(config) = Config::read_from(&path) {
+            let _ = output.send(config).await;
+        }
+        while let Some(config) = receiver.next().await {
+            if output.send(config).await.is_err() {
+                break;
+            }
+        }
+        drop(watcher);
+    })
 }
 
 /// Writes through a temporary file so a crash mid-write cannot truncate the
@@ -554,6 +676,95 @@ fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_fields_warn_without_discarding_known_settings() {
+        let mut ignored = Vec::new();
+        let config = Config::parse_with_ignored(
+            r#"
+            future_setting = true
+            [appearance]
+            theme = "Ocean"
+            future_theme_setting = 42
+            [alarm.sound]
+            volume = 25
+            future_sound_setting = "anything"
+            [[todos.items]]
+            text = "keep me"
+            future_item_setting = true
+            "#,
+            |path| ignored.push(path),
+        )
+        .unwrap();
+        assert_eq!(config.appearance.theme, "Ocean");
+        assert_eq!(config.alarm.sound.volume, 25);
+        assert_eq!(config.todos.items()[0].text, "keep me");
+        assert_eq!(ignored.len(), 4, "{ignored:?}");
+        assert!(ignored.contains(&"future_setting".to_owned()));
+        assert!(ignored.contains(&"appearance.future_theme_setting".to_owned()));
+        assert!(ignored.contains(&"alarm.sound.future_sound_setting".to_owned()));
+    }
+
+    #[test]
+    fn watcher_survives_atomic_replacements_and_invalid_edits() {
+        use iced::futures::StreamExt;
+        let directory = std::env::temp_dir().join(format!(
+            "timetracker-config-watch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.toml");
+        fs::write(&path, "[alarm.sound]\nvolume = 25").unwrap();
+        let watched_path = path.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            iced::futures::executor::block_on(async move {
+                let changes = config_changes_at(Some(watched_path));
+                iced::futures::pin_mut!(changes);
+                // Repeated native events are allowed; forward all snapshots.
+                while let Some(config) = changes.next().await {
+                    let done = config.alarm.sound.volume == 60;
+                    if sender.send(config).is_err() || done {
+                        break;
+                    }
+                }
+            });
+        });
+        let wait_for_volume = |volume| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let config = receiver
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .unwrap();
+                if config.alarm.sound.volume == volume {
+                    break;
+                }
+            }
+        };
+        wait_for_volume(25); // Initial read means the watcher is installed.
+        write_atomically(&path, b"[alarm.sound]\nvolume = 40").unwrap();
+        wait_for_volume(40);
+        fs::write(&path, "[alarm.sound]\nvolume = ").unwrap();
+        assert!(Config::read_from(&path).is_err());
+        // Allow the native callback to read the invalid edit before replacing it.
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while let Ok(config) =
+            receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
+            assert_eq!(
+                config.alarm.sound.volume, 40,
+                "invalid edits must not emit defaults"
+            );
+        }
+        write_atomically(&path, b"[alarm.sound]\nvolume = 60").unwrap();
+        wait_for_volume(60);
+        worker.join().unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn defaults_round_trip_through_toml() {
@@ -636,7 +847,10 @@ mod tests {
             ..CalendarSettings::default()
         };
 
-        assert_eq!(settings.day_start_hour(), CalendarSettings::MAX_DAY_END_HOUR);
+        assert_eq!(
+            settings.day_start_hour(),
+            CalendarSettings::MAX_DAY_END_HOUR
+        );
         assert_eq!(settings.day_end_minutes(), 5 * 60);
     }
 

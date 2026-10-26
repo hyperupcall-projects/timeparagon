@@ -61,7 +61,7 @@ export async function fetchKeep(ctx: BrowserContext) {
         url = `https://keep.google.com/#${archived ? "archive" : "home"}`;
         id = `unavailable-${archived}-${index}`;
         const warning =
-          "Previously shared notes that Keep will not open are shown as their original cards. Their Edit button opens the containing Keep page.";
+          "Previously shared notes that Keep will not open remain available. Their Edit button opens the containing Keep page.";
         if (!warnings.includes(warning)) warnings.push(warning);
       } else {
         await card.locator(TITLE).click();
@@ -86,7 +86,23 @@ export async function fetchKeep(ctx: BrowserContext) {
           ? card.locator(".IZ65Hb-TBnied")
           : page.locator(CONTENT).last();
         await content.waitFor({ state: "visible" });
-        const note = await content.evaluate((element) => {
+        // The edited footer's hover tooltip exposes creation and full edit
+        // timestamps which Keep abbreviates on the card itself.
+        let timestampMetadata: string[] = [];
+        const footer = content.locator(".IZ65Hb-jfdpUb-fmcmS").last();
+        if (!blocked && await footer.isVisible()) {
+          try {
+            await footer.hover({ timeout: 1000 });
+            const tooltip = page.locator('[role="tooltip"]:visible');
+            await tooltip.first().waitFor({ state: "visible", timeout: 1500 });
+            timestampMetadata = await tooltip.evaluateAll((elements) =>
+              elements.map((e) => (e as HTMLElement).innerText)
+            );
+          } catch {
+            // A tooltip is optional; visible footer metadata is still retained.
+          }
+        }
+        const note = await content.evaluate((element, timestampMetadata) => {
           const text = (selector: string) =>
             (element.querySelector(selector) as HTMLElement | null)
               ?.innerText ?? "";
@@ -95,7 +111,7 @@ export async function fetchKeep(ctx: BrowserContext) {
           ].map((e) => e.textContent ?? "");
           const metadata = [
             ...element.querySelectorAll(
-              ".IZ65Hb-jfdpUb [aria-label], .IZ65Hb-jfdpUb-fmcmS, .IZ65Hb-hYUzqc [aria-label]",
+              ".IZ65Hb-jfdpUb [aria-label], .IZ65Hb-jfdpUb [data-tooltip-text], .IZ65Hb-jfdpUb-fmcmS, .IZ65Hb-hYUzqc [aria-label], time",
             ),
           ]
             .filter((e) =>
@@ -106,11 +122,67 @@ export async function fetchKeep(ctx: BrowserContext) {
               (e) => [
                 e.getAttribute("aria-label"),
                 e.getAttribute("data-tooltip-text"),
+                e.getAttribute("title"),
                 (e as HTMLElement).innerText,
               ],
             )
             .filter((s): s is string => !!s?.trim());
+          const body: {
+            text: string;
+            bold: boolean;
+            italic: boolean;
+            underline: boolean;
+            strikethrough: boolean;
+          }[] = [];
+          const append = (value: string, parent: Element) => {
+            if (!value) return;
+            const style = getComputedStyle(parent);
+            body.push({
+              text: value,
+              bold: parseInt(style.fontWeight) >= 600 ||
+                style.fontWeight === "bold",
+              italic: style.fontStyle === "italic",
+              underline: style.textDecorationLine.includes("underline") ||
+                !!parent.closest("u"),
+              strikethrough:
+                style.textDecorationLine.includes("line-through") ||
+                !!parent.closest("s, strike, del"),
+            });
+          };
+          const newline = (parent: Element) => {
+            if (body.length && !body[body.length - 1].text.endsWith("\n")) {
+              append("\n", parent);
+            }
+          };
+          const visit = (node: Node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              if (node.parentElement) {
+                append(node.textContent ?? "", node.parentElement);
+              }
+            } else if (node instanceof HTMLElement) {
+              if (getComputedStyle(node).display === "none") return;
+              if (node.tagName === "BR") {
+                append("\n", node);
+                return;
+              }
+              const block = ["DIV", "P", "LI"].includes(node.tagName);
+              if (block) newline(node);
+              for (const child of node.childNodes) visit(child);
+              if (block) newline(node);
+            }
+          };
+          const description = element.querySelector(".IZ65Hb-qJTHM-haAclf");
+          if (description) {
+            for (const child of description.childNodes) visit(child);
+          }
+          if (body.length) {
+            body[body.length - 1].text = body[body.length - 1].text.replace(
+              /\n$/,
+              "",
+            );
+          }
           return {
+            body,
             title: text(".IZ65Hb-r4nke-haAclf [role=textbox]"),
             description: text(".IZ65Hb-qJTHM-haAclf"),
             labels,
@@ -136,16 +208,16 @@ export async function fetchKeep(ctx: BrowserContext) {
             ) !== null,
             metadata: [
               ...new Set(
-                metadata.filter((s) =>
+                [...timestampMetadata, ...metadata].filter((s) =>
                   !["Remove label", "Delete task", "Remove source"].includes(s)
                 ),
               ),
             ],
           };
-        });
+        }, timestampMetadata);
         // The original rendered note preserves rich formatting, background art,
         // media, checklist nesting, reminder and collaborator chips exactly.
-        // Keep bytes in the response, never persist the user's notes to disk.
+        // Return preview bytes so the app can display and cache the full snapshot.
         const png = await content.screenshot({
           type: "png",
           animations: "disabled",

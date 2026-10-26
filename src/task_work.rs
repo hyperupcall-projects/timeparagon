@@ -1,4 +1,4 @@
-//! Persistent work sessions, keyed by the task's stable ttid rather than its Google list.
+//! Persistent work sessions keyed by local task IDs, with aliases for migrated UUIDs.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
