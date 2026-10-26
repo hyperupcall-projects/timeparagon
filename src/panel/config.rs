@@ -54,7 +54,10 @@ impl PanelConfig {
         match toml::from_str(&text) {
             Ok(config) => config,
             Err(error) => {
-                log::warn!("ignoring invalid panel config at {}: {error}", path.display());
+                log::warn!(
+                    "ignoring invalid panel config at {}: {error}",
+                    path.display()
+                );
                 Self::default()
             }
         }
@@ -63,7 +66,11 @@ impl PanelConfig {
 
 /// `panel.toml`, beside the main `config.toml`.
 pub fn path() -> Option<PathBuf> {
-    Some(crate::config::project_dirs()?.config_dir().join("panel.toml"))
+    Some(
+        crate::config::project_dirs()?
+            .config_dir()
+            .join("panel.toml"),
+    )
 }
 
 #[cfg(test)]
@@ -90,8 +97,18 @@ mod tests {
 
     #[test]
     fn the_side_parses_lowercase() {
-        assert_eq!(toml::from_str::<PanelConfig>("side = \"right\"").unwrap().side, Side::Right);
-        assert_eq!(toml::from_str::<PanelConfig>("side = \"left\"").unwrap().side, Side::Left);
+        assert_eq!(
+            toml::from_str::<PanelConfig>("side = \"right\"")
+                .unwrap()
+                .side,
+            Side::Right
+        );
+        assert_eq!(
+            toml::from_str::<PanelConfig>("side = \"left\"")
+                .unwrap()
+                .side,
+            Side::Left
+        );
     }
 
     #[test]

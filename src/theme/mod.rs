@@ -136,7 +136,10 @@ impl Catalog {
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.entries.iter().map(|entry| entry.name.clone()).collect()
+        self.entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect()
     }
 
     pub fn get(&self, name: &str) -> Option<&Entry> {

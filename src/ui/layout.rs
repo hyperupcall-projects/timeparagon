@@ -88,7 +88,9 @@ impl Metrics {
             size,
             // A starting point for text that is not the main readout; the
             // readout itself is sized against the space it actually gets.
-            digits: digit_size(usable, 5).min(size.height / 4.0).clamp(18.0, 96.0),
+            digits: digit_size(usable, 5)
+                .min(size.height / 4.0)
+                .clamp(18.0, 96.0),
             // Below this the extra `H:` group pushes the readout over the
             // edge, so hours get folded into the minutes instead.
             allow_hours: size.width >= 240.0,
@@ -107,12 +109,20 @@ impl Metrics {
     /// Font size for secondary text, which shrinks more gently than the
     /// readout so it never becomes unreadable.
     pub fn label(&self) -> f32 {
-        if self.breakpoint.is_compact() { 11.0 } else { 13.0 }
+        if self.breakpoint.is_compact() {
+            11.0
+        } else {
+            13.0
+        }
     }
 
     /// Size of a square icon-only button.
     pub fn icon_button(&self) -> f32 {
-        if self.breakpoint.is_compact() { 30.0 } else { 34.0 }
+        if self.breakpoint.is_compact() {
+            30.0
+        } else {
+            34.0
+        }
     }
 }
 

@@ -190,7 +190,10 @@ impl Shared {
     }
 
     pub fn status(&self) -> Status {
-        self.status.lock().map(|status| status.clone()).unwrap_or_default()
+        self.status
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -294,10 +297,9 @@ impl Audio {
             Ok(_handle) => self.sender = Some(sender),
             Err(error) => {
                 self.shared.alive.store(false, Ordering::Release);
-                self.shared
-                    .set_status(Status::Unavailable(format!(
-                        "could not start the audio thread: {error}"
-                    )));
+                self.shared.set_status(Status::Unavailable(format!(
+                    "could not start the audio thread: {error}"
+                )));
             }
         }
     }

@@ -4,7 +4,7 @@
 //! typed. The size of it is the size of the text on this page and nothing
 //! else: the rest of the interface is left as it is drawn.
 
-use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
+use iced::widget::{Space, button, column, container, row, scrollable, text, text_editor};
 use iced::{Element, Fill, Length};
 
 use crate::app::{Message, State};

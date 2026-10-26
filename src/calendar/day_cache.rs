@@ -18,7 +18,7 @@ use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
-use super::{day_at, Details, Event};
+use super::{Details, Event, day_at};
 
 /// One month's events as the cache file holds them.
 ///
@@ -103,7 +103,11 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
             let database = crate::config::project_dirs()
                 .map(|dirs| dirs.data_local_dir().join("tasks.sqlite3"))
                 .filter(|path| path.exists())
-                .and_then(|path| crate::task_db::Database::open(&path).map_err(|e| log::warn!("Cannot load local task data: {e}")).ok());
+                .and_then(|path| {
+                    crate::task_db::Database::open(&path)
+                        .map_err(|e| log::warn!("Cannot load local task data: {e}"))
+                        .ok()
+                });
             let events: Vec<Event> = saved
                 .events
                 .into_iter()
@@ -114,7 +118,9 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
                             match database.lookup(&event) {
                                 Ok(Some(data)) => {
                                     event.details.task_data = Some(data);
-                                    event.details.description = crate::timeblocking::description(&event.details.description);
+                                    event.details.description = crate::timeblocking::description(
+                                        &event.details.description,
+                                    );
                                 }
                                 Err(error) => log::warn!("Cannot load local task data: {error}"),
                                 _ => {}
@@ -152,16 +158,14 @@ pub fn save(
 
     // Load the existing month, or start empty.
     let mut month: SavedMonth = match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(SavedMonth {
-            events: Vec::new(),
-        }),
-        Err(_) => SavedMonth {
-            events: Vec::new(),
-        },
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(SavedMonth { events: Vec::new() }),
+        Err(_) => SavedMonth { events: Vec::new() },
     };
 
     // Drop any events already stored for `day`, then add the new ones.
-    month.events.retain(|saved| day_at(saved.start, day_end_hour) != day);
+    month
+        .events
+        .retain(|saved| day_at(saved.start, day_end_hour) != day);
     month.events.extend(events.iter().map(SavedEvent::from));
 
     let bytes = serde_json::to_vec(&month)
@@ -258,8 +262,8 @@ impl Drop for Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     use crate::calendar::sample_snapshot;
+    use chrono::TimeZone;
 
     #[test]
     fn a_month_round_trips_through_the_directory() {
@@ -288,7 +292,11 @@ mod tests {
         fs::write(scratch.path().join(file_name(day)), b"not json").unwrap();
 
         assert!(load(scratch.path(), day, 0).is_none());
-        assert_eq!(days(scratch.path()), vec![day.with_day(1).unwrap()], "it is still a month file");
+        assert_eq!(
+            days(scratch.path()),
+            vec![day.with_day(1).unwrap()],
+            "it is still a month file"
+        );
     }
 
     #[test]

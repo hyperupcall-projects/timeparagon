@@ -161,10 +161,7 @@ pub fn run(shared: Arc<Shared>, receiver: pw::channel::Receiver<Command>) {
     shared.alive.store(false, Ordering::Release);
 }
 
-fn try_run(
-    shared: &Arc<Shared>,
-    receiver: pw::channel::Receiver<Command>,
-) -> Result<(), String> {
+fn try_run(shared: &Arc<Shared>, receiver: pw::channel::Receiver<Command>) -> Result<(), String> {
     pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(describe)?;
@@ -174,8 +171,8 @@ fn try_run(
     // to, which is the case the settings pane needs to report.
     let core = context.connect_rc(None).map_err(describe)?;
 
-    let stream = pw::stream::StreamRc::new(core, "TimeTracker", stream_properties())
-        .map_err(describe)?;
+    let stream =
+        pw::stream::StreamRc::new(core, "TimeTracker", stream_properties()).map_err(describe)?;
 
     // The listener has to stay alive for the callback to keep firing, so it
     // is bound here for as long as the loop runs.
@@ -351,8 +348,7 @@ fn process(stream: &pw::stream::Stream, playback: &mut Playback, shared: &Shared
             for (channel, sample) in frame.iter().enumerate() {
                 let start = frame_index * STRIDE + channel * SAMPLE_SIZE;
 
-                slice[start..start + SAMPLE_SIZE]
-                    .copy_from_slice(&(sample * gain).to_le_bytes());
+                slice[start..start + SAMPLE_SIZE].copy_from_slice(&(sample * gain).to_le_bytes());
             }
         }
 

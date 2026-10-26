@@ -10,8 +10,13 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Idle,
-    Running { since: Instant, accumulated: Duration },
-    Paused { accumulated: Duration },
+    Running {
+        since: Instant,
+        accumulated: Duration,
+    },
+    Paused {
+        accumulated: Duration,
+    },
 }
 
 /// One clock that counts up, with an optional target that fires the alarm.
@@ -87,7 +92,10 @@ impl Timer {
                 };
             }
             State::Paused { accumulated } => {
-                self.state = State::Running { since: now, accumulated };
+                self.state = State::Running {
+                    since: now,
+                    accumulated,
+                };
             }
             State::Running { .. } => {}
         }
@@ -164,7 +172,10 @@ mod tests {
         let mut timer = Timer::new(None);
         timer.start(start);
 
-        assert_eq!(timer.elapsed(start + Duration::from_secs(20)), Duration::from_secs(20));
+        assert_eq!(
+            timer.elapsed(start + Duration::from_secs(20)),
+            Duration::from_secs(20)
+        );
     }
 
     #[test]
@@ -217,7 +228,10 @@ mod tests {
         timer.start(start);
 
         let _ = timer.poll(start + Duration::from_secs(5));
-        assert_eq!(timer.elapsed(start + Duration::from_secs(12)), Duration::from_secs(12));
+        assert_eq!(
+            timer.elapsed(start + Duration::from_secs(12)),
+            Duration::from_secs(12)
+        );
     }
 
     #[test]

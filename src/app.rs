@@ -312,7 +312,10 @@ pub enum Message {
     ///
     /// `anchor` is the pixel row under the pointer, measured from the top of
     /// the day grid, so the zoom can keep that row still under the mouse.
-    CalendarZoomed { factor: f32, anchor: f32 },
+    CalendarZoomed {
+        factor: f32,
+        anchor: f32,
+    },
     /// Move the day in view by a number of days, positive or negative.
     CalendarDayShift(i64),
     /// Jump the day in view to a specific date, from the month picker.
@@ -435,7 +438,11 @@ impl State {
 
 fn refresh_projects(state: &mut State) -> Task<Message> {
     state.projects = None;
-    let Some(directory) = state.config.projects.directory.clone()
+    let Some(directory) = state
+        .config
+        .projects
+        .directory
+        .clone()
         .filter(|directory| !directory.as_os_str().is_empty())
     else {
         state.projects = Some(Ok(Vec::new()));
@@ -468,6 +475,7 @@ pub fn boot() -> (State, Task<Message>) {
         level: level(state.config.window.always_on_top),
         exit_on_close_request: true,
         icon: window_icon(),
+        platform_specific: window_platform(),
         ..Default::default()
     });
 
@@ -538,6 +546,7 @@ fn sidebar_settings(panel: &panel::PanelConfig) -> window::Settings {
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: true,
         icon: window_icon(),
+        platform_specific: window_platform(),
         ..Default::default()
     }
 }
@@ -572,6 +581,21 @@ fn boot_state() -> State {
     state.recorder.keep_in(tracks::path());
 
     state
+}
+
+/// The desktop-file basename, `timetracker.desktop`.
+///
+/// On Wayland the title-bar icon is not the pixmap passed to `set_window_icon`
+/// (winit ignores that). KWin looks up this id, finds the desktop entry, and
+/// paints `Icon=timetracker`. An empty id leaves the generic Wayland logo, the
+/// yellow W, in the corner while the dock still shows the hourglass.
+const APPLICATION_ID: &str = "timetracker";
+
+fn window_platform() -> window::settings::PlatformSpecific {
+    window::settings::PlatformSpecific {
+        application_id: APPLICATION_ID.to_owned(),
+        ..Default::default()
+    }
 }
 
 /// The window icon, embedded so it survives being installed anywhere.
@@ -671,9 +695,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::NotepadFontSizeChanged(delta) => {
             let size = state.config.notepad.font_size;
-            let next = size
-                .saturating_add_signed(delta as i8)
-                .clamp(config::Notepad::MIN_FONT_SIZE, config::Notepad::MAX_FONT_SIZE);
+            let next = size.saturating_add_signed(delta as i8).clamp(
+                config::Notepad::MIN_FONT_SIZE,
+                config::Notepad::MAX_FONT_SIZE,
+            );
 
             state.config.notepad.font_size = next;
 
@@ -726,7 +751,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
         Message::KeepRefresh => refresh_keep(state),
         Message::KeepSignin => {
-            if state.keep.loading { return Task::none(); }
+            if state.keep.loading {
+                return Task::none();
+            }
             state.keep.loading = true;
             state.keep.error = None;
             blocking::run(crate::keep::signin).map(Message::KeepSignedIn)
@@ -735,23 +762,40 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.keep.loading = false;
             match result {
                 Ok(()) => refresh_keep(state),
-                Err(error) => { state.keep.error = Some(error); Task::none() }
+                Err(error) => {
+                    state.keep.error = Some(error);
+                    Task::none()
+                }
             }
         }
         Message::KeepLoaded(result) => {
             state.keep.loading = false;
             match result {
-                Ok(snapshot) => { state.keep.snapshot = snapshot; state.keep.error = None; }
+                Ok(snapshot) => {
+                    state.keep.snapshot = snapshot;
+                    state.keep.error = None;
+                }
                 Err(error) => state.keep.error = Some(error),
             }
             Task::none()
         }
-        Message::KeepQueryChanged(query) => { state.keep.query = query; Task::none() }
-        Message::KeepLabelChanged(label) => { state.keep.label = label; Task::none() }
-        Message::KeepScopeChanged(scope) => { state.keep.scope = scope; Task::none() }
+        Message::KeepQueryChanged(query) => {
+            state.keep.query = query;
+            Task::none()
+        }
+        Message::KeepLabelChanged(label) => {
+            state.keep.label = label;
+            Task::none()
+        }
+        Message::KeepScopeChanged(scope) => {
+            state.keep.scope = scope;
+            Task::none()
+        }
         Message::KeepEdit(url) => {
             if url.starts_with("https://keep.google.com/") {
-                if let Err(error) = calendar::oauth::open_in_browser(&url) { state.keep.error = Some(error); }
+                if let Err(error) = calendar::oauth::open_in_browser(&url) {
+                    state.keep.error = Some(error);
+                }
             }
             Task::none()
         }
@@ -958,7 +1002,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             if state.sidebar.is_none() {
                 if let Some(id) = state.main_window {
                     if previous.window.always_on_top != state.config.window.always_on_top {
-                        tasks.push(window::set_level(id, level(state.config.window.always_on_top)));
+                        tasks.push(window::set_level(
+                            id,
+                            level(state.config.window.always_on_top),
+                        ));
                     }
                     if previous.window.width != state.config.window.width
                         || previous.window.height != state.config.window.height
@@ -1042,7 +1089,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                     let Some(panel) = &state.panel_config else {
                         return Task::none();
                     };
-                    let (_id, open) = window::open(sidebar_settings(panel));
+                    let mut settings = sidebar_settings(panel);
+                    // The editor stayed open while hidden, so reopen at its width.
+                    if let Some(base) = state.timeblocking.original_width {
+                        let width = crate::timeblocking::editor_width(state, base);
+                        settings.size = Size::new(width, PANEL_FILL);
+                        settings.max_size = None;
+                    }
+                    let (_id, open) = window::open(settings);
                     open.map(Message::WindowOpened)
                 }
                 PanelCommand::Hide => {
@@ -1091,8 +1145,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // The panel is pinned to its configured width and the full height
             // of the monitor, and never widens to the default fraction.
             if let Some(sidebar) = &state.sidebar {
-                log::debug!("panel filling {}x{}", sidebar.width, size.height);
-                return window::resize(id, Size::new(sidebar.width, size.height));
+                let width = match state.timeblocking.original_width {
+                    Some(base) => crate::timeblocking::editor_width(state, base),
+                    None => sidebar.width,
+                };
+                log::debug!("panel filling {}x{}", width, size.height);
+                return window::resize(id, Size::new(width, size.height));
             }
 
             let width = launch_width(size.width);
@@ -1211,7 +1269,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.apply_task_colors(&state.config.calendar);
             // Completing a task in another Google client also ends its work session.
             let completed_key = state.config.task_work.active().and_then(|session| {
-                state.calendar.events.iter().any(|e| e.is_task() && e.completed && crate::timeblocking::task_key(e) == session.task_key)
+                state
+                    .calendar
+                    .events
+                    .iter()
+                    .any(|e| {
+                        e.is_task()
+                            && e.completed
+                            && crate::timeblocking::task_key(e) == session.task_key
+                    })
                     .then(|| session.task_key.clone())
             });
             if let Some(key) = completed_key {
@@ -1250,11 +1316,33 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                     return crate::timeblocking::open(state, id);
                 }
                 if event.is_task() {
-                    state.timeblocking.date = if event.start.date_naive() == crate::timeblocking::UNDATED { state.calendar.day.to_string() } else { event.start.date_naive().to_string() };
-                    state.timeblocking.deadline = event.details.description.lines().next()
-                        .and_then(|line| line.strip_prefix("DUE:")).unwrap_or("").trim().to_owned();
-                    state.timeblocking.start_time = if event.all_day { "09:00".into() } else { calendar::clock_label(event.start) };
-                    state.timeblocking.end_time = if event.all_day { "09:30".into() } else { calendar::clock_label(event.end) };
+                    state.timeblocking.title = event.title.clone();
+                    state.timeblocking.title_error = None;
+                    state.timeblocking.date =
+                        if event.start.date_naive() == crate::timeblocking::UNDATED {
+                            state.calendar.day.to_string()
+                        } else {
+                            event.start.date_naive().to_string()
+                        };
+                    state.timeblocking.deadline = event
+                        .details
+                        .description
+                        .lines()
+                        .next()
+                        .and_then(|line| line.strip_prefix("DUE:"))
+                        .unwrap_or("")
+                        .trim()
+                        .to_owned();
+                    state.timeblocking.start_time = if event.all_day {
+                        "09:00".into()
+                    } else {
+                        calendar::clock_label(event.start)
+                    };
+                    state.timeblocking.end_time = if event.all_day {
+                        "09:30".into()
+                    } else {
+                        calendar::clock_label(event.end)
+                    };
                 }
             }
             state.calendar.open_event = Some(id);
@@ -1276,8 +1364,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventTimeChanged { id, start, end } => {
-            if state.calendar.event(&id).is_some_and(|event| event.is_task()) {
-                return crate::timeblocking::update(state, crate::timeblocking::Action::Schedule(id, start, end));
+            if state
+                .calendar
+                .event(&id)
+                .is_some_and(|event| event.is_task())
+            {
+                return crate::timeblocking::update(
+                    state,
+                    crate::timeblocking::Action::Schedule(id, start, end),
+                );
             }
             let Some(calendar_id) = state
                 .calendar
@@ -1356,12 +1451,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.error = None;
 
             blocking::run(move || {
-                calendar::delete_event(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                )
+                calendar::delete_event(&client_id, &client_secret, &calendar_id, &request_id)
             })
             .map(move |result| Message::EventDeleted(id.clone(), result))
         }
@@ -1405,13 +1495,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskDeleteConfirmed(id) => {
-            if !state.timeblocking.busy.is_empty() { return Task::none(); }
+            if !state.timeblocking.busy.is_empty() {
+                return Task::none();
+            }
             state.timeblocking.revision += 1;
-            let Some(calendar_id) = state
+            let Some(task) = state
                 .calendar
                 .event(&id)
                 .filter(|event| event.is_task())
-                .map(|event| event.calendar_id.clone())
+                .cloned()
             else {
                 state.calendar.pending_delete = None;
                 return Task::none();
@@ -1419,28 +1511,21 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
-            let request_id = id.clone();
+            let tasks_calendar = state.config.calendar.tasks_calendar.clone();
             state.calendar.error = None;
 
             blocking::run(move || {
-                calendar::delete_task(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                )
+                calendar::delete_task(&client_id, &client_secret, &task, tasks_calendar.as_deref())
             })
             .map(move |result| Message::TaskDeleted(id.clone(), result))
         }
 
         Message::TaskDeleted(id, Ok(())) => {
             state.calendar.pending_delete = None;
-            // The task instance is gone on Google's side, so drop it from the
-            // day in view. The next sync reconciles the cache.
-            state.calendar.events.retain(|event| event.id != id);
-            if state.calendar.open_event.as_deref() == Some(id.as_str()) {
-                state.calendar.open_event = None;
-            }
+            // The task is gone on Google's side. Drop every chip that was
+            // showing it, including a stale copy on the list it was moved
+            // from and the calendar block that held its time.
+            state.calendar.forget_task(&id);
             Task::none()
         }
 
@@ -1452,9 +1537,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskToggled(id) => {
-            if !state.timeblocking.busy.is_empty() { return Task::none(); }
+            if !state.timeblocking.busy.is_empty() {
+                return Task::none();
+            }
             state.timeblocking.revision += 1;
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()).cloned() else {
+            let Some(task) = state
+                .calendar
+                .event(&id)
+                .filter(|event| event.is_task())
+                .cloned()
+            else {
                 return Task::none();
             };
             let previous = task.completed;
@@ -1464,7 +1556,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.timeblocking.busy.insert(id.clone());
             let completed = !previous;
             if completed && let Some(task) = state.calendar.event(&id) {
-                state.config.task_work.stop(&crate::timeblocking::task_key(task), chrono::Utc::now());
+                state
+                    .config
+                    .task_work
+                    .stop(&crate::timeblocking::task_key(task), chrono::Utc::now());
                 state.timeblocking.work_now = Some(chrono::Utc::now());
                 let _ = queue_save(state);
             }
@@ -1487,7 +1582,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.timeblocking.revision += 1;
             state.calendar.invalidate_other_days();
             Task::done(Message::CalendarSyncRequested)
-        },
+        }
 
         Message::TaskCompletionSaved(id, previous, Err(error)) => {
             state.timeblocking.busy.remove(&id);
@@ -1648,7 +1743,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventDraftStarted { start, end } => {
-            let Some(calendar_id) = state.calendar.default_calendar_id(&state.config.calendar) else {
+            let Some(calendar_id) = state.calendar.default_calendar_id(&state.config.calendar)
+            else {
                 state.calendar.error =
                     Some("Connect Google Calendar in Settings to add events".to_owned());
                 return Task::none();
@@ -1863,7 +1959,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 }
 
 pub fn view(state: &State, window: window::Id) -> Element<'_, Message> {
-    if state.flash.as_ref().is_some_and(|flash| flash.window == window) {
+    if state
+        .flash
+        .as_ref()
+        .is_some_and(|flash| flash.window == window)
+    {
         return ui::flash::view(state);
     }
 
@@ -1874,7 +1974,11 @@ pub fn view(state: &State, window: window::Id) -> Element<'_, Message> {
 ///
 /// Returning `None` is how iced is told to follow the system color scheme.
 pub fn active_theme(state: &State, window: window::Id) -> Option<Theme> {
-    if state.flash.as_ref().is_some_and(|flash| flash.window == window) {
+    if state
+        .flash
+        .as_ref()
+        .is_some_and(|flash| flash.window == window)
+    {
         return Some(theme::FLASH.clone());
     }
 
@@ -1882,11 +1986,21 @@ pub fn active_theme(state: &State, window: window::Id) -> Option<Theme> {
         return None;
     }
 
-    Some(state.catalog.resolve(&state.config.appearance.theme).theme.clone())
+    Some(
+        state
+            .catalog
+            .resolve(&state.config.appearance.theme)
+            .theme
+            .clone(),
+    )
 }
 
 pub fn title(state: &State, window: window::Id) -> String {
-    if state.flash.as_ref().is_some_and(|flash| flash.window == window) {
+    if state
+        .flash
+        .as_ref()
+        .is_some_and(|flash| flash.window == window)
+    {
         return "TimeTracker".to_owned();
     }
 
@@ -1914,9 +2028,20 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
         keyboard::listen().map(map_key),
         iced::event::listen_with(|event, status, _| {
-            if status == iced::event::Status::Ignored && matches!(event, iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))) {
-                Some(Message::TimeBlocking(crate::timeblocking::Action::CancelDrag))
-            } else { None }
+            if status == iced::event::Status::Ignored
+                && matches!(
+                    event,
+                    iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                        iced::mouse::Button::Left
+                    ))
+                )
+            {
+                Some(Message::TimeBlocking(
+                    crate::timeblocking::Action::CancelDrag,
+                ))
+            } else {
+                None
+            }
         }),
     ];
 
@@ -1926,9 +2051,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     // flush even if the timer never pauses.
     if state.timer.is_running() {
         subscriptions.push(iced::time::every(TIMER_TICK).map(Message::Tick));
-        subscriptions.push(
-            iced::time::every(tracks::FLUSH_EVERY).map(|_| Message::TracksFlushRequested),
-        );
+        subscriptions
+            .push(iced::time::every(tracks::FLUSH_EVERY).map(|_| Message::TracksFlushRequested));
     }
 
     // The needle has to move even when the clock is idle, but only while
@@ -1938,7 +2062,10 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
 
     if state.timeblocking.focus.is_some() || state.config.task_work.active().is_some() {
-        subscriptions.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::TimeBlocking(crate::timeblocking::Action::WorkTick)));
+        subscriptions.push(
+            iced::time::every(Duration::from_secs(1))
+                .map(|_| Message::TimeBlocking(crate::timeblocking::Action::WorkTick)),
+        );
     }
     if state.calendar.is_signed_in() {
         subscriptions.push(
@@ -1952,8 +2079,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
 
     if matches!(state.screen, Screen::Settings | Screen::TimerSettings) {
-        subscriptions
-            .push(iced::time::every(STATUS_POLL).map(|_| Message::AudioStatusPolled));
+        subscriptions.push(iced::time::every(STATUS_POLL).map(|_| Message::AudioStatusPolled));
     }
 
     // The debounce itself: the write lands once the interval elapses, and
@@ -1965,7 +2091,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 
     // The side panel polls for show/hide commands from the panel daemon.
     if state.panel_command_rx.is_some() {
-        subscriptions.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::PanelCommandPolled));
+        subscriptions.push(
+            iced::time::every(Duration::from_millis(200)).map(|_| Message::PanelCommandPolled),
+        );
     }
 
     Subscription::batch(subscriptions)
@@ -1973,9 +2101,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 
 fn map_key(event: keyboard::Event) -> Message {
     match event {
-        keyboard::Event::KeyPressed { key, modifiers, .. } => {
-            Message::KeyPressed(key, modifiers)
-        }
+        keyboard::Event::KeyPressed { key, modifiers, .. } => Message::KeyPressed(key, modifiers),
         _ => Message::Ignored,
     }
 }
@@ -1991,22 +2117,22 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 ///
 /// Kept apart from the task it turns into, so that what a key does can be
 /// looked at without running anything.
-fn key_message(
-    state: &mut State,
-    key: Key,
-    modifiers: keyboard::Modifiers,
-) -> Option<Message> {
+fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
 
     if state.timeblocking.estimate_task.is_some() {
         return match key.as_ref() {
-            Key::Named(Named::Escape) => Some(Message::TimeBlocking(crate::timeblocking::Action::CloseEstimate)),
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CloseEstimate,
+            )),
             _ => None,
         };
     }
     if state.timeblocking.focus.is_some() {
         return match key.as_ref() {
-            Key::Named(Named::Escape) => Some(Message::TimeBlocking(crate::timeblocking::Action::CloseView)),
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CloseView,
+            )),
             _ => None,
         };
     }
@@ -2117,6 +2243,7 @@ fn open_flash(state: &mut State, settings: config::Flash) -> Task<Message> {
         resizable: false,
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: false,
+        platform_specific: window_platform(),
         ..Default::default()
     });
 
@@ -2163,7 +2290,10 @@ pub(crate) fn queue_save(state: &mut State) -> Task<Message> {
 /// Brings the recorded tracks in line with the timer, writing the file when
 /// a stretch has just opened or closed.
 fn sync_tracks(state: &mut State) -> Task<Message> {
-    if state.recorder.follow(state.timer.is_running(), Local::now()) {
+    if state
+        .recorder
+        .follow(state.timer.is_running(), Local::now())
+    {
         save_tracks(state)
     } else {
         Task::none()
@@ -2226,7 +2356,10 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 }
 
 fn sync_calendar(state: &mut State) -> Task<Message> {
-    if !state.calendar.is_signed_in() || state.calendar.is_busy() || !state.timeblocking.busy.is_empty() {
+    if !state.calendar.is_signed_in()
+        || state.calendar.is_busy()
+        || !state.timeblocking.busy.is_empty()
+    {
         return Task::none();
     }
 
@@ -2242,7 +2375,14 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     let revision = state.timeblocking.revision;
     let tasks_calendar = state.config.calendar.tasks_calendar.clone();
     blocking::run(move || {
-        calendar::sync_day(&client_id, &client_secret, &disabled, day, day_end_hour, tasks_calendar.as_deref())
+        calendar::sync_day(
+            &client_id,
+            &client_secret,
+            &disabled,
+            day,
+            day_end_hour,
+            tasks_calendar.as_deref(),
+        )
     })
     .map(move |result| Message::CalendarSyncedAt(revision, result))
 }
@@ -2280,8 +2420,12 @@ fn panel_ipc_listener(socket_path: PathBuf, tx: mpsc::Sender<PanelCommand>) -> A
             Ok(n) => {
                 let command = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
                 match command.as_str() {
-                    "show" => { let _ = tx.send(PanelCommand::Show); }
-                    "hide" => { let _ = tx.send(PanelCommand::Hide); }
+                    "show" => {
+                        let _ = tx.send(PanelCommand::Show);
+                    }
+                    "hide" => {
+                        let _ = tx.send(PanelCommand::Hide);
+                    }
                     _ => log::warn!("unknown panel IPC command: {command:?}"),
                 }
             }
@@ -2363,7 +2507,11 @@ mod tests {
         let total = flash.settings.total_duration();
         assert_eq!(total, Duration::from_millis(1_000));
 
-        assert!(flash.alpha(flash.started + total - Duration::from_millis(1)).is_some());
+        assert!(
+            flash
+                .alpha(flash.started + total - Duration::from_millis(1))
+                .is_some()
+        );
         assert!(flash.alpha(flash.started + total).is_none());
     }
 
@@ -2376,7 +2524,10 @@ mod tests {
         });
 
         // The config asked for 50 pulses a second; it gets three.
-        assert_eq!(flash.settings.total_duration(), config::Flash::MIN_PULSE * 2);
+        assert_eq!(
+            flash.settings.total_duration(),
+            config::Flash::MIN_PULSE * 2
+        );
     }
 
     #[test]
@@ -2401,7 +2552,10 @@ mod tests {
             ..config::Flash::default()
         });
 
-        assert_eq!(flash.alpha(flash.started + Duration::from_millis(100)), Some(0.0));
+        assert_eq!(
+            flash.alpha(flash.started + Duration::from_millis(100)),
+            Some(0.0)
+        );
     }
 
     #[test]
@@ -2591,19 +2745,31 @@ mod tests {
         );
 
         // Resetting has to repaint the chip, not just forget the override.
-        let _ = update(&mut state, Message::TaskColorPicked("tasks:list".into(), None));
+        let _ = update(
+            &mut state,
+            Message::TaskColorPicked("tasks:list".into(), None),
+        );
         assert_eq!(state.config.calendar.task_color("tasks:list"), None);
-        assert_eq!(state.calendar.event("deep").unwrap().color, calendar::colors::TASK);
+        assert_eq!(
+            state.calendar.event("deep").unwrap().color,
+            calendar::colors::TASK
+        );
     }
 
     #[test]
     fn the_task_color_editor_opens_and_closes() {
         let mut state = State::new(Config::default(), Catalog::built_in());
 
-        let _ = update(&mut state, Message::TaskColorEditorToggled("tasks:list".into()));
+        let _ = update(
+            &mut state,
+            Message::TaskColorEditorToggled("tasks:list".into()),
+        );
         assert_eq!(state.calendar.color_editor.as_deref(), Some("tasks:list"));
 
-        let _ = update(&mut state, Message::TaskColorEditorToggled("tasks:list".into()));
+        let _ = update(
+            &mut state,
+            Message::TaskColorEditorToggled("tasks:list".into()),
+        );
         assert_eq!(state.calendar.color_editor, None);
     }
 
@@ -2617,7 +2783,10 @@ mod tests {
 
     #[test]
     fn the_panel_window_is_pinned_to_its_width() {
-        let panel = panel::PanelConfig { width: 200, ..Default::default() };
+        let panel = panel::PanelConfig {
+            width: 200,
+            ..Default::default()
+        };
         let settings = sidebar_settings(&panel);
 
         // The width is fixed from both sides, so the compositor cannot stretch
@@ -2627,6 +2796,7 @@ mod tests {
         assert!(settings.min_size.unwrap().height < settings.max_size.unwrap().height);
         assert!(!settings.decorations);
         assert_eq!(settings.level, window::Level::AlwaysOnTop);
+        assert_eq!(settings.platform_specific.application_id, APPLICATION_ID);
     }
 
     #[test]
@@ -2643,10 +2813,16 @@ mod tests {
         let mut state = State::new(Config::default(), Catalog::built_in());
         let id = window::Id::unique();
         state.main_window = Some(id);
-        state.sidebar = Some(Sidebar { width: 200.0, side: panel::Side::Left });
+        state.sidebar = Some(Sidebar {
+            width: 200.0,
+            side: panel::Side::Left,
+        });
 
         let before = state.config.window.width;
-        let _ = update(&mut state, Message::MonitorSized(id, Some(Size::new(1920.0, 1080.0))));
+        let _ = update(
+            &mut state,
+            Message::MonitorSized(id, Some(Size::new(1920.0, 1080.0))),
+        );
 
         // The main window would have adopted `launch_width` (1280px) here; the
         // panel keeps the width it was told to.
@@ -2658,12 +2834,21 @@ mod tests {
         let mut state = State::new(Config::default(), Catalog::built_in());
         let id = window::Id::unique();
         state.main_window = Some(id);
-        state.sidebar = Some(Sidebar { width: 200.0, side: panel::Side::Left });
+        state.sidebar = Some(Sidebar {
+            width: 200.0,
+            side: panel::Side::Left,
+        });
 
         let before = state.config.window.clone();
-        let _ = update(&mut state, Message::WindowResized(id, Size::new(200.0, 1080.0)));
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(200.0, 1080.0)),
+        );
 
-        assert_eq!(state.config.window, before, "the panel must leave the saved window alone");
+        assert_eq!(
+            state.config.window, before,
+            "the panel must leave the saved window alone"
+        );
     }
 
     #[test]
@@ -2672,7 +2857,10 @@ mod tests {
         let id = window::Id::unique();
         state.main_window = Some(id);
 
-        let _ = update(&mut state, Message::WindowResized(id, Size::new(640.0, 480.0)));
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(640.0, 480.0)),
+        );
 
         assert_eq!(state.config.window.width, 640.0);
         assert_eq!(state.config.window.height, 480.0);
@@ -2808,7 +2996,10 @@ mod tests {
         state.calendar.sync = SyncState::Syncing;
 
         // The sample snapshot is for the day we navigated away from.
-        let _ = update(&mut state, Message::CalendarSynced(Ok(calendar::sample_snapshot())));
+        let _ = update(
+            &mut state,
+            Message::CalendarSynced(Ok(calendar::sample_snapshot())),
+        );
 
         assert_eq!(state.calendar.day, moved_to);
     }
@@ -2874,7 +3065,10 @@ mod tests {
         // The sample day is a week back, so nothing is starting right now.
         let _ = update(&mut state, Message::TimerOpened);
 
-        assert_eq!(state.timer.target(), Config::default().timer.last_duration());
+        assert_eq!(
+            state.timer.target(),
+            Config::default().timer.last_duration()
+        );
     }
 
     /// A state with the standup already dragged an hour later and pending.
@@ -2893,7 +3087,10 @@ mod tests {
     fn a_confirmed_drag_makes_the_chip_final() {
         let (mut state, start, _) = state_with_a_pending_drag();
 
-        let _ = update(&mut state, Message::EventTimeSaved("standup".into(), Ok(())));
+        let _ = update(
+            &mut state,
+            Message::EventTimeSaved("standup".into(), Ok(())),
+        );
 
         assert!(state.calendar.pending_time("standup").is_none());
         assert_eq!(state.calendar.event("standup").unwrap().start, start);
@@ -2917,7 +3114,10 @@ mod tests {
         assert!(state.calendar.pending_time("standup").is_none());
         assert_eq!(state.calendar.event("standup").unwrap().start, before);
         assert_ne!(state.calendar.event("standup").unwrap().start, start);
-        assert_eq!(state.calendar.error.as_deref(), Some("Google Calendar: nope"));
+        assert_eq!(
+            state.calendar.error.as_deref(),
+            Some("Google Calendar: nope")
+        );
     }
 
     #[test]
@@ -2950,22 +3150,55 @@ mod tests {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.timeblocking.focus = Some("standup".into());
         state.timeblocking.estimate_task = Some("task:deep".into());
-        assert!(key_message(&mut state, Key::Named(keyboard::key::Named::Space), keyboard::Modifiers::default()).is_none());
-        assert!(matches!(key_message(&mut state, Key::Named(keyboard::key::Named::Escape), keyboard::Modifiers::default()), Some(Message::TimeBlocking(crate::timeblocking::Action::CloseEstimate))));
+        assert!(
+            key_message(
+                &mut state,
+                Key::Named(keyboard::key::Named::Space),
+                keyboard::Modifiers::default()
+            )
+            .is_none()
+        );
+        assert!(matches!(
+            key_message(
+                &mut state,
+                Key::Named(keyboard::key::Named::Escape),
+                keyboard::Modifiers::default()
+            ),
+            Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CloseEstimate
+            ))
+        ));
     }
 
     #[test]
     fn keep_search_does_not_trigger_timer_shortcuts() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.screen = Screen::KeepNotes;
-        assert!(key_message(&mut state, Key::Named(keyboard::key::Named::Space), keyboard::Modifiers::default()).is_none());
-        assert!(matches!(key_message(&mut state, Key::Named(keyboard::key::Named::Escape), keyboard::Modifiers::default()), Some(Message::ScreenSelected(Screen::Calendar))));
+        assert!(
+            key_message(
+                &mut state,
+                Key::Named(keyboard::key::Named::Space),
+                keyboard::Modifiers::default()
+            )
+            .is_none()
+        );
+        assert!(matches!(
+            key_message(
+                &mut state,
+                Key::Named(keyboard::key::Named::Escape),
+                keyboard::Modifiers::default()
+            ),
+            Some(Message::ScreenSelected(Screen::Calendar))
+        ));
     }
 
     #[test]
     fn keep_failed_refresh_preserves_last_snapshot_and_filters() {
         let mut state = State::new(Config::default(), Catalog::built_in());
-        state.keep.snapshot.notes.push(crate::keep::Note { title: "Saved".into(), ..Default::default() });
+        state.keep.snapshot.notes.push(crate::keep::Note {
+            title: "Saved".into(),
+            ..Default::default()
+        });
         state.keep.query = "saved".into();
         state.keep.loading = true;
         let _ = update(&mut state, Message::KeepLoaded(Err("Reconnect".into())));
@@ -2974,7 +3207,6 @@ mod tests {
         assert_eq!(state.keep.query, "saved");
         assert_eq!(state.keep.error.as_deref(), Some("Reconnect"));
     }
-
 }
 
 fn refresh_keep(state: &mut State) -> Task<Message> {

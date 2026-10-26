@@ -239,7 +239,8 @@ fn helper_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(path) = std::env::var_os("TIMETRACKER_KEEP_BRIDGE")
-        .or_else(|| std::env::var_os("TIMETRACKER_TASKS_BRIDGE")) {
+        .or_else(|| std::env::var_os("TIMETRACKER_TASKS_BRIDGE"))
+    {
         return vec![PathBuf::from(path)];
     }
 
@@ -271,7 +272,6 @@ fn helper_candidates() -> Vec<PathBuf> {
 
     candidates
 }
-
 
 #[cfg(test)]
 mod tests {

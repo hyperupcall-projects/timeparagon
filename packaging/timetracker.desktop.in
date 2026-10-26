@@ -10,3 +10,4 @@ Terminal=false
 Categories=Utility;Clock;
 Keywords=timer;clock;stopwatch;alarm;countdown;
 StartupNotify=true
+StartupWMClass=timetracker

@@ -202,9 +202,12 @@ pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Re
         .request(method, url)
         .set("Authorization", &format!("Bearer {token}"))
         .set("Accept", "application/json");
-    let result = match body {
-        Some(body) => request.send_json(body),
-        None => request.call(),
+    let result = match (method, body) {
+        (_, Some(body)) => request.send_json(body),
+        // Tasks.move is a POST with an empty body. Google answers 411 unless
+        // that request carries Content-Length, and ureq's call() omits it.
+        ("POST" | "PUT" | "PATCH", None) => request.send_string(""),
+        (_, None) => request.call(),
     };
     match result {
         Ok(response) if response.status() == 204 => Ok(Value::Null),
@@ -305,6 +308,48 @@ pub fn remove(token: &str, link: &Link) -> Result<(), String> {
         Err(error) if matches!(error.status, Some(404 | 410)) => Ok(()),
         Err(error) => Err(error.message),
     }
+}
+
+/// Deletes every calendar event on `calendar_id` that points at `task_id`.
+///
+/// Scheduling can leave more than one event for the same task. A missing
+/// event is already the state this is aiming for.
+pub fn remove_task_copies(token: &str, calendar_id: &str, task_id: &str) -> Result<(), String> {
+    let mut page_token: Option<String> = None;
+    loop {
+        let mut url = format!(
+            "{}/{}/events?privateExtendedProperty=ttTask%3D{}&maxResults=50",
+            api::EVENTS,
+            urlencoding::encode(calendar_id),
+            urlencoding::encode(task_id)
+        );
+        if let Some(page) = &page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(page));
+        }
+        let response = request("GET", &url, token, None).map_err(|error| error.message)?;
+        for item in response["items"].as_array().into_iter().flatten() {
+            let Some(id) = item["id"].as_str() else {
+                continue;
+            };
+            let event_url = format!(
+                "{}/{}/events/{}",
+                api::EVENTS,
+                urlencoding::encode(calendar_id),
+                urlencoding::encode(id)
+            );
+            match request("DELETE", &event_url, token, None) {
+                Ok(_) => {}
+                Err(error) if matches!(error.status, Some(404 | 410)) => {}
+                Err(error) => return Err(error.message),
+            }
+        }
+        page_token = response["nextPageToken"].as_str().map(str::to_owned);
+        if page_token.is_none() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// The cross-service scheduling transaction is tested against this boundary,

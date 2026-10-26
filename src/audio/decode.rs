@@ -10,7 +10,6 @@ use std::num::NonZero;
 use std::path::Path;
 use std::time::Duration;
 
-
 use rodio::source::UniformSourceIterator;
 
 use super::{CHANNELS, Pcm, SAMPLE_RATE};
@@ -45,8 +44,8 @@ impl std::error::Error for Error {}
 pub fn load(path: &Path) -> Result<Pcm, Error> {
     let file = File::open(path).map_err(Error::Open)?;
 
-    let decoder = rodio::Decoder::try_from(file)
-        .map_err(|error| Error::Decode(error.to_string()))?;
+    let decoder =
+        rodio::Decoder::try_from(file).map_err(|error| Error::Decode(error.to_string()))?;
 
     let channels = NonZero::new(CHANNELS as u16).expect("CHANNELS is not zero");
     let rate = NonZero::new(SAMPLE_RATE).expect("SAMPLE_RATE is not zero");

@@ -92,12 +92,18 @@ fn main() {
                 state.screen = Screen::SetTime;
             });
 
-            count += shoot(directory, theme, Size::new(width, 720.0), "calendar", |state| {
-                state.screen = Screen::Calendar;
-                state.calendar = timetracker::calendar::Store::with_snapshot(
-                    timetracker::calendar::sample_snapshot(),
-                );
-            });
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "calendar",
+                |state| {
+                    state.screen = Screen::Calendar;
+                    state.calendar = timetracker::calendar::Store::with_snapshot(
+                        timetracker::calendar::sample_snapshot(),
+                    );
+                },
+            );
 
             // A Google summary is free text, and it is often far longer than
             // the event it names. This one brings its own line breaks and a
@@ -142,52 +148,76 @@ fn main() {
                 },
             );
 
-            count += shoot(directory, theme, Size::new(width, 720.0), "calendar-month", |state| {
-                state.screen = Screen::Calendar;
-                state.calendar = timetracker::calendar::Store::with_snapshot(
-                    timetracker::calendar::sample_snapshot(),
-                );
-                state.calendar.month_open = true;
-            });
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "calendar-month",
+                |state| {
+                    state.screen = Screen::Calendar;
+                    state.calendar = timetracker::calendar::Store::with_snapshot(
+                        timetracker::calendar::sample_snapshot(),
+                    );
+                    state.calendar.month_open = true;
+                },
+            );
 
-            count += shoot(directory, theme, Size::new(width, 720.0), "calendar-todos", |state| {
-                state.screen = Screen::Calendar;
-                state.calendar = timetracker::calendar::Store::with_snapshot(
-                    timetracker::calendar::sample_snapshot(),
-                );
-                state.config.todos.add("Draft the report");
-                state.config.todos.add("Collect the numbers");
-                state.config.todos.indent(1, 1);
-                state.config.todos.add("Send it round");
-                state.config.todos.set_current(1);
-            });
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "calendar-todos",
+                |state| {
+                    state.screen = Screen::Calendar;
+                    state.calendar = timetracker::calendar::Store::with_snapshot(
+                        timetracker::calendar::sample_snapshot(),
+                    );
+                    state.config.todos.add("Draft the report");
+                    state.config.todos.add("Collect the numbers");
+                    state.config.todos.indent(1, 1);
+                    state.config.todos.add("Send it round");
+                    state.config.todos.set_current(1);
+                },
+            );
 
-            count += shoot(directory, theme, Size::new(width, 720.0), "todos", |state| {
-                state.screen = Screen::Backlog;
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "todos",
+                |state| {
+                    state.screen = Screen::Backlog;
 
-                // The sample events are in the past, so a couple are moved to
-                // later today to give the "Coming up" list something to show.
-                let mut snapshot = timetracker::calendar::sample_snapshot();
-                let soon = chrono::Local::now() + chrono::Duration::minutes(20);
-                snapshot.events[1].start = soon;
-                snapshot.events[1].end = soon + chrono::Duration::minutes(30);
-                snapshot.events[3].start = soon + chrono::Duration::minutes(45);
-                snapshot.events[3].end = soon + chrono::Duration::minutes(105);
-                state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+                    // The sample events are in the past, so a couple are moved to
+                    // later today to give the "Coming up" list something to show.
+                    let mut snapshot = timetracker::calendar::sample_snapshot();
+                    let soon = chrono::Local::now() + chrono::Duration::minutes(20);
+                    snapshot.events[1].start = soon;
+                    snapshot.events[1].end = soon + chrono::Duration::minutes(30);
+                    snapshot.events[3].start = soon + chrono::Duration::minutes(45);
+                    snapshot.events[3].end = soon + chrono::Duration::minutes(105);
+                    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
 
-                state.config.todos.add("Draft the report");
-                state.config.todos.add("Collect the numbers");
-                state.config.todos.indent(1, 1);
-                state.config.todos.add("Send it round");
-                state.config.todos.set_current(1);
-            });
+                    state.config.todos.add("Draft the report");
+                    state.config.todos.add("Collect the numbers");
+                    state.config.todos.indent(1, 1);
+                    state.config.todos.add("Send it round");
+                    state.config.todos.set_current(1);
+                },
+            );
 
-            count += shoot(directory, theme, Size::new(width, 720.0), "notepad", |state| {
-                state.screen = Screen::Notepad;
-                state.set_notepad(
+            count += shoot(
+                directory,
+                theme,
+                Size::new(width, 720.0),
+                "notepad",
+                |state| {
+                    state.screen = Screen::Notepad;
+                    state.set_notepad(
                     "Things to sort out before Friday:\n\n- the draft\n- the numbers\n- who is picking up the room",
                 );
-            });
+                },
+            );
 
             // The text at its largest, which is the size the narrow layout has
             // to survive.
@@ -198,10 +228,10 @@ fn main() {
                 "notepad-large",
                 |state| {
                     state.screen = Screen::Notepad;
-                    state.config.notepad.font_size =
-                        timetracker::config::Notepad::MAX_FONT_SIZE;
+                    state.config.notepad.font_size = timetracker::config::Notepad::MAX_FONT_SIZE;
                     state.set_notepad(
-                        "Things to sort out before Friday:\n\n- the draft\n- the numbers".to_owned(),
+                        "Things to sort out before Friday:\n\n- the draft\n- the numbers"
+                            .to_owned(),
                     );
                 },
             );
@@ -213,10 +243,10 @@ fn main() {
                 "notepad-small",
                 |state| {
                     state.screen = Screen::Notepad;
-                    state.config.notepad.font_size =
-                        timetracker::config::Notepad::MIN_FONT_SIZE;
+                    state.config.notepad.font_size = timetracker::config::Notepad::MIN_FONT_SIZE;
                     state.set_notepad(
-                        "Things to sort out before Friday:\n\n- the draft\n- the numbers".to_owned(),
+                        "Things to sort out before Friday:\n\n- the draft\n- the numbers"
+                            .to_owned(),
                     );
                 },
             );
@@ -227,18 +257,12 @@ fn main() {
     // progress ring. The ring is dropped automatically in short windows, so
     // this is the only shape that exercises it.
     for theme in ["Sakura", "Matcha"] {
-        count += shoot(
-            directory,
-            theme,
-            Size::new(360.0, 520.0),
-            "ring",
-            |state| {
-                state.timer_open = true;
-                state.timer.set_target(Some(Duration::from_secs(300)));
-                state.timer.start(state.now);
-                state.now += Duration::from_secs(73);
-            },
-        );
+        count += shoot(directory, theme, Size::new(360.0, 520.0), "ring", |state| {
+            state.timer_open = true;
+            state.timer.set_target(Some(Duration::from_secs(300)));
+            state.timer.start(state.now);
+            state.now += Duration::from_secs(73);
+        });
     }
 
     // And the widest layout, where the settings sit beside the calendar.

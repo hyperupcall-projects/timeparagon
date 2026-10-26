@@ -48,10 +48,7 @@ fn the_clock_controls_survive_every_width() {
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
         for label in ["Start", "Reset", "Set Time", "Alarm", "0:00", "of 5:00"] {
-            assert!(
-                ui.find(label).is_ok(),
-                "{label:?} is missing at {width}px"
-            );
+            assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
     }
 }
@@ -68,7 +65,9 @@ fn timer_is_clickable_at_the_minimum_width() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages.iter().any(|message| matches!(message, Message::TimerOpened)),
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::TimerOpened)),
         "clicking Timer produced {messages:?}"
     );
 
@@ -92,7 +91,10 @@ fn the_calendar_unfolds_the_clock_and_folds_it_away() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
     for label in ["Pause", "Set Time", "Reset", "Alarm", "Go back"] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing with the clock open");
+        assert!(
+            ui.find(label).is_ok(),
+            "{label:?} is missing with the clock open"
+        );
     }
 
     let _ = ui.click("Go back")?;
@@ -272,10 +274,22 @@ fn the_settings_tab_uses_the_whole_window() {
 
     for width in [200.0, 420.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 600.0));
-        assert!(ui.find("Start").is_err(), "the clock is visible at {width}px");
-        assert!(ui.find("Done").is_err(), "settings have a Done button at {width}px");
-        assert!(ui.find("Show Google Tasks").is_err(), "settings have a task toggle at {width}px");
-        assert!(ui.find("Theme").is_ok(), "the settings are missing at {width}px");
+        assert!(
+            ui.find("Start").is_err(),
+            "the clock is visible at {width}px"
+        );
+        assert!(
+            ui.find("Done").is_err(),
+            "settings have a Done button at {width}px"
+        );
+        assert!(
+            ui.find("Show Google Tasks").is_err(),
+            "settings have a task toggle at {width}px"
+        );
+        assert!(
+            ui.find("Theme").is_ok(),
+            "the settings are missing at {width}px"
+        );
     }
 }
 
@@ -310,7 +324,10 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
     let mut state = state();
 
     {
-        let mut ui = at(Size::new(800.0, 600.0), timetracker::ui::flash::view(&state));
+        let mut ui = at(
+            Size::new(800.0, 600.0),
+            timetracker::ui::flash::view(&state),
+        );
         let _: Result<_, _> = ui.find("nothing");
     }
 
@@ -320,7 +337,10 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
         settings: timetracker::config::Flash::default(),
     });
 
-    let mut ui = at(Size::new(800.0, 600.0), timetracker::ui::flash::view(&state));
+    let mut ui = at(
+        Size::new(800.0, 600.0),
+        timetracker::ui::flash::view(&state),
+    );
     let _: Result<_, _> = ui.find("nothing");
 }
 
@@ -331,7 +351,8 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
 fn the_calendar_view_is_usable_at_two_hundred_pixels() {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
@@ -346,7 +367,8 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
@@ -389,12 +411,16 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
 fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
     state.calendar.month_open = true;
 
     let mut ui = render(&state, Size::new(200.0, 700.0));
 
-    assert!(ui.find("October 2026").is_ok(), "the month title is missing");
+    assert!(
+        ui.find("October 2026").is_ok(),
+        "the month title is missing"
+    );
     for label in ["M", "T", "W", "F", "S"] {
         assert!(ui.find(label).is_ok(), "weekday {label:?} is missing");
     }
@@ -419,12 +445,21 @@ fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
 fn the_calendar_menu_lists_calendars_and_the_website_link() {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
     state.calendar.menu_open = true;
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Calendars", "Show Google Tasks", "Personal", "Work", "Tasks", "Sync now", "Open Google Calendar"] {
+    for label in [
+        "Calendars",
+        "Show Google Tasks",
+        "Personal",
+        "Work",
+        "Tasks",
+        "Sync now",
+        "Open Google Calendar",
+    ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
     }
 }
@@ -435,10 +470,14 @@ fn the_tabs_keep_the_requested_groups() {
     let state = state();
     for width in [180.0, 200.0, 260.0, 420.0, 640.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 500.0));
-        for label in ["Calendar", "Backlog", "Projects", "Notepad", "Keep", "Settings"] {
+        for label in [
+            "Calendar", "Backlog", "Projects", "Notepad", "Keep", "Settings",
+        ] {
             let bounds = ui.find(label).unwrap().bounds();
-            assert!(bounds.x >= 0.0 && bounds.x + bounds.width <= width,
-                "{label} extends beyond the window at {width}px");
+            assert!(
+                bounds.x >= 0.0 && bounds.x + bounds.width <= width,
+                "{label} extends beyond the window at {width}px"
+            );
         }
         let calendar = ui.find("Calendar").unwrap().bounds();
         let notepad = ui.find("Notepad").unwrap().bounds();
@@ -459,7 +498,8 @@ fn projects_lists_directory_names() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(200.0, 500.0));
     ui.click("Projects")?;
-    let message = ui.into_messages()
+    let message = ui
+        .into_messages()
         .find(|message| matches!(message, Message::ScreenSelected(Screen::Projects)))
         .expect("Projects should select its view");
     let _ = app::update(&mut state, message);
@@ -474,10 +514,10 @@ fn projects_lists_directory_names() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(200.0, 500.0));
     assert!(ui.find("Loading projects…").is_ok());
     drop(ui);
-    let _ = app::update(&mut state, Message::ProjectsLoaded(Ok(vec![
-        "Personal".into(),
-        "School".into(),
-    ])));
+    let _ = app::update(
+        &mut state,
+        Message::ProjectsLoaded(Ok(vec!["Personal".into(), "School".into()])),
+    );
     let mut ui = render(&state, Size::new(200.0, 500.0));
     assert!(ui.find("Personal").is_ok());
     assert!(ui.find("School").is_ok());
@@ -498,10 +538,9 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages.iter().any(|message| matches!(
-            message,
-            Message::ScreenSelected(Screen::Settings)
-        )),
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::ScreenSelected(Screen::Settings))),
         "clicking the tab produced {messages:?}"
     );
 
@@ -524,16 +563,19 @@ fn a_task_list_can_be_given_its_own_color() -> Result<(), Error> {
 
     let mut ui = render(&state, Size::new(200.0, 700.0));
 
-    assert!(ui.find("Task color").is_ok(), "the picker is missing at 200px");
+    assert!(
+        ui.find("Task color").is_ok(),
+        "the picker is missing at 200px"
+    );
 
     let _ = ui.click("Reset to default")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:list")),
+        messages.iter().any(
+            |message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:list")
+        ),
         "expected the reset to be offered, got {messages:?}"
     );
 
@@ -544,8 +586,12 @@ fn a_task_list_can_be_given_its_own_color() -> Result<(), Error> {
 fn toggling_a_calendar_off_hides_its_events_in_the_day_view() {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
-    state.config.calendar.set_calendar_enabled("personal", false);
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state
+        .config
+        .calendar
+        .set_calendar_enabled("personal", false);
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
@@ -559,7 +605,8 @@ fn toggling_a_calendar_off_hides_its_events_in_the_day_view() {
 fn opening_an_event_shows_its_google_details() {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
     let standup = state
         .calendar
         .events
@@ -593,7 +640,10 @@ fn opening_an_event_shows_its_google_details() {
         "Close",
         "Work",
     ] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing from the event details");
+        assert!(
+            ui.find(label).is_ok(),
+            "{label:?} is missing from the event details"
+        );
     }
 }
 
@@ -601,7 +651,8 @@ fn opening_an_event_shows_its_google_details() {
 fn a_task_details_card_links_to_google_tasks_without_a_status() {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
     let task = state
         .calendar
         .events
@@ -619,6 +670,8 @@ fn a_task_details_card_links_to_google_tasks_without_a_status() {
 
     assert!(ui.find("Open in Google Tasks").is_ok());
     assert!(ui.find("Mark complete").is_ok());
+    assert!(ui.find("Name").is_ok());
+    assert!(ui.find("Rename").is_ok());
     assert!(ui.find("Bring the form").is_ok());
     assert!(ui.find("Needs action").is_err());
     assert!(ui.find("Status").is_err());
@@ -680,7 +733,8 @@ fn a_long_event_keeps_its_buttons_out_of_the_scroll() -> Result<(), Error> {
 fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Calendar;
-    state.calendar = timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+    state.calendar =
+        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
     let _ = ui.click("Team offsite")?;
@@ -716,31 +770,37 @@ fn the_calendar_view_shows_the_clock_status() {
     assert!(ui.find("of 5:00").is_ok(), "the target is missing");
 }
 
-/// The day view carries its own switch for Google Tasks, beside the sync
-/// line, so they can be hidden without opening the menu.
+/// The day view says how many of that day's tasks still have no time block.
+/// Undated tasks and tasks on other days stay out of the count.
 #[test]
-fn the_calendar_offers_a_tasks_toggle_beside_the_sync_line() -> Result<(), Error> {
-    let mut state = state();
-    state.screen = Screen::Calendar;
-    state.calendar =
-        timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
+fn the_calendar_shows_how_many_tasks_are_not_time_blocked() -> Result<(), Error> {
+    let mut state = timeblocking_state();
+    let day = state.calendar.day;
+    let mut task = state.calendar.event("task:backlog").unwrap().clone();
+    task.id = "task:today".into();
+    task.title = "Outline today".into();
+    task.all_day = true;
+    task.start = day
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
+    task.end = task.start + chrono::Duration::days(1);
+    state.calendar.add_event(task);
 
-    let mut ui = render(&state, Size::new(200.0, 600.0));
-    assert!(ui.find("Hide tasks").is_ok(), "the tasks toggle is missing");
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+    assert!(ui.find("1 task not time-blocked").is_ok());
+    assert!(ui.find("Show tasks").is_err());
+    assert!(ui.find("Hide tasks").is_err());
+    assert!(ui.find("Hide overdue tasks").is_err());
+    assert!(ui.find("Show overdue tasks").is_err());
+    assert!(ui.find("Drop tasks here to schedule this day").is_err());
+    drop(ui);
 
-    let _ = ui.click("Hide tasks")?;
-    let messages: Vec<Message> = ui.into_messages().collect();
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::ShowTasksToggled(false))),
-        "expected the toggle to ask for the tasks to be hidden, got {messages:?}"
-    );
-
-    // Once they are hidden the same button offers to bring them back.
-    state.config.calendar.show_tasks = false;
-    let mut ui = render(&state, Size::new(200.0, 600.0));
-    assert!(ui.find("Show tasks").is_ok(), "the toggle should offer to restore tasks");
+    state.calendar.day = day.pred_opt().unwrap();
+    let mut ui = render(&state, Size::new(260.0, 600.0));
+    assert!(ui.find("0 tasks not time-blocked").is_ok());
+    assert!(ui.find("1 task not time-blocked").is_err());
 
     Ok(())
 }
@@ -787,7 +847,10 @@ fn the_timer_view_offers_only_a_way_back() {
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
     assert!(ui.find("Go back").is_ok(), "the way back is missing");
-    assert!(ui.find("Todos").is_err(), "the scratchpad button should be gone");
+    assert!(
+        ui.find("Todos").is_err(),
+        "the scratchpad button should be gone"
+    );
 }
 
 /// Calendar connection and sync controls remain available in settings.
@@ -820,7 +883,10 @@ fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
         assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
 
         let calendar = "Calendar";
-        assert!(ui.find(calendar).is_ok(), "the way back is missing at {width}px");
+        assert!(
+            ui.find(calendar).is_ok(),
+            "the way back is missing at {width}px"
+        );
     }
 }
 
@@ -835,10 +901,9 @@ fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages.iter().any(|message| matches!(
-            message,
-            Message::ScreenSelected(Screen::Notepad)
-        )),
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::ScreenSelected(Screen::Notepad))),
         "clicking the tab produced {messages:?}"
     );
 
@@ -891,8 +956,14 @@ fn the_settings_pane_has_no_text_size() {
 
     let mut ui = render(&state, Size::new(200.0, 400.0));
 
-    assert!(ui.find("Text size").is_err(), "the text size should be the notepad's");
-    assert!(ui.find("A-").is_err(), "the size buttons should be on the notepad");
+    assert!(
+        ui.find("Text size").is_err(),
+        "the text size should be the notepad's"
+    );
+    assert!(
+        ui.find("A-").is_err(),
+        "the size buttons should be on the notepad"
+    );
 }
 
 /// Typing in the notepad has to be kept: the editor's actions have to reach
@@ -922,90 +993,470 @@ fn typing_in_the_notepad_is_kept() -> Result<(), Error> {
 }
 
 fn timeblocking_state() -> State {
-    use timetracker::timeblocking::{Metadata, block_key, UNDATED};
+    use timetracker::timeblocking::{Metadata, UNDATED, block_key};
     let mut state = state();
     let mut snapshot = timetracker::calendar::sample_snapshot();
     snapshot.day = Local::now().date_naive();
     state.config.calendar.time_block_calendar = Some("work".into());
     state.config.calendar.time_block_list = Some("tasks:list".into());
-    let block = snapshot.events.iter_mut().find(|e| e.id == "standup").unwrap();
-    block.start = chrono::Local::now().date_naive().and_hms_opt(1,0,0).unwrap().and_local_timezone(Local).unwrap();
+    let block = snapshot
+        .events
+        .iter_mut()
+        .find(|e| e.id == "standup")
+        .unwrap();
+    block.start = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(1, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
     block.end = block.start + chrono::Duration::hours(1);
     let key = block_key(block);
     let mut task = block.clone();
-    task.id = "task:planned".into(); task.calendar_id = "tasks:list".into(); task.title = "Write proposal".into(); task.all_day = true;
-    set_task_metadata(&mut task, "Proposal notes", Metadata { block: Some(key), minutes: 90, order: 1, ..Default::default() });
+    task.id = "task:planned".into();
+    task.calendar_id = "tasks:list".into();
+    task.title = "Write proposal".into();
+    task.all_day = true;
+    set_task_metadata(
+        &mut task,
+        "Proposal notes",
+        Metadata {
+            block: Some(key),
+            minutes: 90,
+            order: 1,
+            ..Default::default()
+        },
+    );
     snapshot.events.push(task.clone());
-    task.id = "task:backlog".into(); task.title = "Research outline".into();
-    task.start = UNDATED.and_hms_opt(0,0,0).unwrap().and_local_timezone(Local).unwrap();
+    task.id = "task:backlog".into();
+    task.title = "Research outline".into();
+    task.start = UNDATED
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
     task.end = task.start + chrono::Duration::days(1);
     set_task_metadata(&mut task, "", Metadata::default());
     snapshot.events.push(task.clone());
-    task.id = "task:overdue".into(); task.title = "Send invoice".into();
-    set_task_metadata(&mut task, &format!("DUE: {}", (Local::now() - chrono::Duration::days(8)).date_naive()), Metadata::default());
-    task.start = Local::now() - chrono::Duration::days(8); task.end = task.start + chrono::Duration::days(1);
+    task.id = "task:overdue".into();
+    task.title = "Send invoice".into();
+    set_task_metadata(
+        &mut task,
+        &format!(
+            "DUE: {}",
+            (Local::now() - chrono::Duration::days(8)).date_naive()
+        ),
+        Metadata::default(),
+    );
+    task.start = Local::now() - chrono::Duration::days(8);
+    task.end = task.start + chrono::Duration::days(1);
     snapshot.events.push(task);
+    snapshot.calendars.push(timetracker::calendar::Calendar {
+        id: "tasks:list".into(),
+        name: "Inbox".into(),
+        color: iced::Color::from_rgb8(66, 133, 244),
+        primary: false,
+        selected_by_google: true,
+    });
     state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
     state
 }
 
 #[test]
-fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() {
+fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> Result<(), Error> {
     let mut state = timeblocking_state();
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
     assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
     assert_eq!(state.timeblocking.original_width, Some(260.0));
     assert!(state.calendar.open_event.is_none());
     let mut ui = render(&state, Size::new(660.0, 720.0));
-    for label in ["90m planned / 60m available", "Write proposal", "Available tasks"] {
+    for label in [
+        "Edit time block",
+        "Show Event Details",
+        "Planned Tasks",
+        "Write proposal",
+        "Available tasks",
+        "Only today",
+        "Search available tasks…",
+    ] {
         assert!(ui.find(label).is_ok(), "missing {label}");
     }
+    assert!(ui.find("90m planned / 60m available").is_err());
+    assert!(ui.find("Add a todo").is_err());
     // Generate a preview only when explicitly requested for visual inspection.
     if std::env::var_os("TB_PREVIEW").is_some() {
-        ui.snapshot(&iced::Theme::Light).unwrap().matches_image(std::path::Path::new("/tmp/timeblocking-preview")).unwrap();
+        ui.snapshot(&iced::Theme::Light)
+            .unwrap()
+            .matches_image(std::path::Path::new("/tmp/timeblocking-preview"))
+            .unwrap();
     }
     drop(ui);
+    state.timeblocking.todo_open = true;
+    state.timeblocking.todo_draft = "Call the client".into();
+    let mut ui = render(&state, Size::new(900.0, 900.0));
+    let _ = ui.click("Add task")?;
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::TimeBlocking(timetracker::timeblocking::Action::AddTodo(id)) if id == "standup"
+    )));
+    drop(state);
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
     let _ = app::update(&mut state, Message::ScreenSelected(Screen::Backlog));
     assert!(state.timeblocking.block.is_none());
     assert_eq!(state.timeblocking.original_width, None);
+    Ok(())
 }
 
 #[test]
-fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() -> Result<(), Error> {
+fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let mut ui = render(&state, Size::new(900.0, 900.0));
+    let _ = ui.click("Edit time block")?;
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::EventEditRequested(id) if id == "standup"
+    )));
+
+    let mut ui = render(&state, Size::new(900.0, 900.0));
+    let _ = ui.click("Show Event Details")?;
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::TimeBlocking(Action::Details(id)) if id == "standup"
+    )));
+
+    let mut ui = render(&state, Size::new(900.0, 900.0));
+    let _ = ui.click("+")?;
+    assert!(
+        ui.into_messages()
+            .any(|message| matches!(message, Message::TimeBlocking(Action::OpenTodo)))
+    );
+
+    let mut ui = render(&state, Size::new(900.0, 900.0));
+    let slot = ui.find("+")?;
+    let task = ui.find("Research outline")?;
+    let start = task.bounds().center();
+    let end = slot.bounds().center();
+    assert!(start.distance(end) >= 4.0);
+    ui.point_at(start);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Left,
+    ))]);
+    ui.point_at(end);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+        position: end,
+    })]);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+        iced::mouse::Button::Left,
+    ))]);
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(messages.iter().any(
+        |message| matches!(message, Message::TimeBlocking(Action::Drag(id)) if id == "task:backlog")
+    ));
+    assert!(messages.iter().any(|message| {
+        matches!(message, Message::TimeBlocking(Action::DropBlock(id)) if id == "standup")
+    }));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, Message::TimeBlocking(Action::OpenTodo)))
+    );
+    Ok(())
+}
+
+#[test]
+fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Send invoice").is_ok());
+    let search = ui.find("Search available tasks…")?;
+    ui.point_at(search.bounds().center());
+    ui.simulate(iced_test::simulator::click());
+    ui.typewrite("invoice");
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::TimeBlocking(Action::AvailableQuery(query)) if query == "invoice"
+    )));
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableQuery("INVOICE".into())),
+    );
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Send invoice").is_ok());
+    assert!(ui.find("Research outline").is_err());
+    assert!(ui.find("Write proposal").is_ok());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableQuery("nope".into())),
+    );
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("No matching tasks").is_ok());
+    assert!(ui.find("Research outline").is_err());
+    assert!(ui.find("Write proposal").is_ok());
+    Ok(())
+}
+
+#[test]
+fn available_tasks_can_be_limited_to_today() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let mut state = timeblocking_state();
+    let today = Local::now().date_naive();
+    let mut later = state.calendar.event("task:backlog").unwrap().clone();
+    later.id = "task:later".into();
+    later.title = "Plan Friday".into();
+    let tomorrow = today + chrono::Duration::days(1);
+    later.start = tomorrow
+        .and_hms_opt(9, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
+    later.end = later.start + chrono::Duration::days(1);
+    state.calendar.add_event(later);
+    let task = state.calendar.event_mut("task:backlog").unwrap();
+    task.start = today
+        .and_hms_opt(9, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
+    task.end = task.start + chrono::Duration::days(1);
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Plan Friday").is_ok());
+    let label = ui.find("Only today")?;
+    let bounds = label.bounds();
+    ui.point_at(Point::new(
+        bounds.x + bounds.width + 20.0,
+        bounds.center().y,
+    ));
+    ui.simulate(iced_test::simulator::click());
+    assert!(
+        ui.into_messages()
+            .any(|message| matches!(message, Message::TimeBlocking(Action::AvailableToday(true))))
+    );
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableToday(true)),
+    );
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Plan Friday").is_err());
+    assert!(ui.find("Write proposal").is_ok());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableToday(false)),
+    );
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Plan Friday").is_ok());
+    Ok(())
+}
+
+#[test]
+fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() -> Result<(), Error>
+{
     let mut state = timeblocking_state();
     state.screen = Screen::Backlog;
     let mut ui = render(&state, Size::new(420.0, 720.0));
     assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Inbox").is_ok());
     assert!(ui.find("Write proposal").is_err());
     assert!(ui.find("Send invoice").is_ok());
     let _ = ui.click("Research outline")?;
     let messages: Vec<_> = ui.into_messages().collect();
-    assert!(messages.iter().any(|m| matches!(m, Message::EventOpened(id) if id == "task:backlog")));
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::EventOpened(id) if id == "task:backlog"))
+    );
     let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+    assert_eq!(state.timeblocking.title, "Research outline");
     let mut ui = render(&state, Size::new(420.0, 720.0));
-    for label in ["Deadline", "Save deadline", "Scheduled day and time", "Schedule time", "Move to Backlog"] { assert!(ui.find(label).is_ok()); }
+    for label in [
+        "Inbox",
+        "Name",
+        "Rename",
+        "Deadline",
+        "Save deadline",
+        "Scheduled day and time",
+        "Schedule time",
+        "Move to Backlog",
+    ] {
+        assert!(ui.find(label).is_ok());
+    }
+    drop(ui);
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timetracker::timeblocking::Action::Title(
+            "Revised outline".into(),
+        )),
+    );
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    let _ = ui.click("Rename")?;
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::TimeBlocking(timetracker::timeblocking::Action::SaveTitle(id)) if id == "task:backlog"
+    )));
+    Ok(())
+}
+
+#[test]
+fn backlog_shows_each_task_list_and_filters_by_search_and_list() -> Result<(), Error> {
+    use timetracker::timeblocking::{Action, Metadata};
+    let mut state = timeblocking_state();
+    state.screen = Screen::Backlog;
+    state
+        .calendar
+        .calendars
+        .push(timetracker::calendar::Calendar {
+            id: "tasks:errands".into(),
+            name: "Errands".into(),
+            color: iced::Color::from_rgb8(52, 168, 83),
+            primary: false,
+            selected_by_google: true,
+        });
+    let mut errand = state.calendar.event("task:backlog").unwrap().clone();
+    errand.id = "task:errand".into();
+    errand.calendar_id = "tasks:errands".into();
+    errand.title = "Buy stamps".into();
+    set_task_metadata(&mut errand, "", Metadata::default());
+    state.calendar.add_event(errand);
+
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    for label in [
+        "All lists",
+        "Inbox",
+        "Errands",
+        "Research outline",
+        "Buy stamps",
+    ] {
+        assert!(ui.find(label).is_ok(), "missing {label}");
+    }
+    let search = ui.find("Search tasks or lists…")?;
+    ui.point_at(search.bounds().center());
+    ui.simulate(iced_test::simulator::click());
+    ui.typewrite("stamp");
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::TimeBlocking(Action::BacklogQuery(query)) if query == "stamp"
+    )));
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::BacklogQuery("STAMP".into())),
+    );
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    assert!(ui.find("Buy stamps").is_ok());
+    assert!(ui.find("Research outline").is_err());
+    assert!(ui.find("Send invoice").is_err());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::BacklogQuery("errands".into())),
+    );
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    assert!(ui.find("Buy stamps").is_ok());
+    assert!(ui.find("Research outline").is_err());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::BacklogQuery(String::new())),
+    );
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    let _ = ui.click("Errands")?;
+    let list_message = ui.into_messages().find(|message| {
+        matches!(message, Message::TimeBlocking(Action::BacklogList(Some(id))) if id == "tasks:errands")
+    });
+    assert!(
+        list_message.is_some(),
+        "the Errands filter did not select that list"
+    );
+    let _ = app::update(&mut state, list_message.unwrap());
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    assert!(ui.find("Buy stamps").is_ok());
+    assert!(ui.find("Research outline").is_err());
+    drop(ui);
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::BacklogList(Some("tasks:list".into()))),
+    );
+    let mut ui = render(&state, Size::new(180.0, 720.0));
+    assert!(ui.find("Research outline").is_ok());
+    assert!(ui.find("Send invoice").is_ok());
+    assert!(ui.find("Buy stamps").is_err());
+    for label in ["Search tasks or lists…", "Inbox", "Research outline"] {
+        let bounds = ui.find(label)?.bounds();
+        assert!(
+            bounds.x >= -1.0 && bounds.x + bounds.width <= 181.0,
+            "{label} escapes the 180px window: {bounds:?}"
+        );
+    }
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::BacklogQuery("nope".into())),
+    );
+    let mut ui = render(&state, Size::new(420.0, 720.0));
+    assert!(ui.find("No matching tasks").is_ok());
+    assert!(ui.find("Research outline").is_err());
     Ok(())
 }
 
 #[test]
 fn overdue_tasks_can_be_hidden_without_hiding_backlog_or_events() {
     let mut state = timeblocking_state();
-    assert!(state.calendar.all_day_events(&state.config.calendar).any(|e| e.id == "task:overdue"));
-    assert!(!state.calendar.all_day_events(&state.config.calendar).any(|e| e.id == "task:backlog"));
-    let _ = app::update(&mut state, Message::TimeBlocking(timetracker::timeblocking::Action::HideOverdue(true)));
-    assert!(!state.calendar.all_day_events(&state.config.calendar).any(|e| e.id == "task:overdue"));
+    assert!(
+        state
+            .calendar
+            .all_day_events(&state.config.calendar)
+            .any(|e| e.id == "task:overdue")
+    );
+    assert!(
+        !state
+            .calendar
+            .all_day_events(&state.config.calendar)
+            .any(|e| e.id == "task:backlog")
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timetracker::timeblocking::Action::HideOverdue(true)),
+    );
+    assert!(
+        !state
+            .calendar
+            .all_day_events(&state.config.calendar)
+            .any(|e| e.id == "task:overdue")
+    );
     assert!(state.calendar.event("task:backlog").is_some());
     assert!(state.calendar.event("standup").is_some());
 }
 
 #[test]
-fn the_calendar_has_backlog_and_overdue_controls_and_no_todos_menu() -> Result<(), Error> {
+fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(260.0, 600.0));
     assert!(ui.find("Todos").is_err());
-    assert!(ui.find("Hide overdue tasks").is_ok());
+    assert!(ui.find("0 tasks not time-blocked").is_ok());
     let _ = ui.click("Backlog")?;
-    assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog))));
+    assert!(
+        ui.into_messages()
+            .any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog)))
+    );
     Ok(())
 }
 
@@ -1015,17 +1466,34 @@ fn task_drag_handles_start_a_drag_and_task_rows_accept_a_drop() -> Result<(), Er
     let state = timeblocking_state();
     let task = state.calendar.event("task:backlog").unwrap();
     let metrics = timetracker::ui::layout::Metrics::of(Size::new(400.0, 70.0));
-    let mut ui = at(Size::new(400.0, 70.0), timetracker::ui::timeblocking::task_row(&state, task, &metrics, false));
+    let mut ui = at(
+        Size::new(400.0, 70.0),
+        timetracker::ui::timeblocking::task_row(&state, task, &metrics, false),
+    );
     let origin = ui.find("⠿")?.bounds().center();
     ui.point_at(origin);
-    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))]);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Left,
+    ))]);
     let position = Point::new(origin.x, origin.y + 8.0);
     ui.point_at(position);
-    ui.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved { position })]);
-    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))]);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+        position,
+    })]);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+        iced::mouse::Button::Left,
+    ))]);
     let messages: Vec<_> = ui.into_messages().collect();
-    assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(Action::Drag(id)) if id == "task:backlog")));
-    assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(Action::DropTask(id)) if id == "task:backlog")));
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::TimeBlocking(Action::Drag(id)) if id == "task:backlog"))
+    );
+    assert!(
+        messages.iter().any(
+            |m| matches!(m, Message::TimeBlocking(Action::DropTask(id)) if id == "task:backlog")
+        )
+    );
     Ok(())
 }
 
@@ -1034,17 +1502,32 @@ fn invalid_rescheduling_keeps_the_task_and_reports_the_date_problem() {
     let mut state = timeblocking_state();
     state.timeblocking.date = "not a date".into();
     let before = state.calendar.event("task:backlog").unwrap().clone();
-    let _ = app::update(&mut state, Message::TimeBlocking(timetracker::timeblocking::Action::Reschedule("task:backlog".into())));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timetracker::timeblocking::Action::Reschedule(
+            "task:backlog".into(),
+        )),
+    );
     assert_eq!(state.calendar.event("task:backlog"), Some(&before));
     assert!(state.timeblocking.busy.is_empty());
-    assert!(state.calendar.error.as_deref().unwrap().contains("YYYY-MM-DD"));
+    assert!(
+        state
+            .calendar
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("YYYY-MM-DD")
+    );
 }
 
 #[test]
 fn a_sync_started_before_a_task_edit_cannot_replace_the_edited_tasks() {
     let mut state = timeblocking_state();
     state.timeblocking.revision = 2;
-    let _ = app::update(&mut state, Message::CalendarSyncedAt(1, Ok(timetracker::calendar::sample_snapshot())));
+    let _ = app::update(
+        &mut state,
+        Message::CalendarSyncedAt(1, Ok(timetracker::calendar::sample_snapshot())),
+    );
     assert!(state.calendar.event("task:planned").is_some());
     assert!(state.calendar.event("task:backlog").is_some());
 }
@@ -1063,36 +1546,66 @@ fn focus_state() -> State {
     planned.details.task_data.as_mut().unwrap().metadata = meta.clone();
     let key = tb::task_key(planned);
     let mut second = planned.clone();
-    second.id = "task:second".into(); second.title = "Review the draft".into();
-    meta.minutes = 20; meta.order = 2;
+    second.id = "task:second".into();
+    second.title = "Review the draft".into();
+    meta.minutes = 20;
+    meta.order = 2;
     set_task_metadata(&mut second, "", meta.clone());
     state.calendar.add_event(second.clone());
-    second.id = "task:done".into(); second.title = "Gather references".into(); second.completed = true;
+    second.id = "task:done".into();
+    second.title = "Gather references".into();
+    second.completed = true;
     meta.order = 3;
     set_task_metadata(&mut second, "", meta.clone());
     state.calendar.add_event(second);
-    state.config.task_work.start(key,"Write proposal".into(),Some(block_key),now-chrono::Duration::minutes(31));
-    let _ = app::update(&mut state,Message::TimeBlocking(Action::View("standup".into())));
+    state.config.task_work.start(
+        key,
+        "Write proposal".into(),
+        Some(block_key),
+        now - chrono::Duration::minutes(31),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::View("standup".into())),
+    );
     state
 }
 
 #[test]
 fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
     let mut state = focus_state();
-    assert_eq!(state.timeblocking.focus.as_deref(),Some("standup"));
+    assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
     assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.original_width.is_none());
-    let mut ui = render(&state,Size::new(900.0,720.0));
-    for label in ["FOCUS · TIME BLOCK", "Write proposal", "Review the draft", "Gather references", "Start", "Stop", "Complete", "Completed ✓"] {
-        assert!(ui.find(label).is_ok(),"missing {label}");
+    let mut ui = render(&state, Size::new(900.0, 720.0));
+    for label in [
+        "FOCUS · TIME BLOCK",
+        "Write proposal",
+        "Review the draft",
+        "Gather references",
+        "Start",
+        "Stop",
+        "Complete",
+        "Completed ✓",
+    ] {
+        assert!(ui.find(label).is_ok(), "missing {label}");
     }
     if std::env::var_os("FOCUS_PREVIEW").is_some() {
-        ui.snapshot(&iced::Theme::Light).unwrap().matches_image(std::path::Path::new("/tmp/focus-preview")).unwrap();
+        ui.snapshot(&iced::Theme::Light)
+            .unwrap()
+            .matches_image(std::path::Path::new("/tmp/focus-preview"))
+            .unwrap();
     }
     drop(ui);
-    let _ = app::update(&mut state,Message::TimeBlocking(timetracker::timeblocking::Action::CloseView));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timetracker::timeblocking::Action::CloseView),
+    );
     assert!(state.timeblocking.focus.is_none());
-    assert!(state.config.task_work.active().is_some(),"closing the view should retain the running task");
+    assert!(
+        state.config.task_work.active().is_some(),
+        "closing the view should retain the running task"
+    );
 }
 
 #[test]
@@ -1100,19 +1613,35 @@ fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
     use timetracker::timeblocking::{self as tb, Action};
     let mut state = focus_state();
     let key = tb::task_key(state.calendar.event("task:planned").unwrap());
-    let _ = app::update(&mut state,Message::TaskToggled("task:planned".into()));
+    let _ = app::update(&mut state, Message::TaskToggled("task:planned".into()));
     assert!(!state.config.task_work.running(&key));
     assert!(state.calendar.event("task:planned").unwrap().completed);
     let block = state.calendar.event("standup").unwrap();
-    assert!(tb::assigned_all(&state,block).iter().any(|e| e.id == "task:planned"));
-    let elapsed = state.config.task_work.seconds(&key,chrono::Utc::now());
-    assert!(elapsed >= 31*60);
-    assert_eq!(elapsed,state.config.task_work.seconds(&key,chrono::Utc::now()+chrono::Duration::days(1)));
+    assert!(
+        tb::assigned_all(&state, block)
+            .iter()
+            .any(|e| e.id == "task:planned")
+    );
+    let elapsed = state.config.task_work.seconds(&key, chrono::Utc::now());
+    assert!(elapsed >= 31 * 60);
+    assert_eq!(
+        elapsed,
+        state
+            .config
+            .task_work
+            .seconds(&key, chrono::Utc::now() + chrono::Duration::days(1))
+    );
     let saved = toml::to_string(&state.config).unwrap();
     let restored: Config = toml::from_str(&saved).unwrap();
-    assert_eq!(restored.task_work,state.config.task_work);
-    let _ = app::update(&mut state,Message::TimeBlocking(Action::StartWork("task:done".into())));
-    assert!(state.config.task_work.active().is_none(),"completed tasks cannot start a timer");
+    assert_eq!(restored.task_work, state.config.task_work);
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::StartWork("task:done".into())),
+    );
+    assert!(
+        state.config.task_work.active().is_none(),
+        "completed tasks cannot start a timer"
+    );
 }
 
 #[test]
@@ -1121,32 +1650,55 @@ fn start_and_stop_are_local_and_do_not_change_google_task_status() {
     let mut state = focus_state();
     let second = state.calendar.event("task:second").unwrap();
     let key = tb::task_key(second);
-    let _ = app::update(&mut state,Message::TimeBlocking(Action::StartWork("task:second".into())));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::StartWork("task:second".into())),
+    );
     assert!(state.config.task_work.running(&key));
-    assert_eq!(state.config.task_work.sessions.iter().filter(|s| s.stopped_at.is_none()).count(),1);
-    let _ = app::update(&mut state,Message::TimeBlocking(Action::StopWork("task:second".into())));
+    assert_eq!(
+        state
+            .config
+            .task_work
+            .sessions
+            .iter()
+            .filter(|s| s.stopped_at.is_none())
+            .count(),
+        1
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::StopWork("task:second".into())),
+    );
     assert!(state.config.task_work.active().is_none());
     assert!(!state.calendar.event("task:second").unwrap().completed);
     assert!(state.timeblocking.busy.is_empty());
 }
 
 #[test]
-fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(),Error> {
+fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(), Error> {
     let state = focus_state();
-    let mut ui = render(&state,Size::new(900.0,720.0));
+    let mut ui = render(&state, Size::new(900.0, 720.0));
     let _ = ui.click("Timer")?;
-    assert!(!ui.into_messages().any(|m| matches!(m,Message::TimerOpened)));
+    assert!(
+        !ui.into_messages()
+            .any(|m| matches!(m, Message::TimerOpened))
+    );
     Ok(())
 }
 
 #[test]
-fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(),Error> {
+fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(), Error> {
     use timetracker::timeblocking::Action;
-    for width in [200.0,320.0,900.0] {
+    for width in [200.0, 320.0, 900.0] {
         let state = focus_state();
-        let mut ui = render(&state,Size::new(width,720.0));
+        let mut ui = render(&state, Size::new(width, 720.0));
         let _ = ui.click("Stop")?;
-        assert!(ui.into_messages().any(|m| matches!(m,Message::TimeBlocking(Action::StopWork(id)) if id == "task:planned")),"Stop did not work at {width}px");
+        assert!(
+            ui.into_messages().any(
+                |m| matches!(m,Message::TimeBlocking(Action::StopWork(id)) if id == "task:planned")
+            ),
+            "Stop did not work at {width}px"
+        );
     }
     Ok(())
 }
@@ -1157,25 +1709,44 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
     let mut snapshot = timetracker::calendar::sample_snapshot();
     snapshot.day = state.calendar.day;
     snapshot.events = state.calendar.events.clone();
-    snapshot.events.iter_mut().find(|e| e.id == "task:planned").unwrap().completed = true;
-    let _ = app::update(&mut state,Message::CalendarSynced(Ok(snapshot)));
+    snapshot
+        .events
+        .iter_mut()
+        .find(|e| e.id == "task:planned")
+        .unwrap()
+        .completed = true;
+    let _ = app::update(&mut state, Message::CalendarSynced(Ok(snapshot)));
     assert!(state.config.task_work.active().is_none());
     let block = state.calendar.event("standup").unwrap();
-    assert!(timetracker::timeblocking::assigned_all(&state,block).iter().any(|e| e.id == "task:planned" && e.completed));
+    assert!(
+        timetracker::timeblocking::assigned_all(&state, block)
+            .iter()
+            .any(|e| e.id == "task:planned" && e.completed)
+    );
 }
 
 #[test]
-fn an_unconfigured_event_offers_a_direct_way_to_enable_its_time_block_controls() -> Result<(),Error> {
-    use timetracker::timeblocking::{self as tb,Action};
+fn an_unconfigured_event_offers_a_direct_way_to_enable_its_time_block_controls() -> Result<(), Error>
+{
+    use timetracker::timeblocking::{self as tb, Action};
     let mut state = timeblocking_state();
     state.config.calendar.time_block_calendar = None;
-    let _ = app::update(&mut state,Message::EventOpened("standup".into()));
-    assert!(!tb::is_block(state.calendar.event("standup").unwrap(),&state.config.calendar));
-    let mut ui = render(&state,Size::new(420.0,720.0));
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    assert!(!tb::is_block(
+        state.calendar.event("standup").unwrap(),
+        &state.config.calendar
+    ));
+    let mut ui = render(&state, Size::new(420.0, 720.0));
     let _ = ui.click("Use this calendar for time blocks")?;
-    let action = ui.into_messages().find(|m| matches!(m,Message::TimeBlocking(Action::Calendar(_)))).expect("calendar selection action");
-    let _ = app::update(&mut state,action);
-    assert!(tb::is_block(state.calendar.event("standup").unwrap(),&state.config.calendar));
+    let action = ui
+        .into_messages()
+        .find(|m| matches!(m, Message::TimeBlocking(Action::Calendar(_))))
+        .expect("calendar selection action");
+    let _ = app::update(&mut state, action);
+    assert!(tb::is_block(
+        state.calendar.event("standup").unwrap(),
+        &state.config.calendar
+    ));
     assert!(state.calendar.open_event.is_none());
     assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.original_width.is_none());
@@ -1188,10 +1759,16 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
         let mut state = state();
         let mut ui = render(&state, Size::new(width, HEIGHT));
         ui.click("Keep")?;
-        assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes))));
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes)))
+        );
         let mut ui = render(&state, Size::new(width, HEIGHT));
         ui.click("Backlog")?;
-        assert!(ui.into_messages().any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog))));
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog)))
+        );
         state.screen = Screen::KeepNotes;
         let mut ui = render(&state, Size::new(width, HEIGHT));
         for label in ["Refresh", "Reconnect", "Active", "Labels"] {
@@ -1214,7 +1791,9 @@ fn keep_edit_opens_the_selected_note() -> Result<(), Error> {
     });
     let mut ui = render(&state, Size::new(260.0, 720.0));
     ui.click("Edit")?;
-    assert!(ui.into_messages().any(|m| matches!(m, Message::KeepEdit(url) if url == "https://keep.google.com/#NOTE/test-note")));
+    assert!(ui.into_messages().any(
+        |m| matches!(m, Message::KeepEdit(url) if url == "https://keep.google.com/#NOTE/test-note")
+    ));
     Ok(())
 }
 
@@ -1234,13 +1813,26 @@ fn switching_to_keep_closes_time_block_views_and_starts_refresh() {
     assert!(state.config.task_work.active().is_some());
 }
 
-fn set_task_metadata(event: &mut timetracker::calendar::Event, prose: &str, metadata: timetracker::timeblocking::Metadata) {
+fn set_task_metadata(
+    event: &mut timetracker::calendar::Event,
+    prose: &str,
+    metadata: timetracker::timeblocking::Metadata,
+) {
     let id = match event.id.as_str() {
-        "task:planned" => 100, "task:backlog" => 101, "task:overdue" => 102,
-        "task:second" => 103, "task:done" => 104, other => panic!("Unknown fixture task: {other}"),
+        "task:planned" => 100,
+        "task:backlog" => 101,
+        "task:overdue" => 102,
+        "task:second" => 103,
+        "task:done" => 104,
+        "task:errand" => 105,
+        other => panic!("Unknown fixture task: {other}"),
     };
     event.details.description = prose.into();
-    event.details.task_data = Some(timetracker::task_db::TaskData { id, metadata, legacy_key: None });
+    event.details.task_data = Some(timetracker::task_db::TaskData {
+        id,
+        metadata,
+        legacy_key: None,
+    });
 }
 
 #[test]
@@ -1248,14 +1840,26 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
     for width in WIDTHS {
         let mut state = timeblocking_state();
         state.screen = Screen::Backlog;
-        state.calendar.event_mut("task:backlog").unwrap().details.description = "DUE: 2026-12-31\nNotes".into();
+        state
+            .calendar
+            .event_mut("task:backlog")
+            .unwrap()
+            .details
+            .description = "DUE: 2026-12-31\nNotes".into();
         let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
         assert_eq!(state.timeblocking.deadline, "2026-12-31");
         let mut ui = render(&state, Size::new(width, 720.0));
-        for label in ["Save deadline", "Schedule time", "Move to Backlog"] {
+        for label in [
+            "Rename",
+            "Save deadline",
+            "Schedule time",
+            "Move to Backlog",
+        ] {
             let bounds = ui.find(label)?.bounds();
-            assert!(bounds.x >= 0.0 && bounds.x + bounds.width <= width + 1.0,
-                "{label} escapes the {width}px window: {bounds:?}");
+            assert!(
+                bounds.x >= 0.0 && bounds.x + bounds.width <= width + 1.0,
+                "{label} escapes the {width}px window: {bounds:?}"
+            );
         }
     }
     Ok(())

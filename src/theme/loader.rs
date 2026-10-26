@@ -143,9 +143,7 @@ danger     = \"#D2504F\"
 pub fn ensure_example(directory: &Path) {
     let has_themes = fs::read_dir(directory).is_ok_and(|mut listing| {
         listing.any(|entry| {
-            entry.is_ok_and(|entry| {
-                entry.path().extension().is_some_and(|ext| ext == "toml")
-            })
+            entry.is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
         })
     });
 

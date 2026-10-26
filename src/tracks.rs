@@ -94,7 +94,10 @@ impl Recorder {
     pub fn follow(&mut self, running: bool, now: DateTime<Local>) -> bool {
         match (running, self.open) {
             (true, false) => {
-                self.tracks.tracks.push(Track { start: now, stop: now });
+                self.tracks.tracks.push(Track {
+                    start: now,
+                    stop: now,
+                });
                 self.open = true;
                 true
             }
@@ -156,7 +159,10 @@ fn read(path: &Path) -> Option<Tracks> {
     match serde_json::from_slice(&bytes) {
         Ok(tracks) => Some(tracks),
         Err(error) => {
-            log::warn!("{} could not be parsed, ignoring it: {error}", path.display());
+            log::warn!(
+                "{} could not be parsed, ignoring it: {error}",
+                path.display()
+            );
             None
         }
     }
@@ -308,11 +314,17 @@ mod tests {
 
         assert_eq!(tracks.len(), 1);
         assert!(
-            tracks[0].get("start").and_then(|start| start.as_str()).is_some(),
+            tracks[0]
+                .get("start")
+                .and_then(|start| start.as_str())
+                .is_some(),
             "{text}"
         );
         assert!(
-            tracks[0].get("stop").and_then(|stop| stop.as_str()).is_some(),
+            tracks[0]
+                .get("stop")
+                .and_then(|stop| stop.as_str())
+                .is_some(),
             "{text}"
         );
     }

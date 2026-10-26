@@ -76,7 +76,11 @@ pub fn pack(spans: &[Span]) -> Vec<Packed> {
 }
 
 fn apply_cluster(cluster: &[usize], column: &[usize], columns: &mut [usize]) {
-    let width = cluster.iter().map(|&index| column[index] + 1).max().unwrap_or(1);
+    let width = cluster
+        .iter()
+        .map(|&index| column[index] + 1)
+        .max()
+        .unwrap_or(1);
     for &index in cluster {
         columns[index] = width;
     }

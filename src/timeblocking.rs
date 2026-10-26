@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 pub const PANEL_WIDTH: f32 = 400.0;
+/// Busy-set key for a todo that does not have a task id until Google creates it.
+pub(crate) const ADDING_TODO: &str = "adding-todo";
+const MAX_TODO_CHARS: usize = 1024;
 const META: &str = "tt-timeblocking: ";
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
@@ -37,8 +40,26 @@ pub struct Workspace {
     pub estimate: String,
     pub estimate_task: Option<String>,
     pub estimate_error: Option<String>,
+    /// The name being edited for the open task, before it is saved.
+    pub title: String,
+    pub title_error: Option<String>,
+    /// The task whose rename is in flight, so a failure stays on the name field.
+    pub renaming: Option<String>,
+    /// The line being typed into the open time block, before it is saved.
+    pub todo_draft: String,
+    pub todo_error: Option<String>,
+    /// The planned-tasks box is open so a task title can be typed.
+    pub todo_open: bool,
+    /// Text that narrows the available tasks under the open time block.
+    pub available_query: String,
+    /// When set, available tasks are limited to the current day.
+    pub available_today: bool,
     pub dragging: Option<String>,
     pub busy: std::collections::HashSet<String>,
+    /// Text that narrows the backlog by task title or list name.
+    pub backlog_query: String,
+    /// When set, the backlog shows only tasks from this Google Tasks list.
+    pub backlog_list: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -69,8 +90,28 @@ pub enum Action {
     Date(String),
     SaveEstimate(String),
     Backlog(String),
+    /// The backlog search box changed.
+    BacklogQuery(String),
+    /// Restrict the backlog to one task list, or all lists when `None`.
+    BacklogList(Option<String>),
     Reschedule(String),
     Assign(String, String),
+    /// The name being typed for an existing task changed.
+    Title(String),
+    /// Save the edited name of this task.
+    SaveTitle(String),
+    /// Open the planned-tasks box so a task can be typed.
+    OpenTodo,
+    /// Close the typed-task box without saving.
+    CloseTodo,
+    /// The free-text todo being typed into a time block changed.
+    TodoDraft(String),
+    /// Save the typed line as a Google Task in this time block.
+    AddTodo(String),
+    /// The available-tasks search box changed.
+    AvailableQuery(String),
+    /// Show only available tasks dated today, or every unassigned task.
+    AvailableToday(bool),
     Drag(String),
     DropBlock(String),
     DropTask(String),
@@ -170,6 +211,39 @@ pub fn assigned<'a>(state: &'a State, block: &Event) -> Vec<&'a Event> {
     tasks.sort_by_key(|e| (metadata(e).order, e.id.clone()));
     tasks
 }
+/// The Google Tasks list a task belongs to, using the list title when it is known.
+pub fn task_list_name(state: &State, calendar_id: &str) -> String {
+    state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id == calendar_id)
+        .map(|calendar| calendar.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            calendar_id
+                .strip_prefix("tasks:")
+                .filter(|id| !id.is_empty())
+                .unwrap_or("Tasks")
+                .to_owned()
+        })
+}
+
+/// A task that still needs a time: unscheduled, or waiting on a schedule write.
+pub fn in_backlog(event: &Event) -> bool {
+    let meta = metadata(event);
+    let pending = meta.schedule.as_ref().is_some_and(|link| link.pending);
+    event.is_task()
+        && !event.completed
+        && (pending || (meta.schedule.is_none() && meta.block.is_none()))
+}
+
+/// A task whose date is the current day. An undated task is not.
+pub fn on_today(event: &Event) -> bool {
+    event.start.date_naive() == Local::now().date_naive()
+}
+
 pub fn overdue(event: &Event) -> bool {
     event.is_task()
         && !event.completed
@@ -182,6 +256,14 @@ pub fn close(state: &mut State) -> Task<Message> {
     state.timeblocking.block = None;
     state.timeblocking.focus = None;
     state.timeblocking.dragging = None;
+    state.timeblocking.available_query.clear();
+    state.timeblocking.available_today = false;
+    // A save still in flight keeps the draft so its result can land on the same field.
+    if !state.timeblocking.busy.contains(ADDING_TODO) {
+        state.timeblocking.todo_open = false;
+        state.timeblocking.todo_draft.clear();
+        state.timeblocking.todo_error = None;
+    }
     match (state.main_window, state.timeblocking.original_width.take()) {
         (Some(id), Some(width)) => {
             let resize = window::resize(id, Size::new(width, state.main_size.height));
@@ -204,6 +286,15 @@ pub(crate) fn editor_width(state: &State, base_width: f32) -> f32 {
         .max(base_width + PANEL_WIDTH)
 }
 pub fn open(state: &mut State, id: String) -> Task<Message> {
+    if state.timeblocking.block.as_deref() != Some(id.as_str())
+        && !state.timeblocking.busy.contains(ADDING_TODO)
+    {
+        state.timeblocking.todo_open = false;
+        state.timeblocking.todo_draft.clear();
+        state.timeblocking.todo_error = None;
+        state.timeblocking.available_query.clear();
+        state.timeblocking.available_today = false;
+    }
     state.timeblocking.focus = None;
     state.timeblocking.block = Some(id);
     if state.timeblocking.original_width.is_none() {
@@ -402,6 +493,14 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.date = value;
             return Task::none();
         }
+        Action::BacklogQuery(query) => {
+            state.timeblocking.backlog_query = query;
+            return Task::none();
+        }
+        Action::BacklogList(list) => {
+            state.timeblocking.backlog_list = list;
+            return Task::none();
+        }
         Action::EditEstimate(id) => {
             let Some(task) = state.calendar.event(&id).filter(|e| e.is_task()) else {
                 return Task::none();
@@ -496,8 +595,18 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.revision += 1;
             state.timeblocking.busy.remove(&id);
             let editing_estimate = state.timeblocking.estimate_task.as_deref() == Some(&id);
+            let renaming = state.timeblocking.renaming.as_deref() == Some(&id);
             match result {
                 Ok(event) => {
+                    if renaming {
+                        state.timeblocking.renaming = None;
+                        state.timeblocking.title_error = None;
+                    }
+                    if id == ADDING_TODO {
+                        state.timeblocking.todo_draft.clear();
+                        state.timeblocking.todo_error = None;
+                        state.timeblocking.todo_open = false;
+                    }
                     if let Some(link) = &event.details.scheduled {
                         if state.config.calendar.tasks_calendar.is_none() {
                             state.config.calendar.tasks_calendar = Some(link.calendar_id.clone());
@@ -522,6 +631,18 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     state.calendar.invalidate_other_days();
                 }
                 Err(error) if editing_estimate => state.timeblocking.estimate_error = Some(error),
+                Err(error) if renaming => {
+                    state.timeblocking.renaming = None;
+                    if state.calendar.open_event.as_deref() == Some(&id) {
+                        state.timeblocking.title_error = Some(error);
+                    } else {
+                        state.calendar.error = Some(error);
+                    }
+                }
+                Err(error) if id == ADDING_TODO => {
+                    state.timeblocking.todo_error = Some(error);
+                    state.timeblocking.todo_open = true;
+                }
                 Err(error) => state.calendar.error = Some(error),
             }
             return crate::app::queue_save(state);
@@ -560,6 +681,60 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
             (id, Change::Block(block_key(event), event.start, event.end))
         }
+        Action::Title(value) => {
+            state.timeblocking.title = value;
+            state.timeblocking.title_error = None;
+            return Task::none();
+        }
+        Action::SaveTitle(id) => {
+            let title = state.timeblocking.title.trim().to_owned();
+            if title.is_empty() {
+                state.timeblocking.title_error = Some("A task needs a name".into());
+                return Task::none();
+            }
+            if title.chars().count() > MAX_TODO_CHARS {
+                state.timeblocking.title_error = Some(format!(
+                    "A task name can be at most {MAX_TODO_CHARS} characters"
+                ));
+                return Task::none();
+            }
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            if task.title == title {
+                state.timeblocking.title_error = None;
+                return Task::none();
+            }
+            state.timeblocking.title_error = None;
+            (id, Change::Title(title))
+        }
+        Action::OpenTodo => {
+            state.timeblocking.todo_open = true;
+            return iced::widget::operation::focus(iced::widget::Id::new("time-block-todo"));
+        }
+        Action::CloseTodo => {
+            if state.timeblocking.busy.contains(ADDING_TODO) {
+                return Task::none();
+            }
+            state.timeblocking.todo_open = false;
+            state.timeblocking.todo_draft.clear();
+            state.timeblocking.todo_error = None;
+            return Task::none();
+        }
+        Action::TodoDraft(value) => {
+            state.timeblocking.todo_draft = value;
+            state.timeblocking.todo_error = None;
+            return Task::none();
+        }
+        Action::AddTodo(block_id) => return add_todo(state, &block_id),
+        Action::AvailableQuery(query) => {
+            state.timeblocking.available_query = query;
+            return Task::none();
+        }
+        Action::AvailableToday(only) => {
+            state.timeblocking.available_today = only;
+            return Task::none();
+        }
     };
     if !state.timeblocking.busy.is_empty() {
         return Task::none();
@@ -567,6 +742,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     let Some(task) = state.calendar.event(&id).filter(|e| e.is_task()).cloned() else {
         return Task::none();
     };
+    if matches!(change, Change::Title(_)) {
+        state.timeblocking.renaming = Some(id.clone());
+    }
     let settings = state.config.calendar.clone();
     let order = state
         .calendar
@@ -596,7 +774,119 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     blocking::run(move || save_and_reflow(task, settings, change, order, blocks, related))
         .map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone(), result)))
 }
+
+/// Saves the typed line as a Google Task and assigns it to the open block.
+///
+/// Time-block items are tasks, so a free-text todo is a task whose title is
+/// whatever was typed. The write happens off the UI thread.
+fn add_todo(state: &mut State, block_id: &str) -> Task<Message> {
+    let title = state.timeblocking.todo_draft.trim().to_owned();
+    if title.is_empty() {
+        return Task::none();
+    }
+    if title.chars().count() > MAX_TODO_CHARS {
+        state.timeblocking.todo_error =
+            Some(format!("A todo can be at most {MAX_TODO_CHARS} characters"));
+        return Task::none();
+    }
+    if !state.timeblocking.busy.is_empty() {
+        return Task::none();
+    }
+    let Some(block) = state
+        .calendar
+        .event(block_id)
+        .filter(|event| is_block(event, &state.config.calendar))
+        .cloned()
+    else {
+        return Task::none();
+    };
+    let key = block_key(&block);
+    let start = block.start;
+    let end = block.end;
+    let settings = state.config.calendar.clone();
+    let order = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| event.is_task())
+        .map(|event| metadata(event).order)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1_i64 << 32);
+    let blocks: Vec<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| is_block(event, &settings))
+        .cloned()
+        .collect();
+    let related: Vec<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| event.is_task())
+        .cloned()
+        .collect();
+    state.timeblocking.todo_error = None;
+    state.timeblocking.revision += 1;
+    state.timeblocking.busy.insert(ADDING_TODO.to_owned());
+    blocking::run(move || {
+        create_and_assign(title, settings, key, start, end, order, blocks, related)
+    })
+    .map(|result| Message::TimeBlocking(Action::SavedMany(ADDING_TODO.to_owned(), result)))
+}
+
+fn create_and_assign(
+    title: String,
+    settings: CalendarSettings,
+    key: String,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+    order: i64,
+    blocks: Vec<Event>,
+    related: Vec<Event>,
+) -> Result<Vec<Event>, String> {
+    let token = access(&settings)?;
+    let (_, list_id) = calendar::scheduled::destinations(
+        &token,
+        settings.tasks_calendar.as_deref(),
+        settings.time_block_list.as_deref(),
+    )?;
+    let created = calendar::api::insert_task(&token, &list_id, &title)?;
+    let task = new_todo_event(&list_id, &created, start);
+    save_and_reflow(
+        task,
+        settings,
+        Change::Block(key, start, end),
+        order,
+        blocks,
+        related,
+    )
+}
+
+fn new_todo_event(
+    list_id: &str,
+    created: &calendar::api::CreatedTask,
+    when: DateTime<Local>,
+) -> Event {
+    Event {
+        id: format!("task:{}", created.id),
+        calendar_id: format!("tasks:{list_id}"),
+        title: created.title.clone(),
+        start: when,
+        end: when + chrono::Duration::minutes(30),
+        all_day: true,
+        color: calendar::colors::TASK,
+        completed: false,
+        details: calendar::Details {
+            link: created.link.clone(),
+            ..Default::default()
+        },
+    }
+}
+
 enum Change {
+    Title(String),
     Estimate(u32),
     Deadline(Option<NaiveDate>),
     Backlog,
@@ -724,6 +1014,28 @@ fn save(
     }
     task.details.description = description(&task.details.description);
     match change {
+        // Tasks own the name. A scheduled block copies that name onto its calendar event.
+        Change::Title(title) => {
+            let token = access(settings)?;
+            calendar::api::patch(
+                &task_url(&task)?,
+                &token,
+                &serde_json::json!({ "title": title }).to_string(),
+                "Rename task",
+            )?;
+            task.title = title;
+            if let Some(link) = &data.metadata.schedule {
+                if !link.pending {
+                    calendar::scheduled::request(
+                        "PATCH",
+                        &link.event_url(),
+                        &token,
+                        Some(&calendar::scheduled::content(&task, link)),
+                    )
+                    .map_err(|error| error.message)?;
+                }
+            }
+        }
         Change::Estimate(minutes) => {
             data.metadata.minutes = minutes;
             database.save(&task, &data)?;
@@ -1231,5 +1543,127 @@ mod tests {
             legacy_id(old).as_deref(),
             Some("12345678-1234-4234-8234-123456789abc")
         );
+    }
+
+    #[test]
+    fn a_blank_todo_is_not_added_and_a_long_one_is_refused() {
+        let mut state = estimate_state();
+        state.timeblocking.todo_draft = "   ".into();
+        let _ = update(&mut state, Action::AddTodo("standup".into()));
+        assert!(state.timeblocking.busy.is_empty());
+        assert!(state.timeblocking.todo_error.is_none());
+
+        state.timeblocking.todo_draft = "x".repeat(MAX_TODO_CHARS + 1);
+        let _ = update(&mut state, Action::AddTodo("standup".into()));
+        assert!(state.timeblocking.busy.is_empty());
+        assert!(state.timeblocking.todo_error.is_some());
+        assert_eq!(
+            state.timeblocking.todo_draft.chars().count(),
+            MAX_TODO_CHARS + 1
+        );
+    }
+
+    #[test]
+    fn typing_a_todo_clears_the_previous_error() {
+        let mut state = estimate_state();
+        state.timeblocking.todo_error = Some("Could not save".into());
+        let _ = update(&mut state, Action::TodoDraft("Call the client".into()));
+        assert_eq!(state.timeblocking.todo_draft, "Call the client");
+        assert!(state.timeblocking.todo_error.is_none());
+    }
+
+    #[test]
+    fn a_task_can_be_renamed_after_it_is_created() {
+        let mut state = estimate_state();
+        let original = state.calendar.event("task:deep").unwrap().title.clone();
+        state.calendar.open_event = Some("task:deep".into());
+        state.timeblocking.title = "   ".into();
+        let _ = update(&mut state, Action::SaveTitle("task:deep".into()));
+        assert_eq!(
+            state.timeblocking.title_error.as_deref(),
+            Some("A task needs a name")
+        );
+        assert!(state.timeblocking.busy.is_empty());
+        assert_eq!(state.calendar.event("task:deep").unwrap().title, original);
+
+        state.timeblocking.title = "x".repeat(MAX_TODO_CHARS + 1);
+        let _ = update(&mut state, Action::SaveTitle("task:deep".into()));
+        assert!(state.timeblocking.title_error.is_some());
+        assert!(state.timeblocking.busy.is_empty());
+        assert_eq!(state.calendar.event("task:deep").unwrap().title, original);
+
+        let _ = update(&mut state, Action::Title(original.clone()));
+        assert!(state.timeblocking.title_error.is_none());
+        let _ = update(&mut state, Action::SaveTitle("task:deep".into()));
+        assert!(state.timeblocking.renaming.is_none());
+        assert!(state.timeblocking.busy.is_empty());
+
+        state.timeblocking.title = format!("  {original} revised  ");
+        state.timeblocking.renaming = Some("task:deep".into());
+        state.timeblocking.busy.insert("task:deep".into());
+        let _ = update(
+            &mut state,
+            Action::Saved("task:deep".into(), Err("Not connected to Google".into())),
+        );
+        assert_eq!(state.calendar.event("task:deep").unwrap().title, original);
+        assert_eq!(
+            state.timeblocking.title_error.as_deref(),
+            Some("Not connected to Google")
+        );
+        assert!(state.calendar.error.is_none());
+        assert_eq!(state.calendar.open_event.as_deref(), Some("task:deep"));
+        assert!(state.timeblocking.renaming.is_none());
+
+        let mut saved = state.calendar.event("task:deep").unwrap().clone();
+        saved.title = format!("{original} revised");
+        state.timeblocking.renaming = Some("task:deep".into());
+        let _ = update(&mut state, Action::Saved("task:deep".into(), Ok(saved)));
+        assert_eq!(
+            state.calendar.event("task:deep").unwrap().title,
+            format!("{original} revised")
+        );
+        assert!(state.timeblocking.title_error.is_none());
+        assert!(state.timeblocking.renaming.is_none());
+    }
+
+    #[test]
+    fn a_saved_todo_replaces_the_draft_and_a_failure_keeps_it() {
+        let mut state = estimate_state();
+        state.timeblocking.todo_open = true;
+        state.timeblocking.todo_draft = "Call the client".into();
+        state.timeblocking.busy.insert(ADDING_TODO.to_owned());
+        let event = new_todo_event(
+            "has-time",
+            &calendar::api::CreatedTask {
+                id: "fresh".into(),
+                title: "Call the client".into(),
+                link: "https://tasks.google.com/task/fresh".into(),
+            },
+            Local::now(),
+        );
+        assert!(event.is_task());
+        let _ = update(&mut state, Action::Saved(ADDING_TODO.into(), Ok(event)));
+        assert!(state.timeblocking.todo_draft.is_empty());
+        assert!(!state.timeblocking.todo_open);
+        assert!(state.timeblocking.busy.is_empty());
+        assert_eq!(
+            state.calendar.event("task:fresh").unwrap().title,
+            "Call the client"
+        );
+
+        state.timeblocking.todo_open = true;
+        state.timeblocking.todo_draft = "Call the client".into();
+        state.timeblocking.busy.insert(ADDING_TODO.to_owned());
+        let _ = update(
+            &mut state,
+            Action::Saved(ADDING_TODO.into(), Err("Not connected to Google".into())),
+        );
+        assert!(state.timeblocking.todo_open);
+        assert_eq!(state.timeblocking.todo_draft, "Call the client");
+        assert_eq!(
+            state.timeblocking.todo_error.as_deref(),
+            Some("Not connected to Google")
+        );
+        assert!(state.calendar.error.is_none());
     }
 }

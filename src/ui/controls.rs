@@ -15,11 +15,23 @@ use super::layout::Metrics;
 /// The one button that is always in the same place: start, pause, or dismiss.
 pub fn primary_action<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
     let (label, message, style) = if state.alarm_active {
-        ("Dismiss", Message::Dismiss, button::danger as fn(&_, _) -> _)
+        (
+            "Dismiss",
+            Message::Dismiss,
+            button::danger as fn(&_, _) -> _,
+        )
     } else if state.timer.is_running() {
-        ("Pause", Message::StartPause, button::secondary as fn(&_, _) -> _)
+        (
+            "Pause",
+            Message::StartPause,
+            button::secondary as fn(&_, _) -> _,
+        )
     } else {
-        ("Start", Message::StartPause, button::primary as fn(&_, _) -> _)
+        (
+            "Start",
+            Message::StartPause,
+            button::primary as fn(&_, _) -> _,
+        )
     };
 
     button(text(label).size(metrics.label() + 2.0).center().width(Fill))

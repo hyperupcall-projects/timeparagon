@@ -1,21 +1,21 @@
 //! Google Calendar day view, drawn to resemble the web UI.
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
+use iced::font::Weight;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
-    button, canvas as canvas_widget, column, container, mouse_area, row, scrollable,
-    stack, text, text_input, toggler, Space,
+    Space, button, canvas as canvas_widget, column, container, mouse_area, row, scrollable, stack,
+    text, text_input, toggler,
 };
-use iced::font::Weight;
 use iced::{
     Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
     mouse,
 };
 
 use crate::app::{Message, State};
-use crate::calendar::{self, Event};
 use crate::calendar::colors::{self, on_color};
 use crate::calendar::layout::{self, Span};
+use crate::calendar::{self, Event};
 use crate::engine::{Precision, format};
 
 use super::layout::Metrics;
@@ -59,17 +59,15 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let body: Element<'a, Message> = if state.timer_open {
         super::clock_body(state, metrics)
     } else {
-        let all_day = all_day_row(state, metrics);
         let grid = day_grid(state, metrics, Local::now());
 
         // The pointer watch records where the click landed without publishing a
         // message, so scrolling stays on the widget's own path.
-        pointer_watch(
-            column![all_day, grid]
-                .spacing(metrics.spacing)
-                .height(Fill)
-                .width(Fill),
-        )
+        let mut body = column![].spacing(metrics.spacing).height(Fill).width(Fill);
+        if let Some(all_day) = all_day_row(state, metrics) {
+            body = body.push(all_day);
+        }
+        pointer_watch(body.push(grid))
     };
 
     // The month picker, the menu, the day arrows and the sync line belong to the
@@ -78,16 +76,29 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut content = column![];
 
     if !state.timer_open {
+        let unblocked = unblocked_task_count(state);
+        let mut unblocked_line = text(unblocked_tasks_label(unblocked))
+            .size(metrics.label() + 9.0)
+            .width(Fill);
+        if unblocked == 0 {
+            unblocked_line = unblocked_line.style(text::secondary);
+        } else {
+            unblocked_line = unblocked_line.font(Font {
+                weight: Weight::Bold,
+                ..Font::DEFAULT
+            });
+        }
         let status = column![
-            text(state.calendar.status_line()).size(metrics.label() - 1.0)
-                .style(if state.calendar.error.is_some() { text::danger } else { text::secondary }),
-            row![
-                tasks_toggle(state, metrics),
-                button(text(if state.config.calendar.hide_overdue_tasks { "Show overdue tasks" } else { "Hide overdue tasks" }).size(metrics.label() - 1.0))
-                    .on_press(Message::TimeBlocking(crate::timeblocking::Action::HideOverdue(!state.config.calendar.hide_overdue_tasks)))
-                    .style(button::text),
-            ].spacing(4).align_y(Alignment::Center),
-        ].spacing(2);
+            text(state.calendar.status_line())
+                .size(metrics.label() - 1.0)
+                .style(if state.calendar.error.is_some() {
+                    text::danger
+                } else {
+                    text::secondary
+                }),
+            unblocked_line,
+        ]
+        .spacing(2);
 
         content = content.push(header(state, metrics)).push(status);
     }
@@ -135,9 +146,12 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let heading = calendar::day_heading(state.calendar.day, today);
 
     let month = button(
-        text(format!("{} ▾", calendar::month_short(state.calendar.day.month())))
-            .size(metrics.label())
-            .center(),
+        text(format!(
+            "{} ▾",
+            calendar::month_short(state.calendar.day.month())
+        ))
+        .size(metrics.label())
+        .center(),
     )
     .on_press(Message::CalendarMonthToggled)
     .style(if state.calendar.month_open {
@@ -194,17 +208,25 @@ fn header_offset(state: &State, metrics: &Metrics) -> f32 {
     offset
 }
 
-/// The small switch beside the sync line: the same setting the menu and the
-/// settings pane offer, one tap away from the day grid.
-fn tasks_toggle<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let shown = state.config.calendar.show_tasks;
-    let label = if shown { "Hide tasks" } else { "Show tasks" };
+/// Tasks on the day in view that still have no time block.
+///
+/// Undated backlog tasks and tasks filed on another day stay out of the count.
+fn unblocked_task_count(state: &State) -> usize {
+    let day = state.calendar.day;
+    state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| event.start.date_naive() == day && crate::timeblocking::in_backlog(event))
+        .count()
+}
 
-    button(text(label).size(metrics.label() - 1.0).center())
-        .padding([2.0, 6.0])
-        .on_press(Message::ShowTasksToggled(!shown))
-        .style(button::secondary)
-        .into()
+fn unblocked_tasks_label(count: usize) -> String {
+    if count == 1 {
+        "1 task not time-blocked".to_owned()
+    } else {
+        format!("{count} tasks not time-blocked")
+    }
 }
 
 /// The foot of the calendar: what the clock is doing, and the way into it.
@@ -232,16 +254,27 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         allow_hours,
     );
     let target = match state.timer.target() {
-        Some(target) => format!("of {}", format::readout(target, Precision::Seconds, allow_hours)),
+        Some(target) => format!(
+            "of {}",
+            format::readout(target, Precision::Seconds, allow_hours)
+        ),
         None => "No target".to_owned(),
     };
 
     // An alarm can go off with the clock put away, so this button doubles as
     // the way to silence it.
     let (label, message, style) = if state.alarm_active {
-        ("Dismiss", Message::Dismiss, button::danger as fn(&_, _) -> _)
+        (
+            "Dismiss",
+            Message::Dismiss,
+            button::danger as fn(&_, _) -> _,
+        )
     } else {
-        ("Timer", Message::TimerOpened, button::secondary as fn(&_, _) -> _)
+        (
+            "Timer",
+            Message::TimerOpened,
+            button::secondary as fn(&_, _) -> _,
+        )
     };
 
     let toggle = button(text(label).size(metrics.label()).center())
@@ -263,22 +296,49 @@ fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     status.into()
 }
 
-fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let mut events: Vec<_> = state.calendar.all_day_events(&state.config.calendar).collect();
-    events.sort_by_key(|e| (!crate::timeblocking::overdue(e), crate::timeblocking::metadata(e).order));
-    let chips: Vec<Element<'a, Message>> = events.into_iter()
-        .filter(|event| !event.is_task() || crate::timeblocking::metadata(event).block.as_ref().is_none_or(|key| !state.calendar.events.iter().any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)) || crate::timeblocking::overdue(event))
-        .map(|event| if event.is_task() { super::timeblocking::task_row(state, event, metrics, false) } else { all_day_chip(event, metrics) })
+fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
+    let mut events: Vec<_> = state
+        .calendar
+        .all_day_events(&state.config.calendar)
+        .collect();
+    events.sort_by_key(|e| {
+        (
+            !crate::timeblocking::overdue(e),
+            crate::timeblocking::metadata(e).order,
+        )
+    });
+    let chips: Vec<Element<'a, Message>> = events
+        .into_iter()
+        .filter(|event| {
+            !event.is_task()
+                || crate::timeblocking::metadata(event)
+                    .block
+                    .as_ref()
+                    .is_none_or(|key| {
+                        !state.calendar.events.iter().any(|block| {
+                            !block.is_task() && crate::timeblocking::block_key(block) == *key
+                        })
+                    })
+                || crate::timeblocking::overdue(event)
+        })
+        .map(|event| {
+            if event.is_task() {
+                super::timeblocking::task_row(state, event, metrics, false)
+            } else {
+                all_day_chip(event, metrics)
+            }
+        })
         .collect();
 
     if chips.is_empty() {
-        return mouse_area(container(text("Drop tasks here to schedule this day").size(metrics.label()).style(text::secondary)).width(Fill).padding(4))
-            .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay)).into();
+        return None;
     }
 
-    mouse_area(container(scrollable(column(chips).spacing(4.0).width(Fill))).max_height(180))
-        .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
-        .into()
+    Some(
+        mouse_area(container(scrollable(column(chips).spacing(4.0).width(Fill))).max_height(180))
+            .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
+            .into(),
+    )
 }
 
 fn all_day_chip<'a>(event: &Event, metrics: &Metrics) -> Element<'a, Message> {
@@ -390,10 +450,15 @@ fn task_color_picker<'a>(
         rows.push(row(swatches).spacing(6.0).into());
     }
 
-    let reset = button(text("Reset to default").size(metrics.label() - 1.0).center().width(Fill))
-        .width(Fill)
-        .on_press(Message::TaskColorPicked(id.to_owned(), None))
-        .style(button::secondary);
+    let reset = button(
+        text("Reset to default")
+            .size(metrics.label() - 1.0)
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .on_press(Message::TaskColorPicked(id.to_owned(), None))
+    .style(button::secondary);
 
     column![
         text("Task color")
@@ -419,7 +484,10 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
     let offset = state.config.calendar.day_end_minutes();
     let day_start_hour = state.config.calendar.day_start_hour();
 
-    let timed: Vec<&Event> = state.calendar.timed_events(&state.config.calendar).collect();
+    let timed: Vec<&Event> = state
+        .calendar
+        .timed_events(&state.config.calendar)
+        .collect();
     let spans: Vec<Span> = timed
         .iter()
         .map(|event| {
@@ -429,10 +497,7 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
                 let start = start.clamp(0, DAY_MINUTES);
                 (start, (start + 15).min(DAY_MINUTES))
             });
-            Span {
-                start_min,
-                end_min,
-            }
+            Span { start_min, end_min }
         })
         .collect();
     let packed = layout::pack(&spans);
@@ -443,7 +508,11 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         .zip(packed.iter())
         .map(|((event, span), slot)| Block {
             id: event.id.clone(),
-            title: if event.is_task() && event.completed { format!("✓ {}", event.title) } else { event.title.clone() },
+            title: if event.is_task() && event.completed {
+                format!("✓ {}", event.title)
+            } else {
+                event.title.clone()
+            },
             when: calendar::event_time_label(event),
             start_min: span.start_min,
             end_min: span.end_min,
@@ -451,11 +520,23 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             columns: slot.columns,
             color: event.color,
             editable: !event.is_task() || event.details.scheduled.is_some(),
-            pending: state.calendar.pending_time(&event.id).is_some() || state.timeblocking.busy.contains(&event.id),
+            pending: state.calendar.pending_time(&event.id).is_some()
+                || state.timeblocking.busy.contains(&event.id),
             time_block: crate::timeblocking::is_block(event, &state.config.calendar),
             tasks: if crate::timeblocking::is_block(event, &state.config.calendar) {
-                crate::timeblocking::assigned(state, event).iter().map(|e| (e.id.clone(), e.title.clone(), crate::timeblocking::metadata(e).minutes)).collect()
-            } else { Vec::new() },
+                crate::timeblocking::assigned(state, event)
+                    .iter()
+                    .map(|e| {
+                        (
+                            e.id.clone(),
+                            e.title.clone(),
+                            crate::timeblocking::metadata(e).minutes,
+                        )
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         })
         .collect();
 
@@ -472,7 +553,9 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
     let create_color = state
         .calendar
         .default_calendar_id(&state.config.calendar)
-        .map_or(colors::DEFAULT_EVENT, |id| state.calendar.calendar_color(&id));
+        .map_or(colors::DEFAULT_EVENT, |id| {
+            state.calendar.calendar_color(&id)
+        });
 
     scrollable(
         canvas_widget(DayCanvas {
@@ -515,8 +598,8 @@ const DAY_SCROLL: &str = "cal-day";
 /// Scrolls the day grid so the needle sits a little below the top, the way
 /// Google Calendar opens on "now" rather than the start of the day.
 pub fn scroll_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
-    let minutes = (calendar::minutes_from_midnight(Local::now()) - day_end_minutes)
-        .rem_euclid(DAY_MINUTES);
+    let minutes =
+        (calendar::minutes_from_midnight(Local::now()) - day_end_minutes).rem_euclid(DAY_MINUTES);
     let y = ((minutes - 90) as f32 * (hour_height / 60.0)).max(0.0);
 
     iced::widget::operation::scroll_to(
@@ -551,8 +634,12 @@ pub fn zoom_scroll_delta(anchor: f32, before: f32, after: f32) -> f32 {
 }
 
 fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
-        .on_press(Message::CalendarMenuToggled);
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::CalendarMenuToggled);
 
     let mut panel = column![
         text("Calendars").size(metrics.label() + 1.0),
@@ -586,7 +673,9 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
             }
 
             let id = calendar.id.clone();
-            let enabled = state.calendar.calendar_enabled(&calendar.id, &state.config.calendar);
+            let enabled = state
+                .calendar
+                .calendar_enabled(&calendar.id, &state.config.calendar);
             let swatch = calendar.color;
             let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
 
@@ -635,10 +724,15 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     panel = panel.push(sync);
     panel = panel.push(
-        button(text("Open Google Calendar").size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .on_press(Message::OpenGoogleCalendar)
-            .style(button::secondary),
+        button(
+            text("Open Google Calendar")
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .on_press(Message::OpenGoogleCalendar)
+        .style(button::secondary),
     );
 
     let card = container(panel)
@@ -670,8 +764,12 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 /// The month picker: a grid of the month's days, with arrows to step a month
 /// at a time. Tapping a day jumps the day view to it.
 fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
-        .on_press(Message::CalendarMonthToggled);
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::CalendarMonthToggled);
 
     let month = state.calendar.month;
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
@@ -709,13 +807,9 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         weeks.push(row(cells).spacing(2.0).width(Fill).into());
     }
 
-    let panel = column![
-        title,
-        weekdays,
-        column(weeks).spacing(2.0).width(Fill),
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
+    let panel = column![title, weekdays, column(weeks).spacing(2.0).width(Fill),]
+        .spacing(metrics.spacing)
+        .width(Fill);
 
     let card = container(panel)
         .padding(metrics.padding)
@@ -801,17 +895,27 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
     let mut body = column![
         super::links::text(event.title.clone(), metrics.label() + 2.0),
-        text(schedule_line(event)).size(metrics.label()).style(text::secondary),
+        text(schedule_line(event))
+            .size(metrics.label())
+            .style(text::secondary),
         detail_line("Calendar", calendar_name.to_owned(), metrics),
     ]
     .spacing(metrics.spacing)
     .width(Fill);
 
     if !event.is_task() && !event.all_day && state.config.calendar.time_block_calendar.is_none() {
-        body = body.push(button(text("Use this calendar for time blocks").size(metrics.label()).center())
+        body = body.push(
+            button(
+                text("Use this calendar for time blocks")
+                    .size(metrics.label())
+                    .center(),
+            )
             .width(Fill)
-            .on_press(Message::TimeBlocking(crate::timeblocking::Action::Calendar(event.calendar_id.clone())))
-            .style(button::primary));
+            .on_press(Message::TimeBlocking(
+                crate::timeblocking::Action::Calendar(event.calendar_id.clone()),
+            ))
+            .style(button::primary),
+        );
     }
 
     let details = &event.details;
@@ -825,14 +929,18 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         body = body.push(detail_line("Organizer", details.organizer.clone(), metrics));
     }
     if !details.attendees.is_empty() {
-        body = body.push(detail_line(
-            "Guests",
-            details.attendees.join("\n"),
-            metrics,
-        ));
+        body = body.push(detail_line("Guests", details.attendees.join("\n"), metrics));
     }
     if !details.description.is_empty() {
-        body = body.push(detail_line("Description", if event.is_task() { crate::timeblocking::description(&details.description) } else { details.description.clone() }, metrics));
+        body = body.push(detail_line(
+            "Description",
+            if event.is_task() {
+                crate::timeblocking::description(&details.description)
+            } else {
+                details.description.clone()
+            },
+            metrics,
+        ));
     }
 
     // The action buttons sit outside the scrollable, so they stay reachable
@@ -859,22 +967,32 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         // other instances untouched.
         let id = event.id.clone();
         buttons.push(
-            button(text("Delete Instance").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::TaskDeleteRequested(id))
-                .style(button::secondary)
-                .into(),
+            button(
+                text("Delete Instance")
+                    .size(metrics.label())
+                    .center()
+                    .width(Fill),
+            )
+            .width(Fill)
+            .on_press(Message::TaskDeleteRequested(id))
+            .style(button::secondary)
+            .into(),
         );
     }
 
     if !details.meeting.is_empty() {
         let meeting = details.meeting.clone();
         buttons.push(
-            button(text("Join meeting").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::OpenEventLink(meeting))
-                .style(button::primary)
-                .into(),
+            button(
+                text("Join meeting")
+                    .size(metrics.label())
+                    .center()
+                    .width(Fill),
+            )
+            .width(Fill)
+            .on_press(Message::OpenEventLink(meeting))
+            .style(button::primary)
+            .into(),
         );
     }
     if !details.link.is_empty() {
@@ -921,7 +1039,11 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .into(),
     );
 
-    let max_height = if event.is_task() { (metrics.size.height * 0.85).clamp(140.0, 720.0) } else { (metrics.size.height * 0.42).clamp(140.0, 420.0) };
+    let max_height = if event.is_task() {
+        (metrics.size.height * 0.85).clamp(140.0, 720.0)
+    } else {
+        (metrics.size.height * 0.42).clamp(140.0, 420.0)
+    };
     // A button is normally one line of text plus its vertical padding, so
     // reserving that leaves the scroll every pixel the buttons do not need.
     // The reserve is generous enough that a label wrapping at the narrowest
@@ -938,9 +1060,12 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         .width(Fill);
 
     let card = container(
-        column![scrolling, column(buttons).spacing(metrics.spacing).width(Fill)]
-            .spacing(metrics.spacing)
-            .width(Fill),
+        column![
+            scrolling,
+            column(buttons).spacing(metrics.spacing).width(Fill)
+        ]
+        .spacing(metrics.spacing)
+        .width(Fill),
     )
     .padding(metrics.padding)
     .width(Fill)
@@ -996,7 +1121,9 @@ fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, M
 
     // Clicking outside the card puts the prompt away without deleting.
     let dismiss = mouse_area(
-        container(iced::widget::Space::new()).width(Fill).height(Fill),
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
     )
     .on_press(Message::EventDeleteCancelled);
 
@@ -1005,7 +1132,9 @@ fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, M
     } else {
         text("Delete this event?").size(metrics.label() + 1.0)
     };
-    let event_title = text(event.title.clone()).size(metrics.label()).style(text::secondary);
+    let event_title = text(event.title.clone())
+        .size(metrics.label())
+        .style(text::secondary);
 
     let confirm = if is_task {
         Message::TaskDeleteConfirmed(id.to_owned())
@@ -1063,8 +1192,12 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     };
 
     // Clicking outside the card puts the draft away, the way the menu closes.
-    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
-        .on_press(Message::EventDraftCancelled);
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::EventDraftCancelled);
 
     let header = row![
         text("New event").size(metrics.label() + 1.0).width(Fill),
@@ -1191,8 +1324,12 @@ fn edit_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     };
 
     // Clicking outside the card puts the edit away.
-    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
-        .on_press(Message::EventEditCancelled);
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::EventEditCancelled);
 
     let header = row![
         text("Edit event").size(metrics.label() + 1.0).width(Fill),
@@ -1344,6 +1481,11 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
         .calendars
         .iter()
         .filter(|calendar| !calendar.is_task_list())
+        // Assigned task times live on a calendar the app manages. A new event
+        // is a normal calendar event, so that calendar is not a choice.
+        .filter(|calendar| {
+            state.config.calendar.tasks_calendar.as_deref() != Some(calendar.id.as_str())
+        })
         .map(|calendar| CalendarChoice {
             id: calendar.id.clone(),
             name: calendar.name.clone(),
@@ -1393,7 +1535,9 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
             .as_ref()
             .map(|option| option.name.clone())
             .unwrap_or_else(|| "Calendar".to_owned());
-        let color = selected.as_ref().map_or(Color::from_rgb8(0xCC, 0xCC, 0xCC), |c| c.color);
+        let color = selected
+            .as_ref()
+            .map_or(Color::from_rgb8(0xCC, 0xCC, 0xCC), |c| c.color);
 
         let control = button(
             row![
@@ -1402,16 +1546,13 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
             ]
             .spacing(8.0)
             .align_y(Alignment::Center)
-            .padding([2.0, 8.0])
+            .padding([2.0, 8.0]),
         )
         .width(Fill)
         .on_press(Message::EventDraftCalendarDropdownToggled)
         .style(button::secondary);
 
-        column![caption, control]
-            .spacing(2.0)
-            .width(Fill)
-            .into()
+        column![caption, control].spacing(2.0).width(Fill).into()
     }
 }
 
@@ -1422,8 +1563,12 @@ fn calendar_dropdown_overlay<'a>(
     selected: Option<CalendarChoice>,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let dismiss = mouse_area(container(iced::widget::Space::new()).width(Fill).height(Fill))
-        .on_press(Message::EventDraftCalendarDropdownToggled);
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::EventDraftCalendarDropdownToggled);
 
     let mut list = column![];
     for option in &options {
@@ -1439,7 +1584,7 @@ fn calendar_dropdown_overlay<'a>(
             ]
             .spacing(8.0)
             .align_y(Alignment::Center)
-            .padding([6.0, 10.0])
+            .padding([6.0, 10.0]),
         )
         .width(Fill)
         .on_press(Message::EventDraftCalendarSelected(id.clone()))
@@ -1455,9 +1600,7 @@ fn calendar_dropdown_overlay<'a>(
         list = list.push(Space::new().height(4.0));
     }
 
-    let scrollable = scrollable(list)
-        .width(Fill)
-        .height(Length::Fixed(320.0));
+    let scrollable = scrollable(list).width(Fill).height(Length::Fixed(320.0));
 
     let card = container(scrollable)
         .padding(4.0)
@@ -1483,7 +1626,10 @@ fn calendar_dropdown_overlay<'a>(
 }
 
 /// The calendar after `selected`, wrapping around at the end.
-fn next_calendar(options: &[CalendarChoice], selected: Option<&CalendarChoice>) -> Option<CalendarChoice> {
+fn next_calendar(
+    options: &[CalendarChoice],
+    selected: Option<&CalendarChoice>,
+) -> Option<CalendarChoice> {
     if options.is_empty() {
         return None;
     }
@@ -1501,7 +1647,9 @@ fn is_task(event: &Event) -> bool {
 
 fn detail_line<'a>(label: &'a str, value: String, metrics: &Metrics) -> Element<'a, Message> {
     column![
-        text(label).size(metrics.label() - 1.0).style(text::secondary),
+        text(label)
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
         super::links::text(value, metrics.label()),
     ]
     .spacing(2.0)
@@ -1641,9 +1789,9 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for PointerWatch<'
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.content.as_widget().draw(
-            tree, renderer, theme, style, layout, cursor, viewport,
-        );
+        self.content
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
     }
 
     fn mouse_interaction(
@@ -1826,19 +1974,41 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        if matches!(event, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))) && self.external_drag {
+        if matches!(
+            event,
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+        ) && self.external_drag
+        {
             state.task_press = None;
             let point = cursor.position_in(bounds)?;
             if let Some(id) = self.task_at(point, bounds.width) {
-                return Some(canvas::Action::publish(Message::TimeBlocking(
-                    crate::timeblocking::Action::DropTask(id.to_owned()),
-                )).and_capture());
+                return Some(
+                    canvas::Action::publish(Message::TimeBlocking(
+                        crate::timeblocking::Action::DropTask(id.to_owned()),
+                    ))
+                    .and_capture(),
+                );
             }
-            let block = self.blocks.iter().find(|b| b.time_block && self.rect_for(b, bounds.width, b.start_min, b.end_min).contains(point));
+            let block = self.blocks.iter().find(|b| {
+                b.time_block
+                    && self
+                        .rect_for(b, bounds.width, b.start_min, b.end_min)
+                        .contains(point)
+            });
             if let Some(block) = block {
-                return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropBlock(block.id.clone()))).and_capture());
+                return Some(
+                    canvas::Action::publish(Message::TimeBlocking(
+                        crate::timeblocking::Action::DropBlock(block.id.clone()),
+                    ))
+                    .and_capture(),
+                );
             }
-            return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::DropTime(self.time_at(self.snap_minute(point.y))))).and_capture());
+            return Some(
+                canvas::Action::publish(Message::TimeBlocking(
+                    crate::timeblocking::Action::DropTime(self.time_at(self.snap_minute(point.y))),
+                ))
+                .and_capture(),
+            );
         }
         match event {
             iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
@@ -1868,12 +2038,18 @@ impl canvas::Program<Message> for DayCanvas {
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some((id, origin)) = &state.task_press {
-                    if cursor.position().is_some_and(|point| point.distance(*origin) >= 4.0) {
+                    if cursor
+                        .position()
+                        .is_some_and(|point| point.distance(*origin) >= 4.0)
+                    {
                         let id = id.clone();
                         state.task_press = None;
-                        return Some(canvas::Action::publish(Message::TimeBlocking(
-                            crate::timeblocking::Action::Drag(id),
-                        )).and_capture());
+                        return Some(
+                            canvas::Action::publish(Message::TimeBlocking(
+                                crate::timeblocking::Action::Drag(id),
+                            ))
+                            .and_capture(),
+                        );
                     }
                     return Some(canvas::Action::capture());
                 }
@@ -1898,7 +2074,10 @@ impl canvas::Program<Message> for DayCanvas {
                     if let Some(point) = cursor.position_in(bounds) {
                         let head = self.snap_minute(point.y);
                         if head != create.head_min {
-                            state.set_create(Some(CreateDrag { head_min: head, ..create }));
+                            state.set_create(Some(CreateDrag {
+                                head_min: head,
+                                ..create
+                            }));
                             return Some(canvas::Action::request_redraw().and_capture());
                         }
                     }
@@ -1911,14 +2090,24 @@ impl canvas::Program<Message> for DayCanvas {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
                 for block in &self.blocks {
-                    if !block.time_block { continue; }
+                    if !block.time_block {
+                        continue;
+                    }
                     let rect = self.block_rect(block, bounds.width);
                     let (view, edit) = block_actions(rect);
                     if edit.contains(point) {
-                        return Some(canvas::Action::publish(Message::EventOpened(block.id.clone())).and_capture());
+                        return Some(
+                            canvas::Action::publish(Message::EventOpened(block.id.clone()))
+                                .and_capture(),
+                        );
                     }
                     if view.contains(point) {
-                        return Some(canvas::Action::publish(Message::TimeBlocking(crate::timeblocking::Action::View(block.id.clone()))).and_capture());
+                        return Some(
+                            canvas::Action::publish(Message::TimeBlocking(
+                                crate::timeblocking::Action::View(block.id.clone()),
+                            ))
+                            .and_capture(),
+                        );
                     }
                 }
 
@@ -1967,7 +2156,10 @@ impl canvas::Program<Message> for DayCanvas {
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if let Some((id, origin)) = state.task_press.take() {
-                    return if cursor.position().is_some_and(|point| point.distance(origin) < 4.0) {
+                    return if cursor
+                        .position()
+                        .is_some_and(|point| point.distance(origin) < 4.0)
+                    {
                         Some(canvas::Action::publish(Message::EventOpened(id)).and_capture())
                     } else {
                         Some(canvas::Action::capture())
@@ -1989,17 +2181,16 @@ impl canvas::Program<Message> for DayCanvas {
                 let drag = state.drag.take()?;
 
                 // A press that never moved is a click, not a drag.
-                let action = if drag.preview_start == drag.start_min
-                    && drag.preview_end == drag.end_min
-                {
-                    canvas::Action::publish(Message::EventOpened(drag.id))
-                } else {
-                    canvas::Action::publish(Message::EventTimeChanged {
-                        id: drag.id,
-                        start: self.time_at(drag.preview_start),
-                        end: self.time_at(drag.preview_end),
-                    })
-                };
+                let action =
+                    if drag.preview_start == drag.start_min && drag.preview_end == drag.end_min {
+                        canvas::Action::publish(Message::EventOpened(drag.id))
+                    } else {
+                        canvas::Action::publish(Message::EventTimeChanged {
+                            id: drag.id,
+                            start: self.time_at(drag.preview_start),
+                            end: self.time_at(drag.preview_end),
+                        })
+                    };
 
                 Some(action.and_capture())
             }
@@ -2038,7 +2229,11 @@ impl canvas::Program<Message> for DayCanvas {
             }
         }
 
-        if cursor.position_in(bounds).and_then(|point| self.task_at(point, bounds.width)).is_some() {
+        if cursor
+            .position_in(bounds)
+            .and_then(|point| self.task_at(point, bounds.width))
+            .is_some()
+        {
             return mouse::Interaction::Grab;
         }
 
@@ -2120,18 +2315,21 @@ impl DayCanvas {
                 },
             );
 
-            fill_glyphs(frame, Text {
-                content: calendar::hour_label((self.day_start_hour + hour) % 24),
-                position: Point::new(self.gutter - 6.0, y + 2.0),
-                color: colors::GUTTER_TEXT,
-                size: Pixels(label_size),
-                font: Font::DEFAULT,
-                align_x: iced::alignment::Horizontal::Right.into(),
-                align_y: iced::alignment::Vertical::Top,
-                line_height: text::LineHeight::default(),
-                shaping: text::Shaping::Basic,
-                max_width: self.gutter - 8.0,
-            });
+            fill_glyphs(
+                frame,
+                Text {
+                    content: calendar::hour_label((self.day_start_hour + hour) % 24),
+                    position: Point::new(self.gutter - 6.0, y + 2.0),
+                    color: colors::GUTTER_TEXT,
+                    size: Pixels(label_size),
+                    font: Font::DEFAULT,
+                    align_x: iced::alignment::Horizontal::Right.into(),
+                    align_y: iced::alignment::Vertical::Top,
+                    line_height: text::LineHeight::default(),
+                    shaping: text::Shaping::Basic,
+                    max_width: self.gutter - 8.0,
+                },
+            );
         }
 
         for (index, block) in self.blocks.iter().enumerate() {
@@ -2159,17 +2357,43 @@ impl DayCanvas {
                 let total: u32 = block.tasks.iter().map(|t| t.2).sum();
                 let duration = (block.end_min - block.start_min).max(1) as f32;
                 let occupied = (total as f32 / duration).min(1.0);
-                frame.fill_rectangle(Point::new(block_bounds.x, block_bounds.y), Size::new(block_bounds.width, block_bounds.height * occupied), Color::from_rgba(0.15,0.15,0.15,0.28));
+                frame.fill_rectangle(
+                    Point::new(block_bounds.x, block_bounds.y),
+                    Size::new(block_bounds.width, block_bounds.height * occupied),
+                    Color::from_rgba(0.15, 0.15, 0.15, 0.28),
+                );
                 let mut elapsed = 0;
                 for (i, (_, title, minutes)) in block.tasks.iter().enumerate() {
                     elapsed += minutes;
                     let over = elapsed as f32 > duration;
                     let y = block_bounds.y + i as f32 * 20.0;
                     let x = block_bounds.x + block_bounds.width + 4.0;
-                    if over { frame.fill_rectangle(Point::new(x,y), Size::new(block_bounds.width,19.0), Color::from_rgba(0.9,0.2,0.15,0.22)); }
+                    if over {
+                        frame.fill_rectangle(
+                            Point::new(x, y),
+                            Size::new(block_bounds.width, 19.0),
+                            Color::from_rgba(0.9, 0.2, 0.15, 0.22),
+                        );
+                    }
                     let label = format!("○ {} · {}m", title, minutes);
-                    let label = fit_lines(&label, 11.0, block_bounds.width - 6.0, 1).into_iter().next().unwrap_or_default();
-                    fill_glyphs(frame, Text { content: label, position: Point::new(x + 3.0,y + 2.0), color: if over { Color::from_rgb8(220,65,55) } else { Color::from_rgb8(125,125,125) }, size: Pixels(11.0), ..Text::default() });
+                    let label = fit_lines(&label, 11.0, block_bounds.width - 6.0, 1)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default();
+                    fill_glyphs(
+                        frame,
+                        Text {
+                            content: label,
+                            position: Point::new(x + 3.0, y + 2.0),
+                            color: if over {
+                                Color::from_rgb8(220, 65, 55)
+                            } else {
+                                Color::from_rgb8(125, 125, 125)
+                            },
+                            size: Pixels(11.0),
+                            ..Text::default()
+                        },
+                    );
                 }
             }
             frame.stroke(
@@ -2185,16 +2409,44 @@ impl DayCanvas {
             let title_size = if self.compact { 11.0 } else { 12.0 };
             let mut label_bounds = block_bounds;
             if block.time_block {
-                if block_bounds.width >= 160.0 { label_bounds.width -= 78.0; }
-                else { label_bounds.y += 22.0; label_bounds.height = (label_bounds.height - 22.0).max(0.0); }
+                if block_bounds.width >= 160.0 {
+                    label_bounds.width -= 78.0;
+                } else {
+                    label_bounds.y += 22.0;
+                    label_bounds.height = (label_bounds.height - 22.0).max(0.0);
+                }
             }
             if label_bounds.height >= 14.0 {
-                draw_block_label(frame, label_bounds, &block.title, &block.when, ink, title_size);
+                draw_block_label(
+                    frame,
+                    label_bounds,
+                    &block.title,
+                    &block.when,
+                    ink,
+                    title_size,
+                );
             }
             if block.time_block {
-                for (label, bounds) in [("View", block_actions(block_bounds).0), ("Edit", block_actions(block_bounds).1)] {
-                    frame.fill(&Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()), Color::WHITE.scale_alpha(0.27));
-                    fill_glyphs(frame, Text { content: label.into(), position: Point::new(bounds.center_x(), bounds.center_y()), color: ink, size: Pixels(10.0), align_x: iced::alignment::Horizontal::Center.into(), align_y: iced::alignment::Vertical::Center, ..Text::default() });
+                for (label, bounds) in [
+                    ("View", block_actions(block_bounds).0),
+                    ("Edit", block_actions(block_bounds).1),
+                ] {
+                    frame.fill(
+                        &Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()),
+                        Color::WHITE.scale_alpha(0.27),
+                    );
+                    fill_glyphs(
+                        frame,
+                        Text {
+                            content: label.into(),
+                            position: Point::new(bounds.center_x(), bounds.center_y()),
+                            color: ink,
+                            size: Pixels(10.0),
+                            align_x: iced::alignment::Horizontal::Center.into(),
+                            align_y: iced::alignment::Vertical::Center,
+                            ..Text::default()
+                        },
+                    );
                 }
             }
         }
@@ -2214,7 +2466,10 @@ impl DayCanvas {
                 ..Stroke::default()
             },
         );
-        frame.fill(&Path::circle(Point::new(self.gutter, y), NEEDLE_RADIUS), colors::NEEDLE);
+        frame.fill(
+            &Path::circle(Point::new(self.gutter, y), NEEDLE_RADIUS),
+            colors::NEEDLE,
+        );
     }
 
     fn draw_hover(&self, frame: &mut Frame, index: usize) {
@@ -2297,17 +2552,25 @@ impl DayCanvas {
 
     /// The task row beside a time block, including its title and estimate.
     fn task_at(&self, point: Point, width: f32) -> Option<&str> {
-        self.blocks.iter().filter(|block| block.time_block).find_map(|block| {
-            let rect = self.block_rect(block, width);
-            let rows = Rectangle {
-                x: rect.x + rect.width + 4.0,
-                y: rect.y,
-                width: rect.width,
-                height: block.tasks.len() as f32 * 20.0,
-            };
-            if !rows.contains(point) { return None; }
-            block.tasks.get(((point.y - rows.y) / 20.0) as usize).map(|task| task.0.as_str())
-        })
+        self.blocks
+            .iter()
+            .filter(|block| block.time_block)
+            .find_map(|block| {
+                let rect = self.block_rect(block, width);
+                let rows = Rectangle {
+                    x: rect.x + rect.width + 4.0,
+                    y: rect.y,
+                    width: rect.width,
+                    height: block.tasks.len() as f32 * 20.0,
+                };
+                if !rows.contains(point) {
+                    return None;
+                }
+                block
+                    .tasks
+                    .get(((point.y - rows.y) / 20.0) as usize)
+                    .map(|task| task.0.as_str())
+            })
     }
 
     /// Whether the block at this index can be dragged at all.
@@ -2418,27 +2681,27 @@ impl DayCanvas {
         let title_size = if self.compact { 11.0 } else { 12.0 };
         let text_width = (bounds.width - BLOCK_PADDING - BLOCK_PADDING_RIGHT).max(8.0);
         let label = format!("{} – {}", self.clock_label(start), self.clock_label(end));
-        fill_glyphs(frame, Text {
-            content: fit_line(&label, title_size, text_width),
-            position: Point::new(bounds.x + BLOCK_PADDING, bounds.y + 3.0),
-            color: ink,
-            size: Pixels(title_size),
-            font: Font::DEFAULT,
-            align_x: iced::alignment::Horizontal::Left.into(),
-            align_y: iced::alignment::Vertical::Top,
-            line_height: text::LineHeight::default(),
-            shaping: text::Shaping::Basic,
-            max_width: text_width,
-        });
+        fill_glyphs(
+            frame,
+            Text {
+                content: fit_line(&label, title_size, text_width),
+                position: Point::new(bounds.x + BLOCK_PADDING, bounds.y + 3.0),
+                color: ink,
+                size: Pixels(title_size),
+                font: Font::DEFAULT,
+                align_x: iced::alignment::Horizontal::Left.into(),
+                align_y: iced::alignment::Vertical::Top,
+                line_height: text::LineHeight::default(),
+                shaping: text::Shaping::Basic,
+                max_width: text_width,
+            },
+        );
     }
 
     /// The real time a previewed minute-of-day lands on.
     fn time_at(&self, minutes: i32) -> DateTime<Local> {
         let offset = self.day_start_hour as i32 * 60;
-        let naive = self
-            .day
-            .and_hms_opt(0, 0, 0)
-            .unwrap_or_default()
+        let naive = self.day.and_hms_opt(0, 0, 0).unwrap_or_default()
             + chrono::Duration::minutes(i64::from(offset + minutes));
 
         match Local.from_local_datetime(&naive) {
@@ -2471,14 +2734,22 @@ impl DayCanvas {
 
     fn hit(&self, local: Option<Point>, width: f32) -> Option<usize> {
         let point = local?;
-        self.blocks.iter().enumerate().rev().find_map(|(index, block)| {
-            self.block_rect(block, width).contains(point).then_some(index)
-        })
+        self.blocks
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, block)| {
+                self.block_rect(block, width)
+                    .contains(point)
+                    .then_some(index)
+            })
     }
 
     fn block_rect(&self, block: &Block, width: f32) -> Rectangle {
         let mut rect = self.rect_for(block, width, block.start_min, block.end_min);
-        if block.time_block { rect.width = (rect.width - 6.0) * 0.5; }
+        if block.time_block {
+            rect.width = (rect.width - 6.0) * 0.5;
+        }
         rect
     }
 
@@ -2503,8 +2774,16 @@ impl DayCanvas {
 fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
     let width = 36.0_f32.min(((bounds.width - 6.0) / 2.0).max(1.0));
     let height = 18.0_f32.min((bounds.height - 4.0).max(1.0));
-    let edit = Rectangle { x: bounds.x + bounds.width - width - 2.0, y: bounds.y + 2.0, width, height };
-    let view = Rectangle { x: edit.x - width - 2.0, ..edit };
+    let edit = Rectangle {
+        x: bounds.x + bounds.width - width - 2.0,
+        y: bounds.y + 2.0,
+        width,
+        height,
+    };
+    let view = Rectangle {
+        x: edit.x - width - 2.0,
+        ..edit
+    };
     (view, edit)
 }
 
@@ -2560,21 +2839,24 @@ fn draw_block_label(
     let lines = fit_lines(title, title_size, text_width, room);
 
     for (index, line) in lines.iter().enumerate() {
-        fill_glyphs(frame, Text {
-            content: line.clone(),
-            position: Point::new(
-                bounds.x + BLOCK_PADDING,
-                title_top + index as f32 * title_line,
-            ),
-            color: ink,
-            size: Pixels(title_size),
-            font: Font::DEFAULT,
-            align_x: iced::alignment::Horizontal::Left.into(),
-            align_y: iced::alignment::Vertical::Top,
-            line_height: text::LineHeight::default(),
-            shaping: text::Shaping::Basic,
-            max_width: text_width,
-        });
+        fill_glyphs(
+            frame,
+            Text {
+                content: line.clone(),
+                position: Point::new(
+                    bounds.x + BLOCK_PADDING,
+                    title_top + index as f32 * title_line,
+                ),
+                color: ink,
+                size: Pixels(title_size),
+                font: Font::DEFAULT,
+                align_x: iced::alignment::Horizontal::Left.into(),
+                align_y: iced::alignment::Vertical::Top,
+                line_height: text::LineHeight::default(),
+                shaping: text::Shaping::Basic,
+                max_width: text_width,
+            },
+        );
     }
 
     // The time sits under the title, so it has to clear however many lines
@@ -2583,18 +2865,21 @@ fn draw_block_label(
     if when_top + when_line <= bounds.y + bounds.height
         && let Some(when) = time_label(when, when_size, text_width)
     {
-        fill_glyphs(frame, Text {
-            content: when,
-            position: Point::new(bounds.x + BLOCK_PADDING, when_top),
-            color: ink.scale_alpha(0.85),
-            size: Pixels(when_size),
-            font: Font::DEFAULT,
-            align_x: iced::alignment::Horizontal::Left.into(),
-            align_y: iced::alignment::Vertical::Top,
-            line_height: text::LineHeight::default(),
-            shaping: text::Shaping::Basic,
-            max_width: text_width,
-        });
+        fill_glyphs(
+            frame,
+            Text {
+                content: when,
+                position: Point::new(bounds.x + BLOCK_PADDING, when_top),
+                color: ink.scale_alpha(0.85),
+                size: Pixels(when_size),
+                font: Font::DEFAULT,
+                align_x: iced::alignment::Horizontal::Left.into(),
+                align_y: iced::alignment::Vertical::Top,
+                line_height: text::LineHeight::default(),
+                shaping: text::Shaping::Basic,
+                max_width: text_width,
+            },
+        );
     }
 }
 
@@ -2607,8 +2892,7 @@ fn time_label(when: &str, size: f32, width: f32) -> Option<String> {
         return Some(when.to_owned());
     }
 
-    when
-        .split_once(" – ")
+    when.split_once(" – ")
         .filter(|(start, _)| text_width_of(start, size) <= width)
         .map(|(start, _)| start.to_owned())
 }
@@ -2804,7 +3088,9 @@ fn cache_key(
     let mut hash = hour_height.to_bits() as u64;
     hash = hash.wrapping_mul(31).wrapping_add(gutter.to_bits() as u64);
     hash = hash.wrapping_mul(31).wrapping_add(u64::from(compact));
-    hash = hash.wrapping_mul(31).wrapping_add(u64::from(day_start_hour));
+    hash = hash
+        .wrapping_mul(31)
+        .wrapping_add(u64::from(day_start_hour));
     // Which block is being dragged decides which one the cached grid leaves
     // out, so the grid has to retrace when a drag starts or ends.
     hash = hash
@@ -2816,16 +3102,28 @@ fn cache_key(
         hash = hash.wrapping_mul(31).wrapping_add(block.end_min as u64);
         hash = hash.wrapping_mul(31).wrapping_add(block.column as u64);
         hash = hash.wrapping_mul(31).wrapping_add(block.columns as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(block.color.r.to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(block.color.g.to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(block.color.b.to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(block.color.a.to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(block.color.r.to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(block.color.g.to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(block.color.b.to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(block.color.a.to_bits() as u64);
         // An unconfirmed write changes the shade, so it has to retrace too.
         hash = hash.wrapping_mul(31).wrapping_add(u64::from(block.pending));
-        hash = hash.wrapping_mul(31).wrapping_add(u64::from(block.time_block));
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(u64::from(block.time_block));
         for (id, title, minutes) in &block.tasks {
             hash = hash.wrapping_mul(31).wrapping_add(u64::from(*minutes));
-            for byte in id.bytes().chain(title.bytes()) { hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte)); }
+            for byte in id.bytes().chain(title.bytes()) {
+                hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte));
+            }
         }
         for byte in block.title.bytes() {
             hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte));
@@ -2865,15 +3163,37 @@ mod tests {
             let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
             let (view_rect, edit_rect) = block_actions(bounds);
             assert!(view_rect.x < edit_rect.x);
-            let element: Element<'_, Message> = canvas_widget(canvas).width(240).height(1440).into();
-            let mut ui = iced_test::Simulator::with_size(iced_test::core::Settings::default(),Size::new(240.0,1440.0),element);
-            ui.point_at(if view { view_rect.center() } else { edit_rect.center() });
-            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+            let element: Element<'_, Message> =
+                canvas_widget(canvas).width(240).height(1440).into();
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                Size::new(240.0, 1440.0),
+                element,
+            );
+            ui.point_at(if view {
+                view_rect.center()
+            } else {
+                edit_rect.center()
+            });
+            ui.simulate([
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
             let messages: Vec<_> = ui.into_messages().collect();
             if view {
                 assert!(messages.iter().any(|m| matches!(m,Message::TimeBlocking(crate::timeblocking::Action::View(id)) if id == "standup")));
-                assert!(!messages.iter().any(|m| matches!(m,Message::EventOpened(_))));
-            } else { assert!(messages.iter().any(|m| matches!(m,Message::EventOpened(id) if id == "standup"))); }
+                assert!(
+                    !messages
+                        .iter()
+                        .any(|m| matches!(m, Message::EventOpened(_)))
+                );
+            } else {
+                assert!(
+                    messages
+                        .iter()
+                        .any(|m| matches!(m,Message::EventOpened(id) if id == "standup"))
+                );
+            }
         }
     }
 
@@ -2883,12 +3203,22 @@ mod tests {
         canvas.blocks[0].time_block = true;
         canvas.external_drag = true;
         let element: Element<'_, Message> = canvas_widget(canvas).width(240).height(1440).into();
-        let mut ui = iced_test::Simulator::with_size(iced_test::core::Settings::default(), Size::new(240.0,1440.0), element);
-        ui.point_at(Point::new(90.0,550.0));
-        ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(240.0, 1440.0),
+            element,
+        );
+        ui.point_at(Point::new(90.0, 550.0));
+        ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(
+            mouse::Button::Left,
+        ))]);
         let messages: Vec<_> = ui.into_messages().collect();
         assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::DropBlock(id)) if id == "standup")));
-        assert!(!messages.iter().any(|m| matches!(m, Message::EventDraftStarted { .. })));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Message::EventDraftStarted { .. }))
+        );
     }
 
     #[test]
@@ -2899,23 +3229,45 @@ mod tests {
             canvas.blocks[0].tasks = vec![("task".into(), "Task title".into(), 30)];
             let bounds = Rectangle::new(Point::ORIGIN, Size::new(600.0, 1440.0));
             let rect = canvas.block_rect(&canvas.blocks[0], bounds.width);
-            let start = Point::new(rect.x + rect.width + 4.0 + fraction * rect.width, rect.y + 10.0);
+            let start = Point::new(
+                rect.x + rect.width + 4.0 + fraction * rect.width,
+                rect.y + 10.0,
+            );
             let cursor = mouse::Cursor::Available(start);
-            assert_eq!(canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor), mouse::Interaction::Grab);
+            assert_eq!(
+                canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor),
+                mouse::Interaction::Grab
+            );
             canvas.external_drag = true;
-            assert_eq!(canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor), mouse::Interaction::Grabbing);
+            assert_eq!(
+                canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor),
+                mouse::Interaction::Grabbing
+            );
             canvas.external_drag = false;
-            let element: Element<'_, Message> = canvas_widget(canvas).width(600).height(1440).into();
-            let mut ui = iced_test::Simulator::with_size(iced_test::core::Settings::default(), bounds.size(), element);
+            let element: Element<'_, Message> =
+                canvas_widget(canvas).width(600).height(1440).into();
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                bounds.size(),
+                element,
+            );
             ui.point_at(start);
-            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
+            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(
+                mouse::Button::Left,
+            ))]);
             let position = Point::new(start.x, start.y + 10.0);
             ui.point_at(position);
             ui.simulate([iced::Event::Mouse(mouse::Event::CursorMoved { position })]);
-            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+            ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left,
+            ))]);
             let messages: Vec<_> = ui.into_messages().collect();
             assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::Drag(id)) if id == "task")));
-            assert!(!messages.iter().any(|m| matches!(m, Message::EventOpened(_))));
+            assert!(
+                !messages
+                    .iter()
+                    .any(|m| matches!(m, Message::EventOpened(_)))
+            );
         }
     }
 
@@ -2949,7 +3301,12 @@ mod tests {
 
         // The next morning's small hours belong to this view, at the foot.
         let next = day.succ_opt().unwrap();
-        let next_1am = next.and_hms_opt(1, 0, 0).unwrap().and_local_timezone(Local).single().unwrap();
+        let next_1am = next
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .single()
+            .unwrap();
         assert_eq!(minutes_into_day(next_1am, day, 3 * 60), 22 * 60);
 
         // Midnight keeps the plain mapping.
@@ -3160,7 +3517,10 @@ mod tests {
         let at = |y: f32| canvas.grab(Point::new(rect.x + 4.0, y), 240.0);
 
         assert_eq!(at(rect.y + 1.0), Some((0, DragMode::ResizeStart)));
-        assert_eq!(at(rect.y + rect.height - 1.0), Some((0, DragMode::ResizeEnd)));
+        assert_eq!(
+            at(rect.y + rect.height - 1.0),
+            Some((0, DragMode::ResizeEnd))
+        );
         assert_eq!(at(rect.y + rect.height / 2.0), Some((0, DragMode::Move)));
         assert_eq!(canvas.grab(Point::new(8.0, rect.y + 1.0), 240.0), None);
     }

@@ -193,11 +193,19 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut input = text_input("e.g. Meta+U", &state.panel_shortcut_input).size(metrics.label());
     let mut apply = button(
-        text(if state.panel_shortcut_busy { "Applying…" } else { "Apply shortcut" })
-            .size(metrics.label()).center().width(Fill),
-    ).width(Fill);
+        text(if state.panel_shortcut_busy {
+            "Applying…"
+        } else {
+            "Apply shortcut"
+        })
+        .size(metrics.label())
+        .center()
+        .width(Fill),
+    )
+    .width(Fill);
     if !state.panel_shortcut_busy {
-        input = input.on_input(Message::PanelShortcutChanged)
+        input = input
+            .on_input(Message::PanelShortcutChanged)
             .on_submit(Message::PanelShortcutApply);
         if !state.panel_shortcut_input.trim().is_empty() {
             apply = apply.on_press(Message::PanelShortcutApply);
@@ -212,7 +220,8 @@ fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     if let Some(result) = &state.panel_shortcut_result {
         section = section.push(match result {
             Ok(shortcut) => text(format!("Shortcut set to {shortcut}"))
-                .size(metrics.label()).style(text::success),
+                .size(metrics.label())
+                .style(text::success),
             Err(error) => text(error).size(metrics.label()).style(text::danger),
         });
     }
@@ -248,17 +257,27 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .spacing(metrics.spacing);
 
     let action = if connected {
-        let mut disconnect = button(text("Disconnect").size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .style(button::secondary);
+        let mut disconnect = button(
+            text("Disconnect")
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .style(button::secondary);
         if !state.calendar.is_busy() {
             disconnect = disconnect.on_press(Message::GoogleDisconnectRequested);
         }
         disconnect
     } else {
-        let mut connect = button(text("Connect Google Calendar").size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .style(button::primary);
+        let mut connect = button(
+            text("Connect Google Calendar")
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .style(button::primary);
         if !state.calendar.is_busy() {
             connect = connect.on_press(Message::GoogleConnectRequested);
         }
@@ -268,7 +287,11 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     section = section.push(action);
 
     if let Some(error) = &state.calendar.error {
-        section = section.push(text(error.clone()).size(metrics.label()).style(text::danger));
+        section = section.push(
+            text(error.clone())
+                .size(metrics.label())
+                .style(text::danger),
+        );
     } else {
         section = section.push(
             text(state.calendar.status_line())
@@ -309,6 +332,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .calendars
         .iter()
         .filter(|calendar| !calendar.is_task_list())
+        .filter(|calendar| settings.tasks_calendar.as_deref() != Some(calendar.id.as_str()))
         .cloned()
         .collect();
 
@@ -332,11 +356,9 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     section = section.push(field(
         "Default calendar for new events",
-        pick_list(
-            option_map,
-            selected_option,
-            |option: CalendarOption| Message::DefaultCalendarSelected(option.id),
-        )
+        pick_list(option_map, selected_option, |option: CalendarOption| {
+            Message::DefaultCalendarSelected(option.id)
+        })
         .text_size(metrics.label())
         .width(Fill)
         .into(),
@@ -344,23 +366,71 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ));
 
     section = section.push(heading("Time Blocking", metrics));
-    for (label, tasks) in [("Google Tasks list for scheduled tasks (default: Has Time)", true), ("Calendar for time blocks", false)] {
-        let options: Vec<CalendarOption> = state.calendar.calendars.iter()
+    for (label, tasks) in [
+        (
+            "Google Tasks list for scheduled tasks (default: Has Time)",
+            true,
+        ),
+        ("Calendar for time blocks", false),
+    ] {
+        let options: Vec<CalendarOption> = state
+            .calendar
+            .calendars
+            .iter()
             .filter(|c| c.is_task_list() == tasks)
-            .map(|c| CalendarOption { id: c.id.clone(), name: c.name.clone() }).collect();
-        let selected_id = if tasks { &settings.time_block_list } else { &settings.time_block_calendar };
-        let selected = options.iter().find(|o| Some(&o.id) == selected_id.as_ref()).cloned();
-        section = section.push(field(label, pick_list(options, selected, move |o: CalendarOption| {
-            Message::TimeBlocking(if tasks { crate::timeblocking::Action::List(o.id) } else { crate::timeblocking::Action::Calendar(o.id) })
-        }).text_size(metrics.label()).width(Fill).into(), metrics));
+            .map(|c| CalendarOption {
+                id: c.id.clone(),
+                name: c.name.clone(),
+            })
+            .collect();
+        let selected_id = if tasks {
+            &settings.time_block_list
+        } else {
+            &settings.time_block_calendar
+        };
+        let selected = options
+            .iter()
+            .find(|o| Some(&o.id) == selected_id.as_ref())
+            .cloned();
+        section = section.push(field(
+            label,
+            pick_list(options, selected, move |o: CalendarOption| {
+                Message::TimeBlocking(if tasks {
+                    crate::timeblocking::Action::List(o.id)
+                } else {
+                    crate::timeblocking::Action::Calendar(o.id)
+                })
+            })
+            .text_size(metrics.label())
+            .width(Fill)
+            .into(),
+            metrics,
+        ));
     }
-    let options: Vec<CalendarOption> = state.calendar.calendars.iter()
+    let options: Vec<CalendarOption> = state
+        .calendar
+        .calendars
+        .iter()
         .filter(|c| !c.is_task_list())
-        .map(|c| CalendarOption { id: c.id.clone(), name: c.name.clone() }).collect();
-    let selected = options.iter().find(|o| settings.tasks_calendar.as_deref() == Some(o.id.as_str())).cloned();
-    section = section.push(field("Calendar for scheduled tasks (default: Tasks)",
-        pick_list(options, selected, |o: CalendarOption| Message::TimeBlocking(crate::timeblocking::Action::TaskCalendar(o.id)))
-            .text_size(metrics.label()).width(Fill).into(), metrics));
+        .map(|c| CalendarOption {
+            id: c.id.clone(),
+            name: c.name.clone(),
+        })
+        .collect();
+    let selected = options
+        .iter()
+        .find(|o| settings.tasks_calendar.as_deref() == Some(o.id.as_str()))
+        .cloned();
+    section = section.push(field(
+        "Calendar for scheduled tasks (default: Tasks)",
+        pick_list(options, selected, |o: CalendarOption| {
+            Message::TimeBlocking(crate::timeblocking::Action::TaskCalendar(o.id))
+        })
+        .text_size(metrics.label())
+        .width(Fill)
+        .into(),
+        metrics,
+    ));
     section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. The Tasks calendar and Has Time list are created on first use if needed. Deadlines use the first description line: DUE: YYYY-MM-DD. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
@@ -477,10 +547,15 @@ fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
         section = section.push(
             row![
-                button(text("Choose file...").size(metrics.label()).center().width(Fill))
-                    .width(Fill)
-                    .on_press(Message::SoundFileRequested)
-                    .style(button::secondary),
+                button(
+                    text("Choose file...")
+                        .size(metrics.label())
+                        .center()
+                        .width(Fill)
+                )
+                .width(Fill)
+                .on_press(Message::SoundFileRequested)
+                .style(button::secondary),
                 preview,
             ]
             .spacing(metrics.spacing),
@@ -524,15 +599,24 @@ fn flash<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     if settings.enabled {
         section = section.push(field(
             format!("Strength {}%", (settings.peak() * 100.0).round()),
-            slider(0.05..=0.8_f32, settings.peak(), Message::FlashOpacityChanged)
-                .step(0.05_f32)
-                .into(),
+            slider(
+                0.05..=0.8_f32,
+                settings.peak(),
+                Message::FlashOpacityChanged,
+            )
+            .step(0.05_f32)
+            .into(),
             metrics,
         ));
 
         section = section.push(field(
             format!("Pulses {}", settings.pulses.max(1)),
-            slider(1..=5_u8, settings.pulses.max(1), Message::FlashPulsesChanged).into(),
+            slider(
+                1..=5_u8,
+                settings.pulses.max(1),
+                Message::FlashPulsesChanged,
+            )
+            .into(),
             metrics,
         ));
 
@@ -590,7 +674,11 @@ fn switch<'a>(
 fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> Element<'a, Message> {
     container(content)
         .padding(iced::Padding {
-            left: if metrics.breakpoint.is_compact() { 0.0 } else { 6.0 },
+            left: if metrics.breakpoint.is_compact() {
+                0.0
+            } else {
+                6.0
+            },
             ..iced::Padding::ZERO
         })
         .width(Fill)

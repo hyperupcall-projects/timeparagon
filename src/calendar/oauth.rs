@@ -63,7 +63,11 @@ impl Tokens {
 }
 
 pub fn token_path() -> Option<PathBuf> {
-    Some(config::project_dirs()?.config_dir().join("google-token.toml"))
+    Some(
+        config::project_dirs()?
+            .config_dir()
+            .join("google-token.toml"),
+    )
 }
 
 pub fn load_tokens() -> Option<Tokens> {
@@ -73,9 +77,8 @@ pub fn load_tokens() -> Option<Tokens> {
 }
 
 pub fn save_tokens(tokens: &Tokens) -> io::Result<()> {
-    let path = token_path().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "no config directory available")
-    })?;
+    let path = token_path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -110,9 +113,7 @@ pub fn clear_tokens() {
 pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
-        return Err(
-            "add a Google OAuth client ID in Settings before connecting".to_owned(),
-        );
+        return Err("add a Google OAuth client ID in Settings before connecting".to_owned());
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
@@ -120,7 +121,10 @@ pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String>
         .set_nonblocking(false)
         .map_err(|error| error.to_string())?;
 
-    let port = listener.local_addr().map_err(|error| error.to_string())?.port();
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
     let redirect = format!("http://127.0.0.1:{port}");
     let verifier = code_verifier();
     let challenge = code_challenge(&verifier);
@@ -148,7 +152,9 @@ pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String>
         .map_err(|error| error.to_string())?;
 
     let mut buffer = [0u8; 4096];
-    let read = stream.read(&mut buffer).map_err(|error| error.to_string())?;
+    let read = stream
+        .read(&mut buffer)
+        .map_err(|error| error.to_string())?;
     let request = String::from_utf8_lossy(&buffer[..read]);
     let code = parse_redirect(&request)?;
 
@@ -160,7 +166,11 @@ pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String>
     exchange_code(client_id, client_secret, &redirect, &code, &verifier)
 }
 
-pub fn refresh(client_id: &str, client_secret: &str, refresh_token: &str) -> Result<Tokens, String> {
+pub fn refresh(
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+) -> Result<Tokens, String> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
         return Err("Google OAuth client ID is missing".to_owned());
@@ -184,7 +194,11 @@ pub fn refresh(client_id: &str, client_secret: &str, refresh_token: &str) -> Res
 }
 
 /// Makes sure `tokens` has a usable access token, refreshing if needed.
-pub fn ensure_access(client_id: &str, client_secret: &str, tokens: Tokens) -> Result<Tokens, String> {
+pub fn ensure_access(
+    client_id: &str,
+    client_secret: &str,
+    tokens: Tokens,
+) -> Result<Tokens, String> {
     if tokens.access_valid() {
         return Ok(tokens);
     }
@@ -341,7 +355,11 @@ mod tests {
     #[test]
     fn a_denied_redirect_is_an_error() {
         let request = "GET /?error=access_denied HTTP/1.1\r\n\r\n";
-        assert!(parse_redirect(request).unwrap_err().contains("access_denied"));
+        assert!(
+            parse_redirect(request)
+                .unwrap_err()
+                .contains("access_denied")
+        );
     }
 
     #[test]

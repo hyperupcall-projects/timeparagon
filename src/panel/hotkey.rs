@@ -9,7 +9,7 @@
 //! The registered shortcut also shows up in System Settings → Shortcuts, so the
 //! user can rebind it without touching our config file.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::sync::mpsc::Sender;
 
 use super::config::PanelConfig;
@@ -63,7 +63,10 @@ trait KGlobalAccel {
     fn shortcut_keys(&self, action_id: &[&str]) -> zbus::Result<Vec<(Vec<i32>,)>>;
 
     #[zbus(name = "getComponent")]
-    fn get_component(&self, component_unique: &str) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+    fn get_component(
+        &self,
+        component_unique: &str,
+    ) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 }
 
 #[zbus::proxy(
@@ -102,7 +105,9 @@ pub fn rebind(spec: &str) -> Result<()> {
     if applied != keys {
         kga.set_shortcut_keys(&action_id, &previous, SET_PRESENT | NO_AUTOLOADING)
             .context("Shortcut unavailable, and restoring the previous shortcut failed")?;
-        anyhow::bail!("Shortcut unavailable. It may already be used by another application; try another combination");
+        anyhow::bail!(
+            "Shortcut unavailable. It may already be used by another application; try another combination"
+        );
     }
     Ok(())
 }
@@ -197,13 +202,11 @@ fn parse_shortcut(spec: &str) -> Result<i32> {
             "alt" => modifiers |= ALT,
             "shift" => modifiers |= SHIFT,
             other => {
-                anyhow::ensure!(
-                    key.is_none(),
-                    "Use exactly one key with optional modifiers"
-                );
-                key = Some(key_code(other).ok_or_else(|| {
-                    anyhow!("unsupported key '{other}' in shortcut '{spec}'")
-                })?);
+                anyhow::ensure!(key.is_none(), "Use exactly one key with optional modifiers");
+                key =
+                    Some(key_code(other).ok_or_else(|| {
+                        anyhow!("unsupported key '{other}' in shortcut '{spec}'")
+                    })?);
             }
         }
     }
@@ -289,7 +292,7 @@ fn describe(applied: &[(Vec<i32>,)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zbus::zvariant::{serialized::Context, to_bytes, Endian, Type};
+    use zbus::zvariant::{Endian, Type, serialized::Context, to_bytes};
 
     #[test]
     fn meta_u_parses_to_the_expected_combined_code() {
@@ -313,7 +316,16 @@ mod tests {
 
     #[test]
     fn malformed_or_unmodified_typing_keys_are_rejected() {
-        for spec in ["", "Meta", "Meta+", "Ctrl++T", "Meta+U+T", "U", "Space", "Meta+Unknown"] {
+        for spec in [
+            "",
+            "Meta",
+            "Meta+",
+            "Ctrl++T",
+            "Meta+U+T",
+            "U",
+            "Space",
+            "Meta+Unknown",
+        ] {
             assert!(parse_shortcut(spec).is_err(), "{spec:?} should be rejected");
         }
     }

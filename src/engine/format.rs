@@ -112,7 +112,10 @@ mod tests {
     #[test]
     fn ceil_keeps_whole_seconds_untouched() {
         assert_eq!(ceil_secs(Duration::from_secs(5)), Duration::from_secs(5));
-        assert_eq!(ceil_secs(Duration::from_millis(4_001)), Duration::from_secs(5));
+        assert_eq!(
+            ceil_secs(Duration::from_millis(4_001)),
+            Duration::from_secs(5)
+        );
         assert_eq!(ceil_secs(Duration::ZERO), Duration::ZERO);
     }
 }

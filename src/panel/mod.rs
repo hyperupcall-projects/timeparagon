@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// The command-line switch that turns the main binary into the panel.
 const SIDEBAR_FLAG: &str = "--sidebar";
@@ -46,10 +46,8 @@ const PANEL_SOCKET_NAME: &str = "timetracker-panel.sock";
 
 /// Runs the daemon: register the shortcut, then toggle the panel on every press.
 pub fn run() -> Result<()> {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("timetracker=info"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
+        .init();
 
     let config = PanelConfig::load();
     log::info!(
@@ -125,11 +123,7 @@ pub fn panel_socket_path() -> Option<PathBuf> {
     std::env::var("XDG_RUNTIME_DIR")
         .ok()
         .map(|dir| PathBuf::from(dir).join(PANEL_SOCKET_NAME))
-        .or_else(|| {
-            Some(
-                std::env::temp_dir().join(PANEL_SOCKET_NAME),
-            )
-        })
+        .or_else(|| Some(std::env::temp_dir().join(PANEL_SOCKET_NAME)))
 }
 
 /// Sends a `show` or `hide` command to a running panel instance over its IPC

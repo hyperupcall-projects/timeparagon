@@ -8,14 +8,14 @@ pub mod calendar;
 pub mod controls;
 pub mod digits;
 pub mod flash;
+pub mod keep;
 pub mod layout;
 pub mod links;
 pub mod notepad;
-pub mod keep;
 pub mod settings;
+mod task_drag;
 pub mod timeblocking;
 mod timeblocking_focus;
-mod task_drag;
 
 use std::time::Duration;
 
@@ -69,7 +69,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
         // The tabs are the window's navigation, so they sit above whatever is
         // on show rather than inside it.
-        let base = column![tabs(state, &metrics), content].width(Fill).height(Fill);
+        let base = column![tabs(state, &metrics), content]
+            .width(Fill)
+            .height(Fill);
         // Adding/removing a wrapper resets the state of all its descendants.
         // Keep one stack with the calendar first, and append active dialogs.
         let mut layers = vec![base.into()];
@@ -90,7 +92,8 @@ fn projects<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     match &state.projects {
         None => items = items.push(text("Loading projects…").size(metrics.label())),
         Some(Err(error)) => {
-            items = items.push(text(format!("Could not list projects: {error}")).size(metrics.label()));
+            items =
+                items.push(text(format!("Could not list projects: {error}")).size(metrics.label()));
         }
         Some(Ok(names)) => {
             for name in names {
@@ -109,28 +112,66 @@ fn projects<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 /// Narrow windows stack the tabs within each group to keep full names visible.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings_active = matches!(state.screen, Screen::Settings | Screen::TimerSettings);
-    let spacing = if metrics.size.width < 720.0 { 2.0 } else { metrics.spacing };
-    let calendar = tab("Calendar", state.screen == Screen::Calendar, Screen::Calendar, metrics);
-    let backlog = tab("Backlog", state.screen == Screen::Backlog, Screen::Backlog, metrics);
-    let projects = tab("Projects", state.screen == Screen::Projects, Screen::Projects, metrics);
-    let notepad = tab("Notepad", state.screen == Screen::Notepad, Screen::Notepad, metrics);
-    let keep = tab("Keep", state.screen == Screen::KeepNotes, Screen::KeepNotes, metrics);
+    let spacing = if metrics.size.width < 720.0 {
+        2.0
+    } else {
+        metrics.spacing
+    };
+    let calendar = tab(
+        "Calendar",
+        state.screen == Screen::Calendar,
+        Screen::Calendar,
+        metrics,
+    );
+    let backlog = tab(
+        "Backlog",
+        state.screen == Screen::Backlog,
+        Screen::Backlog,
+        metrics,
+    );
+    let projects = tab(
+        "Projects",
+        state.screen == Screen::Projects,
+        Screen::Projects,
+        metrics,
+    );
+    let notepad = tab(
+        "Notepad",
+        state.screen == Screen::Notepad,
+        Screen::Notepad,
+        metrics,
+    );
+    let keep = tab(
+        "Keep",
+        state.screen == Screen::KeepNotes,
+        Screen::KeepNotes,
+        metrics,
+    );
     let settings = tab("Settings", settings_active, Screen::Settings, metrics);
 
-    let (left, middle, right): (Element<'a, Message>, Element<'a, Message>, Element<'a, Message>) =
-        if metrics.size.width < 720.0 {
-            (
-                column![calendar, backlog].spacing(spacing).into(),
-                column![notepad, keep].spacing(spacing).align_x(Center).into(),
-                column![settings, projects].spacing(spacing).align_x(iced::Right).into(),
-            )
-        } else {
-            (
-                row![calendar, backlog, projects].spacing(spacing).into(),
-                row![notepad, keep].spacing(spacing).into(),
-                settings,
-            )
-        };
+    let (left, middle, right): (
+        Element<'a, Message>,
+        Element<'a, Message>,
+        Element<'a, Message>,
+    ) = if metrics.size.width < 720.0 {
+        (
+            column![calendar, backlog].spacing(spacing).into(),
+            column![notepad, keep]
+                .spacing(spacing)
+                .align_x(Center)
+                .into(),
+            column![settings, projects]
+                .spacing(spacing)
+                .align_x(iced::Right)
+                .into(),
+        )
+    } else {
+        (
+            row![calendar, backlog, projects].spacing(spacing).into(),
+            row![notepad, keep].spacing(spacing).into(),
+            settings,
+        )
+    };
 
     container(
         row![
@@ -158,8 +199,16 @@ fn tab<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     button(text(label).size(metrics.label()).center())
-        .height(if metrics.breakpoint.is_compact() { 16.0 } else { metrics.icon_button() })
-        .padding(if metrics.breakpoint.is_compact() { Padding::from([0.0, 2.0]) } else { Padding::from(5.0) })
+        .height(if metrics.breakpoint.is_compact() {
+            16.0
+        } else {
+            metrics.icon_button()
+        })
+        .padding(if metrics.breakpoint.is_compact() {
+            Padding::from([0.0, 2.0])
+        } else {
+            Padding::from(5.0)
+        })
         .on_press(Message::ScreenSelected(screen))
         .style(if active {
             button::primary
@@ -214,10 +263,9 @@ pub fn clock_body<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     // The countdown warning tints the app window rather than the screen,
     // which is the whole reason it is a separate, gentler cue. It runs over
     // the final seconds before the target, while the clock is still under it.
-    let remaining = state
-        .timer
-        .target()
-        .map_or(Duration::ZERO, |target| target.saturating_sub(state.timer.elapsed(state.now)));
+    let remaining = state.timer.target().map_or(Duration::ZERO, |target| {
+        target.saturating_sub(state.timer.elapsed(state.now))
+    });
     let tint = alarm::countdown_pulse(&state.config.alarm.flash, remaining);
 
     match tint {
@@ -275,7 +323,11 @@ fn timer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 /// A small note under the readout when there is no target at all.
 fn no_target_line<'a>(metrics: &Metrics) -> Element<'a, Message> {
-    text("No target").size(metrics.label()).width(Fill).center().into()
+    text("No target")
+        .size(metrics.label())
+        .width(Fill)
+        .center()
+        .into()
 }
 
 /// The pane for choosing the target time.

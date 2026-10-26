@@ -64,7 +64,8 @@ impl TodoList {
     /// Where the item being worked on sits, as `(position, total)` counting
     /// from one. This is the "2/4" the calendar shows.
     pub fn position(&self) -> Option<(usize, usize)> {
-        self.current_index().map(|index| (index + 1, self.items.len()))
+        self.current_index()
+            .map(|index| (index + 1, self.items.len()))
     }
 
     /// Appends an item and returns its index. The new item becomes the one
@@ -232,7 +233,10 @@ mod tests {
         list.move_item(0, 1);
 
         assert_eq!(
-            list.items().iter().map(|todo| todo.text.as_str()).collect::<Vec<_>>(),
+            list.items()
+                .iter()
+                .map(|todo| todo.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["b", "a", "c"]
         );
         assert_eq!(list.current().unwrap().text, "a");
@@ -246,7 +250,10 @@ mod tests {
         list.move_item(1, 1);
 
         assert_eq!(
-            list.items().iter().map(|todo| todo.text.as_str()).collect::<Vec<_>>(),
+            list.items()
+                .iter()
+                .map(|todo| todo.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b"]
         );
     }

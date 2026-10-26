@@ -132,8 +132,13 @@ fn captioned<'a>(value: String, caption: String, size: f32, color: Color) -> Ele
 
     container(
         column![
-            text(value).size(size).font(iced::Font::MONOSPACE).color(color),
-            text(caption).size(caption_size).color(color.scale_alpha(0.7)),
+            text(value)
+                .size(size)
+                .font(iced::Font::MONOSPACE)
+                .color(color),
+            text(caption)
+                .size(caption_size)
+                .color(color.scale_alpha(0.7)),
         ]
         .align_x(iced::Center)
         .spacing(size * 0.08),
@@ -161,50 +166,52 @@ impl canvas::Program<Message> for Ring {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let geometry = self.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
-            let center = frame.center();
-            let width = (frame.width() * 0.035).clamp(2.0, 6.0);
-            // A stroked path straddles its own line, so half the stroke width
-            // has to come out of the radius or it gets clipped.
-            let radius = (frame.width().min(frame.height()) - width) / 2.0;
+        let geometry = self
+            .cache
+            .draw(renderer, bounds.size(), |frame: &mut Frame| {
+                let center = frame.center();
+                let width = (frame.width() * 0.035).clamp(2.0, 6.0);
+                // A stroked path straddles its own line, so half the stroke width
+                // has to come out of the radius or it gets clipped.
+                let radius = (frame.width().min(frame.height()) - width) / 2.0;
 
-            frame.stroke(
-                &Path::circle(center, radius),
-                Stroke {
-                    style: Style::Solid(theme.extended_palette().background.weak.color),
-                    width,
-                    ..Stroke::default()
-                },
-            );
+                frame.stroke(
+                    &Path::circle(center, radius),
+                    Stroke {
+                        style: Style::Solid(theme.extended_palette().background.weak.color),
+                        width,
+                        ..Stroke::default()
+                    },
+                );
 
-            if self.progress <= 0.0 {
-                return;
-            }
+                if self.progress <= 0.0 {
+                    return;
+                }
 
-            // Start at twelve o'clock and sweep clockwise, the way every
-            // other timer does.
-            let start = Radians(-std::f32::consts::FRAC_PI_2);
-            let sweep = Radians(std::f32::consts::TAU * self.progress.clamp(0.0, 1.0));
+                // Start at twelve o'clock and sweep clockwise, the way every
+                // other timer does.
+                let start = Radians(-std::f32::consts::FRAC_PI_2);
+                let sweep = Radians(std::f32::consts::TAU * self.progress.clamp(0.0, 1.0));
 
-            let arc = Path::new(|builder| {
-                builder.arc(canvas::path::Arc {
-                    center,
-                    radius,
-                    start_angle: start,
-                    end_angle: start + sweep,
+                let arc = Path::new(|builder| {
+                    builder.arc(canvas::path::Arc {
+                        center,
+                        radius,
+                        start_angle: start,
+                        end_angle: start + sweep,
+                    });
                 });
-            });
 
-            frame.stroke(
-                &arc,
-                Stroke {
-                    style: Style::Solid(self.color),
-                    width,
-                    line_cap: canvas::LineCap::Round,
-                    ..Stroke::default()
-                },
-            );
-        });
+                frame.stroke(
+                    &arc,
+                    Stroke {
+                        style: Style::Solid(self.color),
+                        width,
+                        line_cap: canvas::LineCap::Round,
+                        ..Stroke::default()
+                    },
+                );
+            });
 
         vec![geometry]
     }

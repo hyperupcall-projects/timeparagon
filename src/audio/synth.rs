@@ -80,8 +80,8 @@ fn swell(duration: f32, frequency: f32) -> Vec<f32> {
         // Raised cosine: silent at both ends, loudest in the middle.
         let envelope = 0.5 - 0.5 * (TAU * progress).cos();
 
-        *sample = envelope
-            * ((TAU * frequency * t).sin() + 0.3 * (TAU * frequency * 2.0 * t).sin());
+        *sample =
+            envelope * ((TAU * frequency * t).sin() + 0.3 * (TAU * frequency * 2.0 * t).sin());
     }
 
     finish(buffer, duration)
@@ -98,7 +98,9 @@ fn attack(t: f32, length: f32) -> f32 {
 /// numbers of partials; without it, switching sounds would also change the
 /// volume, which makes the volume slider feel broken.
 fn finish(mut buffer: Vec<f32>, duration: f32) -> Vec<f32> {
-    let peak = buffer.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    let peak = buffer
+        .iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
 
     if peak > 0.0 {
         let scale = 0.9 / peak;
@@ -137,9 +139,21 @@ pub fn chime() -> Pcm {
     to_stereo(struck(
         1.2,
         &[
-            Partial { frequency: 880.0, amplitude: 1.0, decay: 3.0 },
-            Partial { frequency: 1320.0, amplitude: 0.5, decay: 3.5 },
-            Partial { frequency: 1760.0, amplitude: 0.25, decay: 4.2 },
+            Partial {
+                frequency: 880.0,
+                amplitude: 1.0,
+                decay: 3.0,
+            },
+            Partial {
+                frequency: 1320.0,
+                amplitude: 0.5,
+                decay: 3.5,
+            },
+            Partial {
+                frequency: 1760.0,
+                amplitude: 0.25,
+                decay: 4.2,
+            },
         ],
     ))
 }
@@ -150,10 +164,26 @@ pub fn bell() -> Pcm {
     to_stereo(struck(
         2.0,
         &[
-            Partial { frequency: 587.0, amplitude: 1.0, decay: 1.5 },
-            Partial { frequency: 1174.0, amplitude: 0.6, decay: 2.0 },
-            Partial { frequency: 1761.0, amplitude: 0.3, decay: 2.6 },
-            Partial { frequency: 2348.0, amplitude: 0.15, decay: 3.2 },
+            Partial {
+                frequency: 587.0,
+                amplitude: 1.0,
+                decay: 1.5,
+            },
+            Partial {
+                frequency: 1174.0,
+                amplitude: 0.6,
+                decay: 2.0,
+            },
+            Partial {
+                frequency: 1761.0,
+                amplitude: 0.3,
+                decay: 2.6,
+            },
+            Partial {
+                frequency: 2348.0,
+                amplitude: 0.15,
+                decay: 3.2,
+            },
         ],
     ))
 }
@@ -166,8 +196,16 @@ pub fn marimba() -> Pcm {
     to_stereo(struck(
         0.8,
         &[
-            Partial { frequency: 440.0, amplitude: 1.0, decay: 6.0 },
-            Partial { frequency: 1760.0, amplitude: 0.35, decay: 9.0 },
+            Partial {
+                frequency: 440.0,
+                amplitude: 1.0,
+                decay: 6.0,
+            },
+            Partial {
+                frequency: 1760.0,
+                amplitude: 0.35,
+                decay: 9.0,
+            },
         ],
     ))
 }
@@ -181,7 +219,8 @@ mod tests {
     use super::*;
 
     fn peak(pcm: &Pcm) -> f32 {
-        pcm.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+        pcm.iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
     }
 
     #[test]
@@ -198,7 +237,10 @@ mod tests {
             let peak = peak(&pcm);
 
             assert!(peak <= 1.0, "peak {peak} would clip");
-            assert!(peak > 0.5, "peak {peak} is too quiet to have been normalized");
+            assert!(
+                peak > 0.5,
+                "peak {peak} is too quiet to have been normalized"
+            );
         }
     }
 

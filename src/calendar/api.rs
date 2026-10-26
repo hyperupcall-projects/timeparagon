@@ -17,15 +17,20 @@ pub(crate) const EVENTS: &str = "https://www.googleapis.com/calendar/v3/calendar
 
 pub(crate) fn agent() -> &'static ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(30))
-        .build())
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+    })
 }
 
 fn append_notice(notice: &mut Option<String>, message: &str) {
     match notice {
-        Some(existing) => { existing.push('\n'); existing.push_str(message); }
+        Some(existing) => {
+            existing.push('\n');
+            existing.push_str(message);
+        }
         None => *notice = Some(message.to_owned()),
     }
 }
@@ -156,9 +161,12 @@ pub fn fetch_day(
         let tasks = scope.spawn(|| fetch_tasks(access_token, day));
         let mut events = Vec::new();
         for chunk in calendars.chunks(4) {
-            let workers: Vec<_> = chunk.iter().map(|calendar| {
-                scope.spawn(move || fetch_events(access_token, calendar, day, day_end_hour))
-            }).collect();
+            let workers: Vec<_> = chunk
+                .iter()
+                .map(|calendar| {
+                    scope.spawn(move || fetch_events(access_token, calendar, day, day_end_hour))
+                })
+                .collect();
             for worker in workers {
                 events.extend(worker.join().map_err(|_| "Calendar worker failed")??);
             }
@@ -171,17 +179,31 @@ pub fn fetch_day(
     };
     // Fetch app-owned task blocks independently of the day. This makes a task
     // scheduled on another day/device stay scheduled in Backlog and block views.
-    let mut linked_calendars: std::collections::HashSet<String> = task_events.iter()
-        .filter_map(|task| crate::timeblocking::metadata(task).schedule.map(|link| link.calendar_id))
+    let mut linked_calendars: std::collections::HashSet<String> = task_events
+        .iter()
+        .filter_map(|task| {
+            crate::timeblocking::metadata(task)
+                .schedule
+                .map(|link| link.calendar_id)
+        })
         .collect();
     linked_calendars.extend(tasks_calendar.map(str::to_owned));
-    linked_calendars.extend(calendars.iter().filter(|c| c.name == "Tasks").map(|c| c.id.clone()));
+    linked_calendars.extend(
+        calendars
+            .iter()
+            .filter(|c| c.name == "Tasks")
+            .map(|c| c.id.clone()),
+    );
     let mut loaded_calendars = std::collections::HashSet::new();
-    for calendar in calendars.iter().filter(|c| linked_calendars.contains(&c.id)) {
+    for calendar in calendars
+        .iter()
+        .filter(|c| linked_calendars.contains(&c.id))
+    {
         match fetch_scheduled_events(access_token, calendar) {
             Ok(linked) => {
                 loaded_calendars.insert(calendar.id.clone());
-                let ids: std::collections::HashSet<_> = linked.iter().map(|e| e.id.as_str()).collect();
+                let ids: std::collections::HashSet<_> =
+                    linked.iter().map(|e| e.id.as_str()).collect();
                 events.retain(|e| e.calendar_id != calendar.id || !ids.contains(e.id.as_str()));
                 events.extend(linked);
             }
@@ -204,8 +226,16 @@ pub fn fetch_day(
         }
     }
     for (link, body) in changes {
-        if let Err(error) = super::scheduled::request("PATCH", &link.event_url(), access_token, Some(&body)) {
-            append_notice(&mut notice, &format!("Could not update a task's calendar event: {}", error.message));
+        if let Err(error) =
+            super::scheduled::request("PATCH", &link.event_url(), access_token, Some(&body))
+        {
+            append_notice(
+                &mut notice,
+                &format!(
+                    "Could not update a task's calendar event: {}",
+                    error.message
+                ),
+            );
         }
     }
     calendars.extend(task_calendars);
@@ -223,7 +253,10 @@ pub fn fetch_day(
 fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
     let mut list: CalendarList = get(CALENDAR_LIST, access_token)?;
     while let Some(token) = list.next_page_token.take() {
-        let next: CalendarList = get(&format!("{CALENDAR_LIST}?pageToken={}", urlencoding::encode(&token)), access_token)?;
+        let next: CalendarList = get(
+            &format!("{CALENDAR_LIST}?pageToken={}", urlencoding::encode(&token)),
+            access_token,
+        )?;
         list.items.extend(next.items);
         list.next_page_token = next.next_page_token;
     }
@@ -253,7 +286,12 @@ fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
         })
         .collect();
 
-    calendars.sort_by(|left, right| right.primary.cmp(&left.primary).then(left.name.cmp(&right.name)));
+    calendars.sort_by(|left, right| {
+        right
+            .primary
+            .cmp(&left.primary)
+            .then(left.name.cmp(&right.name))
+    });
     Ok(calendars)
 }
 
@@ -309,56 +347,94 @@ struct TaskCache {
     lists: std::collections::HashMap<String, CachedTasks>,
 }
 struct CachedTasks {
-    since: DateTime<Utc>,
     items: std::collections::HashMap<String, TaskEntry>,
 }
 
-/// Fetch changes since the previous request, including deletions and tasks
-/// completed by Google's clients. Capture the watermark before fetching and
-/// overlap it so pagination and coarse timestamps cannot lose a change.
+static TASK_CACHE: std::sync::Mutex<Option<TaskCache>> = std::sync::Mutex::new(None);
+
+/// The tasks currently on `list`.
+///
+/// Each refresh replaces that list. A move between lists does not come back as
+/// a deletion on the list that was left, so merging incremental updates kept a
+/// ghost there and Delete asked Google for a task on the wrong list.
 fn cached_task_items(access_token: &str, list: &str) -> Result<Vec<TaskEntry>, String> {
-    static CACHE: std::sync::Mutex<Option<TaskCache>> = std::sync::Mutex::new(None);
-    let mut guard = CACHE.lock().map_err(|_| "Task cache is unavailable")?;
+    let mut guard = TASK_CACHE.lock().map_err(|_| "Task cache is unavailable")?;
     let cache = guard.get_or_insert_with(TaskCache::default);
     if cache.token != access_token {
         cache.token = access_token.to_owned();
         cache.lists.clear();
     }
-    let since = cache.lists.get(list).map(|cached| cached.since - chrono::Duration::seconds(2));
-    let watermark = Utc::now();
     let mut page_token: Option<String> = None;
-    let mut changes = Vec::new();
+    let mut tasks = Vec::new();
     loop {
-        let mut url = format!("{TASKS}/{}/tasks?showCompleted=true&showHidden=true&showDeleted=true&maxResults=100", urlencoding::encode(list));
-        if let Some(since) = since {
-            url.push_str("&updatedMin=");
-            url.push_str(&urlencoding::encode(&since.to_rfc3339()));
-        }
+        let mut url = format!(
+            "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&showDeleted=true&maxResults=100",
+            urlencoding::encode(list)
+        );
         if let Some(token) = &page_token {
             url.push_str("&pageToken=");
             url.push_str(&urlencoding::encode(token));
         }
         let page: TaskPage = get(&url, access_token)?;
-        changes.extend(page.items);
+        tasks.extend(page.items);
         page_token = page.next_page_token;
-        if page_token.is_none() { break; }
+        if page_token.is_none() {
+            break;
+        }
     }
-    let cached = cache.lists.entry(list.to_owned()).or_insert_with(|| CachedTasks {
-        since: watermark, items: Default::default(),
-    });
-    for task in changes {
-        if task.deleted { cached.items.remove(&task.id); }
-        else { cached.items.insert(task.id.clone(), task); }
+    adopt_list(&mut cache.lists, list, tasks);
+    Ok(cache
+        .lists
+        .get(list)
+        .map(|cached| cached.items.values().cloned().collect())
+        .unwrap_or_default())
+}
+
+/// `list` now contains exactly the live tasks in `tasks`. The same task id on
+/// any other list is a move, so it is dropped there.
+fn adopt_list(
+    lists: &mut std::collections::HashMap<String, CachedTasks>,
+    list: &str,
+    tasks: Vec<TaskEntry>,
+) {
+    let mut items = std::collections::HashMap::new();
+    for task in tasks {
+        if task.deleted || task.id.is_empty() {
+            continue;
+        }
+        items.insert(task.id.clone(), task);
     }
-    cached.since = watermark;
-    Ok(cached.items.values().cloned().collect())
+    let ids: Vec<String> = items.keys().cloned().collect();
+    lists.insert(list.to_owned(), CachedTasks { items });
+    for (other, cached) in lists.iter_mut() {
+        if other == list {
+            continue;
+        }
+        for id in &ids {
+            cached.items.remove(id);
+        }
+    }
+}
+
+fn forget_cached_task(task_id: &str) {
+    let Ok(mut guard) = TASK_CACHE.lock() else {
+        return;
+    };
+    if let Some(cache) = guard.as_mut() {
+        for cached in cache.lists.values_mut() {
+            cached.items.remove(task_id);
+        }
+    }
 }
 
 fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec<Event>, String> {
     let mut page_token: Option<String> = None;
     let mut events = Vec::new();
     loop {
-        let mut url = format!("{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&maxResults=250", urlencoding::encode(&calendar.id));
+        let mut url = format!(
+            "{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&maxResults=250",
+            urlencoding::encode(&calendar.id)
+        );
         if let Some(token) = &page_token {
             url.push_str("&pageToken=");
             url.push_str(&urlencoding::encode(token));
@@ -372,11 +448,12 @@ fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec
             }
         }
         page_token = page.next_page_token;
-        if page_token.is_none() { break; }
+        if page_token.is_none() {
+            break;
+        }
     }
     Ok(events)
 }
-
 
 #[derive(Debug, Deserialize)]
 struct TaskLists {
@@ -428,7 +505,13 @@ fn fetch_tasks(
 ) -> Result<(Vec<Calendar>, Vec<Event>, Option<String>), String> {
     let mut lists: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100"), access_token)?;
     while let Some(token) = lists.next_page_token.take() {
-        let next: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100&pageToken={}", urlencoding::encode(&token)), access_token)?;
+        let next: TaskLists = get(
+            &format!(
+                "{TASK_LISTS}?maxResults=100&pageToken={}",
+                urlencoding::encode(&token)
+            ),
+            access_token,
+        )?;
         lists.items.extend(next.items);
         lists.next_page_token = next.next_page_token;
     }
@@ -468,7 +551,10 @@ fn fetch_task_items(
     let mut database = crate::task_db::open()?;
     let mut events = Vec::new();
     for task in tasks {
-        let due = task.due.as_deref().and_then(task_due_date)
+        let due = task
+            .due
+            .as_deref()
+            .and_then(task_due_date)
             .unwrap_or(crate::timeblocking::UNDATED);
         if let Some(mut event) = parse_task(task, calendar_id, color, due) {
             // A cached task only needs a lookup; avoid a write transaction per
@@ -480,8 +566,17 @@ fn fetch_task_items(
             let cleaned = crate::timeblocking::description(&event.details.description);
             if cleaned != event.details.description {
                 let id = event.id.strip_prefix("task:").ok_or("Invalid task ID")?;
-                let url = format!("{TASKS}/{}/tasks/{}", urlencoding::encode(list_id), urlencoding::encode(id));
-                patch(&url, access_token, &serde_json::json!({"notes":cleaned}).to_string(), "Migrate Google Tasks metadata")?;
+                let url = format!(
+                    "{TASKS}/{}/tasks/{}",
+                    urlencoding::encode(list_id),
+                    urlencoding::encode(id)
+                );
+                patch(
+                    &url,
+                    access_token,
+                    &serde_json::json!({"notes":cleaned}).to_string(),
+                    "Migrate Google Tasks metadata",
+                )?;
             }
             event.details.description = cleaned;
             event.details.task_data = Some(data);
@@ -493,7 +588,11 @@ fn fetch_task_items(
 }
 
 fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) -> Option<Event> {
-    let due = task.due.as_deref().and_then(task_due_date).unwrap_or(crate::timeblocking::UNDATED);
+    let due = task
+        .due
+        .as_deref()
+        .and_then(task_due_date)
+        .unwrap_or(crate::timeblocking::UNDATED);
     if task.deleted || task.id.is_empty() || due != day {
         return None;
     }
@@ -546,22 +645,155 @@ pub fn set_task_completed(
     patch(&url, access_token, body, "Google Tasks")
 }
 
-/// Deletes a single task instance from Google Tasks.
+/// Deletes one Google Task.
 ///
-/// For a recurring task this removes just the one occurrence identified by
-/// `task_id`; the series and its other instances are untouched.
-pub fn delete_task(
+/// `list_id` is where the chip says the task lives. A task that was moved is
+/// no longer on that list, and Google answers "Task not found"; the other
+/// lists are checked before the chip is treated as already gone.
+pub fn delete_task(access_token: &str, list_id: &str, task_id: &str) -> Result<(), String> {
+    if task_id.is_empty() {
+        return Err("Invalid task".to_owned());
+    }
+    let lists = task_list_ids(access_token)?;
+    let Some(list) = live_list(list_id, &lists, |list| {
+        task_presence(access_token, list, task_id)
+    })?
+    else {
+        forget_cached_task(task_id);
+        return Ok(());
+    };
+    delete(&task_item_url(&list, task_id), access_token, "Google Tasks")?;
+    forget_cached_task(task_id);
+    Ok(())
+}
+
+fn task_item_url(list_id: &str, task_id: &str) -> String {
+    format!(
+        "{TASKS}/{}/tasks/{}",
+        urlencoding::encode(list_id),
+        urlencoding::encode(task_id)
+    )
+}
+
+fn task_list_ids(access_token: &str) -> Result<Vec<String>, String> {
+    let mut url = format!("{TASK_LISTS}?maxResults=100");
+    let mut ids = Vec::new();
+    loop {
+        let page: TaskLists = get(&url, access_token)?;
+        ids.extend(page.items.into_iter().map(|list| list.id));
+        let Some(token) = page.next_page_token else {
+            break;
+        };
+        url = format!(
+            "{TASK_LISTS}?maxResults=100&pageToken={}",
+            urlencoding::encode(&token)
+        );
+    }
+    Ok(ids)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TaskPresence {
+    Live,
+    Gone,
+}
+
+/// The list a delete should use. `preferred` wins when the task is still
+/// there; otherwise the first other list that still has it. `None` means the
+/// task is already gone from every list.
+fn live_list<'a>(
+    preferred: &'a str,
+    lists: &'a [String],
+    mut presence: impl FnMut(&str) -> Result<TaskPresence, String>,
+) -> Result<Option<&'a str>, String> {
+    if presence(preferred)? == TaskPresence::Live {
+        return Ok(Some(preferred));
+    }
+    for list in lists {
+        if list == preferred {
+            continue;
+        }
+        if presence(list)? == TaskPresence::Live {
+            return Ok(Some(list.as_str()));
+        }
+    }
+    Ok(None)
+}
+
+fn task_presence(access_token: &str, list_id: &str, task_id: &str) -> Result<TaskPresence, String> {
+    match lookup_task(access_token, list_id, task_id)? {
+        Some(task) if !task.deleted => Ok(TaskPresence::Live),
+        _ => Ok(TaskPresence::Gone),
+    }
+}
+
+fn lookup_task(
     access_token: &str,
     list_id: &str,
     task_id: &str,
-) -> Result<(), String> {
-    let url = format!(
-        "{TASKS}/{}/tasks/{}",
-        urlencoding::encode(list_id),
-        urlencoding::encode(task_id),
-    );
+) -> Result<Option<TaskEntry>, String> {
+    let result = agent()
+        .get(&task_item_url(list_id, task_id))
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("Accept", "application/json")
+        .call();
+    match result {
+        Ok(response) => response
+            .into_json()
+            .map(Some)
+            .map_err(|error| format!("Google Tasks response: {error}")),
+        Err(ureq::Error::Status(404, response)) => {
+            let _ = response.into_string();
+            Ok(None)
+        }
+        Err(ureq::Error::Status(code, response)) => {
+            let detail = response
+                .into_json::<ApiErrorBody>()
+                .ok()
+                .map(|body| body.error.message)
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| format!("HTTP {code}"));
+            Err(format!("Google Tasks: {detail}"))
+        }
+        Err(error) => Err(format!("Google Tasks: {error}")),
+    }
+}
 
-    delete(&url, access_token, "Google Tasks")
+/// A task Google has just created. The id is what later writes use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedTask {
+    pub id: String,
+    pub title: String,
+    pub link: String,
+}
+
+/// Creates a task with `title` on `list_id` and returns the identity Google assigned.
+///
+/// Blocking: call it from [`crate::blocking::run`].
+pub fn insert_task(access_token: &str, list_id: &str, title: &str) -> Result<CreatedTask, String> {
+    let url = format!("{TASKS}/{}/tasks", urlencoding::encode(list_id));
+    let body = serde_json::json!({ "title": title }).to_string();
+    let response = post(&url, access_token, &body, "Google Tasks")?;
+    created_task(&response, title)
+}
+
+fn created_task(response: &str, title: &str) -> Result<CreatedTask, String> {
+    let created: TaskEntry = serde_json::from_str(response)
+        .map_err(|error| format!("Google Tasks response: {error}"))?;
+    if created.id.is_empty() {
+        return Err("Google Tasks did not return the new task".to_owned());
+    }
+    let link = task_link(&created);
+    let title = if created.title.is_empty() {
+        title.to_owned()
+    } else {
+        created.title
+    };
+    Ok(CreatedTask {
+        id: created.id,
+        title,
+        link,
+    })
 }
 
 /// Moves an event's start and end on Google's side.
@@ -655,11 +887,7 @@ pub fn insert_event(
 /// Deletes a single event on Google. A successful call returns `204 No
 /// Content` and there is no body to parse. Blocking: call it from
 /// [`crate::blocking::run`].
-pub fn delete_event(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-) -> Result<(), String> {
+pub fn delete_event(access_token: &str, calendar_id: &str, event_id: &str) -> Result<(), String> {
     let url = format!(
         "{EVENTS}/{}/events/{}",
         urlencoding::encode(calendar_id),
@@ -699,7 +927,10 @@ fn tasks_notice(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
     if lower.contains("insufficient") || lower.contains("scope") {
         "Reconnect Google so Tasks are included".to_owned()
-    } else if lower.contains("has not been used") || lower.contains("tasks api") || lower.contains("accessnotconfigured") {
+    } else if lower.contains("has not been used")
+        || lower.contains("tasks api")
+        || lower.contains("accessnotconfigured")
+    {
         "Enable the Google Tasks API, then sync again".to_owned()
     } else {
         format!("Tasks: {error}")
@@ -710,26 +941,23 @@ fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option
     let start = entry.start.as_ref()?;
     let end = entry.end.as_ref()?;
 
-    let (start_dt, end_dt, all_day) = match (&start.date_time, &start.date, &end.date_time, &end.date) {
-        (Some(start), _, Some(end), _) => {
-            (parse_date_time(start)?, parse_date_time(end)?, false)
-        }
-        (_, Some(start), _, Some(end)) => {
-            let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?;
-            let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?;
-            // Google's all-day end is exclusive. An event on `day` is kept if
-            // it covers that date.
-            if day < start_date || day >= end_date {
-                return None;
+    let (start_dt, end_dt, all_day) =
+        match (&start.date_time, &start.date, &end.date_time, &end.date) {
+            (Some(start), _, Some(end), _) => {
+                (parse_date_time(start)?, parse_date_time(end)?, false)
             }
-            (
-                date_at(start_date, 0, 0),
-                date_at(end_date, 0, 0),
-                true,
-            )
-        }
-        _ => return None,
-    };
+            (_, Some(start), _, Some(end)) => {
+                let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?;
+                let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?;
+                // Google's all-day end is exclusive. An event on `day` is kept if
+                // it covers that date.
+                if day < start_date || day >= end_date {
+                    return None;
+                }
+                (date_at(start_date, 0, 0), date_at(end_date, 0, 0), true)
+            }
+            _ => return None,
+        };
 
     let color = entry
         .color_id
@@ -737,7 +965,11 @@ fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option
         .and_then(colors::event)
         .unwrap_or(calendar.color);
     let mut details = details_of(&entry);
-    details.scheduled = super::scheduled::Link::from_properties(&calendar.id, &entry.id, &entry.extended_properties);
+    details.scheduled = super::scheduled::Link::from_properties(
+        &calendar.id,
+        &entry.id,
+        &entry.extended_properties,
+    );
     let completed = entry.extended_properties["private"]["ttCompleted"].as_str() == Some("true");
 
     Some(Event {
@@ -771,9 +1003,8 @@ fn parse_date_time(value: &str) -> Option<DateTime<Local>> {
 fn date_at(date: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
     let naive = date.and_hms_opt(hour, minute, 0).unwrap_or_default();
     match Local.from_local_datetime(&naive) {
-        chrono::offset::LocalResult::Single(when) | chrono::offset::LocalResult::Ambiguous(when, _) => {
-            when
-        }
+        chrono::offset::LocalResult::Single(when)
+        | chrono::offset::LocalResult::Ambiguous(when, _) => when,
         chrono::offset::LocalResult::None => naive.and_utc().with_timezone(&Local),
     }
 }
@@ -880,7 +1111,10 @@ fn plain_text(value: &str) -> String {
                     text.push(')');
                 }
             }
-        } else if ["br", "br/", "/p", "/div", "/li"].iter().any(|name| tag.eq_ignore_ascii_case(name)) {
+        } else if ["br", "br/", "/p", "/div", "/li"]
+            .iter()
+            .any(|name| tag.eq_ignore_ascii_case(name))
+        {
             text.push('\n');
         } else if tag.starts_with("https://") || tag.starts_with("http://") {
             text.push('<');
@@ -898,19 +1132,27 @@ fn plain_text(value: &str) -> String {
 fn html_href(mut attributes: &str) -> Option<String> {
     while !attributes.trim_start().is_empty() {
         attributes = attributes.trim_start();
-        let end = attributes.find(|ch: char| ch.is_whitespace() || ch == '=').unwrap_or(attributes.len());
+        let end = attributes
+            .find(|ch: char| ch.is_whitespace() || ch == '=')
+            .unwrap_or(attributes.len());
         let name = &attributes[..end];
         attributes = attributes[end..].trim_start();
         if !attributes.starts_with('=') {
             continue;
         }
         attributes = attributes[1..].trim_start();
-        let (value, rest) = if let Some(quote) = attributes.chars().next().filter(|ch| *ch == '\'' || *ch == '"') {
+        let (value, rest) = if let Some(quote) = attributes
+            .chars()
+            .next()
+            .filter(|ch| *ch == '\'' || *ch == '"')
+        {
             let tail = &attributes[1..];
             let end = tail.find(quote).unwrap_or(tail.len());
             (&tail[..end], tail.get(end + 1..).unwrap_or(""))
         } else {
-            let end = attributes.find(char::is_whitespace).unwrap_or(attributes.len());
+            let end = attributes
+                .find(char::is_whitespace)
+                .unwrap_or(attributes.len());
             (&attributes[..end], &attributes[end..])
         };
         if name.eq_ignore_ascii_case("href") {
@@ -940,8 +1182,12 @@ fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (String, String) {
     )
 }
 
-pub(crate) fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str) -> Result<T, String> {
-    let result = agent().get(url)
+pub(crate) fn get<T: serde::de::DeserializeOwned>(
+    url: &str,
+    access_token: &str,
+) -> Result<T, String> {
+    let result = agent()
+        .get(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Accept", "application/json")
         .call();
@@ -968,8 +1214,14 @@ pub(crate) fn get<T: serde::de::DeserializeOwned>(url: &str, access_token: &str)
 /// `context` names the API in the error, so a failed write reads as coming
 /// from Calendar or Tasks rather than from whichever call site happened to
 /// share this helper.
-pub(crate) fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), String> {
-    let result = agent().request("PATCH", url)
+pub(crate) fn patch(
+    url: &str,
+    access_token: &str,
+    body: &str,
+    context: &str,
+) -> Result<(), String> {
+    let result = agent()
+        .request("PATCH", url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
         .send_string(body);
@@ -994,7 +1246,8 @@ pub(crate) fn patch(url: &str, access_token: &str, body: &str, context: &str) ->
 /// A successful deletion comes back as `204 No Content` with no body, so there
 /// is nothing to parse. Blocking: call it from [`crate::blocking::run`].
 fn delete(url: &str, access_token: &str, context: &str) -> Result<(), String> {
-    let result = agent().request("DELETE", url)
+    let result = agent()
+        .request("DELETE", url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .call();
 
@@ -1017,8 +1270,14 @@ fn delete(url: &str, access_token: &str, context: &str) -> Result<(), String> {
 ///
 /// Used for the one call that needs something back: creating an event, whose
 /// id the caller keeps so the new chip can be drawn without a full sync.
-pub(crate) fn post(url: &str, access_token: &str, body: &str, context: &str) -> Result<String, String> {
-    let result = agent().post(url)
+pub(crate) fn post(
+    url: &str,
+    access_token: &str,
+    body: &str,
+    context: &str,
+) -> Result<String, String> {
+    let result = agent()
+        .post(url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("Content-Type", "application/json")
         .send_string(body);
@@ -1051,15 +1310,23 @@ mod tests {
     #[test]
     fn descriptions_keep_html_link_targets_and_line_breaks() {
         assert_eq!(
-            plain_text("<p>Join <a href=\"https://example.org/?a=1&amp;b=2\">the meeting</a></p><br>Bring notes"),
+            plain_text(
+                "<p>Join <a href=\"https://example.org/?a=1&amp;b=2\">the meeting</a></p><br>Bring notes"
+            ),
             "Join the meeting (https://example.org/?a=1&b=2)\n\nBring notes"
         );
         assert_eq!(
             plain_text("<A title='more info' HREF='https://example.org'>https://example.org</A>"),
             "https://example.org"
         );
-        assert_eq!(plain_text("<a href=https://example.org>Visit</a>"), "Visit (https://example.org)");
-        assert_eq!(plain_text("See <https://example.org>"), "See <https://example.org>");
+        assert_eq!(
+            plain_text("<a href=https://example.org>Visit</a>"),
+            "Visit (https://example.org)"
+        );
+        assert_eq!(
+            plain_text("See <https://example.org>"),
+            "See <https://example.org>"
+        );
     }
 
     #[test]
@@ -1171,7 +1438,10 @@ mod tests {
         assert_eq!(event.details.status, "Confirmed");
         assert_eq!(event.details.organizer, "Ada");
         assert_eq!(event.details.attendees, vec!["Grace (accepted)".to_owned()]);
-        assert_eq!(event.details.meeting, "https://meet.google.com/abc-defg-hij");
+        assert_eq!(
+            event.details.meeting,
+            "https://meet.google.com/abc-defg-hij"
+        );
         assert!(event.details.link.contains("calendar.google.com"));
     }
 
@@ -1214,8 +1484,108 @@ mod tests {
     }
 
     #[test]
+    fn a_created_task_keeps_its_id_title_and_link() {
+        let created = created_task(
+            r#"{"id":"abc","title":"Call the client","webViewLink":"https://tasks.google.com/task/abc"}"#,
+            "ignored",
+        )
+        .unwrap();
+        assert_eq!(
+            created,
+            CreatedTask {
+                id: "abc".into(),
+                title: "Call the client".into(),
+                link: "https://tasks.google.com/task/abc".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_created_task_without_a_title_or_link_uses_what_was_typed() {
+        let created = created_task(r#"{"id":"abc"}"#, "Buy milk").unwrap();
+        assert_eq!(created.title, "Buy milk");
+        assert_eq!(created.link, "https://tasks.google.com/task/abc");
+    }
+
+    #[test]
+    fn a_created_task_without_an_id_is_refused() {
+        let error = created_task(r#"{"title":"Buy milk"}"#, "Buy milk").unwrap_err();
+        assert!(error.contains("did not return"));
+    }
+
+    #[test]
     fn a_missing_tasks_scope_asks_for_a_reconnect() {
         let notice = tasks_notice("Request had insufficient authentication scopes.");
         assert_eq!(notice, "Reconnect Google so Tasks are included");
+    }
+
+    fn task_entry(id: &str, deleted: bool) -> TaskEntry {
+        TaskEntry {
+            deleted,
+            id: id.into(),
+            title: id.into(),
+            notes: String::new(),
+            status: None,
+            due: None,
+            web_view_link: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_moved_task_leaves_the_list_it_came_from() {
+        let mut lists = std::collections::HashMap::new();
+        adopt_list(
+            &mut lists,
+            "low-priority",
+            vec![task_entry("shopping", false), task_entry("keep", false)],
+        );
+        adopt_list(
+            &mut lists,
+            "time-blocked",
+            vec![task_entry("shopping", false)],
+        );
+        assert!(!lists["low-priority"].items.contains_key("shopping"));
+        assert!(lists["low-priority"].items.contains_key("keep"));
+        assert!(lists["time-blocked"].items.contains_key("shopping"));
+
+        adopt_list(
+            &mut lists,
+            "low-priority",
+            vec![task_entry("keep", false), task_entry("shopping", true)],
+        );
+        assert!(!lists["low-priority"].items.contains_key("shopping"));
+        assert!(lists["time-blocked"].items.contains_key("shopping"));
+    }
+
+    #[test]
+    fn delete_uses_the_list_that_still_has_the_task() {
+        let lists = vec!["time-blocked".to_owned(), "low-priority".to_owned()];
+        let mut checked = Vec::new();
+        let found = live_list("low-priority", &lists, |list| {
+            checked.push(list.to_owned());
+            Ok(if list == "time-blocked" {
+                TaskPresence::Live
+            } else {
+                TaskPresence::Gone
+            })
+        })
+        .unwrap();
+        assert_eq!(found, Some("time-blocked"));
+        assert_eq!(
+            checked,
+            vec!["low-priority".to_owned(), "time-blocked".to_owned()]
+        );
+
+        let mut checked = Vec::new();
+        let found = live_list("time-blocked", &lists, |list| {
+            checked.push(list.to_owned());
+            Ok(TaskPresence::Live)
+        })
+        .unwrap();
+        assert_eq!(found, Some("time-blocked"));
+        assert_eq!(checked, vec!["time-blocked".to_owned()]);
+
+        let found = live_list("low-priority", &lists, |_| Ok(TaskPresence::Gone)).unwrap();
+        assert_eq!(found, None);
     }
 }

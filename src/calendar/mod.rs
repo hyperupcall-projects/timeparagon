@@ -2,12 +2,12 @@
 //! should not have to know about.
 
 pub mod api;
-pub mod deadline;
-pub mod scheduled;
 pub mod colors;
 mod day_cache;
+pub mod deadline;
 pub mod layout;
 pub mod oauth;
+pub mod scheduled;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -288,7 +288,10 @@ fn days_to_drop(days: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -
 /// The current month, the month before it and the month after it are never
 /// dropped, and the [`EXTRA_CACHED_DAYS`] closest months beyond that
 /// window survive too. Everything further out goes, furthest first.
-fn months_to_drop(months: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -> Vec<NaiveDate> {
+fn months_to_drop(
+    months: impl IntoIterator<Item = NaiveDate>,
+    current: NaiveDate,
+) -> Vec<NaiveDate> {
     let current_month = first_of_month(current);
     let current_index = current_month.year() as i32 * 12 + current_month.month() as i32;
 
@@ -510,7 +513,9 @@ impl Store {
     /// no longer describes the days filed under it.
     pub fn invalidate_other_days(&mut self) {
         self.cache.clear();
-        if let Some(directory) = self.day_cache.as_ref() { day_cache::clear(directory); }
+        if let Some(directory) = self.day_cache.as_ref() {
+            day_cache::clear(directory);
+        }
     }
     pub fn forget_cached_days(&mut self) {
         self.cache.clear();
@@ -652,7 +657,13 @@ impl Store {
             // is a block on the grid, so it stays put alongside the events.
             .filter(move |event| settings.show_tasks || !event.is_task() || !event.all_day)
             .filter(|event| self.calendar_enabled(&event.calendar_id, settings))
-            .filter(|event| event.details.scheduled.as_ref().is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings)))
+            .filter(|event| {
+                event
+                    .details
+                    .scheduled
+                    .as_ref()
+                    .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
+            })
     }
 
     /// The event with this id, if it is still loaded.
@@ -671,7 +682,10 @@ impl Store {
         if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
             return Some(event);
         }
-        self.cache.values_mut().flatten().find(|event| event.id == id)
+        self.cache
+            .values_mut()
+            .flatten()
+            .find(|event| event.id == id)
     }
 
     /// Applies a dragged time to the event and remembers it as unconfirmed.
@@ -722,9 +736,15 @@ impl Store {
     ///
     /// The configured default wins when it still exists; otherwise the primary
     /// calendar, and failing that the first writable one. Task lists are never
-    /// offered, since they hold Google Tasks rather than events.
+    /// offered, since they hold Google Tasks rather than events. The calendar
+    /// that stores assigned task times is managed by the app, so a new event
+    /// is never filed there either.
     pub fn default_calendar_id(&self, settings: &CalendarSettings) -> Option<String> {
-        if let Some(id) = settings.time_block_calendar.as_ref().or(settings.default_calendar.as_ref())
+        if let Some(id) = settings
+            .time_block_calendar
+            .as_ref()
+            .or(settings.default_calendar.as_ref())
+            && !is_managed_tasks_calendar(settings, id)
             && self
                 .calendars
                 .iter()
@@ -735,8 +755,16 @@ impl Store {
 
         self.calendars
             .iter()
-            .find(|calendar| calendar.primary && !calendar.is_task_list())
-            .or_else(|| self.calendars.iter().find(|calendar| !calendar.is_task_list()))
+            .find(|calendar| {
+                calendar.primary
+                    && !calendar.is_task_list()
+                    && !is_managed_tasks_calendar(settings, &calendar.id)
+            })
+            .or_else(|| {
+                self.calendars.iter().find(|calendar| {
+                    !calendar.is_task_list() && !is_managed_tasks_calendar(settings, &calendar.id)
+                })
+            })
             .map(|calendar| calendar.id.clone())
     }
 
@@ -750,7 +778,12 @@ impl Store {
     }
 
     /// Opens the add-event popup on `calendar_id`, spanning `start` to `end`.
-    pub fn begin_draft(&mut self, calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) {
+    pub fn begin_draft(
+        &mut self,
+        calendar_id: String,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    ) {
         self.draft = Some(Draft::new(calendar_id, start, end));
         self.open_event = None;
         self.edit_draft = None;
@@ -769,6 +802,37 @@ impl Store {
         self.draft = None;
         self.menu_open = false;
         self.month_open = false;
+    }
+
+    /// Drops a deleted task, every cached copy of it, and the calendar blocks
+    /// that were standing in for it.
+    pub fn forget_task(&mut self, id: &str) {
+        let task_id = id.strip_prefix("task:").unwrap_or(id).to_owned();
+        let drop_copies = |events: &mut Vec<Event>| {
+            events.retain(|event| {
+                event.id != id
+                    && event
+                        .details
+                        .scheduled
+                        .as_ref()
+                        .map(|link| link.task_id.as_str())
+                        != Some(task_id.as_str())
+            });
+        };
+        drop_copies(&mut self.events);
+        for events in self.cache.values_mut() {
+            drop_copies(events);
+        }
+        if self.open_event.as_ref().is_some_and(|open| {
+            !self.events.iter().any(|event| &event.id == open)
+                && !self
+                    .cache
+                    .values()
+                    .any(|events| events.iter().any(|event| &event.id == open))
+        }) {
+            self.open_event = None;
+        }
+        self.write_day(self.day, &self.events);
     }
 
     /// Puts a freshly created event into the day in view, keeping the order the
@@ -794,18 +858,44 @@ impl Store {
         &'a self,
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
-        self.visible_events(settings).filter(|event| event.all_day && (!event.is_task() ||
-            (event.start.date_naive() != crate::timeblocking::UNDATED && event.start.date_naive() == self.day)
-            || (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event))))
+        let blocks = self.time_block_keys(settings);
+        self.visible_events(settings).filter(move |event| {
+            event.all_day
+                && (!event.is_task()
+                    || (event.start.date_naive() != crate::timeblocking::UNDATED
+                        && event.start.date_naive() == self.day)
+                    || (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
+                && !omit_managed_tasks_event(event, &blocks, settings)
+        })
     }
 
     pub fn timed_events<'a>(
         &'a self,
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
+        let blocks = self.time_block_keys(settings);
         let start = at_clock(self.day, settings.day_start_hour(), 0);
-        let end = at_clock(self.day.succ_opt().unwrap_or(self.day), settings.day_start_hour(), 0);
-        self.visible_events(settings).filter(move |event| !event.all_day && event.start < end && event.end > start)
+        let end = at_clock(
+            self.day.succ_opt().unwrap_or(self.day),
+            settings.day_start_hour(),
+            0,
+        );
+        self.visible_events(settings).filter(move |event| {
+            !event.all_day
+                && event.start < end
+                && event.end > start
+                && !omit_managed_tasks_event(event, &blocks, settings)
+        })
+    }
+
+    /// Keys of the time blocks currently loaded, so a scheduled task can be
+    /// recognized as already drawn beside its block.
+    fn time_block_keys(&self, settings: &CalendarSettings) -> Vec<String> {
+        self.events
+            .iter()
+            .filter(|event| crate::timeblocking::is_block(event, settings))
+            .map(crate::timeblocking::block_key)
+            .collect()
     }
 
     pub fn status_line(&self) -> String {
@@ -818,6 +908,41 @@ impl Store {
             _ => "Not connected".to_owned(),
         }
     }
+}
+
+/// The calendar that holds a task's assigned time. The app writes those
+/// events itself, so they are not a calendar the user files new events on.
+fn is_managed_tasks_calendar(settings: &CalendarSettings, id: &str) -> bool {
+    settings.tasks_calendar.as_deref() == Some(id)
+}
+
+/// Whether this event is the managed tasks calendar showing up as a normal chip.
+///
+/// A task that already sits beside its time block is drawn there, so the grid
+/// does not draw it again. A plain event stored on that calendar is managed by
+/// the app and stays off the day view. A task given a time of its own, with no
+/// time block, still occupies the grid: that chip is the only place its time
+/// is visible.
+fn omit_managed_tasks_event(
+    event: &Event,
+    time_blocks: &[String],
+    settings: &CalendarSettings,
+) -> bool {
+    let Some(managed) = settings.tasks_calendar.as_deref() else {
+        return false;
+    };
+    if event.calendar_id == managed {
+        return true;
+    }
+    event
+        .details
+        .scheduled
+        .as_ref()
+        .is_some_and(|link| link.calendar_id == managed)
+        && crate::timeblocking::metadata(event)
+            .block
+            .as_ref()
+            .is_some_and(|key| time_blocks.iter().any(|block| block == key))
 }
 
 impl Default for Store {
@@ -913,9 +1038,16 @@ pub fn sync_day(
     day_end_hour: u32,
     tasks_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::fetch_day(&tokens.access_token, disabled, day, day_end_hour, tasks_calendar)
+    api::fetch_day(
+        &tokens.access_token,
+        disabled,
+        day,
+        day_end_hour,
+        tasks_calendar,
+    )
 }
 
 pub fn disconnect() {
@@ -931,7 +1063,8 @@ pub fn set_task_completed(
     event_id: &str,
     completed: bool,
 ) -> Result<(), String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
     let list_id = calendar_id.strip_prefix("tasks:").unwrap_or(calendar_id);
@@ -952,41 +1085,80 @@ pub fn set_linked_task_completed(
 ) -> Result<(), String> {
     let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let list = task.calendar_id.strip_prefix("tasks:").ok_or("Invalid task list")?;
+    let list = task
+        .calendar_id
+        .strip_prefix("tasks:")
+        .ok_or("Invalid task list")?;
     let id = task.id.strip_prefix("task:").ok_or("Invalid task")?;
-    api::set_task_completed(&tokens.access_token, list, id, completed).map_err(describe_task_write_error)?;
+    api::set_task_completed(&tokens.access_token, list, id, completed)
+        .map_err(describe_task_write_error)?;
     if let Some(link) = &task.details.scheduled {
         let mut updated = task.clone();
         updated.completed = completed;
-        if let Err(error) = scheduled::request("PATCH", &link.event_url(), &tokens.access_token,
-            Some(&scheduled::content(&updated, link))) {
+        if let Err(error) = scheduled::request(
+            "PATCH",
+            &link.event_url(),
+            &tokens.access_token,
+            Some(&scheduled::content(&updated, link)),
+        ) {
             return match api::set_task_completed(&tokens.access_token, list, id, task.completed) {
-                Ok(()) => Err(format!("Calendar completion could not be saved; the task was restored: {}", error.message)),
-                Err(rollback) => Err(format!("Calendar completion failed: {}. Restoring the task also failed: {rollback}. Sync before retrying.", error.message)),
+                Ok(()) => Err(format!(
+                    "Calendar completion could not be saved; the task was restored: {}",
+                    error.message
+                )),
+                Err(rollback) => Err(format!(
+                    "Calendar completion failed: {}. Restoring the task also failed: {rollback}. Sync before retrying.",
+                    error.message
+                )),
             };
         }
     }
     Ok(())
 }
 
-/// Deletes a single task instance from Google Tasks.
+/// Deletes a task from Google Tasks, and the calendar blocks that point at it.
 ///
-/// For a recurring task this removes just the one occurrence identified by
-/// `event_id`; the series and its other instances are untouched.
+/// The chip's list can be stale after the task is moved onto the scheduling
+/// list. The Tasks API is asked for the task wherever it still lives. Every
+/// calendar event that records this task is removed too, including a second
+/// block created for the same task.
 pub fn delete_task(
     client_id: &str,
     client_secret: &str,
-    calendar_id: &str,
-    event_id: &str,
+    task: &Event,
+    tasks_calendar: Option<&str>,
 ) -> Result<(), String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
-    let list_id = calendar_id.strip_prefix("tasks:").unwrap_or(calendar_id);
-    let task_id = event_id.strip_prefix("task:").unwrap_or(event_id);
+    let chip_list = task
+        .calendar_id
+        .strip_prefix("tasks:")
+        .unwrap_or(task.calendar_id.as_str());
+    let chip_task = task.id.strip_prefix("task:").unwrap_or(task.id.as_str());
+    // The schedule records the list the task was moved to. A cached chip can
+    // still name the list it left.
+    let (list_id, task_id) = match &task.details.scheduled {
+        Some(link) if !link.list_id.is_empty() && !link.task_id.is_empty() => {
+            (link.list_id.as_str(), link.task_id.as_str())
+        }
+        _ => (chip_list, chip_task),
+    };
 
-    api::delete_task(&tokens.access_token, list_id, task_id)
-        .map_err(describe_task_write_error)
+    api::delete_task(&tokens.access_token, list_id, task_id).map_err(describe_task_write_error)?;
+
+    let mut calendars = Vec::new();
+    if let Some(link) = &task.details.scheduled {
+        calendars.push(link.calendar_id.as_str());
+    }
+    if let Some(calendar) = tasks_calendar.filter(|calendar| !calendars.contains(calendar)) {
+        calendars.push(calendar);
+    }
+    for calendar in calendars {
+        scheduled::remove_task_copies(&tokens.access_token, calendar, task_id)?;
+    }
+    Ok(())
 }
 
 /// Turns a read-only-token rejection into something a user can act on.
@@ -1009,7 +1181,8 @@ pub fn set_event_time(
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<(), String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
     api::patch_event_time(&tokens.access_token, calendar_id, event_id, start, end)
@@ -1037,11 +1210,19 @@ pub fn create_event(
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<String, String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
-    api::insert_event(&tokens.access_token, calendar_id, title, description, start, end)
-        .map_err(describe_event_write_error)
+    api::insert_event(
+        &tokens.access_token,
+        calendar_id,
+        title,
+        description,
+        start,
+        end,
+    )
+    .map_err(describe_event_write_error)
 }
 
 /// Updates an existing event on Google: title, description, start and end.
@@ -1056,11 +1237,20 @@ pub fn update_event(
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<(), String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
-    api::patch_event(&tokens.access_token, calendar_id, event_id, title, description, start, end)
-        .map_err(describe_event_write_error)
+    api::patch_event(
+        &tokens.access_token,
+        calendar_id,
+        event_id,
+        title,
+        description,
+        start,
+        end,
+    )
+    .map_err(describe_event_write_error)
 }
 
 /// Deletes a single event on Google. Blocking: run it on a worker thread
@@ -1073,7 +1263,8 @@ pub fn delete_event(
     calendar_id: &str,
     event_id: &str,
 ) -> Result<(), String> {
-    let tokens = oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
     api::delete_event(&tokens.access_token, calendar_id, event_id)
@@ -1274,6 +1465,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn forgetting_a_task_drops_the_stale_list_copy_and_its_calendar_block() {
+        let mut store = Store::with_snapshot(sample_snapshot());
+        let day = store.day;
+        let at = store.events[0].start;
+        let mirror = Event {
+            id: "ttblock".into(),
+            calendar_id: "tasks-calendar".into(),
+            title: "Shopping2".into(),
+            start: at,
+            end: at,
+            all_day: false,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details {
+                scheduled: Some(scheduled::Link {
+                    calendar_id: "tasks-calendar".into(),
+                    event_id: "ttblock".into(),
+                    list_id: "time-blocked".into(),
+                    task_id: "abc".into(),
+                    pending: false,
+                    block: None,
+                    order: 0,
+                }),
+                ..Details::default()
+            },
+        };
+        let ghost = Event {
+            id: "task:abc".into(),
+            calendar_id: "tasks:low-priority".into(),
+            title: "Shopping2".into(),
+            start: at,
+            end: at,
+            all_day: true,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        };
+        let kept = Event {
+            id: "task:other".into(),
+            calendar_id: "tasks:low-priority".into(),
+            title: "Keep".into(),
+            start: at,
+            end: at,
+            all_day: true,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        };
+        store.events = vec![mirror, ghost.clone(), kept];
+        store.cache.insert(day.pred_opt().unwrap(), vec![ghost]);
+        store.open_event = Some("ttblock".into());
+
+        store.forget_task("task:abc");
+
+        let titles: Vec<_> = store
+            .events
+            .iter()
+            .map(|event| event.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Keep"]);
+        assert!(store.cache.values().all(|events| events.is_empty()));
+        assert!(store.open_event.is_none());
+    }
+
+    #[test]
     fn upcoming_keeps_unfinished_things_in_time_order() {
         fn make(
             id: &str,
@@ -1365,8 +1621,16 @@ mod tests {
             id: "task:abc".into(),
             calendar_id: "tasks:list".into(),
             title: "File taxes".into(),
-            start: day.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Local).unwrap(),
-            end: day.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Local).unwrap(),
+            start: day
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .unwrap(),
+            end: day
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .unwrap(),
             all_day: true,
             color: colors::DEFAULT_EVENT,
             completed: false,
@@ -1378,8 +1642,16 @@ mod tests {
             id: "task:def".into(),
             calendar_id: "tasks:list".into(),
             title: "Stand-up".into(),
-            start: day.and_hms_opt(9, 30, 0).unwrap().and_local_timezone(Local).unwrap(),
-            end: day.and_hms_opt(10, 0, 0).unwrap().and_local_timezone(Local).unwrap(),
+            start: day
+                .and_hms_opt(9, 30, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .unwrap(),
+            end: day
+                .and_hms_opt(10, 0, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .unwrap(),
             all_day: false,
             color: colors::DEFAULT_EVENT,
             completed: false,
@@ -1388,7 +1660,13 @@ mod tests {
 
         let store = Store::with_snapshot(snapshot);
         let mut settings = CalendarSettings::default();
-        assert_eq!(store.visible_events(&settings).filter(|e| e.is_task()).count(), 2);
+        assert_eq!(
+            store
+                .visible_events(&settings)
+                .filter(|e| e.is_task())
+                .count(),
+            2
+        );
 
         settings.show_tasks = false;
         let tasks: Vec<_> = store
@@ -1397,6 +1675,124 @@ mod tests {
             .map(|e| e.title.as_str())
             .collect();
         assert_eq!(tasks, vec!["Stand-up"]);
+    }
+
+    #[test]
+    fn the_managed_tasks_calendar_is_not_drawn_like_a_normal_calendar() {
+        let mut snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let at = |hour, minute| {
+            day.and_hms_opt(hour, minute, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .unwrap()
+        };
+        snapshot.events.push(Event {
+            id: "focus".into(),
+            calendar_id: "work".into(),
+            title: "Focus".into(),
+            start: at(10, 0),
+            end: at(12, 0),
+            all_day: false,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        });
+        snapshot.events.push(Event {
+            id: "tasks-all-day".into(),
+            calendar_id: "tasks".into(),
+            title: "Managed all day".into(),
+            start: at(0, 0),
+            end: at(0, 0),
+            all_day: true,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        });
+
+        let mut assigned = Event {
+            id: "task:inside".into(),
+            calendar_id: "tasks:list".into(),
+            title: "Inside the block".into(),
+            start: at(10, 0),
+            end: at(10, 30),
+            all_day: false,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        };
+        let mut link = scheduled::Link::new("tasks".into(), &assigned).unwrap();
+        link.pending = false;
+        link.block = Some("work/focus".into());
+        assigned.details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            metadata: crate::timeblocking::Metadata {
+                block: Some("work/focus".into()),
+                minutes: 30,
+                schedule: Some(link.clone()),
+                ..Default::default()
+            },
+            legacy_key: None,
+        });
+        assigned.details.scheduled = Some(link);
+        snapshot.events.push(assigned);
+
+        let mut alone = Event {
+            id: "task:alone".into(),
+            calendar_id: "tasks:list".into(),
+            title: "On my own".into(),
+            start: at(15, 0),
+            end: at(15, 30),
+            all_day: false,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details::default(),
+        };
+        let mut alone_link = scheduled::Link::new("tasks".into(), &alone).unwrap();
+        alone_link.pending = false;
+        alone.details.task_data = Some(crate::task_db::TaskData {
+            id: 101,
+            metadata: crate::timeblocking::Metadata {
+                minutes: 30,
+                schedule: Some(alone_link.clone()),
+                ..Default::default()
+            },
+            legacy_key: None,
+        });
+        alone.details.scheduled = Some(alone_link);
+        snapshot.events.push(alone);
+
+        let store = Store::with_snapshot(snapshot);
+        let mut settings = CalendarSettings::default();
+        settings.tasks_calendar = Some("tasks".into());
+        settings.time_block_calendar = Some("work".into());
+
+        let titles: Vec<_> = store
+            .timed_events(&settings)
+            .map(|event| event.title.as_str())
+            .collect();
+        assert!(titles.contains(&"Standup"));
+        assert!(titles.contains(&"Focus"));
+        assert!(titles.contains(&"On my own"));
+        assert!(!titles.contains(&"Inside the block"));
+        assert!(!titles.contains(&"Write the Cal tab"));
+        assert!(
+            !store
+                .all_day_events(&settings)
+                .any(|event| event.title == "Managed all day")
+        );
+        assert!(
+            store
+                .all_day_events(&settings)
+                .any(|event| event.title == "Team offsite")
+        );
+
+        settings.time_block_calendar = None;
+        settings.default_calendar = Some("tasks".into());
+        assert_eq!(
+            store.default_calendar_id(&settings).as_deref(),
+            Some("personal")
+        );
     }
 
     #[test]
@@ -1417,9 +1813,17 @@ mod tests {
 
         store.apply_task_colors(&settings);
 
-        let list = store.calendars.iter().find(|c| c.id == "tasks:list").unwrap();
+        let list = store
+            .calendars
+            .iter()
+            .find(|c| c.id == "tasks:list")
+            .unwrap();
         assert_eq!(list.color, red);
-        for event in store.events.iter().filter(|e| e.calendar_id == "tasks:list") {
+        for event in store
+            .events
+            .iter()
+            .filter(|e| e.calendar_id == "tasks:list")
+        {
             assert_eq!(event.color, red);
         }
     }
@@ -1433,7 +1837,11 @@ mod tests {
         let mut store = Store::with_snapshot(snapshot);
         store.apply_task_colors(&CalendarSettings::default());
 
-        let list = store.calendars.iter().find(|c| c.id == "tasks:list").unwrap();
+        let list = store
+            .calendars
+            .iter()
+            .find(|c| c.id == "tasks:list")
+            .unwrap();
         assert_eq!(list.color, colors::TASK);
     }
 
@@ -1449,9 +1857,14 @@ mod tests {
 
     #[test]
     fn a_read_only_token_is_explained_as_a_reconnect() {
-        assert!(describe_task_write_error("Request had insufficient authentication scopes.".to_owned())
-            .contains("Reconnect"));
-        assert_eq!(describe_task_write_error("Network down".to_owned()), "Network down");
+        assert!(
+            describe_task_write_error("Request had insufficient authentication scopes.".to_owned())
+                .contains("Reconnect")
+        );
+        assert_eq!(
+            describe_task_write_error("Network down".to_owned()),
+            "Network down"
+        );
     }
 
     #[test]
@@ -1503,7 +1916,10 @@ mod tests {
         assert_eq!(grid.len() % 7, 0, "the grid has to be whole weeks");
         assert_eq!(grid[0].weekday(), chrono::Weekday::Mon);
         assert_eq!(grid[0], NaiveDate::from_ymd_opt(2026, 9, 28).unwrap());
-        assert_eq!(grid.last().unwrap(), &NaiveDate::from_ymd_opt(2026, 11, 1).unwrap());
+        assert_eq!(
+            grid.last().unwrap(),
+            &NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()
+        );
 
         // Every day of the month is present exactly once.
         for day in 1..=31 {
@@ -1543,11 +1959,17 @@ mod tests {
         store.set_day(next, today);
 
         assert_eq!(store.day, next);
-        assert!(store.events.is_empty(), "the old day's events must not linger");
+        assert!(
+            store.events.is_empty(),
+            "the old day's events must not linger"
+        );
         assert!(!store.follow_today, "a moved day no longer follows today");
 
         store.set_day(today, today);
-        assert!(store.follow_today, "back on today, the view follows it again");
+        assert!(
+            store.follow_today,
+            "back on today, the view follows it again"
+        );
     }
 
     #[test]
@@ -1561,7 +1983,11 @@ mod tests {
         assert!(store.events.is_empty());
 
         store.set_day(today, today);
-        assert_eq!(store.events.len(), parked, "the cached day should come back");
+        assert_eq!(
+            store.events.len(),
+            parked,
+            "the cached day should come back"
+        );
     }
 
     #[test]
@@ -1573,7 +1999,10 @@ mod tests {
         store.forget_cached_days();
         store.set_day(today, today);
 
-        assert!(store.events.is_empty(), "a forgotten day has to be fetched again");
+        assert!(
+            store.events.is_empty(),
+            "a forgotten day has to be fetched again"
+        );
     }
 
     /// A snapshot with nothing in it, standing in for a run that has not
@@ -1604,7 +2033,11 @@ mod tests {
             .filter(|day| !dropped.contains(day))
             .collect();
 
-        assert_eq!(kept.len(), 13, "the day in view, its neighbours and ten more");
+        assert_eq!(
+            kept.len(),
+            13,
+            "the day in view, its neighbours and ten more"
+        );
         for offset in [-6, -1, 0, 1, 6] {
             let day = today + chrono::Duration::days(i64::from(offset));
             assert!(kept.contains(&day), "day {offset} should stay");
