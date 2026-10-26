@@ -259,6 +259,8 @@ pub enum Message {
     CalendarMenuToggled,
     CalendarToggled(String, bool),
     CalendarSyncRequested,
+    /// Drop cached days and pull the day in view from Google again.
+    CalendarResyncRequested,
     CalendarSynced(Result<calendar::Snapshot, String>),
     CalendarSyncedAt(u64, Result<calendar::Snapshot, String>),
     CalendarTick,
@@ -1153,6 +1155,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 return window::resize(id, Size::new(width, size.height));
             }
 
+            // Only a window that has never been sized gets the default
+            // fraction. A width the user chose, or the one saved with the
+            // editor open, must survive a relaunch.
+            if state.config.window.width != Config::default().window.width
+                || state.timeblocking.original_width.is_some()
+            {
+                return Task::none();
+            }
+
             let width = launch_width(size.width);
             let height = state.config.window.height;
             state.config.window.width = width;
@@ -1242,6 +1253,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CalendarSyncRequested => sync_calendar(state),
+
+        Message::CalendarResyncRequested => {
+            // Days parked in memory and on disk would paint before the next
+            // visit fetched them. Drop them so the resync is the source of
+            // truth. The day in view stays up until its own fetch lands.
+            state.calendar.invalidate_other_days();
+            sync_calendar(state)
+        }
 
         Message::CalendarSyncedAt(revision, result) => {
             if revision != state.timeblocking.revision {
@@ -3002,6 +3021,28 @@ mod tests {
         );
 
         assert_eq!(state.calendar.day, moved_to);
+    }
+
+    #[test]
+    fn resync_forgets_cached_days() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        // Stay signed out so the fetch is not started against a real account.
+        // The cache drop still has to happen; a signed-in store would also
+        // move into Syncing, which `sync_calendar` owns.
+        state.calendar.connection = Connection::SignedOut;
+        let today = state.calendar.day;
+        let tomorrow = today.succ_opt().unwrap();
+        state.calendar.set_day(tomorrow, today);
+
+        let _ = update(&mut state, Message::CalendarResyncRequested);
+
+        state.calendar.set_day(today, today);
+        assert!(
+            state.calendar.events.is_empty(),
+            "a resync should forget days that were only cached"
+        );
+        assert_eq!(state.calendar.sync, SyncState::Idle);
     }
 
     #[test]

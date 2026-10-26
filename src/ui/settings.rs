@@ -300,6 +300,24 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         );
     }
 
+    let resync_label = if state.calendar.is_busy() {
+        "Syncing…"
+    } else {
+        "Resync calendar data"
+    };
+    let mut resync = button(
+        text(resync_label)
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .style(button::secondary);
+    if connected && !state.calendar.is_busy() {
+        resync = resync.on_press(Message::CalendarResyncRequested);
+    }
+    section = section.push(resync);
+
     section = section.push(field(
         sync_label(settings.sync_minutes),
         slider(

@@ -864,11 +864,34 @@ fn the_settings_pane_includes_calendar_sync_controls() {
     for label in [
         "Google Calendar",
         "OAuth client ID",
+        "Resync calendar data",
         "Sync every 15 minutes",
         "Day ends at midnight",
     ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from settings");
     }
+}
+
+/// Resync is the settings way to throw away cached days and fetch again.
+#[test]
+fn resync_calendar_data_is_offered_once_signed_in() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Settings;
+    state.calendar.connection = timetracker::calendar::Connection::SignedIn;
+
+    let mut ui = render(&state, Size::new(420.0, 1400.0));
+
+    let _ = ui.click("Resync calendar data")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::CalendarResyncRequested)),
+        "clicking resync produced {messages:?}"
+    );
+
+    Ok(())
 }
 
 /// The notepad is a tab of its own and is reachable at every width.
