@@ -27,7 +27,14 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .and_then(|id| state.calendar.event(id));
     let body: Element<'a, Message> = if let Some(block) = block {
         let tasks = tb::assigned_all(state, block);
-        let done = tasks.iter().filter(|e| e.completed).count();
+        let done = tasks
+            .iter()
+            .filter(|e| tb::task_status(e) == tb::TaskStatus::Completed)
+            .count();
+        let ignored = tasks
+            .iter()
+            .filter(|e| tb::task_status(e) == tb::TaskStatus::Ignored)
+            .count();
         let planned: u64 = tasks
             .iter()
             .map(|e| u64::from(tb::metadata(e).minutes))
@@ -53,7 +60,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             .style(text::secondary),
             row![
                 text(format!(
-                    "{done}/{} complete · {planned}m planned",
+                    "{done}/{} complete · {ignored} ignored · {planned}m planned",
                     tasks.len()
                 ))
                 .size(12)
@@ -266,8 +273,9 @@ fn task_card<'a>(
     let minutes = tb::metadata(task).minutes;
     let overtime = minutes > 0 && seconds > u64::from(minutes) * 60;
     let busy = state.timeblocking.busy.contains(&task.id);
+    let ignored = tb::task_status(task) == tb::TaskStatus::Ignored;
     let mut completion = button(
-        text(if task.completed {
+        text(if task.completed && !ignored {
             "Completed ✓"
         } else {
             "Complete"
@@ -275,24 +283,27 @@ fn task_card<'a>(
         .size(12),
     )
     .style(button::text);
-    if !busy {
+    if state.timeblocking.busy.is_empty() {
         completion = completion.on_press(Message::TaskToggled(task.id.clone()));
     }
-    let title = text(task.title.clone())
-        .size(if compact { 14 } else { 17 })
-        .width(Fill)
-        .style(if task.completed {
-            text::secondary
+    let mut ignore = button(
+        text(if ignored {
+            "Unignore Task"
         } else {
-            text::default
-        });
+            "Ignore Task"
+        })
+        .size(12),
+    )
+    .style(button::text);
+    if state.timeblocking.busy.is_empty() {
+        ignore = ignore.on_press(Message::TaskIgnoreToggled(task.id.clone()));
+    }
+    let actions = column![completion, ignore].spacing(3);
+    let title = super::timeblocking::task_title(task, if compact { 14.0 } else { 17.0 });
     let heading: Element<'a, Message> = if compact {
-        column![title, completion].spacing(3).into()
+        column![title, actions].spacing(3).into()
     } else {
-        row![title, completion]
-            .align_y(iced::Center)
-            .spacing(8)
-            .into()
+        row![title, actions].align_y(iced::Center).spacing(8).into()
     };
     let clock = text(task_work::clock(seconds))
         .size(if compact { 20 } else { 24 })

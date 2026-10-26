@@ -21,8 +21,53 @@ pub struct Metadata {
     pub minutes: u32,
     #[serde(default)]
     pub order: i64,
+    #[serde(default)]
+    pub ignored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<calendar::scheduled::Link>,
+}
+
+/// Completed and ignored tasks both count as completed in Google Tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskStatus {
+    Active,
+    Completed,
+    Ignored,
+}
+
+pub fn task_status(task: &Event) -> TaskStatus {
+    if !task.completed {
+        TaskStatus::Active
+    } else if metadata(task).ignored {
+        TaskStatus::Ignored
+    } else {
+        TaskStatus::Completed
+    }
+}
+
+pub(crate) fn apply_status(task: &mut Event, status: TaskStatus) {
+    task.completed = status != TaskStatus::Active;
+    let ignored = status == TaskStatus::Ignored;
+    if let Some(data) = &mut task.details.task_data {
+        data.metadata.ignored = ignored;
+    } else {
+        let mut meta = metadata(task);
+        meta.ignored = ignored;
+        // Legacy tasks can be edited before their first database import.
+        task.details.description = format!(
+            "{}\n{META}{}",
+            description(&task.details.description),
+            serde_json::to_string(&meta).expect("metadata serializes")
+        );
+    }
+}
+
+pub fn task_label(task: &Event) -> String {
+    match task_status(task) {
+        TaskStatus::Active => task.title.clone(),
+        TaskStatus::Completed => format!("{} · Completed ✓", task.title),
+        TaskStatus::Ignored => format!("{} · Ignored", task.title),
+    }
 }
 #[derive(Default)]
 pub struct Workspace {
@@ -93,6 +138,8 @@ pub enum Action {
     Date(String),
     SaveEstimate(String),
     Backlog(String),
+    /// Remove a task from its block without deleting it or moving lists.
+    Unassign(String),
     /// The backlog search box changed.
     BacklogQuery(String),
     /// Restrict the backlog to one task list, or all lists when `None`.
@@ -206,15 +253,7 @@ pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
         && settings.time_block_calendar.as_deref() == Some(&event.calendar_id)
 }
 pub fn assigned<'a>(state: &'a State, block: &Event) -> Vec<&'a Event> {
-    let key = block_key(block);
-    let mut tasks: Vec<_> = state
-        .calendar
-        .events
-        .iter()
-        .filter(|e| e.is_task() && !e.completed && metadata(e).block.as_deref() == Some(&key))
-        .collect();
-    tasks.sort_by_key(|e| (metadata(e).order, e.id.clone()));
-    tasks
+    assigned_all(state, block)
 }
 /// The Google Tasks list a task belongs to, using the list title when it is known.
 pub fn task_list_name(state: &State, calendar_id: &str) -> String {
@@ -675,6 +714,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Estimate(minutes))
         }
         Action::Backlog(id) => (id, Change::Backlog),
+        Action::Unassign(id) => (id, Change::Unassign),
         Action::Reschedule(id) => {
             let Ok(day) = NaiveDate::parse_from_str(&state.timeblocking.date, "%Y-%m-%d") else {
                 state.calendar.error = Some("Enter a date as YYYY-MM-DD".into());
@@ -905,6 +945,7 @@ enum Change {
     Estimate(u32),
     Deadline(Option<calendar::deadline::Deadline>),
     Backlog,
+    Unassign,
     Day(NaiveDate),
     Block(String, DateTime<Local>, DateTime<Local>),
     Reorder(Option<String>, i64, NaiveDate),
@@ -1076,11 +1117,11 @@ fn save(
                 .map_err(|e| e.message)?;
             }
         }
-        Change::Backlog | Change::Day(_) => {
-            let day = if let Change::Day(day) = change {
-                Some(day)
-            } else {
-                None
+        Change::Backlog | Change::Unassign | Change::Day(_) => {
+            let day = match change {
+                Change::Day(day) => Some(day),
+                Change::Unassign => Some(task.start.date_naive()),
+                _ => None,
             };
             let token = access(settings)?;
             unschedule_with(
@@ -1641,6 +1682,52 @@ mod tests {
                     .borrow()
                     .iter()
                     .any(|call| call.starts_with("move:"))
+            );
+        }
+    }
+
+    #[test]
+    fn removing_a_planned_task_retains_its_day_identity_status_and_list() {
+        for status in [
+            TaskStatus::Active,
+            TaskStatus::Completed,
+            TaskStatus::Ignored,
+        ] {
+            let mut task = calendar::sample_snapshot().events.remove(0);
+            task.id = "task:remove".into();
+            task.calendar_id = "tasks:has-time".into();
+            let mut database =
+                crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+            let mut data = database.import(&task).unwrap();
+            data.metadata.block = Some("work/block".into());
+            data.metadata.schedule =
+                Some(calendar::scheduled::Link::new("calendar".into(), &task).unwrap());
+            task.details.task_data = Some(data.clone());
+            apply_status(&mut task, status);
+            data = task.details.task_data.clone().unwrap();
+            let original = task.clone();
+            let remote = BacklogGoogle::default();
+            let day = task.start.date_naive();
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                &CalendarSettings::default(),
+                &remote,
+                Some(day),
+            )
+            .unwrap();
+            task.details.task_data = Some(data.clone());
+            assert_eq!(task.id, original.id);
+            assert_eq!(task.calendar_id, original.calendar_id);
+            assert_eq!(task.start.date_naive(), day);
+            assert_eq!(task_status(&task), status);
+            assert_eq!(task_key(&task), task_key(&original));
+            assert!(data.metadata.block.is_none());
+            assert!(data.metadata.schedule.is_none());
+            assert_eq!(
+                *remote.calls.borrow(),
+                ["remove".to_owned(), format!("day:remove:Some({day})")]
             );
         }
     }

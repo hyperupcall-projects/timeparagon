@@ -68,6 +68,15 @@ pub struct Event {
 }
 
 impl Event {
+    /// Source used for calendar visibility and overlap ordering.
+    pub fn source_id(&self) -> &str {
+        if self.is_task() {
+            CalendarSettings::GOOGLE_TASKS_ID
+        } else {
+            &self.calendar_id
+        }
+    }
+
     /// Whether this came from Google Tasks rather than Google Calendar. Task
     /// events carry a `task:` id and a `tasks:` calendar id.
     pub fn is_task(&self) -> bool {
@@ -587,8 +596,38 @@ impl Store {
         matches!(self.sync, SyncState::Connecting | SyncState::Syncing)
     }
 
+    /// All real calendars plus one shared Google Tasks entry, including hidden sources.
+    pub fn display_sources(&self, settings: &CalendarSettings) -> Vec<Calendar> {
+        let mut sources: Vec<_> = self
+            .calendars
+            .iter()
+            .filter(|calendar| !calendar.is_task_list())
+            .cloned()
+            .collect();
+        sources.push(Calendar {
+            id: CalendarSettings::GOOGLE_TASKS_ID.into(),
+            name: "Google Tasks".into(),
+            color: task_color(settings, CalendarSettings::GOOGLE_TASKS_ID),
+            primary: false,
+            selected_by_google: true,
+        });
+        // Stable sorting appends newly discovered sources in Google's order.
+        sources.sort_by_key(|source| {
+            settings
+                .source_order
+                .iter()
+                .position(|id| id == &source.id)
+                .unwrap_or(usize::MAX)
+        });
+        sources
+    }
+
     pub fn calendar_enabled(&self, id: &str, settings: &CalendarSettings) -> bool {
-        !settings.disabled.iter().any(|hidden| hidden == id)
+        if id.starts_with("tasks:") {
+            settings.show_tasks
+        } else {
+            !settings.disabled.iter().any(|hidden| hidden == id)
+        }
     }
 
     /// Gives every Google Tasks list its saved color, or Google's blue when it
@@ -653,10 +692,7 @@ impl Store {
     ) -> impl Iterator<Item = &'a Event> {
         self.events
             .iter()
-            // The tasks switch only hides the all-day ones. A task with a time
-            // is a block on the grid, so it stays put alongside the events.
-            .filter(move |event| settings.show_tasks || !event.is_task() || !event.all_day)
-            .filter(|event| self.calendar_enabled(&event.calendar_id, settings))
+            .filter(|event| self.calendar_enabled(event.source_id(), settings))
             .filter(|event| {
                 event
                     .details
@@ -1083,35 +1119,74 @@ pub fn set_linked_task_completed(
     task: &Event,
     completed: bool,
 ) -> Result<(), String> {
+    set_linked_task_status(
+        client_id,
+        client_secret,
+        task,
+        if completed {
+            crate::timeblocking::TaskStatus::Completed
+        } else {
+            crate::timeblocking::TaskStatus::Active
+        },
+    )
+    .map(|_| ())
+}
+
+pub fn set_linked_task_status(
+    client_id: &str,
+    client_secret: &str,
+    task: &Event,
+    status: crate::timeblocking::TaskStatus,
+) -> Result<Event, String> {
     let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let mut database = crate::task_db::open()?;
+    save_task_status(&mut database, task, status, |updated| {
+        write_task_status(&tokens.access_token, updated)
+    })
+}
+
+/// Persist the distinction between ignored and completed only after Google
+/// accepts it. A failed remote or local write restores the previous state.
+fn save_task_status(
+    database: &mut crate::task_db::Database,
+    task: &Event,
+    status: crate::timeblocking::TaskStatus,
+    mut write: impl FnMut(&Event) -> Result<(), String>,
+) -> Result<Event, String> {
+    let mut updated = task.clone();
+    updated.details.task_data = Some(database.import(task)?);
+    crate::timeblocking::apply_status(&mut updated, status);
+    if let Err(error) = write(&updated)
+        .and_then(|()| database.save(&updated, updated.details.task_data.as_ref().unwrap()))
+    {
+        return match write(task) {
+            Ok(()) => Err(format!(
+                "Task status could not be saved; the task was restored: {error}"
+            )),
+            Err(rollback) => Err(format!(
+                "Task status failed: {error}. Restoring the task also failed: {rollback}. Sync before retrying."
+            )),
+        };
+    }
+    Ok(updated)
+}
+
+fn write_task_status(token: &str, task: &Event) -> Result<(), String> {
     let list = task
         .calendar_id
         .strip_prefix("tasks:")
         .ok_or("Invalid task list")?;
     let id = task.id.strip_prefix("task:").ok_or("Invalid task")?;
-    api::set_task_completed(&tokens.access_token, list, id, completed)
-        .map_err(describe_task_write_error)?;
+    api::set_task_completed(token, list, id, task.completed).map_err(describe_task_write_error)?;
     if let Some(link) = &task.details.scheduled {
-        let mut updated = task.clone();
-        updated.completed = completed;
-        if let Err(error) = scheduled::request(
+        scheduled::request(
             "PATCH",
             &link.event_url(),
-            &tokens.access_token,
-            Some(&scheduled::content(&updated, link)),
-        ) {
-            return match api::set_task_completed(&tokens.access_token, list, id, task.completed) {
-                Ok(()) => Err(format!(
-                    "Calendar completion could not be saved; the task was restored: {}",
-                    error.message
-                )),
-                Err(rollback) => Err(format!(
-                    "Calendar completion failed: {}. Restoring the task also failed: {rollback}. Sync before retrying.",
-                    error.message
-                )),
-            };
-        }
+            token,
+            Some(&scheduled::content(task, link)),
+        )
+        .map_err(|error| error.message)?;
     }
     Ok(())
 }
@@ -1465,6 +1540,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn task_status_round_trips_and_failed_writes_restore_the_previous_status() {
+        use crate::timeblocking::{self as tb, TaskStatus};
+        let mut database =
+            crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+        let mut task = sample_snapshot().events.remove(0);
+        task.id = "task:status".into();
+        task.calendar_id = "tasks:list".into();
+        let mut data = database.import(&task).unwrap();
+        let mut link = scheduled::Link::new("calendar".into(), &task).unwrap();
+        link.pending = false;
+        link.block = Some("work/block".into());
+        data.metadata.block = link.block.clone();
+        data.metadata.minutes = 45;
+        data.metadata.schedule = Some(link.clone());
+        database.save(&task, &data).unwrap();
+        task.details.task_data = Some(data);
+        task.details.scheduled = Some(link.clone());
+
+        for status in [
+            TaskStatus::Ignored,
+            TaskStatus::Active,
+            TaskStatus::Completed,
+            TaskStatus::Active,
+            TaskStatus::Ignored,
+            TaskStatus::Completed,
+            TaskStatus::Ignored,
+            TaskStatus::Active,
+        ] {
+            let previous = task.clone();
+            let mut calls = Vec::new();
+            let failed = save_task_status(&mut database, &task, status, |updated| {
+                calls.push(tb::task_status(updated));
+                if calls.len() == 1 {
+                    Err("Calendar is offline".into())
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(failed.unwrap_err().contains("the task was restored"));
+            assert_eq!(calls, [status, tb::task_status(&previous)]);
+            assert_eq!(database.lookup(&task).unwrap(), previous.details.task_data);
+
+            task = save_task_status(&mut database, &task, status, |updated| {
+                assert_eq!(updated.completed, status != TaskStatus::Active);
+                assert_eq!(tb::task_status(updated), status);
+                Ok(())
+            })
+            .unwrap();
+            let mut reloaded = task.clone();
+            reloaded.details.task_data = database.lookup(&task).unwrap();
+            assert_eq!(tb::task_status(&reloaded), status);
+            assert_eq!(tb::metadata(&reloaded).block, link.block);
+            assert_eq!(tb::metadata(&reloaded).minutes, 45);
+            assert_eq!(reloaded.details.scheduled.as_ref(), Some(&link));
+            assert_eq!((task.start, task.end), (previous.start, previous.end));
+        }
+    }
+
+    #[test]
     fn forgetting_a_task_drops_the_stale_list_copy_and_its_calendar_block() {
         let mut store = Store::with_snapshot(sample_snapshot());
         let day = store.day;
@@ -1614,7 +1748,7 @@ mod tests {
     }
 
     #[test]
-    fn disabling_tasks_hides_only_the_all_day_ones() {
+    fn disabling_tasks_hides_both_all_day_and_timed_tasks() {
         let mut snapshot = sample_snapshot();
         let day = snapshot.day;
         snapshot.events.push(Event {
@@ -1636,8 +1770,7 @@ mod tests {
             completed: false,
             details: Details::default(),
         });
-        // A scheduled task is a block on the grid, so the
-        // switch leaves it alone.
+        // A task with a time follows the same aggregate toggle.
         snapshot.events.push(Event {
             id: "task:def".into(),
             calendar_id: "tasks:list".into(),
@@ -1674,7 +1807,7 @@ mod tests {
             .filter(|e| e.is_task())
             .map(|e| e.title.as_str())
             .collect();
-        assert_eq!(tasks, vec!["Stand-up"]);
+        assert!(tasks.is_empty());
     }
 
     #[test]

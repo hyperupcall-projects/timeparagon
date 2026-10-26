@@ -14,7 +14,8 @@
 #   --prefix DIR   Install the binary under DIR/bin (default: ~/.local)
 #   --no-build     Use an existing target/debug/timetracker instead of
 #                  building it
-#   --no-enable    Install the systemd unit but do not enable/start it
+#   --no-enable    Install the systemd units but do not enable them or start
+#                  the shortcut daemon
 #   --help         Show this message
 
 set -eu
@@ -187,14 +188,15 @@ fi
 if [ "$enable" -eq 1 ]; then
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload
-        systemctl --user enable --now timetracker.service
+        systemctl --user enable timetracker.service
         systemctl --user enable timetracker-panel.service
         systemctl --user restart timetracker-panel.service
-        say "Enabled and started: timetracker.service"
+        say "Enabled for the next graphical session: timetracker.service"
         say "Enabled and restarted: timetracker-panel.service"
     else
         say "systemctl not found; enable the units yourself with:"
-        say "  systemctl --user enable --now timetracker.service timetracker-panel.service"
+        say "  systemctl --user enable timetracker.service timetracker-panel.service"
+        say "  systemctl --user start timetracker-panel.service"
     fi
 fi
 

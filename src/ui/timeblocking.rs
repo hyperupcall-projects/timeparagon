@@ -5,7 +5,8 @@ use crate::{
     timeblocking::{self as tb, Action},
 };
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, toggler,
+    button, column, container, mouse_area, rich_text, row, scrollable, span, text, text_input,
+    toggler,
 };
 use iced::{Color, Element, Fill, Length};
 fn msg(a: Action) -> Message {
@@ -42,20 +43,30 @@ pub fn task_row<'a>(
         });
     let busy = state.timeblocking.busy.contains(&task.id);
     let mut check = button(text(if task.completed { "●" } else { "○" })).style(button::text);
-    if !busy {
+    if state.timeblocking.busy.is_empty() {
         check = check.on_press(Message::TaskToggled(task.id.clone()));
     }
-    let title = button(
-        text(format!(
-            "{}{}",
-            task.title,
-            if busy { " · Saving…" } else { "" }
-        ))
-        .size(metrics.label()),
-    )
-    .width(Fill)
-    .style(button::text)
-    .on_press(Message::EventOpened(task.id.clone()));
+    let mut title_content = column![task_title(task, metrics.label())].spacing(2);
+    let status = if busy {
+        Some("Saving…")
+    } else {
+        match tb::task_status(task) {
+            tb::TaskStatus::Completed => Some("Completed ✓"),
+            tb::TaskStatus::Ignored => Some("Ignored"),
+            tb::TaskStatus::Active => None,
+        }
+    };
+    if let Some(status) = status {
+        title_content = title_content.push(
+            text(status)
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+    let title = button(title_content)
+        .width(Fill)
+        .style(button::text)
+        .on_press(Message::EventOpened(task.id.clone()));
     let handle = text("⠿").size(17);
     let mut line = row![
         handle,
@@ -120,6 +131,26 @@ pub fn task_row<'a>(
         });
     super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.is_some())
 }
+
+pub(super) fn task_title<'a>(task: &'a Event, size: f32) -> Element<'a, Message> {
+    if tb::task_status(task) == tb::TaskStatus::Ignored {
+        rich_text::<(), _, _, _>([span(task.title.as_str()).strikethrough(true)])
+            .size(size)
+            .width(Fill)
+            .style(text::secondary)
+            .into()
+    } else {
+        text(&task.title)
+            .size(size)
+            .width(Fill)
+            .style(if task.completed {
+                text::secondary
+            } else {
+                text::default
+            })
+            .into()
+    }
+}
 pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
     let busy = state.timeblocking.busy.contains(&task.id);
     let mut name = text_input("Task name", &state.timeblocking.title).size(metrics.label());
@@ -127,7 +158,6 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     let mut save_deadline = button(text("Save deadline").size(metrics.label()));
     let mut schedule = button(text("Schedule time").size(metrics.label()));
     let mut day = button(text("Set day only").size(metrics.label())).style(button::text);
-    let mut backlog = button(text("Move to Backlog").size(metrics.label())).style(button::text);
     if !busy {
         let id = task.id.clone();
         name = name
@@ -137,7 +167,6 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         save_deadline = save_deadline.on_press(msg(Action::SaveDeadline(task.id.clone())));
         schedule = schedule.on_press(msg(Action::ScheduleEntered(task.id.clone())));
         day = day.on_press(msg(Action::Reschedule(task.id.clone())));
-        backlog = backlog.on_press(msg(Action::Backlog(task.id.clone())));
     }
     let mut body = column![
         text("Name").size(metrics.label()).style(text::secondary),
@@ -184,11 +213,50 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         ]
         .spacing(6),
     );
-    body = body.push(schedule).push(day).push(backlog);
+    body = body.push(schedule).push(day);
     if let Err(error) = crate::calendar::deadline::check(&task.details.description) {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
     body.into()
+}
+
+/// Keep task actions in the same order in details and the backlog editor.
+pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let status = tb::task_status(task);
+    let mut actions = column![].spacing(metrics.spacing).width(Fill);
+    for (label, action) in [
+        (
+            if status == tb::TaskStatus::Completed {
+                "Uncomplete task"
+            } else {
+                "Complete task"
+            },
+            Message::TaskToggled(task.id.clone()),
+        ),
+        (
+            if status == tb::TaskStatus::Ignored {
+                "Unignore Task"
+            } else {
+                "Ignore Task"
+            },
+            Message::TaskIgnoreToggled(task.id.clone()),
+        ),
+        ("Move to backlog", msg(Action::Backlog(task.id.clone()))),
+        ("Delete task", Message::TaskDeleteRequested(task.id.clone())),
+    ] {
+        let mut action_button = button(text(label).size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(if matches!(&action, Message::TaskToggled(_)) {
+                button::primary
+            } else {
+                button::secondary
+            });
+        if state.timeblocking.busy.is_empty() {
+            action_button = action_button.on_press(action);
+        }
+        actions = actions.push(action_button);
+    }
+    actions.into()
 }
 
 pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -222,7 +290,11 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut elapsed = 0;
     for task in tasks {
         elapsed += tb::metadata(task).minutes;
-        let card = task_row(state, task, metrics, false);
+        let mut remove = button("−");
+        if state.timeblocking.busy.is_empty() {
+            remove = remove.on_press(msg(Action::Unassign(task.id.clone())));
+        }
+        let card: Element<'a, Message> = row![task_row(state, task, metrics, false), remove].into();
         body = body.push(if elapsed > capacity {
             container(card)
                 .style(|_| container::Style {
@@ -496,6 +568,7 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                     .size(metrics.label())
                     .style(text::secondary),
                 editor(state, task, metrics),
+                task_actions(state, task, metrics),
                 button("Done").on_press(Message::EventClosed)
             ])
             .padding(16)

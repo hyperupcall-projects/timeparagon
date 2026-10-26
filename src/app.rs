@@ -19,7 +19,7 @@ use crate::calendar::{self, Connection, SyncState};
 use crate::config::{self, Config};
 use crate::engine::{TIMER_TICK, Timer};
 use crate::theme::Catalog;
-use crate::{alarm, blocking, notify, panel, theme, tracks, ui};
+use crate::{alarm, blocking, notify, panel, theme, timeblocking, tracks, ui};
 
 /// The smallest window we are willing to be asked to draw.
 ///
@@ -258,6 +258,8 @@ pub enum Message {
 
     CalendarMenuToggled,
     CalendarToggled(String, bool),
+    /// Move a calendar-view source one position up (left) or down (right).
+    CalendarSourceMoved(String, bool),
     CalendarSyncRequested,
     /// Drop cached days and pull the day in view from Google again.
     CalendarResyncRequested,
@@ -288,7 +290,13 @@ pub enum Message {
     EventDeleted(String, Result<(), String>),
     /// Tick a Google Task off, or put it back.
     TaskToggled(String),
-    TaskCompletionSaved(String, bool, Result<(), String>),
+    /// Ignore a task, or restore an ignored task to active.
+    TaskIgnoreToggled(String),
+    TaskCompletionSaved(
+        String,
+        timeblocking::TaskStatus,
+        Result<calendar::Event, String>,
+    ),
     /// Show or hide Google Tasks in the day view.
     ShowTasksToggled(bool),
     /// Open or close the color picker for a Google Tasks list.
@@ -1252,6 +1260,35 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
+        Message::CalendarSourceMoved(id, up) => {
+            let mut order: Vec<_> = state
+                .calendar
+                .display_sources(&state.config.calendar)
+                .into_iter()
+                .map(|source| source.id)
+                .collect();
+            let Some(index) = order.iter().position(|source| source == &id) else {
+                return Task::none();
+            };
+            let next = if up {
+                index.checked_sub(1)
+            } else {
+                index.checked_add(1).filter(|&next| next < order.len())
+            };
+            let Some(next) = next else {
+                return Task::none();
+            };
+            order.swap(index, next);
+            // Keep preferences for calendars temporarily absent from the account.
+            for saved in &state.config.calendar.source_order {
+                if !order.contains(saved) {
+                    order.push(saved.clone());
+                }
+            }
+            state.config.calendar.source_order = order;
+            queue_save(state)
+        }
+
         Message::CalendarSyncRequested => sync_calendar(state),
 
         Message::CalendarResyncRequested => {
@@ -1507,6 +1544,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskDeleteConfirmed(id) => {
+            if state.calendar.pending_delete.as_deref() != Some(id.as_str()) {
+                return Task::none();
+            }
             if !state.timeblocking.busy.is_empty() {
                 return Task::none();
             }
@@ -1525,6 +1565,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             let client_secret = state.config.calendar.client_secret.clone();
             let tasks_calendar = state.config.calendar.tasks_calendar.clone();
             state.calendar.error = None;
+            state.timeblocking.busy.insert(id.clone());
 
             blocking::run(move || {
                 calendar::delete_task(&client_id, &client_secret, &task, tasks_calendar.as_deref())
@@ -1533,22 +1574,37 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TaskDeleted(id, Ok(())) => {
+            state.timeblocking.busy.remove(&id);
+            state.timeblocking.revision += 1;
             state.calendar.pending_delete = None;
+            if let Some(task) = state.calendar.event(&id) {
+                state
+                    .config
+                    .task_work
+                    .stop(&timeblocking::task_key(task), chrono::Utc::now());
+            }
             // The task is gone on Google's side. Drop every chip that was
             // showing it, including a stale copy on the list it was moved
             // from and the calendar block that held its time.
             state.calendar.forget_task(&id);
-            Task::none()
+            state.calendar.invalidate_other_days();
+            queue_save(state)
         }
 
-        Message::TaskDeleted(_id, Err(error)) => {
+        Message::TaskDeleted(id, Err(error)) => {
+            state.timeblocking.busy.remove(&id);
+            state.timeblocking.revision += 1;
             state.calendar.pending_delete = None;
             log::warn!("could not delete the task: {error}");
             state.calendar.error = Some(error);
             Task::none()
         }
 
-        Message::TaskToggled(id) => {
+        Message::TaskToggled(_) | Message::TaskIgnoreToggled(_) => {
+            let ignoring = matches!(&message, Message::TaskIgnoreToggled(_));
+            let (Message::TaskToggled(id) | Message::TaskIgnoreToggled(id)) = message else {
+                unreachable!()
+            };
             if !state.timeblocking.busy.is_empty() {
                 return Task::none();
             }
@@ -1561,12 +1617,23 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             else {
                 return Task::none();
             };
-            let previous = task.completed;
+            let previous = timeblocking::task_status(&task);
+            let status = if ignoring {
+                if previous == timeblocking::TaskStatus::Ignored {
+                    timeblocking::TaskStatus::Active
+                } else {
+                    timeblocking::TaskStatus::Ignored
+                }
+            } else if previous == timeblocking::TaskStatus::Completed {
+                timeblocking::TaskStatus::Active
+            } else {
+                timeblocking::TaskStatus::Completed
+            };
 
             // Update the chip straight away, then put it back if Google
             // refuses the write.
             state.timeblocking.busy.insert(id.clone());
-            let completed = !previous;
+            let completed = status != timeblocking::TaskStatus::Active;
             if completed && let Some(task) = state.calendar.event(&id) {
                 state
                     .config
@@ -1576,7 +1643,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 let _ = queue_save(state);
             }
             if let Some(event) = state.calendar.event_mut(&id) {
-                event.completed = completed;
+                timeblocking::apply_status(event, status);
             }
 
             let client_id = state.config.calendar.client_id.clone();
@@ -1584,12 +1651,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.error = None;
 
             blocking::run(move || {
-                calendar::set_linked_task_completed(&client_id, &client_secret, &task, completed)
+                calendar::set_linked_task_status(&client_id, &client_secret, &task, status)
             })
             .map(move |result| Message::TaskCompletionSaved(id.clone(), previous, result))
         }
 
-        Message::TaskCompletionSaved(id, _, Ok(())) => {
+        Message::TaskCompletionSaved(id, _, Ok(task)) => {
+            if let Some(event) = state.calendar.event_mut(&id) {
+                *event = task;
+            }
             state.timeblocking.busy.remove(&id);
             state.timeblocking.revision += 1;
             state.calendar.invalidate_other_days();
@@ -1600,7 +1670,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.timeblocking.busy.remove(&id);
             state.timeblocking.revision += 1;
             if let Some(event) = state.calendar.event_mut(&id) {
-                event.completed = previous;
+                timeblocking::apply_status(event, previous);
             }
 
             log::warn!("could not update the task: {error}");

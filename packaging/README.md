@@ -19,14 +19,17 @@ Nothing needs root; everything lives under your home directory.
 ## Usage
 
 ```sh
-packaging/install.sh              # build, install, enable and start
+packaging/install.sh              # build, install and enable for future sessions
 packaging/install.sh --no-build   # reuse binaries in target/debug
-packaging/install.sh --no-enable  # install the unit but do not start it
+packaging/install.sh --no-enable  # install the units without enabling or starting
 packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 ```
 
-The installer restarts `timetracker-panel.service` so updates take effect
-immediately, unless `--no-enable` is passed.
+The installer does not launch the TimeTracker application. Open it from the
+application menu when ready; its service will start with your next graphical
+session. The installer restarts the background shortcut daemon,
+`timetracker-panel.service`, so the side-panel shortcut is ready immediately,
+unless `--no-enable` is passed.
 
 Google Tasks and Calendar sync use the public Google APIs and require no
 browser helper. In Settings, choose a calendar for scheduled task events and

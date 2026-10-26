@@ -39,6 +39,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         appearance(state, metrics),
         heading("Side panel", metrics),
         side_panel(state, metrics),
+        heading("Calendar view order", metrics),
+        calendar_order(state, metrics),
         heading("Google Calendar", metrics),
         calendar(state, metrics),
     ]
@@ -224,6 +226,41 @@ fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .style(text::success),
             Err(error) => text(error).size(metrics.label()).style(text::danger),
         });
+    }
+    indent(section.into(), metrics)
+}
+
+fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let sources = state.calendar.display_sources(&state.config.calendar);
+    let mut section = column![
+        text("Top to bottom sets left to right when events overlap. Google Tasks includes every task list.")
+            .size(metrics.label()).style(text::secondary),
+    ].spacing(metrics.spacing).width(Fill);
+    for (index, source) in sources.iter().enumerate() {
+        let mut up = button(text("Up").size(metrics.label())).style(button::secondary);
+        let mut down = button(text("Down").size(metrics.label())).style(button::secondary);
+        if index > 0 {
+            up = up.on_press(Message::CalendarSourceMoved(source.id.clone(), true));
+        }
+        if index + 1 < sources.len() {
+            down = down.on_press(Message::CalendarSourceMoved(source.id.clone(), false));
+        }
+        let controls = row![up, down].spacing(4.0);
+        let entry: Element<'a, Message> = if metrics.breakpoint.is_compact() {
+            column![text(source.name.clone()).size(metrics.label()), controls]
+                .spacing(2.0)
+                .width(Fill)
+                .into()
+        } else {
+            row![
+                text(source.name.clone()).size(metrics.label()).width(Fill),
+                controls
+            ]
+            .spacing(metrics.spacing)
+            .align_y(Center)
+            .into()
+        };
+        section = section.push(entry);
     }
     indent(section.into(), metrics)
 }

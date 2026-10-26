@@ -453,7 +453,7 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
 
     for label in [
         "Calendars",
-        "Show Google Tasks",
+        "Google Tasks",
         "Personal",
         "Work",
         "Tasks",
@@ -547,19 +547,15 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     Ok(())
 }
 
-/// A Google Tasks list is the one kind of calendar whose color can be
-/// changed, so opening its picker has to fit and offer a way back to the
-/// default.
+/// The aggregate Google Tasks swatch offers a shared color and a reset.
 #[test]
-fn a_task_list_can_be_given_its_own_color() -> Result<(), Error> {
+fn google_tasks_can_be_given_a_shared_color() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.calendar =
         timetracker::calendar::Store::with_snapshot(timetracker::calendar::sample_snapshot());
     state.calendar.menu_open = true;
-    // The sample shortens the task list id; real ones carry the `tasks:` prefix.
-    state.calendar.calendars[2].id = "tasks:list".into();
-    state.calendar.color_editor = Some("tasks:list".into());
+    state.calendar.color_editor = Some("tasks:".into());
 
     let mut ui = render(&state, Size::new(200.0, 700.0));
 
@@ -573,9 +569,9 @@ fn a_task_list_can_be_given_its_own_color() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages.iter().any(
-            |message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:list")
-        ),
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:")),
         "expected the reset to be offered, got {messages:?}"
     );
 
@@ -669,7 +665,7 @@ fn a_task_details_card_links_to_google_tasks_without_a_status() {
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
     assert!(ui.find("Open in Google Tasks").is_ok());
-    assert!(ui.find("Mark complete").is_ok());
+    assert!(ui.find("Complete task").is_ok());
     assert!(ui.find("Name").is_ok());
     assert!(ui.find("Rename").is_ok());
     assert!(ui.find("Bring the form").is_ok());
@@ -1148,6 +1144,194 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
 }
 
 #[test]
+fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Result<(), Error> {
+    use timetracker::timeblocking::{self as tb, TaskStatus};
+    let mut state = timeblocking_state();
+    let id = "task:planned";
+    let metrics = timetracker::ui::layout::Metrics::of(Size::new(400.0, 1200.0));
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let original = state.calendar.event(id).unwrap().clone();
+    for (ignore, expected) in [
+        (false, TaskStatus::Completed),
+        (false, TaskStatus::Active),
+        (true, TaskStatus::Ignored),
+        (true, TaskStatus::Active),
+        (true, TaskStatus::Ignored),
+        (false, TaskStatus::Completed),
+        (true, TaskStatus::Ignored),
+        (true, TaskStatus::Active),
+    ] {
+        let previous = tb::task_status(state.calendar.event(id).unwrap());
+        let message = if ignore {
+            Message::TaskIgnoreToggled(id.into())
+        } else {
+            Message::TaskToggled(id.into())
+        };
+        let _ = app::update(&mut state, message);
+        let task = state.calendar.event(id).unwrap().clone();
+        assert_eq!(tb::task_status(&task), expected);
+        assert_eq!(task.completed, expected != TaskStatus::Active);
+        assert_eq!((task.start, task.end), (original.start, original.end));
+        let _ = app::update(
+            &mut state,
+            Message::TaskCompletionSaved(id.into(), previous, Ok(task)),
+        );
+        assert!(!state.timeblocking.busy.contains(id));
+        let task = state.calendar.event(id).unwrap();
+        let mut actions = at(
+            Size::new(260.0, 240.0),
+            timetracker::ui::timeblocking::task_actions(&state, task, &metrics),
+        );
+        assert!(
+            actions
+                .find(if expected == TaskStatus::Completed {
+                    "Uncomplete task"
+                } else {
+                    "Complete task"
+                })
+                .is_ok()
+        );
+        let _ = actions.click(if expected == TaskStatus::Ignored {
+            "Unignore Task"
+        } else {
+            "Ignore Task"
+        })?;
+        assert!(actions.into_messages().any(|message| matches!(message,
+            Message::TaskIgnoreToggled(id) if id == "task:planned")));
+        assert!(
+            tb::assigned(&state, state.calendar.event("standup").unwrap())
+                .iter()
+                .any(|task| task.id == id)
+        );
+        let mut ui = at(
+            metrics.size,
+            timetracker::ui::timeblocking::panel(&state, &metrics),
+        );
+        assert!(ui.find("−").is_ok());
+        match expected {
+            TaskStatus::Completed => assert!(ui.find("Completed ✓").is_ok()),
+            TaskStatus::Ignored => assert!(ui.find("Ignored").is_ok()),
+            TaskStatus::Active => assert!(ui.find("Write proposal").is_ok()),
+        }
+    }
+
+    // A rejected unignore restores the ignored marker and keeps the assignment.
+    let _ = app::update(&mut state, Message::TaskIgnoreToggled(id.into()));
+    let task = state.calendar.event(id).unwrap().clone();
+    let _ = app::update(
+        &mut state,
+        Message::TaskCompletionSaved(id.into(), TaskStatus::Active, Ok(task)),
+    );
+    let _ = app::update(&mut state, Message::TaskIgnoreToggled(id.into()));
+    let _ = app::update(
+        &mut state,
+        Message::TaskCompletionSaved(id.into(), TaskStatus::Ignored, Err("Offline".into())),
+    );
+    assert_eq!(
+        tb::task_status(state.calendar.event(id).unwrap()),
+        TaskStatus::Ignored
+    );
+    assert_eq!(state.calendar.error.as_deref(), Some("Offline"));
+    let mut ui = at(
+        metrics.size,
+        timetracker::ui::timeblocking::panel(&state, &metrics),
+    );
+    let _ = ui.click("−")?;
+    assert!(ui.into_messages().any(|m| matches!(m,
+        Message::TimeBlocking(tb::Action::Unassign(id)) if id == "task:planned")));
+    Ok(())
+}
+
+#[test]
+fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Result<(), Error> {
+    for screen in [Screen::Calendar, Screen::Backlog] {
+        for width in WIDTHS {
+            let mut state = timeblocking_state();
+            state.screen = screen;
+            let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+            let size = Size::new(width, 720.0);
+            let mut ui = render(&state, size);
+            let mut bottom = 0.0;
+            for label in [
+                "Complete task",
+                "Ignore Task",
+                "Move to backlog",
+                "Delete task",
+            ] {
+                let bounds = ui.find(label)?.bounds();
+                assert!(bounds.y >= bottom, "{label} is out of order");
+                assert!(
+                    bounds.y + bounds.height <= size.height,
+                    "{label} is outside {width}px {screen:?}: {bounds:?}"
+                );
+                bottom = bounds.y + bounds.height;
+            }
+            let _ = ui.click("Ignore Task")?;
+            assert!(ui.into_messages().any(|message| matches!(message,
+                Message::TaskIgnoreToggled(id) if id == "task:backlog")));
+            let mut ui = render(&state, size);
+            let _ = ui.click("Delete task")?;
+            assert!(ui.into_messages().any(|message| matches!(message,
+                Message::TaskDeleteRequested(id) if id == "task:backlog")));
+            let _ = app::update(
+                &mut state,
+                Message::TaskDeleteRequested("task:backlog".into()),
+            );
+            assert!(state.calendar.event("task:backlog").is_some());
+            assert!(state.timeblocking.busy.is_empty());
+            let mut ui = render(&state, size);
+            assert!(
+                ui.find("Are you sure you want to delete this task?")
+                    .is_ok()
+            );
+            let _ = ui.click("Cancel")?;
+            assert!(
+                ui.into_messages()
+                    .any(|message| matches!(message, Message::EventDeleteCancelled))
+            );
+            let _ = app::update(&mut state, Message::EventDeleteCancelled);
+            assert!(state.calendar.event("task:backlog").is_some());
+            assert!(state.calendar.pending_delete.is_none());
+        }
+    }
+    let mut state = timeblocking_state();
+    let task = state.calendar.event("task:planned").unwrap();
+    let key = timetracker::timeblocking::task_key(task);
+    state.config.task_work.start(
+        key.clone(),
+        task.title.clone(),
+        timetracker::timeblocking::metadata(task).block,
+        chrono::Utc::now(),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TaskDeleteConfirmed("task:planned".into()),
+    );
+    assert!(
+        state.timeblocking.busy.is_empty(),
+        "must request confirmation first"
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TaskDeleteRequested("task:planned".into()),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::TaskDeleteConfirmed("task:planned".into()),
+    );
+    assert!(state.timeblocking.busy.contains("task:planned"));
+    let _ = app::update(
+        &mut state,
+        Message::TaskDeleted("task:planned".into(), Ok(())),
+    );
+    assert!(state.calendar.event("task:planned").is_none());
+    assert!(state.calendar.event("standup").is_some());
+    assert!(state.timeblocking.busy.is_empty());
+    assert!(!state.config.task_work.running(&key));
+    Ok(())
+}
+
+#[test]
 fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), Error> {
     use timetracker::timeblocking::Action;
     let mut state = timeblocking_state();
@@ -1441,7 +1625,7 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
         "Save deadline",
         "Scheduled day and time",
         "Schedule time",
-        "Move to Backlog",
+        "Move to backlog",
     ] {
         assert!(ui.find(label).is_ok());
     }
@@ -2002,7 +2186,7 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
             "Rename",
             "Save deadline",
             "Schedule time",
-            "Move to Backlog",
+            "Move to backlog",
         ] {
             let bounds = ui.find(label)?.bounds();
             assert!(

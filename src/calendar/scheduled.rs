@@ -94,7 +94,11 @@ pub fn description(task: &Event) -> String {
 
 pub fn content(task: &Event, link: &Link) -> Value {
     json!({
-        "summary": if task.completed { format!("✓ {}", task.title) } else { task.title.clone() },
+        "summary": match crate::timeblocking::task_status(task) {
+            crate::timeblocking::TaskStatus::Ignored => format!("Ignored · {}", task.title),
+            crate::timeblocking::TaskStatus::Completed => format!("✓ {}", task.title),
+            crate::timeblocking::TaskStatus::Active => task.title.clone(),
+        },
         "description": description(task),
         "extendedProperties": { "private": {
             "ttKind": "task", "ttTaskList": link.list_id, "ttTask": link.task_id,
@@ -563,6 +567,36 @@ mod tests {
     }
 
     #[test]
+    fn ignored_tasks_survive_sync_and_mirror_their_status_without_moving_time() {
+        use crate::timeblocking::{self as tb, TaskStatus};
+        let mut task = make_task("ignored", false);
+        let event = mirror(&task);
+        let start = event.start;
+        tb::apply_status(&mut task, TaskStatus::Ignored);
+        let (events, changes) = merge(vec![event], vec![task], &Default::default());
+        assert_eq!(events.len(), 1);
+        assert_eq!(tb::task_status(&events[0]), TaskStatus::Ignored);
+        assert_eq!(events[0].start, start);
+        assert_eq!(changes[0].1["summary"], "Ignored · Same title");
+        assert_eq!(
+            changes[0].1["extendedProperties"]["private"]["ttCompleted"],
+            "true"
+        );
+        assert!(changes[0].1.get("start").is_none());
+
+        let mut task = events[0].clone();
+        let mut mirror = events[0].clone();
+        mirror.details.task_data = None;
+        mirror.id = task.details.scheduled.as_ref().unwrap().event_id.clone();
+        mirror.calendar_id = "task-calendar".into();
+        tb::apply_status(&mut task, TaskStatus::Active);
+        let (events, changes) = merge(vec![mirror], vec![task], &Default::default());
+        assert_eq!(tb::task_status(&events[0]), TaskStatus::Active);
+        assert_eq!(events[0].start, start);
+        assert_eq!(changes[0].1["summary"], "Same title");
+    }
+
+    #[test]
     fn completed_tasks_keep_their_calendar_blocks_and_mirror_content_without_moving_time() {
         let mut task = make_task("one", false);
         let event = mirror(&task);
@@ -699,6 +733,8 @@ mod tests {
         let mut settings = crate::config::CalendarSettings::default();
         settings.show_tasks = false;
         store.apply_task_colors(&settings);
+        assert_eq!(store.timed_events(&settings).count(), 0);
+        settings.show_tasks = true;
         assert_eq!(store.timed_events(&settings).count(), 1);
         settings.disabled.push("task-calendar".into());
         assert_eq!(store.timed_events(&settings).count(), 0);

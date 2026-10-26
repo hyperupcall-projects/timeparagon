@@ -118,11 +118,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     } else if state.calendar.edit_draft.is_some() {
         edit_overlay(state, metrics)
     } else if state.calendar.open_event.is_some() {
-        let mut layers: Vec<Element<'a, Message>> = vec![details_overlay(state, metrics)];
-        if state.calendar.pending_delete.is_some() {
-            layers.push(delete_confirmation(state, metrics));
-        }
-        stack(layers).into()
+        details_overlay(state, metrics)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -306,8 +302,13 @@ fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Me
         .calendar
         .all_day_events(&state.config.calendar)
         .collect();
+    let sources = state.calendar.display_sources(&state.config.calendar);
     events.sort_by_key(|e| {
         (
+            sources
+                .iter()
+                .position(|source| source.id == e.source_id())
+                .unwrap_or(usize::MAX),
             !crate::timeblocking::overdue(e),
             crate::timeblocking::metadata(e).order,
         )
@@ -505,7 +506,17 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             Span { start_min, end_min }
         })
         .collect();
-    let packed = layout::pack(&spans);
+    let sources = state.calendar.display_sources(&state.config.calendar);
+    let priorities: Vec<_> = timed
+        .iter()
+        .map(|event| {
+            sources
+                .iter()
+                .position(|source| source.id == event.source_id())
+                .unwrap_or(usize::MAX)
+        })
+        .collect();
+    let packed = layout::pack_prioritized(&spans, &priorities);
 
     let blocks: Vec<Block> = timed
         .iter()
@@ -513,8 +524,8 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         .zip(packed.iter())
         .map(|((event, span), slot)| Block {
             id: event.id.clone(),
-            title: if event.is_task() && event.completed {
-                format!("✓ {}", event.title)
+            title: if event.is_task() {
+                crate::timeblocking::task_label(event)
             } else {
                 event.title.clone()
             },
@@ -528,13 +539,14 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             pending: state.calendar.pending_time(&event.id).is_some()
                 || state.timeblocking.busy.contains(&event.id),
             time_block: crate::timeblocking::is_block(event, &state.config.calendar),
+            // A block owns its task rows independently of standalone task visibility.
             tasks: if crate::timeblocking::is_block(event, &state.config.calendar) {
                 crate::timeblocking::assigned(state, event)
                     .iter()
                     .map(|e| {
                         (
                             e.id.clone(),
-                            e.title.clone(),
+                            crate::timeblocking::task_label(e),
                             crate::timeblocking::metadata(e).minutes,
                         )
                     })
@@ -646,18 +658,48 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     )
     .on_press(Message::CalendarMenuToggled);
 
-    let mut panel = column![
-        text("Calendars").size(metrics.label() + 1.0),
-        row![
-            text("Show Google Tasks").size(metrics.label()).width(Fill),
-            toggler(state.config.calendar.show_tasks).on_toggle(Message::ShowTasksToggled),
-        ]
-        .spacing(8.0)
-        .align_y(Alignment::Center),
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
+    let mut panel = column![text("Calendars").size(metrics.label() + 1.0)]
+        .spacing(metrics.spacing)
+        .width(Fill);
 
+    for source in state.calendar.display_sources(&state.config.calendar) {
+        let is_tasks = source.id == crate::config::CalendarSettings::GOOGLE_TASKS_ID;
+        let id = source.id;
+        let enabled = state.calendar.calendar_enabled(&id, &state.config.calendar);
+        let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
+        let dot = if is_tasks {
+            swatch_button(
+                source.color,
+                editing,
+                Message::TaskColorEditorToggled(id.clone()),
+            )
+        } else {
+            static_swatch(source.color)
+        };
+        let toggle_id = id.clone();
+        panel = panel.push(
+            row![
+                dot,
+                text(source.name).size(metrics.label()).width(Fill),
+                toggler(enabled).on_toggle(move |value| {
+                    if is_tasks {
+                        Message::ShowTasksToggled(value)
+                    } else {
+                        Message::CalendarToggled(toggle_id.clone(), value)
+                    }
+                }),
+            ]
+            .spacing(8.0)
+            .align_y(Alignment::Center),
+        );
+        if is_tasks && editing {
+            panel = panel.push(task_color_picker(
+                &id,
+                state.config.calendar.task_color(&id),
+                metrics,
+            ));
+        }
+    }
     if state.calendar.calendars.is_empty() {
         panel = panel.push(
             text(if state.calendar.is_signed_in() {
@@ -668,49 +710,6 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
             .size(metrics.label())
             .style(text::secondary),
         );
-    } else {
-        for calendar in &state.calendar.calendars {
-            let is_task_list = calendar.is_task_list();
-
-            // Task lists are Google Tasks, so they follow the same switch.
-            if !state.config.calendar.show_tasks && is_task_list {
-                continue;
-            }
-
-            let id = calendar.id.clone();
-            let enabled = state
-                .calendar
-                .calendar_enabled(&calendar.id, &state.config.calendar);
-            let swatch = calendar.color;
-            let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
-
-            // A task list's swatch opens the color picker; other calendars keep
-            // a plain dot, since only Google Tasks colors can be changed.
-            let dot: Element<'a, Message> = if is_task_list {
-                swatch_button(swatch, editing, Message::TaskColorEditorToggled(id.clone()))
-            } else {
-                static_swatch(swatch)
-            };
-
-            let toggle_id = id.clone();
-            panel = panel.push(
-                row![
-                    dot,
-                    text(calendar.name.clone())
-                        .size(metrics.label())
-                        .width(Fill),
-                    toggler(enabled)
-                        .on_toggle(move |value| Message::CalendarToggled(toggle_id.clone(), value)),
-                ]
-                .spacing(8.0)
-                .align_y(Alignment::Center),
-            );
-
-            if is_task_list && editing {
-                let current = state.config.calendar.task_color(&id);
-                panel = panel.push(task_color_picker(&id, current, metrics));
-            }
-        }
     }
 
     let sync_label = if state.calendar.is_busy() {
@@ -740,7 +739,11 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .style(button::secondary),
     );
 
-    let card = container(panel)
+    let card = container(scrollable(panel).height(Length::Shrink))
+        .max_height(
+            (state.main_size.height - header_offset(state, metrics) - metrics.padding * 2.0)
+                .max(120.0),
+        )
         .padding(metrics.padding)
         .width(Length::Fill)
         .style(|theme: &Theme| {
@@ -955,34 +958,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     // A Google Task gets a way to tick it off; events never do.
     if is_task(event) {
         body = body.push(super::timeblocking::editor(state, event, metrics));
-        let label = if event.completed {
-            "Mark incomplete"
-        } else {
-            "Mark complete"
-        };
-        let id = event.id.clone();
-        buttons.push(
-            button(text(label).size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::TaskToggled(id))
-                .style(button::primary)
-                .into(),
-        );
-        // Deleting one occurrence of a recurring task leaves the series and its
-        // other instances untouched.
-        let id = event.id.clone();
-        buttons.push(
-            button(
-                text("Delete Instance")
-                    .size(metrics.label())
-                    .center()
-                    .width(Fill),
-            )
-            .width(Fill)
-            .on_press(Message::TaskDeleteRequested(id))
-            .style(button::secondary)
-            .into(),
-        );
+        buttons.push(super::timeblocking::task_actions(state, event, metrics));
     }
 
     if !details.meeting.is_empty() {
@@ -1054,8 +1030,9 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     // The reserve is generous enough that a label wrapping at the narrowest
     // widths still lands inside the card rather than under the scrollbar.
     let button_height = metrics.label() * 1.3 + 10.0;
-    let reserved = button_height * buttons.len() as f32
-        + metrics.spacing * buttons.len().saturating_sub(1) as f32;
+    let button_count = buttons.len() + if event.is_task() { 3 } else { 0 };
+    let reserved = button_height * button_count as f32
+        + metrics.spacing * button_count.saturating_sub(1) as f32;
     // The buttons come first in the budget: the scroll gets whatever is left,
     // even if that is nothing, so the actions can never be squeezed out.
     let scroll_max = (max_height - reserved - metrics.spacing).max(0.0);
@@ -1114,7 +1091,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
 /// The "are you sure" prompt that covers the details card while a delete is
 /// being confirmed. Clicking outside the card cancels the deletion.
-fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(id) = state.calendar.pending_delete.as_deref() else {
         return iced::widget::Space::new().width(0.0).height(0.0).into();
     };
@@ -1133,7 +1110,7 @@ fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, M
     .on_press(Message::EventDeleteCancelled);
 
     let title = if is_task {
-        text("Delete this instance?").size(metrics.label() + 1.0)
+        text("Are you sure you want to delete this task?").size(metrics.label() + 1.0)
     } else {
         text("Delete this event?").size(metrics.label() + 1.0)
     };
@@ -1147,35 +1124,51 @@ fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, M
         Message::EventDeleteConfirmed(id.to_owned())
     };
 
+    let mut delete = button(text("Delete").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .style(button::secondary);
+    if state.timeblocking.busy.is_empty() {
+        delete = delete.on_press(confirm);
+    }
     let buttons = row![
         button(text("Cancel").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(Message::EventDeleteCancelled)
             .style(button::secondary),
-        button(text("Delete").size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .on_press(confirm)
-            .style(button::secondary),
+        delete,
     ]
     .spacing(metrics.spacing)
     .width(Fill);
 
     let card = container(
-        container(column![title, event_title, buttons])
-            .padding(metrics.padding)
-            .width(Length::Fixed(260.0))
-            .style(|theme: &Theme| {
-                let palette = theme.extended_palette();
-                container::Style {
-                    background: Some(palette.background.base.color.into()),
-                    border: iced::Border {
-                        color: palette.background.strong.color,
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            }),
+        container(
+            column![
+                title,
+                event_title,
+                text(if is_task {
+                    "This removes the task from Google Tasks and its planned time."
+                } else {
+                    "This removes the event from Google Calendar."
+                })
+                .size(metrics.label()),
+                buttons
+            ]
+            .spacing(metrics.spacing),
+        )
+        .padding(metrics.padding)
+        .width(Length::Fixed(260.0))
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        }),
     )
     .width(Fill)
     .height(Fill)
@@ -3159,6 +3152,73 @@ fn zoom_steps(delta: mouse::ScrollDelta) -> f32 {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    #[test]
+    fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
+        use crate::timeblocking::{self as tb, Metadata};
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        let mut snapshot = calendar::sample_snapshot();
+        let mut block = snapshot
+            .events
+            .iter()
+            .find(|event| event.id == "standup")
+            .unwrap()
+            .clone();
+        block.start = block.start.with_hour(1).unwrap().with_minute(0).unwrap();
+        block.end = block.start + chrono::Duration::hours(1);
+        state.config.calendar.time_block_calendar = Some(block.calendar_id.clone());
+        let mut task = block.clone();
+        task.id = "task:planned".into();
+        task.calendar_id = "tasks:list".into();
+        task.title = "Assigned task".into();
+        task.all_day = true;
+        task.details.description = format!(
+            "tt-timeblocking: {}",
+            serde_json::to_string(&Metadata {
+                block: Some(tb::block_key(&block)),
+                minutes: 30,
+                ..Metadata::default()
+            })
+            .unwrap()
+        );
+        let mut standalone = task.clone();
+        standalone.id = "task:standalone".into();
+        standalone.details.description = "DUE_TIME: 03:00".into();
+        calendar::deadline::place(&mut standalone, 30);
+        snapshot.events = vec![block, task, standalone];
+        state.calendar = calendar::Store::with_snapshot(snapshot);
+        let size = Size::new(600.0, 1440.0);
+        let metrics = Metrics::of(size);
+        for show in [true, false, true] {
+            let _ = crate::app::update(&mut state, Message::ShowTasksToggled(show));
+            assert_eq!(
+                state
+                    .calendar
+                    .timed_events(&state.config.calendar)
+                    .any(|event| event.id == "task:standalone"),
+                show
+            );
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                size,
+                day_grid(&state, &metrics, Local::now()),
+            );
+            // The assigned task row occupies the right half of the 1am block.
+            ui.point_at(Point::new(400.0, state.calendar.hour_height + 10.0));
+            ui.simulate([
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
+            assert!(
+                ui.into_messages().any(|message| matches!(message,
+                Message::EventOpened(id) if id == "task:planned")),
+                "assigned task must remain visible and clickable with show_tasks={show}"
+            );
+        }
+    }
 
     #[test]
     fn time_block_view_and_edit_buttons_dispatch_different_actions() {

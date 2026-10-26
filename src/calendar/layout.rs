@@ -75,6 +75,76 @@ pub fn pack(spans: &[Span]) -> Vec<Packed> {
         .collect()
 }
 
+/// Packs overlaps with lower priorities always to the left of higher ones.
+/// Unlike sorting by start time, this also handles a leftmost source starting
+/// later than an event it overlaps. Equal-priority events reuse free columns.
+/// Each disconnected cluster starts at column zero and gets its own width.
+pub fn pack_prioritized(spans: &[Span], priorities: &[usize]) -> Vec<Packed> {
+    assert_eq!(spans.len(), priorities.len());
+    if priorities.windows(2).all(|pair| pair[0] == pair[1]) {
+        return pack(spans);
+    }
+    let spans: Vec<_> = spans.iter().copied().map(normalized).collect();
+    let mut order: Vec<_> = (0..spans.len()).collect();
+    order.sort_by_key(|&index| (spans[index].start_min, spans[index].end_min));
+    let mut result = vec![
+        Packed {
+            column: 0,
+            columns: 1
+        };
+        spans.len()
+    ];
+    let mut begin = 0;
+    while begin < order.len() {
+        let mut end = begin + 1;
+        let mut cluster_end = spans[order[begin]].end_min;
+        while end < order.len() && spans[order[end]].start_min < cluster_end {
+            cluster_end = cluster_end.max(spans[order[end]].end_min);
+            end += 1;
+        }
+        let mut cluster = order[begin..end].to_vec();
+        cluster.sort_by_key(|&index| {
+            (
+                priorities[index],
+                spans[index].start_min,
+                spans[index].end_min,
+            )
+        });
+        for (position, &index) in cluster.iter().enumerate() {
+            let overlaps = |other: usize| {
+                spans[other].start_min < spans[index].end_min
+                    && spans[index].start_min < spans[other].end_min
+            };
+            let earlier = &cluster[..position];
+            let mut column = earlier
+                .iter()
+                .copied()
+                .filter(|&other| priorities[other] < priorities[index] && overlaps(other))
+                .map(|other| result[other].column + 1)
+                .max()
+                .unwrap_or(0);
+            while earlier
+                .iter()
+                .copied()
+                .any(|other| result[other].column == column && overlaps(other))
+            {
+                column += 1;
+            }
+            result[index].column = column;
+        }
+        let columns = cluster
+            .iter()
+            .map(|&index| result[index].column + 1)
+            .max()
+            .unwrap_or(1);
+        for &index in &cluster {
+            result[index].columns = columns;
+        }
+        begin = end;
+    }
+    result
+}
+
 fn apply_cluster(cluster: &[usize], column: &[usize], columns: &mut [usize]) {
     let width = cluster
         .iter()
@@ -191,6 +261,100 @@ mod tests {
         }]);
 
         assert_eq!(packed[0].columns, 1);
+    }
+
+    #[test]
+    fn source_priority_beats_start_time_and_unrelated_events_stay_full_width() {
+        let spans = [
+            Span {
+                start_min: 60,
+                end_min: 180,
+            },
+            Span {
+                start_min: 90,
+                end_min: 150,
+            },
+            Span {
+                start_min: 300,
+                end_min: 360,
+            },
+        ];
+        let packed = pack_prioritized(&spans, &[2, 0, 1]);
+        assert_eq!(
+            packed[1],
+            Packed {
+                column: 0,
+                columns: 2
+            }
+        );
+        assert_eq!(
+            packed[0],
+            Packed {
+                column: 1,
+                columns: 2
+            }
+        );
+        assert_eq!(
+            packed[2],
+            Packed {
+                column: 0,
+                columns: 1
+            }
+        );
+        let reversed = pack_prioritized(&spans, &[0, 2, 1]);
+        assert_eq!(reversed[0].column, 0);
+        assert_eq!(reversed[1].column, 1);
+    }
+
+    #[test]
+    fn later_sources_stay_right_of_every_overlapping_track_in_a_source() {
+        let spans = [
+            Span {
+                start_min: 0,
+                end_min: 60,
+            },
+            Span {
+                start_min: 30,
+                end_min: 120,
+            },
+            Span {
+                start_min: 60,
+                end_min: 90,
+            },
+        ];
+        let packed = pack_prioritized(&spans, &[0, 0, 1]);
+        assert_eq!(packed[0].column, 0);
+        assert_eq!(packed[1].column, 1);
+        // Column zero is now free, but using it would put this source on the left.
+        assert_eq!(packed[2].column, 2);
+    }
+
+    #[test]
+    fn prioritized_packing_keeps_all_overlaps_separate_and_in_source_order() {
+        let spans: Vec<_> = (0..80)
+            .map(|i| Span {
+                start_min: (i * 37) % 300,
+                end_min: (i * 37) % 300 + (i * 19) % 90 + 1,
+            })
+            .collect();
+        let priorities: Vec<_> = (0..80).map(|i| i % 4).collect();
+        let packed = pack_prioritized(&spans, &priorities);
+        for i in 0..spans.len() {
+            assert!(packed[i].column < packed[i].columns);
+            for j in 0..spans.len() {
+                if i == j
+                    || spans[i].start_min >= spans[j].end_min
+                    || spans[j].start_min >= spans[i].end_min
+                {
+                    continue;
+                }
+                assert_ne!(packed[i].column, packed[j].column);
+                assert_eq!(packed[i].columns, packed[j].columns);
+                if priorities[i] < priorities[j] {
+                    assert!(packed[i].column < packed[j].column);
+                }
+            }
+        }
     }
 
     #[test]

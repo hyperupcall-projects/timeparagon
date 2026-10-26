@@ -94,6 +94,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.timeblocking.estimate_task.is_some() {
             layers.push(timeblocking::estimate_overlay(state, &metrics));
         }
+        if state.calendar.pending_delete.is_some() {
+            layers.push(calendar::delete_confirmation(state, &metrics));
+        }
         iced::widget::stack(layers).into()
     })
     .into()

@@ -211,7 +211,10 @@ pub struct CalendarSettings {
     pub client_secret: String,
     /// Calendar IDs the hamburger menu has toggled off.
     pub disabled: Vec<String>,
-    /// When false, Google Tasks are hidden and only calendar events show.
+    /// Calendar-view source IDs, ordered from left to right for overlapping events.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_order: Vec<String>,
+    /// Whether standalone Google Tasks are visible; tasks inside time blocks stay visible.
     pub show_tasks: bool,
     pub hide_overdue_tasks: bool,
     pub time_block_calendar: Option<String>,
@@ -246,6 +249,7 @@ impl Default for CalendarSettings {
             client_id: String::new(),
             client_secret: String::new(),
             disabled: Vec::new(),
+            source_order: Vec::new(),
             show_tasks: true,
             hide_overdue_tasks: false,
             time_block_calendar: None,
@@ -260,6 +264,9 @@ impl Default for CalendarSettings {
 }
 
 impl CalendarSettings {
+    /// Synthetic source shared by every Google Tasks list.
+    pub const GOOGLE_TASKS_ID: &str = "tasks:";
+
     pub const MIN_SYNC_MINUTES: u32 = 1;
     pub const MAX_SYNC_MINUTES: u32 = 120;
     /// The latest hour a day can end: 5am, which is as far into the morning
@@ -295,11 +302,18 @@ impl CalendarSettings {
 
     /// The custom color set for a Google Tasks list, if it has one.
     pub fn task_color(&self, calendar_id: &str) -> Option<Color> {
-        self.task_colors.get(calendar_id).map(|color| color.0)
+        self.task_colors
+            .get(calendar_id)
+            .or_else(|| self.task_colors.get(Self::GOOGLE_TASKS_ID))
+            .map(|color| color.0)
     }
 
     /// Sets a task list's custom color, or clears it back to Google's blue.
     pub fn set_task_color(&mut self, calendar_id: &str, color: Option<Color>) {
+        // Picking the aggregate swatch applies to every list.
+        if calendar_id == Self::GOOGLE_TASKS_ID {
+            self.task_colors.clear();
+        }
         match color {
             Some(color) => {
                 self.task_colors
