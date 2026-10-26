@@ -210,7 +210,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     mouse_area(
         container(scrollable(body))
             .padding(16)
-            .width(Length::Fixed(400.0))
+            .width(Length::Fixed(tb::PANEL_WIDTH))
             .height(Fill),
     )
     .on_release(msg(Action::DropBlock(block.id.clone())))

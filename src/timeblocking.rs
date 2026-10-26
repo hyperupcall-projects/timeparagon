@@ -10,6 +10,7 @@ use iced::{Size, Task, window};
 use serde::{Deserialize, Serialize};
 
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+pub const PANEL_WIDTH: f32 = 400.0;
 const META: &str = "tt-timeblocking: ";
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
@@ -193,6 +194,15 @@ pub fn close(state: &mut State) -> Task<Message> {
         _ => Task::none(),
     }
 }
+pub(crate) fn editor_width(state: &State, base_width: f32) -> f32 {
+    state
+        .config
+        .window
+        .time_block_width
+        .filter(|width| width.is_finite())
+        .unwrap_or(base_width + PANEL_WIDTH)
+        .max(base_width + PANEL_WIDTH)
+}
 pub fn open(state: &mut State, id: String) -> Task<Message> {
     state.timeblocking.focus = None;
     state.timeblocking.block = Some(id);
@@ -200,9 +210,12 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
         let width = state.main_size.width;
         state.timeblocking.original_width = Some(width);
         if let Some(id) = state.main_window {
-            let resize = window::resize(id, Size::new(width + 400.0, state.main_size.height));
+            let resize = window::resize(
+                id,
+                Size::new(editor_width(state, width), state.main_size.height),
+            );
             return if state.sidebar.is_some() {
-                window::set_max_size(id, Some(Size::new(width + 400.0, 100_000.0))).chain(resize)
+                window::set_max_size(id, None).chain(resize)
             } else {
                 resize
             };

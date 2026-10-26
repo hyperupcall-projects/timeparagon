@@ -141,6 +141,9 @@ pub struct Window {
     pub width: f32,
     pub height: f32,
     pub always_on_top: bool,
+    /// Width with the time-block editor open, independent of the normal window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_block_width: Option<f32>,
 }
 
 impl Default for Window {
@@ -149,6 +152,7 @@ impl Default for Window {
             width: 260.0,
             height: 340.0,
             always_on_top: false,
+            time_block_width: None,
         }
     }
 }

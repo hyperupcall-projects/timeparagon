@@ -962,16 +962,19 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                     if previous.window.width != state.config.window.width
                         || previous.window.height != state.config.window.height
+                        || (state.timeblocking.original_width.is_some()
+                            && previous.window.time_block_width
+                                != state.config.window.time_block_width)
                     {
-                        let extra = if state.timeblocking.original_width.is_some() {
+                        let width = if state.timeblocking.original_width.is_some() {
                             state.timeblocking.original_width = Some(state.config.window.width);
-                            400.0
+                            crate::timeblocking::editor_width(state, state.config.window.width)
                         } else {
-                            0.0
+                            state.config.window.width
                         };
                         tasks.push(window::resize(
                             id,
-                            Size::new(state.config.window.width + extra, state.config.window.height),
+                            Size::new(width, state.config.window.height),
                         ));
                     }
                 }
@@ -1110,14 +1113,23 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             state.main_size = size;
             log::debug!("window is now {}x{}", size.width, size.height);
 
+            // The expanded editor has its own saved width. Keep the width to
+            // restore on close, including in the side-panel companion.
+            if state.timeblocking.original_width.is_some() {
+                state.config.window.time_block_width = Some(size.width);
+                if state.sidebar.is_none() {
+                    state.config.window.height = size.height;
+                }
+                return queue_save(state);
+            }
+
             // The panel's geometry is not the user's saved window, so it must
             // not be written back over it.
             if state.sidebar.is_some() {
                 return Task::none();
             }
 
-            state.config.window.width = if state.timeblocking.original_width.is_some() { (size.width - 400.0).max(MIN_SIZE.width) } else { size.width };
-            if state.timeblocking.original_width.is_some() { state.timeblocking.original_width = Some(state.config.window.width); }
+            state.config.window.width = size.width;
             state.config.window.height = size.height;
 
             queue_save(state)

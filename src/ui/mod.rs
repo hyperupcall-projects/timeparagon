@@ -58,7 +58,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 // the block editor opens or closes, preserving its scroll state.
                 let mut content = row![container(calendar::view(state, &metrics)).width(Fill)];
                 if state.timeblocking.block.is_some() {
-                    content = content.push(container(timeblocking::panel(state, &metrics)).width(400));
+                    content = content.push(
+                        container(timeblocking::panel(state, &metrics))
+                            .width(crate::timeblocking::PANEL_WIDTH),
+                    );
                 }
                 content.into()
             }
