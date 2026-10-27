@@ -468,33 +468,40 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
     }
 }
 
-/// Navigation keeps its three groups and full names at every width.
+/// The tab label at `index` (Calendar, Inbox, Projects, Backlog, Keep,
+/// Notepad, Settings) for a window of `width`.
+fn tab_label(width: f32, index: usize) -> &'static str {
+    timetracker::ui::tab_labels(width)[index]
+}
+
+/// Navigation is one row in three groups at every width, never overflowing:
+/// Calendar, then Inbox/Projects/Backlog, then Keep/Notepad/Settings.
 #[test]
-fn the_tabs_keep_the_requested_groups() {
+fn the_tabs_are_one_row_in_three_groups() {
     let state = state();
     for width in [180.0, 200.0, 260.0, 420.0, 640.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 500.0));
-        for label in [
-            "Inbox", "Calendar", "Backlog", "Projects", "Notepad", "Keep", "Settings",
-        ] {
-            let bounds = ui.find(label).unwrap().bounds();
+        let labels = timetracker::ui::tab_labels(width);
+        let mut bounds = Vec::new();
+        for label in labels {
+            let found = ui.find(label).unwrap().bounds();
             assert!(
-                bounds.x >= 0.0 && bounds.x + bounds.width <= width,
+                found.x >= 0.0 && found.x + found.width <= width,
                 "{label} extends beyond the window at {width}px"
             );
+            bounds.push(found);
         }
-        let inbox = ui.find("Inbox").unwrap().bounds();
-        let calendar = ui.find("Calendar").unwrap().bounds();
-        let notepad = ui.find("Notepad").unwrap().bounds();
-        let settings = ui.find("Settings").unwrap().bounds();
-        assert!(calendar.x < notepad.x && notepad.x < settings.x);
-        let backlog = ui.find("Backlog").unwrap().bounds();
-        let keep = ui.find("Keep").unwrap().bounds();
-        if width < 720.0 {
-            assert!(calendar.y > inbox.y && backlog.y > calendar.y && keep.y > notepad.y);
-        } else {
-            assert!(inbox.x < calendar.x && backlog.x > calendar.x && keep.x > notepad.x);
+        // Order: Calendar, Inbox, Projects, Backlog, Keep, Notepad, Settings.
+        for pair in bounds.windows(2) {
+            assert!(pair[0].x + pair[0].width <= pair[1].x, "order at {width}px");
+            assert!(
+                (pair[0].y - pair[1].y).abs() < 1.0,
+                "not one row at {width}px"
+            );
         }
+        // Space separates the groups more than it separates tabs within one.
+        let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
+        assert!(gap(0, 1) > gap(1, 2) && gap(3, 4) > gap(4, 5));
     }
 }
 
@@ -502,7 +509,7 @@ fn the_tabs_keep_the_requested_groups() {
 fn projects_lists_directory_names() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(200.0, 500.0));
-    ui.click("Projects")?;
+    ui.click(tab_label(200.0, 2))?;
     let message = ui
         .into_messages()
         .find(|message| matches!(message, Message::ScreenSelected(Screen::Projects)))
@@ -528,7 +535,7 @@ fn projects_lists_directory_names() -> Result<(), Error> {
     assert!(ui.find("School").is_ok());
     assert!(ui.find("Timer").is_err());
     assert!(ui.find("Theme").is_err());
-    assert!(ui.find("Calendar").is_ok());
+    assert!(ui.find(tab_label(200.0, 0)).is_ok());
     Ok(())
 }
 
@@ -918,10 +925,10 @@ fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
 
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
-        let notepad = "Notepad";
+        let notepad = tab_label(width, 5);
         assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
 
-        let calendar = "Calendar";
+        let calendar = tab_label(width, 0);
         assert!(
             ui.find(calendar).is_ok(),
             "the way back is missing at {width}px"
@@ -958,7 +965,7 @@ fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 600.0));
 
-    for label in ["Notepad", "Calendar", "A-", "A+", "100%"] {
+    for label in [tab_label(200.0, 5), tab_label(200.0, 0), "A-", "A+", "100%"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -1822,7 +1829,7 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(260.0, 600.0));
     assert!(ui.find("Todos").is_err());
     assert!(ui.find("0 tasks not planned").is_ok());
-    let _ = ui.click("Backlog")?;
+    let _ = ui.click(tab_label(260.0, 3))?;
     assert!(
         ui.into_messages()
             .any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog)))
@@ -2128,13 +2135,13 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
     for width in WIDTHS {
         let mut state = state();
         let mut ui = render(&state, Size::new(width, HEIGHT));
-        ui.click("Keep")?;
+        ui.click(tab_label(width, 4))?;
         assert!(
             ui.into_messages()
                 .any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes)))
         );
         let mut ui = render(&state, Size::new(width, HEIGHT));
-        ui.click("Backlog")?;
+        ui.click(tab_label(width, 3))?;
         assert!(
             ui.into_messages()
                 .any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog)))

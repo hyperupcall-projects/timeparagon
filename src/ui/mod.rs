@@ -21,7 +21,7 @@ mod timeblocking_focus;
 
 use std::time::Duration;
 
-use iced::widget::{button, column, container, responsive, row, scrollable, text};
+use iced::widget::{Space, button, column, container, responsive, row, scrollable, text};
 use iced::{Center, Element, Fill, Length, Padding, Size};
 
 use crate::alarm;
@@ -203,86 +203,120 @@ fn projects<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into()
 }
 
-/// Navigation grouped by purpose, with Settings replacing the main view.
-/// Narrow windows stack the tabs within each group to keep full names visible.
+/// Full tab names, in display order: Calendar, then Inbox/Projects/Backlog,
+/// then Keep/Notepad/Settings.
+const TAB_LABELS: [&str; 7] = [
+    "Calendar", "Inbox", "Projects", "Backlog", "Keep", "Notepad", "Settings",
+];
+
+/// Short names for windows too narrow to fit the full ones legibly.
+const TAB_SHORT_LABELS: [&str; 7] = ["Cal", "Inbox", "Proj", "Back", "Keep", "Note", "Set"];
+
+/// Average glyph width as a fraction of the font size, with some slack.
+const TAB_GLYPH_WIDTH: f32 = 0.6;
+/// The smallest tab text that is still worth showing in full.
+const TAB_FULL_MIN_SIZE: f32 = 9.0;
+const TAB_MIN_SIZE: f32 = 7.0;
+
+/// How the tab row is laid out at a given width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TabFit {
+    pub short: bool,
+    pub size: f32,
+    pad: f32,
+    gap: f32,
+}
+
+/// The labels shown at `width`, so tests and callers agree with `tabs`.
+pub fn tab_labels(width: f32) -> [&'static str; 7] {
+    if tab_fit(Metrics::of(Size::new(width, 0.0))).short {
+        TAB_SHORT_LABELS
+    } else {
+        TAB_LABELS
+    }
+}
+
+/// Choose the longest labels and largest text that fit on a single row.
+fn tab_fit(metrics: Metrics) -> TabFit {
+    let available = (metrics.size.width - metrics.padding * 2.0).max(1.0);
+    let max_size = metrics.label();
+    let (pad, gap) = if metrics.size.width < 300.0 {
+        (1.0, 1.0)
+    } else {
+        (5.0, metrics.spacing.min(6.0))
+    };
+    let size_for = |labels: &[&str; 7]| {
+        let chars: usize = labels.iter().map(|label| label.chars().count()).sum();
+        // Seven tabs with padding each side, a gap inside each group of
+        // three (two gaps in each of the two groups), and two group gaps.
+        let fixed = 14.0 * pad + 4.0 * gap + 2.0 * (gap * 2.0).max(4.0);
+        ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
+    };
+    let full = size_for(&TAB_LABELS);
+    if full >= TAB_FULL_MIN_SIZE.min(max_size) {
+        TabFit {
+            short: false,
+            size: full,
+            pad,
+            gap,
+        }
+    } else {
+        TabFit {
+            short: true,
+            size: size_for(&TAB_SHORT_LABELS).max(TAB_MIN_SIZE),
+            pad,
+            gap,
+        }
+    }
+}
+
+/// A single row of navigation in three groups with space between them:
+/// Calendar, then Inbox/Projects/Backlog, then Keep/Notepad/Settings.
+/// Labels shrink (and shorten, when very narrow) rather than wrapping.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let fit = tab_fit(*metrics);
+    let labels = if fit.short {
+        TAB_SHORT_LABELS
+    } else {
+        TAB_LABELS
+    };
     let settings_active = matches!(state.screen, Screen::Settings | Screen::TimerSettings);
-    let spacing = if metrics.size.width < 720.0 {
-        2.0
-    } else {
-        metrics.spacing
-    };
-    let inbox = tab(
-        "Inbox",
-        state.screen == Screen::Inbox,
-        Screen::Inbox,
-        metrics,
-    );
-    let calendar = tab(
-        "Calendar",
-        state.screen == Screen::Calendar,
+    let screens = [
         Screen::Calendar,
-        metrics,
-    );
-    let backlog = tab(
-        "Backlog",
-        state.screen == Screen::Backlog,
-        Screen::Backlog,
-        metrics,
-    );
-    let projects = tab(
-        "Projects",
-        state.screen == Screen::Projects,
+        Screen::Inbox,
         Screen::Projects,
-        metrics,
-    );
-    let notepad = tab(
-        "Notepad",
-        state.screen == Screen::Notepad,
-        Screen::Notepad,
-        metrics,
-    );
-    let keep = tab(
-        "Keep",
-        state.screen == Screen::KeepNotes,
+        Screen::Backlog,
         Screen::KeepNotes,
-        metrics,
-    );
-    let settings = tab("Settings", settings_active, Screen::Settings, metrics);
+        Screen::Notepad,
+        Screen::Settings,
+    ];
+    let mut tabs: Vec<Element<'a, Message>> = screens
+        .iter()
+        .zip(labels)
+        .map(|(&screen, label)| {
+            let active = if screen == Screen::Settings {
+                settings_active
+            } else {
+                state.screen == screen
+            };
+            tab(label, active, screen, metrics, fit)
+        })
+        .collect();
+    let right: Vec<_> = tabs.drain(4..).collect();
+    let middle: Vec<_> = tabs.drain(1..).collect();
+    let calendar = tabs.remove(0);
 
-    let (left, middle, right): (
-        Element<'a, Message>,
-        Element<'a, Message>,
-        Element<'a, Message>,
-    ) = if metrics.size.width < 720.0 {
-        (
-            column![inbox, calendar, backlog].spacing(spacing).into(),
-            column![notepad, keep]
-                .spacing(spacing)
-                .align_x(Center)
-                .into(),
-            column![settings, projects]
-                .spacing(spacing)
-                .align_x(iced::Right)
-                .into(),
-        )
-    } else {
-        (
-            row![inbox, calendar, backlog, projects]
-                .spacing(spacing)
-                .into(),
-            row![notepad, keep].spacing(spacing).into(),
-            settings,
-        )
-    };
-
+    let group_gap = (fit.gap * 2.0).max(4.0);
     container(
         row![
-            container(left).width(Fill).align_left(Fill),
-            container(middle).width(Fill).center_x(Fill),
-            container(right).width(Fill).align_right(Fill),
+            calendar,
+            Space::new().width(Fill),
+            row(middle).spacing(fit.gap),
+            Space::new().width(Fill),
+            row(right).spacing(fit.gap),
         ]
-        .spacing(spacing),
+        .spacing(group_gap)
+        .align_y(Center),
     )
     .padding(Padding {
         left: metrics.padding,
@@ -294,18 +328,16 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .into()
 }
 
-/// The height `tabs` takes: one row on wide windows, a stack of three below
-/// 720px.
+/// The height `tabs` takes: always one row.
 fn tabs_height(metrics: &Metrics) -> f32 {
-    let tab = if metrics.breakpoint.is_compact() {
+    tab_height(metrics)
+}
+
+fn tab_height(metrics: &Metrics) -> f32 {
+    if metrics.breakpoint.is_compact() {
         16.0
     } else {
         metrics.icon_button()
-    };
-    if metrics.size.width < 720.0 {
-        tab * 3.0 + 2.0 * 2.0
-    } else {
-        tab
     }
 }
 
@@ -315,25 +347,23 @@ fn tab<'a>(
     active: bool,
     screen: Screen,
     metrics: &Metrics,
+    fit: TabFit,
 ) -> Element<'a, Message> {
-    button(text(label).size(metrics.label()).center())
-        .height(if metrics.breakpoint.is_compact() {
-            16.0
-        } else {
-            metrics.icon_button()
-        })
-        .padding(if metrics.breakpoint.is_compact() {
-            Padding::from([0.0, 2.0])
-        } else {
-            Padding::from(5.0)
-        })
-        .on_press(Message::ScreenSelected(screen))
-        .style(if active {
-            button::primary
-        } else {
-            button::secondary
-        })
-        .into()
+    button(
+        text(label)
+            .size(fit.size)
+            .wrapping(text::Wrapping::None)
+            .center(),
+    )
+    .height(tab_height(metrics))
+    .padding(Padding::from([0.0, fit.pad]))
+    .on_press(Message::ScreenSelected(screen))
+    .style(if active {
+        button::primary
+    } else {
+        button::secondary
+    })
+    .into()
 }
 
 /// A settings-style page: a title with a way back, over a scrolling body.

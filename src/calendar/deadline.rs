@@ -210,7 +210,11 @@ pub fn place(event: &mut Event, minutes: u32) {
     let Ok(Some(time)) = read_due_time(&event.details.description) else {
         return;
     };
-    let minutes = if minutes == 0 { DEFAULT_MINUTES } else { minutes };
+    let minutes = if minutes == 0 {
+        DEFAULT_MINUTES
+    } else {
+        minutes
+    };
     event.start = super::at_clock(day, time.hour(), time.minute());
     event.end = event.start + Duration::minutes(i64::from(minutes));
     event.all_day = false;
@@ -349,7 +353,10 @@ mod tests {
         let mut task = all_day_task("DUE_TIME: 09:30\nNotes", "2026-10-30");
         place(&mut task, 45);
         assert!(!task.all_day);
-        assert_eq!(task.start, super::super::at_clock(date("2026-10-30"), 9, 30));
+        assert_eq!(
+            task.start,
+            super::super::at_clock(date("2026-10-30"), 9, 30)
+        );
         assert_eq!(task.end, task.start + Duration::minutes(45));
 
         let mut unestimated = all_day_task("DUE_TIME: 23:45", "2026-10-30");

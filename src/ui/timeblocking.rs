@@ -73,7 +73,9 @@ pub fn task_row<'a>(
     if let Some(source) = crate::integrations::source_in(&task.details.description) {
         line = line.push(super::source_icon::link(&source, 14.0));
     }
-    line = line.push(title).push(estimate_button(state, task, metrics.label()));
+    line = line
+        .push(title)
+        .push(estimate_button(state, task, metrics.label()));
     if backlog {
         line = line.push(
             button(text("Reschedule").size(metrics.label()))
