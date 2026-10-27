@@ -26,6 +26,7 @@ pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 pub struct Config {
     pub appearance: Appearance,
     pub window: Window,
+    pub views: ViewSettings,
     pub timer: TimerSettings,
     pub alarm: AlarmProfile,
     pub calendar: CalendarSettings,
@@ -47,6 +48,7 @@ impl Default for Config {
         Self {
             appearance: Appearance::default(),
             window: Window::default(),
+            views: ViewSettings::default(),
             timer: TimerSettings::default(),
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
@@ -153,6 +155,59 @@ impl Default for Window {
             height: 340.0,
             always_on_top: false,
             time_block_width: None,
+        }
+    }
+}
+
+/// Default pane sizes, in logical pixels, shared by the Iced windows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewSettings {
+    /// None preserves the saved main-window width and the panel.toml width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_width: Option<f32>,
+    /// Width added alongside the calendar when editing a time block.
+    pub time_block_width: f32,
+    /// Visible inset from the side panel's screen edge, top and bottom.
+    pub margin: f32,
+}
+
+impl Default for ViewSettings {
+    fn default() -> Self {
+        Self {
+            calendar_width: None,
+            time_block_width: 400.0,
+            margin: 5.0,
+        }
+    }
+}
+
+impl ViewSettings {
+    pub const MIN_WIDTH: f32 = 180.0;
+    pub const MAX_WIDTH: f32 = 3840.0;
+    pub const MAX_MARGIN: f32 = 100.0;
+
+    pub fn calendar_width(&self, fallback: f32) -> f32 {
+        Self::width(self.calendar_width.unwrap_or(fallback), fallback)
+    }
+
+    pub fn time_block_width(&self) -> f32 {
+        Self::width(self.time_block_width, 400.0)
+    }
+
+    pub fn margin(&self) -> f32 {
+        if self.margin.is_finite() {
+            self.margin.clamp(0.0, Self::MAX_MARGIN)
+        } else {
+            5.0
+        }
+    }
+
+    fn width(value: f32, fallback: f32) -> f32 {
+        if value.is_finite() {
+            value.clamp(Self::MIN_WIDTH, Self::MAX_WIDTH)
+        } else {
+            fallback.clamp(Self::MIN_WIDTH, Self::MAX_WIDTH)
         }
     }
 }

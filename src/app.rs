@@ -207,6 +207,9 @@ pub enum Message {
     ThemeSelected(String),
     FollowSystemToggled(bool),
     AlwaysOnTopToggled(bool),
+    CalendarWidthChanged(f32),
+    TimeBlockWidthChanged(f32),
+    ScreenMarginChanged(f32),
     PanelShortcutChanged(String),
     PanelShortcutApply,
     PanelShortcutApplied(Result<String, String>),
@@ -412,7 +415,10 @@ impl State {
             screen: Screen::Calendar,
             projects: None,
             main_window: None,
-            main_size: Size::new(config.window.width, config.window.height),
+            main_size: Size::new(
+                config.views.calendar_width(config.window.width),
+                config.window.height,
+            ),
             panel_command_rx: None,
             panel_config: None,
             panel_expected_close: false,
@@ -443,6 +449,54 @@ impl State {
 
         self.notepad = text_editor::Content::with_text(&text);
         self.config.notepad.text = text;
+    }
+
+    pub fn calendar_width(&self) -> f32 {
+        self.config.views.calendar_width(
+            self.sidebar
+                .as_ref()
+                .map_or(self.config.window.width, |panel| panel.width),
+        )
+    }
+
+    pub fn screen_margin(&self) -> f32 {
+        if self.sidebar.is_some() {
+            self.config.views.margin()
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Resize the panes together, keeping the panel's transparent screen inset
+/// outside the calendar's configured width.
+fn apply_view_sizes(state: &mut State) -> Task<Message> {
+    let base = state.calendar_width() + state.screen_margin();
+    let expanded = state.timeblocking.original_width.is_some();
+    let width = if expanded {
+        state.timeblocking.original_width = Some(base);
+        crate::timeblocking::editor_width(state, base)
+    } else {
+        base
+    };
+    let Some(id) = state.main_window else {
+        return Task::none();
+    };
+    let resize = window::resize(id, Size::new(width, state.main_size.height));
+    if state.sidebar.is_some() {
+        // Relax the previous fixed width before asking the compositor to resize.
+        window::set_max_size(id, None)
+            .chain(window::set_min_size(
+                id,
+                Some(Size::new(base, MIN_SIZE.height)),
+            ))
+            .chain(resize)
+            .chain(window::set_max_size(
+                id,
+                (!expanded).then_some(Size::new(base, 100_000.0)),
+            ))
+    } else {
+        resize
     }
 }
 
@@ -480,7 +534,7 @@ pub fn boot() -> (State, Task<Message>) {
     // A daemon opens no window by itself, which is what lets the flash
     // overlay be a peer window rather than a child of the clock.
     let (_id, open) = window::open(window::Settings {
-        size: Size::new(state.config.window.width, state.config.window.height),
+        size: state.main_size,
         min_size: Some(MIN_SIZE),
         level: level(state.config.window.always_on_top),
         exit_on_close_request: true,
@@ -526,7 +580,8 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
             .expect("failed to spawn the panel IPC listener");
     }
 
-    let (_id, open) = window::open(sidebar_settings(&panel));
+    state.main_size = Size::new(state.calendar_width() + state.screen_margin(), PANEL_FILL);
+    let (_id, open) = window::open(sidebar_settings(&panel, &state.config.views));
 
     (state, open.map(Message::WindowOpened))
 }
@@ -540,8 +595,8 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 const PANEL_FILL: f32 = 10_000.0;
 
 /// The window a panel instance opens with.
-fn sidebar_settings(panel: &panel::PanelConfig) -> window::Settings {
-    let width = panel.width as f32;
+fn sidebar_settings(panel: &panel::PanelConfig, views: &config::ViewSettings) -> window::Settings {
+    let width = views.calendar_width(panel.width as f32) + views.margin();
     let side = panel.side;
 
     window::Settings {
@@ -553,6 +608,9 @@ fn sidebar_settings(panel: &panel::PanelConfig) -> window::Settings {
             panel::Side::Right => window::Position::SpecificWith(right_edge),
         },
         decorations: false,
+        // Transparent gutters provide the screen margin even on Wayland,
+        // where clients cannot position their own windows.
+        transparent: true,
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: true,
         icon: window_icon(),
@@ -578,6 +636,10 @@ fn right_edge(window: Size, monitor: Size) -> Point {
 /// opens no window: the two callers want different ones.
 fn boot_state() -> State {
     let mut state = State::new(Config::load(), Catalog::load());
+
+    // Follow the config in Google Drive's app folder. This is also not part of
+    // `State::new`: a hand-built test state must not touch the network.
+    crate::config_sync::start();
 
     // Days are kept under the XDG cache directory as well as in memory, so a
     // restart opens on what the last run saw rather than an empty grid. This
@@ -838,6 +900,55 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::CalendarWidthChanged(width) => {
+            if !width.is_finite() {
+                return Task::none();
+            }
+            let pane = state.config.views.time_block_width();
+            state.config.views.calendar_width = Some(width.clamp(
+                config::ViewSettings::MIN_WIDTH,
+                config::ViewSettings::MAX_WIDTH,
+            ));
+            // A remembered total must not override a newly chosen pane size.
+            state.config.window.time_block_width = state
+                .timeblocking
+                .original_width
+                .map(|_| state.calendar_width() + state.screen_margin() + pane);
+            let resize = apply_view_sizes(state);
+            Task::batch([resize, queue_save(state)])
+        }
+
+        Message::TimeBlockWidthChanged(width) => {
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.time_block_width = width.clamp(
+                config::ViewSettings::MIN_WIDTH,
+                config::ViewSettings::MAX_WIDTH,
+            );
+            state.config.window.time_block_width = None;
+            let resize = apply_view_sizes(state);
+            Task::batch([resize, queue_save(state)])
+        }
+
+        Message::ScreenMarginChanged(margin) => {
+            if !margin.is_finite() {
+                return Task::none();
+            }
+            let before = state.screen_margin();
+            state.config.views.margin = margin.clamp(0.0, config::ViewSettings::MAX_MARGIN);
+            let delta = state.screen_margin() - before;
+            if let Some(width) = &mut state.config.window.time_block_width {
+                *width += delta;
+            }
+            let resize = if state.sidebar.is_some() {
+                apply_view_sizes(state)
+            } else {
+                Task::none()
+            };
+            Task::batch([resize, queue_save(state)])
+        }
+
         Message::ThemeSelected(name) => {
             state.config.appearance.theme = name;
             state.config.appearance.follow_system = false;
@@ -1009,6 +1120,22 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 state.calendar.forget_cached_days();
             }
             let mut tasks = Vec::new();
+            let pane_widths_changed = previous.views.calendar_width
+                != state.config.views.calendar_width
+                || previous.views.time_block_width != state.config.views.time_block_width;
+            let views_changed = pane_widths_changed
+                || (state.sidebar.is_some() && previous.views.margin != state.config.views.margin);
+            if pane_widths_changed
+                && previous.window.time_block_width == state.config.window.time_block_width
+            {
+                state.config.window.time_block_width = None;
+            }
+            if views_changed {
+                if state.sidebar.is_none() {
+                    state.main_size.height = state.config.window.height;
+                }
+                tasks.push(apply_view_sizes(state));
+            }
             if state.sidebar.is_none() {
                 if let Some(id) = state.main_window {
                     if previous.window.always_on_top != state.config.window.always_on_top {
@@ -1017,17 +1144,19 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                             level(state.config.window.always_on_top),
                         ));
                     }
-                    if previous.window.width != state.config.window.width
-                        || previous.window.height != state.config.window.height
-                        || (state.timeblocking.original_width.is_some()
-                            && previous.window.time_block_width
-                                != state.config.window.time_block_width)
+                    if !views_changed
+                        && (previous.window.width != state.config.window.width
+                            || previous.window.height != state.config.window.height
+                            || (state.timeblocking.original_width.is_some()
+                                && previous.window.time_block_width
+                                    != state.config.window.time_block_width))
                     {
                         let width = if state.timeblocking.original_width.is_some() {
-                            state.timeblocking.original_width = Some(state.config.window.width);
-                            crate::timeblocking::editor_width(state, state.config.window.width)
+                            let base = state.calendar_width();
+                            state.timeblocking.original_width = Some(base);
+                            crate::timeblocking::editor_width(state, base)
                         } else {
-                            state.config.window.width
+                            state.calendar_width()
                         };
                         tasks.push(window::resize(
                             id,
@@ -1099,7 +1228,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                     let Some(panel) = &state.panel_config else {
                         return Task::none();
                     };
-                    let mut settings = sidebar_settings(panel);
+                    let mut settings = sidebar_settings(panel, &state.config.views);
                     // The editor stayed open while hidden, so reopen at its width.
                     if let Some(base) = state.timeblocking.original_width {
                         let width = crate::timeblocking::editor_width(state, base);
@@ -1157,7 +1286,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             if let Some(sidebar) = &state.sidebar {
                 let width = match state.timeblocking.original_width {
                     Some(base) => crate::timeblocking::editor_width(state, base),
-                    None => sidebar.width,
+                    None => {
+                        state.config.views.calendar_width(sidebar.width) + state.screen_margin()
+                    }
                 };
                 log::debug!("panel filling {}x{}", width, size.height);
                 return window::resize(id, Size::new(width, size.height));
@@ -1167,6 +1298,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // fraction. A width the user chose, or the one saved with the
             // editor open, must survive a relaunch.
             if state.config.window.width != Config::default().window.width
+                || state.config.views.calendar_width.is_some()
                 || state.timeblocking.original_width.is_some()
             {
                 return Task::none();
@@ -1721,6 +1853,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::GoogleConnected(Ok(_tokens)) => {
+            // Signing in is what makes config sync possible.
+            crate::config_sync::poke();
             state.calendar.connection = Connection::SignedIn;
             state.calendar.sync = SyncState::Idle;
             state.calendar.error = None;
@@ -2869,14 +3003,15 @@ mod tests {
             width: 200,
             ..Default::default()
         };
-        let settings = sidebar_settings(&panel);
+        let settings = sidebar_settings(&panel, &config::ViewSettings::default());
 
         // The width is fixed from both sides, so the compositor cannot stretch
         // the strip, but the height is free to fill the screen.
-        assert_eq!(settings.min_size.unwrap().width, 200.0);
-        assert_eq!(settings.max_size.unwrap().width, 200.0);
+        assert_eq!(settings.min_size.unwrap().width, 205.0);
+        assert_eq!(settings.max_size.unwrap().width, 205.0);
         assert!(settings.min_size.unwrap().height < settings.max_size.unwrap().height);
         assert!(!settings.decorations);
+        assert!(settings.transparent);
         assert_eq!(settings.level, window::Level::AlwaysOnTop);
         assert_eq!(settings.platform_specific.application_id, APPLICATION_ID);
     }

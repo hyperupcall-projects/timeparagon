@@ -1,6 +1,10 @@
 /target/
 /screenshots/
+/dist/
 
 /tools/keep-bridge/node_modules/
 /tools/keep-bridge/keep-bridge
 .env
+/target-android-build.lock
+*.jks
+*.keystore

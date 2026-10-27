@@ -29,7 +29,7 @@ use crate::engine::{Precision, format};
 use layout::{Breakpoint, Metrics};
 
 pub fn view(state: &State) -> Element<'_, Message> {
-    responsive(move |size| {
+    let content = responsive(move |size| {
         let metrics = Metrics::of(size);
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
@@ -66,7 +66,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     // The calendar keeps the width it had before the editor
                     // opened, and the editor takes whatever the window gained.
                     Some(base) => {
-                        let pane = base.min(size.width);
+                        let pane = (base - state.screen_margin()).min(size.width);
                         let calendar_metrics = Metrics::of(Size::new(pane, size.height));
                         row![
                             container(calendar::view(state, &calendar_metrics))
@@ -98,8 +98,35 @@ pub fn view(state: &State) -> Element<'_, Message> {
             layers.push(calendar::delete_confirmation(state, &metrics));
         }
         iced::widget::stack(layers).into()
-    })
-    .into()
+    });
+    if let Some(sidebar) = &state.sidebar {
+        let margin = state.screen_margin();
+        container(
+            container(content)
+                .width(Fill)
+                .height(Fill)
+                .style(|theme: &iced::Theme| container::background(theme.palette().background)),
+        )
+        .padding(Padding {
+            top: margin,
+            bottom: margin,
+            left: if sidebar.side == crate::panel::Side::Left {
+                margin
+            } else {
+                0.0
+            },
+            right: if sidebar.side == crate::panel::Side::Right {
+                margin
+            } else {
+                0.0
+            },
+        })
+        .width(Fill)
+        .height(Fill)
+        .into()
+    } else {
+        content.into()
+    }
 }
 
 /// A plain list of the immediate project directories.

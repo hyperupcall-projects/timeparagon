@@ -322,13 +322,14 @@ pub fn close(state: &mut State) -> Task<Message> {
     }
 }
 pub(crate) fn editor_width(state: &State, base_width: f32) -> f32 {
+    let pane_width = state.config.views.time_block_width();
     state
         .config
         .window
         .time_block_width
         .filter(|width| width.is_finite())
-        .unwrap_or(base_width + PANEL_WIDTH)
-        .max(base_width + PANEL_WIDTH)
+        .unwrap_or(base_width + pane_width)
+        .max(base_width + pane_width)
 }
 pub fn open(state: &mut State, id: String) -> Task<Message> {
     if state.timeblocking.block.as_deref() != Some(id.as_str())

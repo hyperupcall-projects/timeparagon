@@ -1,0 +1,20 @@
+[application]
+name = "TimeTracker"
+out_dir = "dist"
+# Opts out of Auto Backup; see the comment in that file.
+android_manifest = "AndroidManifest.xml"
+
+[web.app]
+title = "TimeTracker"
+
+[bundle]
+identifier = "dev.timetracker.day"
+publisher = "TimeTracker"
+category = "Productivity"
+short_description = "TimeTracker day view"
+long_description = "A day view for Google Calendar and Google Tasks, sharing its data with the iced TimeTracker application."
+
+[android]
+min_sdk = 24
+target_sdk = 34
+compile_sdk = 34

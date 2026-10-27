@@ -1,0 +1,29 @@
+[package]
+name = "timetracker-core"
+version = "0.1.0"
+edition = "2024"
+description = "Renderer-agnostic TimeTracker data layer"
+license = "MPL-2.0"
+
+[dependencies]
+base64 = { version = "0.22.1", default-features = false, features = ["alloc", "std"] }
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std", "serde"] }
+directories = "6.0.0"
+getrandom = { version = "0.3.3", default-features = false, features = ["std"] }
+# The data layer only needs Color. Renaming iced_core to `iced` lets the
+# existing calendar sources compile unchanged in this crate.
+iced = { package = "iced_core", version = "0.14", default-features = false }
+log = "0.4.34"
+notify = "8.2.0"
+rusqlite = { version = "0.41.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = { version = "0.10.9", default-features = false }
+toml = "1.1.6"
+ureq = { version = "2.12.1", default-features = false, features = ["tls", "json"] }
+urlencoding = "2.1.3"
+webbrowser = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"

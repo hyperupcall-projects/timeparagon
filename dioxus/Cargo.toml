@@ -1,0 +1,26 @@
+[package]
+name = "timetracker-dioxus"
+version = "0.1.0"
+edition = "2024"
+description = "TimeTracker's day view, built with Dioxus"
+license = "MPL-2.0"
+
+[[bin]]
+# `dx` turns the binary name into the Android launcher label.
+name = "TimeTracker"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std", "serde"] }
+tokio = { version = "1", features = ["rt", "time"] }
+# Renderer-agnostic calendar/OAuth/Tasks/time-block data shared with the iced
+# app, and safe to cross-compile for Android.
+timetracker-core = { path = "../core" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+dioxus = { version = "0.7.3", default-features = false, features = ["mobile", "lib", "launch"] }
+jni = "0.21"
+ndk-context = "0.1"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+dioxus = { version = "0.7.3", default-features = false, features = ["desktop", "lib", "launch"] }

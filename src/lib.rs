@@ -13,6 +13,7 @@ pub mod audio;
 pub mod blocking;
 pub mod calendar;
 pub mod config;
+pub mod config_sync;
 pub mod engine;
 pub mod hex;
 pub mod keep;

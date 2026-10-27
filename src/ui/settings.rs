@@ -37,6 +37,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         heading("Appearance", metrics),
         appearance(state, metrics),
+        heading("View layout", metrics),
+        view_layout(state, metrics),
         heading("Side panel", metrics),
         side_panel(state, metrics),
         heading("Calendar view order", metrics),
@@ -190,6 +192,35 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ]
     .spacing(metrics.spacing)
     .into()
+}
+
+fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.views;
+    let calendar = state.calendar_width();
+    let block = settings.time_block_width();
+    let margin = settings.margin();
+    column![
+        field(
+            format!("Calendar width: {calendar:.0} px"),
+            slider(config::ViewSettings::MIN_WIDTH..=config::ViewSettings::MAX_WIDTH,
+                calendar, Message::CalendarWidthChanged).step(10.0_f32).into(),
+            metrics,
+        ),
+        field(
+            format!("Time block width: {block:.0} px"),
+            slider(config::ViewSettings::MIN_WIDTH..=config::ViewSettings::MAX_WIDTH,
+                block, Message::TimeBlockWidthChanged).step(10.0_f32).into(),
+            metrics,
+        ),
+        field(
+            format!("Screen margin: {margin:.0} px"),
+            slider(0.0..=config::ViewSettings::MAX_MARGIN,
+                margin, Message::ScreenMarginChanged).step(1.0_f32).into(),
+            metrics,
+        ),
+        text("Widths apply to the calendar and the time block pane beside it. The screen margin insets the side panel from its screen edge, top and bottom.")
+            .size(metrics.label()).style(text::secondary),
+    ].spacing(metrics.spacing).into()
 }
 
 fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {

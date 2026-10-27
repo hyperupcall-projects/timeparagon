@@ -66,8 +66,26 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+# The OAuth module needs a real Android Intent launcher when the shared data
+# layer is used by the mobile build.
+webbrowser = "1"
+jni = "0.21"
+ndk-context = "0.1"
+
 [dev-dependencies]
 iced_test = "0.14"
+
+# The iced application stays the root package. The Dioxus day view is a
+# separate crate beside it rather than a replacement, so the two can be built
+# and run independently.
+[workspace]
+members = ["core", "dioxus"]
+default-members = ["."]
+# The vendored iced_winit is patched in as a dependency, not built as a
+# workspace member of its own.
+exclude = ["vendor/iced_winit"]
+resolver = "3"
 
 # The screenshot renderer lives under `assets/` with the other non-source
 # files, so it needs pointing at explicitly.
