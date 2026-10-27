@@ -6,6 +6,17 @@ use timetracker::app;
 type Boot = fn() -> (app::State, iced::Task<app::Message>);
 
 fn main() -> iced::Result {
+    // The same binary also hosts the dock strip, so the window can always
+    // start it without needing a second program installed beside it. The dock
+    // sets up its own logging.
+    if std::env::args().skip(1).any(|arg| arg == "--dock") {
+        if let Err(error) = timetracker::dock::run() {
+            eprintln!("timetracker: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
         .init();
 

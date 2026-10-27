@@ -40,8 +40,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         // The event details pane is a column of its own to the right of the
         // view. The view keeps its width and the window is widened to match,
         // so the metrics for the main content are measured over that width.
-        let details_open =
-            state.calendar.open_event.is_some() && crate::app::shows_details(state.screen);
+        let details_open = state.calendar.open_event.is_some()
+            && crate::app::shows_details(state.screen)
+            && !(state.screen == Screen::Calendar && state.weekly);
         let detail = if details_open {
             state.config.views.detail_width()
         } else {
@@ -74,29 +75,33 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Projects, _) => projects::view(state, &metrics),
             (Screen::Travel, _) => travel::view(state, &main_metrics),
             (Screen::Calendar, _) => {
-                // Keep the calendar at the same place in the widget tree when
-                // the block editor opens or closes, preserving its scroll state.
-                match state
-                    .timeblocking
-                    .block
-                    .is_some()
-                    .then_some(state.timeblocking.original_width)
-                    .flatten()
-                {
-                    // The calendar keeps the width it had before the editor
-                    // opened, and the editor takes whatever the window gained.
-                    Some(base) => {
-                        let pane = (base - state.screen_margin()).min(main_width);
-                        let calendar_metrics = Metrics::of(Size::new(pane, size.height));
-                        row![
-                            container(calendar::view(state, &calendar_metrics))
-                                .width(Length::Fixed(pane)),
-                            container(timeblocking::panel(state, &main_metrics)).width(Fill),
-                        ]
-                        .into()
-                    }
-                    None => {
-                        row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
+                if state.weekly {
+                    calendar::weekly_view(state, &main_metrics)
+                } else {
+                    // Keep the calendar at the same place in the widget tree when
+                    // the block editor opens or closes, preserving its scroll state.
+                    match state
+                        .timeblocking
+                        .block
+                        .is_some()
+                        .then_some(state.timeblocking.original_width)
+                        .flatten()
+                    {
+                        // The calendar keeps the width it had before the editor
+                        // opened, and the editor takes whatever the window gained.
+                        Some(base) => {
+                            let pane = (base - state.screen_margin()).min(main_width);
+                            let calendar_metrics = Metrics::of(Size::new(pane, size.height));
+                            row![
+                                container(calendar::view(state, &calendar_metrics))
+                                    .width(Length::Fixed(pane)),
+                                container(timeblocking::panel(state, &main_metrics)).width(Fill),
+                            ]
+                            .into()
+                        }
+                        None => {
+                            row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
+                        }
                     }
                 }
             }
@@ -191,15 +196,16 @@ pub fn view(state: &State) -> Element<'_, Message> {
 /// How many tabs there are.
 const TAB_COUNT: usize = 8;
 
-/// Full tab names, in display order: Calendar, then
+/// Full tab names, excluding the separately rendered Weekly tab.
 /// Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
 const TAB_LABELS: [&str; TAB_COUNT] = [
-    "Calendar", "Inbox", "Projects", "Backlog", "Travel", "Keep", "Notepad", "Settings",
+    "Daily", "Inbox", "Projects", "Backlog", "Travel", "Keep", "Notepad", "Settings",
 ];
 
 /// Short names for windows too narrow to fit the full ones legibly.
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] =
-    ["Cal", "Inbox", "Proj", "Back", "Trav", "Keep", "Note", "Set"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = [
+    "Daily", "Inbox", "Proj", "Back", "Trav", "Keep", "Note", "Set",
+];
 
 /// Average glyph width as a fraction of the font size, with some slack.
 const TAB_GLYPH_WIDTH: f32 = 0.6;
@@ -235,11 +241,13 @@ fn tab_fit(metrics: Metrics) -> TabFit {
         (5.0, metrics.spacing.min(6.0))
     };
     let size_for = |labels: &[&str; TAB_COUNT]| {
-        let chars: usize = labels.iter().map(|label| label.chars().count()).sum();
-        // Eight tabs with padding each side, a gap between the tabs inside
-        // each group (three in the group of four, two in the group of three),
-        // and two group gaps.
-        let fixed = 16.0 * pad + 5.0 * gap + 2.0 * (gap * 2.0).max(4.0);
+        let chars: usize = labels
+            .iter()
+            .map(|label| label.chars().count())
+            .sum::<usize>()
+            + 6;
+        // Nine tabs, gaps within groups, and two gaps between groups.
+        let fixed = 18.0 * pad + 6.0 * gap + 2.0 * (gap * 2.0).max(4.0);
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_LABELS);
@@ -261,7 +269,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Calendar, then Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
+/// Daily/Weekly, then Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
@@ -287,6 +295,8 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         .map(|(&screen, label)| {
             let active = if screen == Screen::Settings {
                 settings_active
+            } else if screen == Screen::Calendar {
+                state.screen == screen && !state.weekly
             } else {
                 state.screen == screen
             };
@@ -296,11 +306,25 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let right: Vec<_> = tabs.drain(5..).collect();
     let middle: Vec<_> = tabs.drain(1..).collect();
     let calendar = tabs.remove(0);
+    let weekly = button(
+        text("Weekly")
+            .size(fit.size)
+            .wrapping(text::Wrapping::None)
+            .center(),
+    )
+    .height(tab_height(metrics))
+    .padding(Padding::from([0.0, fit.pad]))
+    .on_press(Message::CalendarModeSelected(true))
+    .style(if state.screen == Screen::Calendar && state.weekly {
+        button::primary
+    } else {
+        button::secondary
+    });
 
     let group_gap = (fit.gap * 2.0).max(4.0);
     container(
         row![
-            calendar,
+            row![calendar, weekly].spacing(fit.gap),
             Space::new().width(Fill),
             row(middle).spacing(fit.gap),
             Space::new().width(Fill),
@@ -348,7 +372,11 @@ fn tab<'a>(
     )
     .height(tab_height(metrics))
     .padding(Padding::from([0.0, fit.pad]))
-    .on_press(Message::ScreenSelected(screen))
+    .on_press(if screen == Screen::Calendar {
+        Message::CalendarModeSelected(false)
+    } else {
+        Message::ScreenSelected(screen)
+    })
     .style(if active {
         button::primary
     } else {

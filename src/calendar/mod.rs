@@ -369,6 +369,8 @@ pub struct Store {
     pub color_editor: Option<String>,
     /// Whether the month picker is showing over the day view.
     pub month_open: bool,
+    /// The day whose pending Google Tasks are listed in a popup.
+    pub pending_open: Option<NaiveDate>,
     /// The first day of the month the picker is showing.
     pub month: NaiveDate,
     /// Whether the day in view should follow the real today. Cleared once the
@@ -415,6 +417,7 @@ impl Store {
             details_below: false,
             color_editor: None,
             month_open: false,
+            pending_open: None,
             month: first_of_month(day),
             follow_today: true,
             pending: HashMap::new(),
@@ -447,6 +450,7 @@ impl Store {
             details_below: false,
             color_editor: None,
             month_open: false,
+            pending_open: None,
             month: first_of_month(snapshot.day),
             // A snapshot is pinned to the day it was fetched for, so it does
             // not follow the clock until the user asks it to.
@@ -684,6 +688,121 @@ impl Store {
         // The day in view has fresh events now, so the run after this one
         // opens on them rather than on an empty grid.
         self.write_day(self.day, &self.events);
+    }
+
+    /// Install a range fetch as ordinary per-day snapshots, retaining all tasks
+    /// on each day just as a day fetch does.
+    pub fn apply_week_snapshot(&mut self, mut snapshot: Snapshot, days: &[NaiveDate]) {
+        let current = self.day;
+        for event in &mut snapshot.events {
+            if let Some(pending) = self.pending.get(&event.id) {
+                event.start = pending.start;
+                event.end = pending.end;
+            }
+        }
+        let mut current_snapshot = snapshot.clone();
+        for &day in days {
+            let start = at_clock(day, self.day_end_hour, 0);
+            let end = at_clock(day.succ_opt().unwrap_or(day), self.day_end_hour, 0);
+            let events: Vec<_> = snapshot
+                .events
+                .iter()
+                .filter(|event| {
+                    event.is_task()
+                        || if event.all_day {
+                            event.start.date_naive() <= day && event.end.date_naive() > day
+                        } else {
+                            event.start < end && event.end > start
+                        }
+                })
+                .cloned()
+                .collect();
+            if day == current {
+                current_snapshot.events = events;
+                current_snapshot.day = day;
+            } else {
+                self.write_day(day, &events);
+                self.cache.insert(day, events);
+            }
+        }
+        self.apply_snapshot(current_snapshot);
+        self.trim_cache();
+    }
+
+    pub fn events_on(&self, day: NaiveDate) -> &[Event] {
+        if day == self.day {
+            &self.events
+        } else {
+            self.cache.get(&day).map(Vec::as_slice).unwrap_or(&[])
+        }
+    }
+
+    pub fn replace_cached_task(&mut self, previous_id: &str, task: &Event) {
+        let key = crate::timeblocking::task_key(task);
+        for events in self.cache.values_mut() {
+            events.retain(|event| {
+                event.id != previous_id
+                    && (!event.is_task() || crate::timeblocking::task_key(event) != key)
+            });
+            events.push(task.clone());
+        }
+        self.clear_disk_cache();
+    }
+
+    pub fn clear_disk_cache(&self) {
+        if let Some(directory) = self.day_cache.as_ref() {
+            day_cache::clear(directory);
+        }
+    }
+
+    pub fn forget_event_everywhere(&mut self, id: &str) {
+        self.events.retain(|event| event.id != id);
+        for events in self.cache.values_mut() {
+            events.retain(|event| event.id != id);
+        }
+        self.clear_disk_cache();
+    }
+
+    pub fn load_cached_days(&mut self, days: &[NaiveDate]) {
+        for &day in days {
+            if day != self.day && !self.cache.contains_key(&day) {
+                if let Some(events) = self.read_day(day) {
+                    self.cache.insert(day, events);
+                }
+            }
+        }
+        self.trim_cache();
+    }
+
+    pub fn all_day_events_on<'a>(
+        &'a self,
+        day: NaiveDate,
+        settings: &'a CalendarSettings,
+    ) -> impl Iterator<Item = &'a Event> {
+        let events = self.events_on(day);
+        let blocks: Vec<_> = events
+            .iter()
+            .filter(|event| crate::timeblocking::is_block(event, settings))
+            .map(crate::timeblocking::block_key)
+            .collect();
+        events
+            .iter()
+            .filter(|event| self.calendar_enabled(event.source_id(), settings))
+            .filter(|event| {
+                event
+                    .details
+                    .scheduled
+                    .as_ref()
+                    .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
+            })
+            .filter(move |event| {
+                event.all_day
+                    && (!event.is_task()
+                        || (event.start.date_naive() != crate::timeblocking::UNDATED
+                            && event.start.date_naive() == day)
+                        || (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
+                    && !omit_managed_tasks_event(event, &blocks, settings)
+            })
     }
 
     pub fn visible_events<'a>(
@@ -942,7 +1061,11 @@ impl Store {
             }
         };
 
-        let blocks = self.time_block_keys(settings);
+        let blocks = events
+            .iter()
+            .filter(|event| crate::timeblocking::is_block(event, settings))
+            .map(crate::timeblocking::block_key)
+            .collect();
         let mut found: Vec<&Event> = timed_in(
             events
                 .iter()
@@ -1007,11 +1130,7 @@ fn timed_in<'a>(
     settings: &'a CalendarSettings,
 ) -> impl Iterator<Item = &'a Event> {
     let start = at_clock(day, settings.day_start_hour(), 0);
-    let end = at_clock(
-        day.succ_opt().unwrap_or(day),
-        settings.day_start_hour(),
-        0,
-    );
+    let end = at_clock(day.succ_opt().unwrap_or(day), settings.day_start_hour(), 0);
     events.filter(move |event| {
         !event.all_day
             && event.start < end
@@ -1158,6 +1277,37 @@ pub fn sync_day(
         day_end_hour,
         tasks_calendar,
     )
+}
+
+pub fn sync_week(
+    client_id: &str,
+    client_secret: &str,
+    disabled: &[String],
+    anchor: NaiveDate,
+    days: u32,
+    day_end_hour: u32,
+    tasks_calendar: Option<&str>,
+) -> Result<Snapshot, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let dates = week_dates(anchor, days);
+    api::fetch_range(
+        &tokens.access_token,
+        disabled,
+        anchor,
+        dates[0],
+        *dates.last().unwrap(),
+        day_end_hour,
+        tasks_calendar,
+    )
+}
+
+/// The selected day and the following days, with one preceding day for context.
+pub fn week_dates(anchor: NaiveDate, days: u32) -> Vec<NaiveDate> {
+    (-1..i64::from(days.clamp(7, 8)))
+        .filter_map(|offset| anchor.checked_add_signed(chrono::Duration::days(offset)))
+        .collect()
 }
 
 pub fn disconnect() {

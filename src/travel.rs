@@ -351,22 +351,22 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             // The place is kept here, so trips still work; only Google's copy
             // of the location is behind.
             log::warn!("could not set the event's location on Google: {error}");
-            state.calendar.error = Some(format!("The place was saved here but not on Google: {error}"));
+            state.calendar.error = Some(format!(
+                "The place was saved here but not on Google: {error}"
+            ));
             Task::none()
         }
 
-        Action::Routed(key, result) => {
-            match result {
-                Ok(route) => {
-                    state.travel.routes.insert(key, RouteState::Ready(route));
-                    save_cache(state)
-                }
-                Err(error) => {
-                    state.travel.routes.insert(key, RouteState::Failed(error));
-                    Task::none()
-                }
+        Action::Routed(key, result) => match result {
+            Ok(route) => {
+                state.travel.routes.insert(key, RouteState::Ready(route));
+                save_cache(state)
             }
-        }
+            Err(error) => {
+                state.travel.routes.insert(key, RouteState::Failed(error));
+                Task::none()
+            }
+        },
     }
 }
 
@@ -442,7 +442,10 @@ fn assign(state: &mut State, target: &PickTarget, place: Option<u64>) -> Task<Me
 /// so trips are known at once, and the place's name and address are written
 /// to the event's location on Google so it reads the same there.
 fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Message> {
-    let Some(calendar_id) = state.calendar.event(id).map(|event| event.calendar_id.clone())
+    let Some(calendar_id) = state
+        .calendar
+        .event(id)
+        .map(|event| event.calendar_id.clone())
     else {
         return Task::none();
     };
@@ -454,7 +457,11 @@ fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Mess
 
     match place {
         Some(place) => {
-            state.config.travel.event_places.insert(id.to_owned(), place);
+            state
+                .config
+                .travel
+                .event_places
+                .insert(id.to_owned(), place);
         }
         None => {
             state.config.travel.event_places.remove(id);
@@ -490,7 +497,19 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
     let mut legs: Vec<Leg> = Vec::new();
 
     if state.travel.show {
-        legs.extend(day_hops(state, state.calendar.day).into_iter().map(|hop| hop.leg));
+        if state.screen == crate::app::Screen::Calendar && state.weekly {
+            for day in
+                crate::calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days())
+            {
+                legs.extend(day_hops(state, day).into_iter().map(|hop| hop.leg));
+            }
+        } else {
+            legs.extend(
+                day_hops(state, state.calendar.day)
+                    .into_iter()
+                    .map(|hop| hop.leg),
+            );
+        }
     }
     if let Some(open) = &state.travel.open {
         legs.push(open.leg);
@@ -599,9 +618,10 @@ pub fn place_of(travel: &TravelSettings, event: &Event) -> Option<u64> {
         .find(|place| normalize(&place.name) == text || normalize(&place.address) == text)
         .or_else(|| {
             // Google's addresses run on into the country, which is rarely typed.
-            travel.places.iter().find(|place| {
-                text.len() >= 6 && normalize(&place.address).starts_with(&text)
-            })
+            travel
+                .places
+                .iter()
+                .find(|place| text.len() >= 6 && normalize(&place.address).starts_with(&text))
         })
         .map(|place| place.id)
 }
@@ -624,8 +644,10 @@ pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
         return found;
     };
 
-    if let (Some(start), Some(place)) = (travel.start.filter(|id| travel.place(*id).is_some()), first.place)
-        && start != place
+    if let (Some(start), Some(place)) = (
+        travel.start.filter(|id| travel.place(*id).is_some()),
+        first.place,
+    ) && start != place
     {
         found.push(Hop {
             leg: Leg {
@@ -654,8 +676,10 @@ pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
         }
     }
 
-    if let (Some(place), Some(end)) = (last.place, travel.end.filter(|id| travel.place(*id).is_some()))
-        && place != end
+    if let (Some(place), Some(end)) = (
+        last.place,
+        travel.end.filter(|id| travel.place(*id).is_some()),
+    ) && place != end
     {
         found.push(Hop {
             leg: Leg {
@@ -1080,11 +1104,29 @@ mod tests {
         let found = hops(&travel, &[stop("w", Some(work)), stop("g", Some(gym))]);
 
         assert_eq!(found.len(), 3);
-        assert_eq!(found[0].leg, Leg { from: home, to: work });
+        assert_eq!(
+            found[0].leg,
+            Leg {
+                from: home,
+                to: work
+            }
+        );
         assert_eq!(found[0].before.as_deref(), Some("w"));
         assert_eq!(found[0].from_title, START_OF_DAY);
-        assert_eq!(found[1].leg, Leg { from: work, to: gym });
-        assert_eq!(found[2].leg, Leg { from: gym, to: home });
+        assert_eq!(
+            found[1].leg,
+            Leg {
+                from: work,
+                to: gym
+            }
+        );
+        assert_eq!(
+            found[2].leg,
+            Leg {
+                from: gym,
+                to: home
+            }
+        );
         assert_eq!(found[2].before, None);
         assert_eq!(found[2].after.as_deref(), Some("g"));
         assert_eq!(found[2].to_title, END_OF_DAY);
@@ -1125,12 +1167,18 @@ mod tests {
 
     #[test]
     fn a_calendar_event_given_a_place_keeps_it_whatever_google_says() {
-        let mut state = State::new(crate::config::Config::default(), crate::theme::Catalog::built_in());
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
         state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
         let work = place(&mut state.config.travel, "Work", "g-work");
         state.config.travel.places[0].address = "1 Main St".into();
 
-        let _ = update(&mut state, Action::OpenPicker(PickTarget::Event("standup".into())));
+        let _ = update(
+            &mut state,
+            Action::OpenPicker(PickTarget::Event("standup".into())),
+        );
         state.travel.picker.as_mut().unwrap().results = vec![Found {
             place_id: "g-work".into(),
             name: "Work".into(),
@@ -1152,14 +1200,21 @@ mod tests {
         assert_eq!(place_of(&state.config.travel, event), Some(work));
 
         // Clearing removes both.
-        let _ = update(&mut state, Action::Clear(PickTarget::Event("standup".into())));
+        let _ = update(
+            &mut state,
+            Action::Clear(PickTarget::Event("standup".into())),
+        );
         assert!(state.config.travel.event_places.is_empty());
         let event = state.calendar.event("standup").unwrap();
         assert_eq!(event.details.location, "");
         assert_eq!(place_of(&state.config.travel, event), None);
 
         // Only a choice made here is written down: an untouched file stays as it was.
-        assert!(!toml::to_string(&state.config.travel).unwrap().contains("event_places"));
+        assert!(
+            !toml::to_string(&state.config.travel)
+                .unwrap()
+                .contains("event_places")
+        );
     }
 
     #[test]
@@ -1209,7 +1264,11 @@ mod tests {
         travel.set_mode(1, 2, TravelMode::Bike);
         travel.set_mode(1, 2, TravelMode::Multimodal);
         assert_eq!(travel.mode_for(1, 2), TravelMode::Multimodal);
-        assert_eq!(travel.mode_for(2, 1), TravelMode::Car, "the way back is its own trip");
+        assert_eq!(
+            travel.mode_for(2, 1),
+            TravelMode::Car,
+            "the way back is its own trip"
+        );
         assert_eq!(travel.modes.len(), 1);
     }
 
@@ -1254,11 +1313,20 @@ mod tests {
         assert_eq!(places.len(), 2, "a place without a location is skipped");
         assert_eq!(places[0].name, "Blue Bottle");
         assert_eq!(places[0].place_id, "ChIJ1");
-        assert_eq!(places[0].address, "66 Mint St, San Francisco, CA 94103, USA");
+        assert_eq!(
+            places[0].address,
+            "66 Mint St, San Francisco, CA 94103, USA"
+        );
         assert_eq!((places[0].lat, places[0].lng), (37.78, -122.40));
-        assert_eq!(places[1].name, "12 Pine Rd", "no title falls back to the street");
+        assert_eq!(
+            places[1].name, "12 Pine Rd",
+            "no title falls back to the street"
+        );
 
-        assert!(parse_places(&json!({})).is_empty(), "no match is an empty body");
+        assert!(
+            parse_places(&json!({})).is_empty(),
+            "no match is an empty body"
+        );
     }
 
     #[test]
@@ -1267,10 +1335,22 @@ mod tests {
             "routes": [{ "duration": "754s", "distanceMeters": 1234 }]
         }))
         .unwrap();
-        assert_eq!(route, Route { seconds: 754, meters: 1234 });
+        assert_eq!(
+            route,
+            Route {
+                seconds: 754,
+                meters: 1234
+            }
+        );
 
         let none = parse_route(&json!({ "routes": [{ "duration": "0s" }] })).unwrap();
-        assert_eq!(none, Route { seconds: 0, meters: 0 });
+        assert_eq!(
+            none,
+            Route {
+                seconds: 0,
+                meters: 0
+            }
+        );
 
         assert!(parse_route(&json!({})).is_err());
         assert!(parse_route(&json!({ "routes": [] })).is_err());
@@ -1289,7 +1369,10 @@ mod tests {
             TravelMode::Multimodal,
         );
         assert_eq!(request["origin"]["placeId"], "g-a");
-        assert_eq!(request["destination"]["location"]["latLng"]["latitude"], 3.5);
+        assert_eq!(
+            request["destination"]["location"]["latLng"]["latitude"],
+            3.5
+        );
         assert_eq!(request["travelMode"], "TRANSIT");
 
         for (mode, name) in [
@@ -1312,7 +1395,10 @@ mod tests {
         assert_eq!(distance_label(850), "850 m");
         assert_eq!(distance_label(1234), "1.2 km");
         assert_eq!(
-            route_label(Route { seconds: 600, meters: 2000 }),
+            route_label(Route {
+                seconds: 600,
+                meters: 2000
+            }),
             "10 min · 2.0 km"
         );
     }
@@ -1361,7 +1447,10 @@ mod tests {
         let mut state = state();
 
         for (target, read) in [
-            (PickTarget::Start, (|s: &State| s.config.travel.start) as fn(&State) -> Option<u64>),
+            (
+                PickTarget::Start,
+                (|s: &State| s.config.travel.start) as fn(&State) -> Option<u64>,
+            ),
             (PickTarget::End, |s: &State| s.config.travel.end),
         ] {
             let _ = update(&mut state, Action::OpenPicker(target.clone()));
@@ -1376,7 +1465,11 @@ mod tests {
             assert_eq!(read(&state), None);
         }
 
-        assert_eq!(state.config.travel.places.len(), 1, "one place, chosen twice");
+        assert_eq!(
+            state.config.travel.places.len(),
+            1,
+            "one place, chosen twice"
+        );
     }
 
     #[test]
@@ -1421,7 +1514,10 @@ mod tests {
         assert!(state.travel.show);
         assert_ne!(summary(&state, leg), Summary::Failed("Quota".into()));
 
-        let route = Route { seconds: 300, meters: 400 };
+        let route = Route {
+            seconds: 300,
+            meters: 400,
+        };
         let _ = update(&mut state, Action::Routed(key, Ok(route)));
         assert_eq!(summary(&state, leg), Summary::Ready(route));
         assert_eq!(short_label(&state, leg), "Walk · 5 min · 400 m");
@@ -1440,7 +1536,10 @@ mod tests {
             to: 2,
             mode: TravelMode::Bike,
         };
-        let route = Route { seconds: 90, meters: 300 };
+        let route = Route {
+            seconds: 90,
+            meters: 300,
+        };
 
         write_cache(&path, &[(key, route)]).unwrap();
 

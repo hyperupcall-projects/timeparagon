@@ -99,10 +99,15 @@ to 8 and leaves transparent space along the panel's screen edge, top and bottom
 (mirrored for a right-side panel). It also applies while the time block pane is
 open. The regular desktop window keeps its normal window placement.
 
-Clicking a calendar event or a Google Task opens its details in a pane on the
-right rather than over the view: the window widens by `detail_width` beside the
-calendar or backlog. When the time block editor is open too, the details pane
-sits to the right of it. `detail_width` is the pane's default width.
+In Weekly, the panel temporarily widens to fit the configured day columns
+and restores its usual width when you leave the view. If the columns exceed
+the screen, scroll horizontally. On Wayland, the compositor decides the
+available window size and placement.
+
+In Daily, clicking a calendar event or a Google Task opens its details in a pane
+on the right rather than over the view: the window widens by `detail_width`
+beside the calendar or backlog. When the time block editor is open too, the
+details pane sits to the right of it. `detail_width` is the pane's default width.
 
 `Meta+U` opens **TimeTracker itself** as a slim panel — 200px wide by default —
 down the **left** edge of the screen. It is a separate instance of the real
@@ -174,6 +179,52 @@ To run the panel without installing it, build and launch the daemon directly:
 ```sh
 cargo run --release --bin timetracker-panel
 ```
+
+## Dock strip
+
+`timetracker-dock` is a much thinner companion than the panel: a 10px line
+down the left edge of the screen showing today. It is a real
+`zwlr_layer_shell_v1` surface, so it needs no window rule. KDE Plasma, Sway,
+Hyprland, niri and COSMIC provide that protocol; GNOME does not.
+
+- It draws only the leftmost column of the day view, so where events overlap
+  you see the one from the source you ranked highest.
+- Calendar events and Google Tasks are coloured spans. Gaps are the day view's
+  background colour (from the configured theme), not transparent.
+- A red line marks the current time.
+- Hovering a span opens a card beside the strip, level with that span.
+- Only the strip takes the pointer; the card area is transparent and click-through.
+
+Switching modes: in the regular window or the side panel, open the calendar
+**Menu** and press **Dock to screen edge**. That starts the dock and puts the
+window away (the window quits; the side panel just hides). The small square at
+the very top of the dock, as wide as the strip, brings back whatever you came
+from and closes the dock. The dock is told where it came from with
+`--from window|sidebar`, which defaults to `window`.
+
+```sh
+cargo run --release --bin timetracker-dock
+timetracker --dock   # the same thing, from the main binary
+```
+
+`install.sh` installs `timetracker-dock` beside the other binaries, and the
+window's button starts the dock through `timetracker --dock`, so it works even
+if the separate binary is missing.
+
+It reads `$XDG_CONFIG_HOME/timetracker/dock.toml` at start-up; every key is
+optional:
+
+```toml
+side = "left"        # or "right"
+width = 10           # strip width, logical px
+margin_top = 12      # gap above the strip
+margin_bottom = 12   # gap below the strip
+popup_width = 300    # hover card width
+popup_gap = 6        # space between strip and card
+```
+
+It shares the main app's config, theme, sign-in and day cache, and syncs today
+itself every `sync_minutes`.
 
 ## Google Keep browser helper
 

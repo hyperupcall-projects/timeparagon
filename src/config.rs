@@ -635,6 +635,10 @@ pub struct CalendarSettings {
     /// real date and time, it is just drawn at the foot of the day it belongs
     /// to.
     pub day_end_hour: u32,
+    /// Days beginning with the selected day; the previous day is also shown.
+    pub weekly_days: u32,
+    /// Width of each day in the horizontally scrollable weekly view.
+    pub weekly_day_width: u32,
     /// Custom colors for Google Tasks lists, keyed by the calendar id
     /// (`tasks:<list>`). Google hands every list back with the same blue, so
     /// this is where a list gets a color of its own. A missing key means the
@@ -664,6 +668,8 @@ impl Default for CalendarSettings {
             inbox_list: None,
             tasks_calendar: None,
             day_end_hour: 0,
+            weekly_days: 8,
+            weekly_day_width: 150,
             task_colors: BTreeMap::new(),
             default_calendar: None,
         }
@@ -680,6 +686,14 @@ impl CalendarSettings {
     /// as a late night is worth pushing the boundary. Midnight (0) is the
     /// default.
     pub const MAX_DAY_END_HOUR: u32 = 5;
+
+    pub fn weekly_days(&self) -> u32 {
+        self.weekly_days.clamp(7, 8)
+    }
+
+    pub fn weekly_day_width(&self) -> u32 {
+        self.weekly_day_width.clamp(100, 400)
+    }
 
     pub fn sync_every(&self) -> Duration {
         let minutes = self
@@ -947,7 +961,12 @@ pub fn cache_keep_path() -> Option<PathBuf> {
 
 /// Travel times already worked out, so a restart does not ask Google again.
 pub fn cache_travel_path() -> Option<PathBuf> {
-    Some(project_dirs()?.cache_dir().join("travel").join("routes.json"))
+    Some(
+        project_dirs()?
+            .cache_dir()
+            .join("travel")
+            .join("routes.json"),
+    )
 }
 
 impl Config {

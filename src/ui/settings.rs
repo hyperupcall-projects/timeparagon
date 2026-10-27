@@ -451,6 +451,27 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
+    section = section.push(field(
+        format!("Weekly days: {} (+ previous day)", settings.weekly_days()),
+        slider(
+            7..=8,
+            settings.weekly_days(),
+            Message::CalendarWeeklyDaysChanged,
+        )
+        .into(),
+        metrics,
+    ));
+    section = section.push(field(
+        format!("Weekly day width: {} px", settings.weekly_day_width()),
+        slider(
+            100..=400,
+            settings.weekly_day_width(),
+            Message::CalendarWeeklyWidthChanged,
+        )
+        .into(),
+        metrics,
+    ));
+
     // The calendar new events are created on. Task lists are excluded since
     // they hold Google Tasks rather than calendar events.
     let options: Vec<calendar::Calendar> = state

@@ -153,6 +153,26 @@ pub fn fetch_day(
     day_end_hour: u32,
     tasks_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
+    fetch_range(
+        access_token,
+        disabled,
+        day,
+        day,
+        day,
+        day_end_hour,
+        tasks_calendar,
+    )
+}
+
+pub fn fetch_range(
+    access_token: &str,
+    disabled: &[String],
+    day: NaiveDate,
+    first: NaiveDate,
+    last: NaiveDate,
+    day_end_hour: u32,
+    tasks_calendar: Option<&str>,
+) -> Result<Snapshot, String> {
     let mut calendars = fetch_calendars(access_token)?;
     // Task refresh and independent calendar requests overlap. Bound concurrency
     // so an account with many calendars does not open an unbounded worker pool.
@@ -164,7 +184,9 @@ pub fn fetch_day(
             let workers: Vec<_> = chunk
                 .iter()
                 .map(|calendar| {
-                    scope.spawn(move || fetch_events(access_token, calendar, day, day_end_hour))
+                    scope.spawn(move || {
+                        fetch_events(access_token, calendar, first, last, day_end_hour)
+                    })
                 })
                 .collect();
             for worker in workers {
@@ -299,9 +321,11 @@ fn fetch_events(
     access_token: &str,
     calendar: &Calendar,
     day: NaiveDate,
+    last: NaiveDate,
     day_end_hour: u32,
 ) -> Result<Vec<Event>, String> {
-    let (time_min, time_max) = day_bounds(day, day_end_hour);
+    let (time_min, _) = day_bounds(day, day_end_hour);
+    let (_, time_max) = day_bounds(last, day_end_hour);
     let calendar_id = urlencoding::encode(&calendar.id);
     let mut page_token: Option<String> = None;
     let mut events = Vec::new();
@@ -324,7 +348,7 @@ fn fetch_events(
                 continue;
             }
 
-            if let Some(event) = parse_event(entry, calendar, day) {
+            if let Some(event) = parse_event_in_range(entry, calendar, day, last) {
                 events.push(event);
             }
         }
@@ -1000,6 +1024,15 @@ fn tasks_notice(error: &str) -> String {
 }
 
 fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option<Event> {
+    parse_event_in_range(entry, calendar, day, day)
+}
+
+fn parse_event_in_range(
+    entry: EventEntry,
+    calendar: &Calendar,
+    first: NaiveDate,
+    last: NaiveDate,
+) -> Option<Event> {
     let start = entry.start.as_ref()?;
     let end = entry.end.as_ref()?;
 
@@ -1013,7 +1046,7 @@ fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option
                 let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?;
                 // Google's all-day end is exclusive. An event on `day` is kept if
                 // it covers that date.
-                if day < start_date || day >= end_date {
+                if last < start_date || first >= end_date {
                     return None;
                 }
                 (date_at(start_date, 0, 0), date_at(end_date, 0, 0), true)
@@ -1420,6 +1453,33 @@ mod tests {
         let event = parse_event(entry, &calendar, day).unwrap();
         assert!(event.all_day);
         assert_eq!(event.title, "Holiday");
+    }
+
+    #[test]
+    fn range_parser_keeps_all_day_events_anywhere_in_the_range() {
+        let calendar = Calendar {
+            id: "primary".into(),
+            name: "Personal".into(),
+            color: colors::DEFAULT_EVENT,
+            primary: true,
+            selected_by_google: true,
+        };
+        let entry = || EventEntry {
+            id: "holiday".into(),
+            start: Some(EventTime {
+                date_time: None,
+                date: Some("2026-10-20".into()),
+            }),
+            end: Some(EventTime {
+                date_time: None,
+                date: Some("2026-10-22".into()),
+            }),
+            ..EventEntry::default()
+        };
+        let day = |day| NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
+        assert!(parse_event_in_range(entry(), &calendar, day(14), day(22)).is_some());
+        assert!(parse_event_in_range(entry(), &calendar, day(14), day(19)).is_none());
+        assert!(parse_event_in_range(entry(), &calendar, day(22), day(25)).is_none());
     }
 
     #[test]

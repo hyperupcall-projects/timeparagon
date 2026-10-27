@@ -166,12 +166,21 @@ pub struct State {
     pub recorder: tracks::Recorder,
 
     pub screen: Screen,
+    pub weekly: bool,
+    pub week_anchor: chrono::NaiveDate,
+    pub week_hover: Option<chrono::NaiveDate>,
+    pub week_scroll_x: f32,
     /// What the Projects tab is in the middle of.
     pub projects: crate::projects::Workspace,
     /// Places, place searches and trips: the Travel tab and travel on the day view.
     pub travel: crate::travel::Workspace,
     pub main_window: Option<window::Id>,
     pub main_size: Size,
+    /// Logical size of the monitor, when the compositor reports it.
+    pub monitor_size: Option<Size>,
+    weekly_resize_pending: bool,
+    /// Suppress queued weekly sizes until the restored width arrives or settles.
+    weekly_width_restoring: Option<(f32, Instant)>,
     /// Receiver for show/hide commands from the panel daemon, when this process
     /// is the side panel.
     pub panel_command_rx: Option<mpsc::Receiver<PanelCommand>>,
@@ -242,6 +251,10 @@ pub enum Message {
     Alarms(alarms::Action),
 
     ScreenSelected(Screen),
+    CalendarModeSelected(bool),
+    WeekDayAction(chrono::NaiveDate, Box<Message>),
+    WeekHover(Option<chrono::NaiveDate>),
+    WeekScrolled(f32),
     Projects(crate::projects::Action),
     Travel(crate::travel::Action),
     KeepRefresh,
@@ -302,6 +315,7 @@ pub enum Message {
     WindowOpened(window::Id),
     /// The monitor size came back, so the window can open at its default width.
     MonitorSized(window::Id, Option<Size>),
+    WeekMonitorSized(window::Id, Option<Size>),
     WindowClosed(window::Id),
     WindowResized(window::Id, Size),
     FlashFinished,
@@ -322,8 +336,16 @@ pub enum Message {
     CalendarResyncRequested,
     CalendarSynced(Result<calendar::Snapshot, String>),
     CalendarSyncedAt(u64, Result<calendar::Snapshot, String>),
+    CalendarWeekSynced(
+        u64,
+        chrono::NaiveDate,
+        u32,
+        Result<calendar::Snapshot, String>,
+    ),
     CalendarTick,
     OpenGoogleCalendar,
+    /// Swap this window for the dock strip on the screen edge.
+    DockRequested,
     EventOpened(String),
     EventClosed,
     OpenEventLink(String),
@@ -375,6 +397,8 @@ pub enum Message {
     /// The hour the calendar day ends, so late-night events stay with the
     /// evening they belong to.
     CalendarDayEndChanged(u32),
+    CalendarWeeklyDaysChanged(u32),
+    CalendarWeeklyWidthChanged(u32),
     /// Multiplies the calendar hour height. Above 1 spreads the hours apart.
     ///
     /// `anchor` is the pixel row under the pointer, measured from the top of
@@ -389,6 +413,8 @@ pub enum Message {
     CalendarDaySelected(chrono::NaiveDate),
     /// Open or close the month picker.
     CalendarMonthToggled,
+    /// Opens the pending-tasks popup for a day, or closes it.
+    PendingTasksShown(Option<chrono::NaiveDate>),
     /// Move the month picker by a number of months, positive or negative.
     CalendarMonthShift(i32),
 
@@ -467,6 +493,10 @@ impl State {
             alarms: alarms::Alarms::default(),
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
+            weekly: false,
+            week_anchor: calendar::day_at(Local::now(), day_end_hour),
+            week_hover: None,
+            week_scroll_x: 0.0,
             projects: Default::default(),
             travel: Default::default(),
             main_window: None,
@@ -474,6 +504,9 @@ impl State {
                 config.views.calendar_width(config.window.width),
                 config.window.height,
             ),
+            monitor_size: None,
+            weekly_resize_pending: false,
+            weekly_width_restoring: None,
             panel_command_rx: None,
             panel_config: None,
             panel_expected_close: false,
@@ -525,12 +558,30 @@ impl State {
             0.0
         }
     }
+
+    fn weekly_active(&self) -> bool {
+        self.screen == Screen::Calendar && self.weekly
+    }
+
+    fn weekly_window_width(&self) -> f32 {
+        let width = (ui::calendar::weekly_view_width(&self.config.calendar) + self.screen_margin())
+            .max(self.calendar_width() + self.screen_margin());
+        match self.monitor_size {
+            Some(size) if size.width.is_finite() && size.width > 0.0 => width.min(size.width),
+            _ => width,
+        }
+    }
 }
 
 /// Resize the panes together, keeping the panel's transparent screen inset
 /// outside the calendar's configured width.
 fn apply_view_sizes(state: &mut State) -> Task<Message> {
-    let base = state.calendar_width() + state.screen_margin();
+    let weekly = state.weekly_active();
+    let base = if weekly {
+        state.weekly_window_width()
+    } else {
+        state.calendar_width() + state.screen_margin()
+    };
     let block_open = state.timeblocking.original_width.is_some();
     let mut width = if block_open {
         state.timeblocking.original_width = Some(base);
@@ -545,13 +596,23 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
     let Some(id) = state.main_window else {
         return Task::none();
     };
+    if weekly && (state.main_size.width - width).abs() > 0.5 {
+        state.weekly_resize_pending = true;
+    }
     let resize = window::resize(id, Size::new(width, state.main_size.height));
     if state.sidebar.is_some() {
         // Relax the previous fixed width before asking the compositor to resize.
         window::set_max_size(id, None)
             .chain(window::set_min_size(
                 id,
-                Some(Size::new(base, MIN_SIZE.height)),
+                Some(Size::new(
+                    if weekly {
+                        (MIN_SIZE.width + state.screen_margin()).min(base)
+                    } else {
+                        base
+                    },
+                    MIN_SIZE.height,
+                )),
             ))
             .chain(resize)
             .chain(window::set_max_size(
@@ -627,7 +688,7 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 /// A Wayland client cannot learn how tall the output is (iced's
 /// `window::monitor_size` reports `None` here), so the panel asks for a strip
 /// taller than any screen and lets the compositor fit it — KWin clamps a window
-/// to the screen. Only the height is free to clamp; the width is fixed.
+/// to the screen. Weekly also permits the compositor to clamp the width.
 const PANEL_FILL: f32 = 10_000.0;
 
 /// The window a panel instance opens with.
@@ -739,12 +800,49 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 /// Opens or closes the event details pane by widening or narrowing the window
 /// to match, whatever code changed which event is open.
 fn reconcile_detail_pane(state: &mut State) -> Task<Message> {
-    let open = state.calendar.open_event.is_some() && shows_details(state.screen);
+    let open = detail_pane_visible(state);
     if open == state.details_pane_open {
         return Task::none();
     }
     state.details_pane_open = open;
     apply_view_sizes(state)
+}
+
+fn detail_pane_visible(state: &State) -> bool {
+    state.calendar.open_event.is_some() && shows_details(state.screen) && !state.weekly_active()
+}
+
+fn resize_for_week_transition(
+    state: &mut State,
+    was_weekly: bool,
+    close: Task<Message>,
+) -> Task<Message> {
+    if was_weekly == state.weekly_active() {
+        return close;
+    }
+
+    state.details_pane_open = detail_pane_visible(state);
+    let restored_width = state.calendar_width()
+        + state.screen_margin()
+        + if state.details_pane_open {
+            state.config.views.detail_width()
+        } else {
+            0.0
+        };
+    let restoring = was_weekly
+        && state.main_window.is_some()
+        && (state.weekly_resize_pending || (state.main_size.width - restored_width).abs() > 0.5);
+    state.weekly_width_restoring = restoring.then_some((restored_width, Instant::now()));
+    state.weekly_resize_pending = false;
+    let resize = close.chain(apply_view_sizes(state));
+    if state.weekly_active() {
+        if let Some(id) = state.main_window {
+            return resize.chain(
+                window::monitor_size(id).map(move |size| Message::WeekMonitorSized(id, size)),
+            );
+        }
+    }
+    resize
 }
 
 /// The screens that show the event details pane beside their content.
@@ -848,6 +946,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::Alarms(action) => alarms::update(state, action),
 
         Message::ScreenSelected(screen) => {
+            let was_weekly = state.weekly_active();
+            let returning_to_week =
+                screen == Screen::Calendar && state.screen != Screen::Calendar && state.weekly;
             state.view_layout_input = None;
             // Alarm setting belongs to the day view, so leaving it ends both.
             state.alarms.mode = false;
@@ -863,11 +964,83 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             state.screen = screen;
             let close = crate::timeblocking::close(state);
-            if screen == Screen::KeepNotes {
+            let close = resize_for_week_transition(state, was_weekly, close);
+            if returning_to_week {
+                Task::batch([close, sync_calendar(state)])
+            } else if screen == Screen::KeepNotes {
                 Task::batch([close, refresh_keep(state)])
             } else {
                 close
             }
+        }
+
+        Message::CalendarModeSelected(weekly) => {
+            let was_weekly = state.weekly_active();
+            let changed = state.weekly != weekly || state.screen != Screen::Calendar;
+            let close = crate::timeblocking::close(state);
+            state.calendar.open_event = None;
+            state.calendar.month_open = false;
+            state.calendar.menu_open = false;
+            state.week_hover = None;
+            state.screen = Screen::Calendar;
+            state.weekly = weekly;
+            let close = resize_for_week_transition(state, was_weekly, close);
+            if changed {
+                state.week_anchor = state.calendar.day;
+                state.week_scroll_x = 0.0;
+                let scroll = if weekly {
+                    ui::calendar::scroll_to_now(
+                        state.calendar.hour_height,
+                        state.config.calendar.day_end_minutes(),
+                    )
+                } else {
+                    Task::none()
+                };
+                Task::batch([close, scroll, sync_calendar(state)])
+            } else {
+                close
+            }
+        }
+
+        Message::WeekHover(day) => {
+            state.week_hover = day;
+            Task::none()
+        }
+
+        Message::WeekScrolled(x) => {
+            state.week_scroll_x = x;
+            Task::none()
+        }
+
+        Message::WeekDayAction(day, message) => {
+            let selects_day = matches!(
+                &*message,
+                Message::EventOpened(_)
+                    | Message::EventTimeChanged { .. }
+                    | Message::TaskToggled(_)
+                    | Message::EventDraftStarted { .. }
+                    | Message::TimeBlocking(
+                        crate::timeblocking::Action::View(_)
+                            | crate::timeblocking::Action::DropDay
+                            | crate::timeblocking::Action::DropTime(_)
+                            | crate::timeblocking::Action::DropTask(_)
+                            | crate::timeblocking::Action::DropBlock(_)
+                    )
+            );
+            if selects_day && day != state.calendar.day {
+                let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+                let follow_today = state.calendar.follow_today;
+                state.calendar.set_day(day, today);
+                state.calendar.follow_today = follow_today;
+                if matches!(
+                    &*message,
+                    Message::EventOpened(_)
+                        | Message::TimeBlocking(crate::timeblocking::Action::View(_))
+                ) {
+                    let _ = crate::timeblocking::close(state);
+                }
+            }
+            dispatch(state, *message)
         }
 
         Message::Projects(action) => crate::projects::update(state, action),
@@ -1233,6 +1406,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 || previous.views.detail_width != state.config.views.detail_width;
             let views_changed = pane_widths_changed
                 || (state.sidebar.is_some() && previous.views.margin != state.config.views.margin);
+            let weekly_size_changed = state.weekly_active()
+                && (previous.calendar.weekly_days() != state.config.calendar.weekly_days()
+                    || previous.calendar.weekly_day_width()
+                        != state.config.calendar.weekly_day_width());
             if pane_widths_changed
                 && previous.window.time_block_width == state.config.window.time_block_width
             {
@@ -1245,7 +1422,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     *width += state.config.views.margin() - previous.views.margin();
                 }
             }
-            if views_changed {
+            if views_changed || weekly_size_changed {
                 if state.sidebar.is_none() {
                     state.main_size.height = state.config.window.height;
                 }
@@ -1260,26 +1437,15 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                         ));
                     }
                     if !views_changed
+                        && !weekly_size_changed
                         && (previous.window.width != state.config.window.width
                             || previous.window.height != state.config.window.height
                             || (state.timeblocking.original_width.is_some()
                                 && previous.window.time_block_width
                                     != state.config.window.time_block_width))
                     {
-                        let mut width = if state.timeblocking.original_width.is_some() {
-                            let base = state.calendar_width();
-                            state.timeblocking.original_width = Some(base);
-                            crate::timeblocking::editor_width(state, base)
-                        } else {
-                            state.calendar_width()
-                        };
-                        if state.details_pane_open {
-                            width += state.config.views.detail_width();
-                        }
-                        tasks.push(window::resize(
-                            id,
-                            Size::new(width, state.config.window.height),
-                        ));
+                        state.main_size.height = state.config.window.height;
+                        tasks.push(apply_view_sizes(state));
                     }
                 }
             }
@@ -1344,16 +1510,25 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                         return Task::none();
                     };
                     let mut settings = sidebar_settings(panel, &state.config.views);
-                    // The editor stayed open while hidden, so reopen at its width.
-                    if let Some(base) = state.timeblocking.original_width {
-                        let width = crate::timeblocking::editor_width(state, base);
+                    if state.weekly_active() {
+                        let width = state.weekly_window_width();
                         settings.size = Size::new(width, PANEL_FILL);
-                        settings.max_size = None;
-                    }
-                    // The details pane widens the panel further while it is open.
-                    if state.details_pane_open {
-                        settings.size.width += state.config.views.detail_width();
-                        settings.max_size = None;
+                        settings.min_size = Some(Size::new(
+                            (MIN_SIZE.width + state.screen_margin()).min(width),
+                            MIN_SIZE.height,
+                        ));
+                        settings.max_size = Some(Size::new(width, 100_000.0));
+                    } else {
+                        // The editor and details pane can stay open while hidden.
+                        if let Some(base) = state.timeblocking.original_width {
+                            let width = crate::timeblocking::editor_width(state, base);
+                            settings.size = Size::new(width, PANEL_FILL);
+                            settings.max_size = None;
+                        }
+                        if state.details_pane_open {
+                            settings.size.width += state.config.views.detail_width();
+                            settings.max_size = None;
+                        }
                     }
                     let (_id, open) = window::open(settings);
                     open.map(Message::WindowOpened)
@@ -1397,6 +1572,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            state.monitor_size = size;
+            if state.weekly_active() {
+                if state.sidebar.is_some() {
+                    if let Some(size) =
+                        size.filter(|size| size.height.is_finite() && size.height > 0.0)
+                    {
+                        state.main_size.height = size.height;
+                    }
+                }
+                return apply_view_sizes(state);
+            }
+
             let Some(size) = size else {
                 return Task::none();
             };
@@ -1437,6 +1624,14 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             ])
         }
 
+        Message::WeekMonitorSized(id, size) => {
+            if state.main_window != Some(id) || !state.weekly_active() {
+                return Task::none();
+            }
+            state.monitor_size = size;
+            apply_view_sizes(state)
+        }
+
         Message::WindowResized(id, size) => {
             if state.main_window != Some(id) {
                 return Task::none();
@@ -1444,6 +1639,28 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
             state.main_size = size;
             log::debug!("window is now {}x{}", size.width, size.height);
+
+            if state.weekly_active() {
+                state.weekly_resize_pending = false;
+                if state.sidebar.is_none() {
+                    state.config.window.height = size.height;
+                    return queue_save(state);
+                }
+                return Task::none();
+            }
+            if let Some((target, started)) = state.weekly_width_restoring {
+                if started.elapsed() < Duration::from_secs(1) {
+                    if (size.width - target).abs() <= 0.5 {
+                        state.weekly_width_restoring = None;
+                    }
+                    if state.sidebar.is_none() {
+                        state.config.window.height = size.height;
+                        return queue_save(state);
+                    }
+                    return Task::none();
+                }
+                state.weekly_width_restoring = None;
+            }
 
             // The expanded editor has its own saved width. Keep the width to
             // restore on close, including in the side-panel companion. The
@@ -1519,6 +1736,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::Ignored => Task::none(),
 
+        Message::PendingTasksShown(day) => {
+            state.calendar.pending_open = day;
+            Task::none()
+        }
+
         Message::CalendarMenuToggled => {
             state.calendar.menu_open = !state.calendar.menu_open;
             // Dismissing the menu also puts away any open color picker, so it
@@ -1572,11 +1794,39 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CalendarSyncedAt(revision, result) => {
-            if revision != state.timeblocking.revision {
+            if revision != state.timeblocking.revision
+                || (state.screen == Screen::Calendar && state.weekly)
+            {
                 state.calendar.sync = SyncState::Idle;
                 return sync_calendar(state);
             }
             Task::done(Message::CalendarSynced(result))
+        }
+        Message::CalendarWeekSynced(revision, anchor, days, result) => {
+            if revision != state.timeblocking.revision
+                || state.screen != Screen::Calendar
+                || !state.weekly
+                || anchor != state.week_anchor
+                || days != state.config.calendar.weekly_days()
+            {
+                state.calendar.sync = SyncState::Idle;
+                return sync_calendar(state);
+            }
+            match result {
+                Ok(mut snapshot) => {
+                    if let Some(notice) = state.timeblocking.sync_notice.take() {
+                        snapshot.notice = Some(match snapshot.notice.take() {
+                            Some(existing) => format!("{notice}\n{existing}"),
+                            None => notice,
+                        });
+                    }
+                    let dates = calendar::week_dates(anchor, days);
+                    state.calendar.apply_week_snapshot(snapshot, &dates);
+                    state.calendar.apply_task_colors(&state.config.calendar);
+                    reconcile_completed_task(state)
+                }
+                Err(error) => dispatch(state, Message::CalendarSynced(Err(error))),
+            }
         }
         Message::CalendarSynced(Ok(mut snapshot)) => {
             // The user may have stepped to another day while this was in
@@ -1595,26 +1845,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             state.calendar.apply_snapshot(snapshot);
             state.calendar.apply_task_colors(&state.config.calendar);
-            // Completing a task in another Google client also ends its work session.
-            let completed_key = state.config.task_work.active().and_then(|session| {
-                state
-                    .calendar
-                    .events
-                    .iter()
-                    .any(|e| {
-                        e.is_task()
-                            && e.completed
-                            && crate::timeblocking::task_key(e) == session.task_key
-                    })
-                    .then(|| session.task_key.clone())
-            });
-            if let Some(key) = completed_key {
-                let now = chrono::Utc::now();
-                state.config.task_work.stop(&key, now);
-                state.timeblocking.work_now = Some(now);
-                return queue_save(state);
-            }
-            Task::none()
+            reconcile_completed_task(state)
         }
 
         Message::CalendarSynced(Err(error)) => {
@@ -1634,6 +1865,27 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 state.calendar.error = Some(error);
             }
             Task::none()
+        }
+
+        Message::DockRequested => {
+            let origin = if state.sidebar.is_some() {
+                crate::dock::launch::Origin::Sidebar
+            } else {
+                crate::dock::launch::Origin::Window
+            };
+            if let Err(error) = crate::dock::launch::open_dock(origin) {
+                state.calendar.error = Some(format!("Could not open the dock: {error:#}"));
+                return Task::none();
+            }
+
+            state.calendar.menu_open = false;
+            let Some(id) = state.main_window else {
+                return Task::none();
+            };
+            // The panel process stays up with its window hidden, so it can be
+            // brought back; the regular window just quits.
+            state.panel_expected_close = state.sidebar.is_some();
+            window::close(id)
         }
 
         Message::EventOpened(id) => {
@@ -1732,7 +1984,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventTimeSaved(id, Ok(())) => {
             state.calendar.confirm_time_change(&id);
-            crate::timeblocking::update(state, crate::timeblocking::Action::RefreshBlock(id))
+            let refresh =
+                crate::timeblocking::update(state, crate::timeblocking::Action::RefreshBlock(id));
+            Task::batch([refresh, refresh_week_after_write(state)])
         }
 
         Message::EventTimeSaved(id, Err(error)) => {
@@ -1788,12 +2042,16 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.pending_delete = None;
             // The event is gone on Google's side, so drop it from the day in
             // view. The next sync reconciles the cache.
-            state.calendar.events.retain(|event| event.id != id);
+            if state.screen == Screen::Calendar && state.weekly {
+                state.calendar.forget_event_everywhere(&id);
+            } else {
+                state.calendar.events.retain(|event| event.id != id);
+            }
             let closing_details = state.calendar.open_event.as_deref() == Some(id.as_str());
             if closing_details {
                 state.calendar.open_event = None;
             }
-            if state.timeblocking.block.as_deref() == Some(id.as_str()) {
+            let close = if state.timeblocking.block.as_deref() == Some(id.as_str()) {
                 let close = crate::timeblocking::close(state);
                 if closing_details && state.details_pane_open {
                     // Detail-pane reconciliation will resize both panes together.
@@ -1803,7 +2061,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 }
             } else {
                 Task::none()
-            }
+            };
+            Task::batch([close, refresh_week_after_write(state)])
         }
 
         Message::EventDeleted(_id, Err(error)) => {
@@ -1872,8 +2131,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // showing it, including a stale copy on the list it was moved
             // from and the calendar block that held its time.
             state.calendar.forget_task(&id);
-            state.calendar.invalidate_other_days();
-            queue_save(state)
+            if state.screen == Screen::Calendar && state.weekly {
+                state.calendar.clear_disk_cache();
+            } else {
+                state.calendar.invalidate_other_days();
+            }
+            let save = queue_save(state);
+            Task::batch([save, refresh_week_after_write(state)])
         }
 
         Message::TaskDeleted(id, Err(error)) => {
@@ -1943,11 +2207,15 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::TaskCompletionSaved(id, _, Ok(task)) => {
             if let Some(event) = state.calendar.event_mut(&id) {
-                *event = task;
+                *event = task.clone();
             }
             state.timeblocking.busy.remove(&id);
             state.timeblocking.revision += 1;
-            state.calendar.invalidate_other_days();
+            if state.screen == Screen::Calendar && state.weekly {
+                state.calendar.replace_cached_task(&id, &task);
+            } else {
+                state.calendar.invalidate_other_days();
+            }
             Task::done(Message::CalendarSyncRequested)
         }
 
@@ -2048,11 +2316,34 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // on today if the user had navigated away.
             let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
             state.calendar.set_day(day, day);
+            state.week_anchor = day;
             // The day's window moved, so the cached days no longer describe
             // the days they are filed under.
             state.calendar.forget_cached_days();
             let save = queue_save(state);
             Task::batch([save, sync_calendar(state)])
+        }
+
+        Message::CalendarWeeklyDaysChanged(days) => {
+            state.config.calendar.weekly_days = days.clamp(7, 8);
+            let save = queue_save(state);
+            let resize = if state.weekly_active() {
+                apply_view_sizes(state)
+            } else {
+                Task::none()
+            };
+            Task::batch([save, resize, sync_calendar(state)])
+        }
+
+        Message::CalendarWeeklyWidthChanged(width) => {
+            state.config.calendar.weekly_day_width = width.clamp(100, 400);
+            let save = queue_save(state);
+            let resize = if state.weekly_active() {
+                apply_view_sizes(state)
+            } else {
+                Task::none()
+            };
+            Task::batch([save, resize])
         }
 
         Message::CalendarZoomed { factor, anchor } => {
@@ -2073,18 +2364,54 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::CalendarDayShift(days) => {
             let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            let day = state.calendar.day + chrono::Duration::days(days);
+            let origin = if state.weekly {
+                state.week_anchor
+            } else {
+                state.calendar.day
+            };
+            let day = origin + chrono::Duration::days(days);
+            let close = if state.weekly {
+                state.calendar.open_event = None;
+                crate::timeblocking::close(state)
+            } else {
+                Task::none()
+            };
             state.calendar.set_day(day, today);
+            if state.weekly {
+                state.week_anchor = day;
+                state.week_scroll_x = 0.0;
+            }
             state.calendar.menu_open = false;
             state.calendar.month_open = false;
-            sync_calendar(state)
+            let scroll = if state.weekly {
+                ui::calendar::scroll_week_to_start()
+            } else {
+                Task::none()
+            };
+            Task::batch([close, scroll, sync_calendar(state)])
         }
 
         Message::CalendarDaySelected(day) => {
             let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            let close = if state.weekly {
+                state.calendar.open_event = None;
+                crate::timeblocking::close(state)
+            } else {
+                Task::none()
+            };
             state.calendar.set_day(day, today);
+            if state.weekly {
+                state.week_anchor = day;
+                state.week_hover = None;
+                state.week_scroll_x = 0.0;
+            }
             state.calendar.month_open = false;
-            sync_calendar(state)
+            let scroll = if state.weekly {
+                ui::calendar::scroll_week_to_start()
+            } else {
+                Task::none()
+            };
+            Task::batch([close, scroll, sync_calendar(state)])
         }
 
         Message::CalendarMonthToggled => {
@@ -2092,7 +2419,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // The picker opens on the month of the day in view, and the menu
             // gets out of its way.
             if state.calendar.month_open {
-                state.calendar.month = calendar::first_of_month(state.calendar.day);
+                state.calendar.month = calendar::first_of_month(if state.weekly {
+                    state.week_anchor
+                } else {
+                    state.calendar.day
+                });
                 state.calendar.menu_open = false;
             }
             Task::none()
@@ -2223,7 +2554,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::EventDraftSaved(Ok(event)) => {
             state.calendar.draft = None;
             state.calendar.add_event(event);
-            Task::none()
+            refresh_week_after_write(state)
         }
 
         Message::EventDraftSaved(Err(error)) => {
@@ -2310,7 +2641,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventEditSaved(Ok(())) => {
             state.calendar.edit_draft = None;
-            Task::none()
+            refresh_week_after_write(state)
         }
 
         Message::EventEditSaved(Err(error)) => {
@@ -2610,7 +2941,11 @@ fn fire_alarm(state: &mut State) -> Task<Message> {
 ///
 /// An alarm already ringing stays dismissable if a quieter one goes off on
 /// top of it.
-pub(crate) fn fire(state: &mut State, profile: &config::AlarmProfile, duration: Duration) -> Task<Message> {
+pub(crate) fn fire(
+    state: &mut State,
+    profile: &config::AlarmProfile,
+    duration: Duration,
+) -> Task<Message> {
     let actions = alarm::on_finished(profile);
 
     state.alarm_active = state.alarm_active || actions.is_dismissable();
@@ -2618,7 +2953,11 @@ pub(crate) fn fire(state: &mut State, profile: &config::AlarmProfile, duration: 
     perform(state, actions, duration)
 }
 
-pub(crate) fn perform(state: &mut State, actions: alarm::Actions, duration: Duration) -> Task<Message> {
+pub(crate) fn perform(
+    state: &mut State,
+    actions: alarm::Actions,
+    duration: Duration,
+) -> Task<Message> {
     let mut tasks = Vec::new();
 
     if let Some(sound) = actions.sound {
@@ -2756,14 +3095,59 @@ fn refresh_day(state: &mut State) -> Task<Message> {
     }
 
     let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    if day != state.calendar.day {
+    let displayed = if state.weekly && state.screen == Screen::Calendar {
+        state.week_anchor
+    } else {
+        state.calendar.day
+    };
+    if day != displayed {
         state.calendar.set_day(day, day);
+        if state.weekly {
+            state.week_anchor = day;
+        }
         return sync_calendar(state);
     }
     Task::none()
 }
 
+pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
+    if state.screen == Screen::Calendar && state.weekly {
+        state.timeblocking.revision += 1;
+        state.calendar.clear_disk_cache();
+        Task::done(Message::CalendarSyncRequested)
+    } else {
+        Task::none()
+    }
+}
+
+fn reconcile_completed_task(state: &mut State) -> Task<Message> {
+    let completed_key = state.config.task_work.active().and_then(|session| {
+        state
+            .calendar
+            .events
+            .iter()
+            .any(|event| {
+                event.is_task()
+                    && event.completed
+                    && crate::timeblocking::task_key(event) == session.task_key
+            })
+            .then(|| session.task_key.clone())
+    });
+    if let Some(key) = completed_key {
+        let now = chrono::Utc::now();
+        state.config.task_work.stop(&key, now);
+        state.timeblocking.work_now = Some(now);
+        queue_save(state)
+    } else {
+        Task::none()
+    }
+}
+
 fn sync_calendar(state: &mut State) -> Task<Message> {
+    if state.screen == Screen::Calendar && state.weekly {
+        let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
+        state.calendar.load_cached_days(&days);
+    }
     if !state.calendar.is_signed_in()
         || state.calendar.is_busy()
         || !state.timeblocking.busy.is_empty()
@@ -2782,6 +3166,22 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
 
     let revision = state.timeblocking.revision;
     let tasks_calendar = state.config.calendar.tasks_calendar.clone();
+    if state.screen == Screen::Calendar && state.weekly {
+        let anchor = state.week_anchor;
+        let days = state.config.calendar.weekly_days();
+        return blocking::run(move || {
+            calendar::sync_week(
+                &client_id,
+                &client_secret,
+                &disabled,
+                anchor,
+                days,
+                day_end_hour,
+                tasks_calendar.as_deref(),
+            )
+        })
+        .map(move |result| Message::CalendarWeekSynced(revision, anchor, days, result));
+    }
     blocking::run(move || {
         calendar::sync_day(
             &client_id,
@@ -2847,6 +3247,47 @@ fn panel_ipc_listener(socket_path: PathBuf, tx: mpsc::Sender<PanelCommand>) -> A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::futures::{StreamExt, executor::block_on};
+
+    #[derive(Debug)]
+    enum GeometryAction {
+        Resize(Size),
+        Min(Option<Size>),
+        Max(Option<Size>),
+        Open(window::Settings),
+    }
+
+    fn geometry_actions(task: Task<Message>) -> Vec<GeometryAction> {
+        use iced_test::runtime::{Action, task, window::Action as WindowAction};
+        block_on(async {
+            let Some(mut stream) = task::into_stream(task) else {
+                return Vec::new();
+            };
+            let mut actions = Vec::new();
+            while let Some(action) = stream.next().await {
+                match action {
+                    Action::Window(WindowAction::Resize(_, size)) => {
+                        actions.push(GeometryAction::Resize(size));
+                    }
+                    Action::Window(WindowAction::SetMinSize(_, size)) => {
+                        actions.push(GeometryAction::Min(size));
+                    }
+                    Action::Window(WindowAction::SetMaxSize(_, size)) => {
+                        actions.push(GeometryAction::Max(size));
+                    }
+                    Action::Window(WindowAction::GetMonitorSize(_, sender)) => {
+                        let _ = sender.send(None);
+                    }
+                    Action::Window(WindowAction::Open(id, settings, sender)) => {
+                        actions.push(GeometryAction::Open(settings));
+                        let _ = sender.send(id);
+                    }
+                    _ => {}
+                }
+            }
+            actions
+        })
+    }
 
     fn flash(settings: config::Flash) -> Flash {
         Flash {
@@ -3214,6 +3655,230 @@ mod tests {
     }
 
     #[test]
+    fn weekly_width_includes_every_column_padding_margin_and_monitor_limit() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.config.calendar.weekly_days = 7;
+        state.config.calendar.weekly_day_width = 100;
+        assert_eq!(state.weekly_window_width(), 828.0);
+        state.config.calendar.weekly_days = 8;
+        state.config.calendar.weekly_day_width = 220;
+        assert_eq!(state.weekly_window_width(), 2008.0);
+        state.sidebar = Some(Sidebar {
+            width: 200.0,
+            side: panel::Side::Left,
+        });
+        assert_eq!(state.weekly_window_width(), 2016.0);
+        state.monitor_size = Some(Size::new(1200.0, 900.0));
+        assert_eq!(state.weekly_window_width(), 1200.0);
+        state.monitor_size = Some(Size::new(f32::NAN, 900.0));
+        assert_eq!(state.weekly_window_width(), 2016.0);
+        state.sidebar = None;
+        state.monitor_size = None;
+        state.config.window.width = 3000.0;
+        assert_eq!(state.weekly_window_width(), 3000.0);
+    }
+
+    #[test]
+    fn weekly_sidebar_relaxes_constraints_and_restores_daily_width() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.main_window = Some(window::Id::unique());
+        state.sidebar = Some(Sidebar {
+            width: 200.0,
+            side: panel::Side::Left,
+        });
+        state.main_size = Size::new(208.0, 900.0);
+
+        let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
+        assert!(matches!(actions.as_slice(), [
+            GeometryAction::Max(None),
+            GeometryAction::Min(Some(min)),
+            GeometryAction::Resize(size),
+            GeometryAction::Max(Some(max)),
+        ] if min.width < 208.0 && size.width == 1386.0 && max.width == size.width));
+
+        let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
+        assert!(matches!(actions.as_slice(), [
+            GeometryAction::Max(None),
+            GeometryAction::Min(Some(min)),
+            GeometryAction::Resize(size),
+            GeometryAction::Max(Some(max)),
+        ] if min.width == 208.0 && size.width == 208.0 && max.width == 208.0));
+    }
+
+    #[test]
+    fn weekly_does_not_replace_the_saved_daily_width() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(640.0, 700.0)),
+        );
+        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(1378.0, 700.0)),
+        );
+        assert_eq!(state.config.window.width, 640.0);
+
+        let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
+        assert!(
+            matches!(actions.as_slice(), [GeometryAction::Resize(size)] if size.width == 640.0)
+        );
+        // A delayed notification from the expanded window can arrive after switching.
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(1378.0, 700.0)),
+        );
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(1200.0, 700.0)),
+        );
+        assert_eq!(state.config.window.width, 640.0);
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(640.0, 700.0)),
+        );
+        assert_eq!(state.config.window.width, 640.0);
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(720.0, 700.0)),
+        );
+        assert_eq!(state.config.window.width, 720.0);
+    }
+
+    #[test]
+    fn leaving_weekly_at_an_unchanged_width_does_not_discard_a_later_manual_resize() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(1600.0, 700.0)),
+        );
+        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
+        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(1550.0, 700.0)),
+        );
+        assert_eq!(state.config.window.width, 1550.0);
+    }
+
+    #[test]
+    fn a_clamped_restore_does_not_prevent_later_manual_resizes() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+        state.config.window.width = 1200.0;
+        state.weekly_width_restoring = Some((1200.0, Instant::now() - Duration::from_secs(2)));
+        let _ = update(
+            &mut state,
+            Message::WindowResized(id, Size::new(900.0, 700.0)),
+        );
+        assert_eq!(state.config.window.width, 900.0);
+    }
+
+    #[test]
+    fn weekly_resizes_on_tab_return_and_external_settings_changes() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.main_window = Some(window::Id::unique());
+        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
+        let actions = geometry_actions(update(
+            &mut state,
+            Message::ScreenSelected(Screen::Settings),
+        ));
+        assert!(
+            matches!(actions.as_slice(), [GeometryAction::Resize(size)] if size.width == state.calendar_width())
+        );
+        let _ = update(&mut state, Message::CalendarWeeklyDaysChanged(7));
+        let _ = update(&mut state, Message::CalendarWeeklyWidthChanged(200));
+        let actions = geometry_actions(update(
+            &mut state,
+            Message::ScreenSelected(Screen::Calendar),
+        ));
+        assert!(
+            matches!(actions.as_slice(), [GeometryAction::Resize(size)] if size.width == 1628.0)
+        );
+
+        let mut external = state.config.clone();
+        external.calendar.weekly_day_width = 250;
+        let actions = geometry_actions(update(&mut state, Message::ConfigReloaded(external)));
+        assert!(
+            matches!(actions.as_slice(), [GeometryAction::Resize(size)] if size.width == 2028.0)
+        );
+    }
+
+    #[test]
+    fn weekly_sidebar_reopens_wide_and_respects_monitor_responses() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.sidebar = Some(Sidebar {
+            width: 200.0,
+            side: panel::Side::Left,
+        });
+        state.panel_config = Some(panel::PanelConfig::default());
+        state.weekly = true;
+        state.monitor_size = Some(Size::new(1000.0, 900.0));
+        let (sender, receiver) = mpsc::channel();
+        state.panel_command_rx = Some(receiver);
+        sender.send(PanelCommand::Show).unwrap();
+        let actions = geometry_actions(update(&mut state, Message::PanelCommandPolled));
+        assert!(
+            matches!(actions.as_slice(), [GeometryAction::Open(settings)]
+            if settings.size.width == 1000.0
+                && settings.min_size.unwrap().width < 1000.0
+                && settings.max_size.unwrap().width == 1000.0)
+        );
+
+        let id = window::Id::unique();
+        state.main_window = Some(id);
+        let actions = geometry_actions(update(
+            &mut state,
+            Message::MonitorSized(id, Some(Size::new(1100.0, 800.0))),
+        ));
+        assert!(matches!(actions.as_slice(), [
+            GeometryAction::Max(None), GeometryAction::Min(_),
+            GeometryAction::Resize(size), GeometryAction::Max(_)
+        ] if *size == Size::new(1100.0, 800.0)));
+        let actions = geometry_actions(update(&mut state, Message::WeekMonitorSized(id, None)));
+        assert!(matches!(actions.as_slice(), [
+            GeometryAction::Max(None), GeometryAction::Min(Some(min)),
+            GeometryAction::Resize(size), GeometryAction::Max(_)
+        ] if size.width == 1386.0 && min.width < 1000.0));
+
+        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
+        let actions = geometry_actions(update(
+            &mut state,
+            Message::WeekMonitorSized(id, Some(Size::new(1000.0, 800.0))),
+        ));
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn entering_weekly_closes_daily_panes_before_the_final_resize() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.main_window = Some(window::Id::unique());
+        state.sidebar = Some(Sidebar {
+            width: 200.0,
+            side: panel::Side::Left,
+        });
+        state.timeblocking.original_width = Some(208.0);
+        state.details_pane_open = true;
+        state.calendar.open_event = Some("event".into());
+        let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
+        let widths: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                GeometryAction::Resize(size) => Some(size.width),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(widths.last(), Some(&1386.0));
+        assert!(!state.details_pane_open);
+        assert_eq!(state.timeblocking.original_width, None);
+    }
+
+    #[test]
     fn the_panel_pins_to_the_edge_it_was_asked_for() {
         let window = Size::new(200.0, 1080.0);
         let monitor = Size::new(1920.0, 1080.0);
@@ -3487,7 +4152,10 @@ mod tests {
     }
 
     fn place(state: &mut State, minutes: i64) {
-        let _ = update(state, Message::Alarms(alarms::Action::Place(at_in(minutes))));
+        let _ = update(
+            state,
+            Message::Alarms(alarms::Action::Place(at_in(minutes))),
+        );
     }
 
     #[test]
@@ -3585,7 +4253,12 @@ mod tests {
         let mut state = State::new(Config::default(), Catalog::built_in());
         place(&mut state, 60);
         place(&mut state, 120);
-        let id = state.alarms.editor.as_ref().expect("the last one is open").id;
+        let id = state
+            .alarms
+            .editor
+            .as_ref()
+            .expect("the last one is open")
+            .id;
 
         let _ = update(&mut state, Message::Alarms(alarms::Action::Delete(id)));
 
@@ -3615,7 +4288,11 @@ mod tests {
         assert_eq!(alarm.profile.sound.volume, 12);
         assert!(!alarm.profile.flash.enabled);
         assert_eq!(alarm.at, before);
-        assert_eq!(state.config.alarm, Config::default().alarm, "defaults stay put");
+        assert_eq!(
+            state.config.alarm,
+            Config::default().alarm,
+            "defaults stay put"
+        );
     }
 
     #[test]
@@ -3625,7 +4302,9 @@ mod tests {
         let alarm = state.alarms.items()[0].clone();
 
         // The same time of day, tomorrow, is still ahead.
-        let later = (alarm.at + chrono::Duration::minutes(5)).format("%H:%M").to_string();
+        let later = (alarm.at + chrono::Duration::minutes(5))
+            .format("%H:%M")
+            .to_string();
         let _ = update(
             &mut state,
             Message::Alarms(alarms::Action::Edit(alarms::Edit::Time(later.clone()))),
@@ -3661,7 +4340,11 @@ mod tests {
             Message::Alarms(alarms::Action::Edit(alarms::Edit::Time("00:00".into()))),
         );
 
-        assert_eq!(state.alarms.items()[0].at, alarm.at, "the alarm did not move");
+        assert_eq!(
+            state.alarms.items()[0].at,
+            alarm.at,
+            "the alarm did not move"
+        );
         assert!(state.alarms.editor.as_ref().unwrap().time_error.is_some());
     }
 

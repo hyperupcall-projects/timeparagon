@@ -149,6 +149,12 @@ fn send_panel_command(command: &str) -> Result<()> {
         .unwrap_or_else(|| anyhow!("panel socket not available")))
 }
 
+/// Asks a running panel to show its window again. Fails when no panel is
+/// running, so the caller can start one.
+pub fn show_panel() -> Result<()> {
+    send_panel_command("show")
+}
+
 fn open_panel() -> Result<Child> {
     let exe = sidebar_exe()?;
     Command::new(&exe)

@@ -4,8 +4,8 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
 use iced::font::Weight;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
-    Space, button, canvas as canvas_widget, column, container, mouse_area, row, scrollable, stack,
-    text, text_input, toggler,
+    Space, button, canvas as canvas_widget, column, container, mouse_area, responsive, row,
+    scrollable, stack, text, text_input, toggler,
 };
 use iced::{
     Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -84,6 +84,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 text::secondary
             }),
         unplanned_line,
+        pending_button(state, state.calendar.day, metrics.label() + 3.0),
     ]
     .spacing(2);
 
@@ -118,6 +119,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         edit_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
+    } else if let Some(day) = state.calendar.pending_open {
+        pending_overlay(state, metrics, day)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -126,6 +129,221 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         iced::widget::Space::new().width(0.0).height(0.0).into()
     };
 
+    stack![content, overlay].into()
+}
+
+pub(crate) fn weekly_view_width(settings: &crate::config::CalendarSettings) -> f32 {
+    let columns = (settings.weekly_days() + 1) as f32 * settings.weekly_day_width() as f32;
+    let padding = Metrics::of(Size::new(columns, 0.0)).padding;
+    columns + padding * 2.0
+}
+
+pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
+    let width = state.config.calendar.weekly_day_width() as f32;
+    let day_metrics = Metrics::of(Size::new(width, metrics.size.height));
+    let now = Local::now();
+    let all_day_height = if days.iter().any(|&day| {
+        state
+            .calendar
+            .all_day_events_on(day, &state.config.calendar)
+            .next()
+            .is_some()
+    }) {
+        (metrics.size.height * 0.13).clamp(35.0, 110.0)
+    } else {
+        0.0
+    };
+    let headings: Vec<Element<'a, Message>> = days
+        .iter()
+        .map(|&day| {
+            let all_day = all_day_row_on(state, &day_metrics, day, true)
+                .unwrap_or_else(|| Space::new().width(Fill).into());
+            let heading = text(day.format("%a %b %-d").to_string())
+                .size(day_metrics.label())
+                .center()
+                .width(Fill);
+            let content = column![
+                heading,
+                container(pending_button(state, day, day_metrics.label()))
+                    .center_x(Fill)
+                    .height(Length::Fixed(day_metrics.label() + 8.0)),
+                container(all_day)
+                    .height(Length::Fixed(all_day_height))
+                    .width(Fill),
+            ]
+            .width(Length::Fixed(width));
+            Element::from(content)
+                .map(move |message| Message::WeekDayAction(day, Box::new(message)))
+        })
+        .collect();
+
+    let grids: Vec<Element<'a, Message>> = days
+        .iter()
+        .map(|&day| {
+            Element::from(
+                container(day_canvas(state, &day_metrics, now, day, true))
+                    .width(Length::Fixed(width)),
+            )
+            .map(move |message| Message::WeekDayAction(day, Box::new(message)))
+        })
+        .collect();
+    let time_grid = scrollable(row(grids))
+        .id(iced::widget::Id::new(DAY_SCROLL))
+        .width(Fill)
+        .height(Fill);
+    let grid = scrollable(
+        column![row(headings), time_grid]
+            .width(Length::Fixed(width * days.len() as f32))
+            .height(Fill),
+    )
+    .direction(scrollable::Direction::Horizontal(
+        scrollable::Scrollbar::new(),
+    ))
+    .id(iced::widget::Id::new(WEEK_SCROLL))
+    .on_scroll(|viewport| Message::WeekScrolled(viewport.absolute_offset().x))
+    .width(Fill)
+    .height(Fill);
+
+    let panel_open = state.calendar.open_event.is_some() || state.timeblocking.block.is_some();
+    let mut grid_layers: Vec<Element<'a, Message>> = vec![grid.into()];
+    if panel_open && let Some(index) = days.iter().position(|day| *day == state.calendar.day) {
+        let viewport = (metrics.size.width - metrics.padding * 2.0).max(1.0);
+        let scroll_x = state
+            .week_scroll_x
+            .clamp(0.0, (width * days.len() as f32 - viewport).max(0.0));
+        let x = index as f32 * width - scroll_x;
+        let left = x.clamp(0.0, viewport);
+        let right = (x + width).clamp(0.0, viewport);
+        let dismiss = if state.calendar.open_event.is_some() {
+            Message::EventClosed
+        } else {
+            Message::TimeBlocking(crate::timeblocking::Action::Close)
+        };
+        let shade = |w: f32| {
+            mouse_area(
+                container(Space::new().width(Fill).height(Fill))
+                    .width(Length::Fixed(w))
+                    .height(Fill)
+                    .style(|_| container::Style {
+                        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.35).into()),
+                        ..container::Style::default()
+                    }),
+            )
+            .on_press(dismiss.clone())
+        };
+        grid_layers.push(
+            row![
+                shade(left),
+                Space::new().width(Length::Fixed((right - left).max(0.0))),
+                shade((viewport - right).max(0.0)),
+            ]
+            .height(Fill)
+            .into(),
+        );
+
+        let requested_width = if state.calendar.open_event.is_some() {
+            state.config.views.detail_width()
+        } else {
+            state.config.views.time_block_width()
+        };
+        let room_right = viewport - right;
+        let place_right = index + 1 < days.len() && room_right >= width.min(80.0);
+        let panel_width = if place_right {
+            requested_width.min(room_right)
+        } else if left > 0.0 {
+            requested_width.min(left)
+        } else {
+            requested_width.min(viewport)
+        };
+        let panel_x = if place_right {
+            right
+        } else {
+            (left - panel_width).max(0.0)
+        };
+        let pane = responsive(move |size| {
+            if state.calendar.open_event.is_some() {
+                let height = size.height.max(480.0);
+                let panel_metrics = Metrics::of(Size::new(panel_width, height));
+                scrollable(
+                    container(details_pane(state, &panel_metrics)).height(Length::Fixed(height)),
+                )
+                .height(Fill)
+                .into()
+            } else {
+                let panel_metrics = Metrics::of(Size::new(panel_width, size.height));
+                super::timeblocking::panel(state, &panel_metrics)
+            }
+        });
+        grid_layers.push(
+            row![
+                Space::new().width(Length::Fixed(panel_x)),
+                container(pane)
+                    .width(Length::Fixed(panel_width))
+                    .height(Fill)
+                    .style(|theme: &Theme| container::Style {
+                        background: Some(theme.extended_palette().background.base.color.into()),
+                        border: iced::Border {
+                            color: theme.extended_palette().background.strong.color,
+                            width: 1.0,
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
+                    }),
+            ]
+            .height(Fill)
+            .into(),
+        );
+    }
+
+    let mut status = column![
+        text(state.calendar.status_line())
+            .size(metrics.label() - 1.0)
+            .style(if state.calendar.error.is_some() {
+                text::danger
+            } else {
+                text::secondary
+            }),
+    ]
+    .spacing(2);
+    if state.alarms.mode {
+        status = status.push(
+            text("Click a time to set an alarm. Esc cancels.")
+                .size(metrics.label() - 1.0)
+                .color(colors::ALARM),
+        );
+    }
+    let mut content = column![
+        header(state, metrics),
+        status,
+        pointer_watch(
+            iced::widget::Stack::with_children(grid_layers)
+                .width(Fill)
+                .height(Fill)
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill);
+    if let Some(dismiss) = dismiss_bar(state, metrics) {
+        content = content.push(dismiss);
+    }
+    let overlay = if state.calendar.draft.is_some() {
+        draft_overlay(state, metrics)
+    } else if state.calendar.edit_draft.is_some() {
+        edit_overlay(state, metrics)
+    } else if state.alarms.editor.is_some() {
+        super::alarms::editor_overlay(state, metrics)
+    } else if let Some(day) = state.calendar.pending_open {
+        pending_overlay(state, metrics, day)
+    } else if state.calendar.month_open {
+        month_overlay(state, metrics)
+    } else if state.calendar.menu_open {
+        menu_overlay(state, metrics)
+    } else {
+        Space::new().width(0.0).height(0.0).into()
+    };
     stack![content, overlay].into()
 }
 
@@ -138,15 +356,32 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 /// narrow window has room for one button beside the day and not for two.
 fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    let heading = calendar::day_heading(state.calendar.day, today);
+    let weekly = state.weekly && state.screen == crate::app::Screen::Calendar;
+    let day = if weekly {
+        state.week_anchor
+    } else {
+        state.calendar.day
+    };
+    let heading = if weekly {
+        let days = calendar::week_dates(day, state.config.calendar.weekly_days());
+        let format = if metrics.breakpoint.is_compact() {
+            "%-m/%-d"
+        } else {
+            "%b %-d"
+        };
+        format!(
+            "{} – {}",
+            days.first().unwrap().format(format),
+            days.last().unwrap().format(format)
+        )
+    } else {
+        calendar::day_heading(day, today)
+    };
 
     let month = button(
-        text(format!(
-            "{} ▾",
-            calendar::month_short(state.calendar.day.month())
-        ))
-        .size(metrics.label())
-        .center(),
+        text(format!("{} ▾", calendar::month_short(day.month())))
+            .size(metrics.label())
+            .center(),
     )
     .on_press(Message::CalendarMonthToggled)
     .style(if state.calendar.month_open {
@@ -191,7 +426,7 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         })
     };
 
-    let day = text(heading)
+    let heading = text(heading)
         .size(metrics.label() + 1.0)
         .font(Font {
             weight: Weight::Bold,
@@ -199,6 +434,27 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         })
         .center()
         .width(Fill);
+    let day: Element<'a, Message> = if weekly {
+        row![
+            nav_button(
+                "◀",
+                Message::CalendarDayShift(-i64::from(state.config.calendar.weekly_days())),
+                metrics
+            ),
+            heading,
+            nav_button(
+                "▶",
+                Message::CalendarDayShift(i64::from(state.config.calendar.weekly_days())),
+                metrics
+            ),
+        ]
+        .spacing(metrics.spacing)
+        .align_y(Alignment::Center)
+        .width(Fill)
+        .into()
+    } else {
+        heading.into()
+    };
 
     match header_lines(metrics) {
         // Four buttons and a date do not fit side by side, so the date gets a
@@ -216,9 +472,15 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         2 => column![
             day,
-            row![month, Space::new().width(Fill), toggle_travel(false), set_alarm, menu]
-                .spacing(metrics.spacing)
-                .align_y(Alignment::Center),
+            row![
+                month,
+                Space::new().width(Fill),
+                toggle_travel(false),
+                set_alarm,
+                menu
+            ]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center),
         ]
         .spacing(metrics.spacing)
         .into(),
@@ -285,6 +547,96 @@ fn unplanned_task_count(state: &State) -> usize {
         .count()
 }
 
+/// Tasks Google Tasks still lists as pending (not completed) on a day.
+fn pending_tasks(state: &State, day: NaiveDate) -> Vec<&Event> {
+    if !state.config.calendar.show_tasks {
+        return Vec::new();
+    }
+    state
+        .calendar
+        .events_on(day)
+        .iter()
+        .filter(|event| event.is_task() && !event.completed)
+        .collect()
+}
+
+/// The pending-task count for a day; pressing it lists the tasks.
+fn pending_button<'a>(state: &'a State, day: NaiveDate, size: f32) -> Element<'a, Message> {
+    let count = pending_tasks(state, day).len();
+    if count == 0 {
+        return Space::new().into();
+    }
+    button(text(format!("{count} pending")).size(size))
+        .padding([0, 4])
+        .style(button::text)
+        .on_press(Message::PendingTasksShown(Some(day)))
+        .into()
+}
+
+/// A popup listing each pending task on a day.
+fn pending_overlay<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    day: NaiveDate,
+) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+        .on_press(Message::PendingTasksShown(None));
+
+    let tasks = pending_tasks(state, day);
+    let mut list = column![
+        text(format!("Pending tasks · {}", day.format("%a %b %-d"))).size(metrics.label() + 1.0)
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+    for task in tasks {
+        list = list.push(
+            column![
+                text(task.title.clone()).size(metrics.label()),
+                text(crate::timeblocking::task_list_name(
+                    state,
+                    &task.calendar_id
+                ))
+                .size(metrics.label() - 2.0)
+                .style(text::secondary),
+            ]
+            .width(Fill),
+        );
+    }
+    list = list.push(
+        button(text("Close").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .on_press(Message::PendingTasksShown(None))
+            .style(button::secondary),
+    );
+
+    let card = container(scrollable(list).height(Length::Shrink))
+        .max_height(
+            (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0).max(120.0),
+        )
+        .padding(metrics.padding)
+        .width(Length::Fill)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+
+    let aligned = column![
+        Space::new().height(header_offset(metrics)),
+        container(card).padding(metrics.padding).width(Fill),
+    ]
+    .width(Fill);
+
+    stack![dismiss, aligned].into()
+}
+
 fn unplanned_tasks_label(count: usize) -> String {
     if count == 1 {
         "1 task not planned".to_owned()
@@ -309,9 +661,18 @@ fn dismiss_bar<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Me
 }
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
+    all_day_row_on(state, metrics, state.calendar.day, false)
+}
+
+fn all_day_row_on<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    day: NaiveDate,
+    weekly: bool,
+) -> Option<Element<'a, Message>> {
     let mut events: Vec<_> = state
         .calendar
-        .all_day_events(&state.config.calendar)
+        .all_day_events_on(day, &state.config.calendar)
         .collect();
     let sources = state.calendar.display_sources(&state.config.calendar);
     events.sort_by_key(|e| {
@@ -332,7 +693,7 @@ fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Me
                     .block
                     .as_ref()
                     .is_none_or(|key| {
-                        !state.calendar.events.iter().any(|block| {
+                        !state.calendar.events_on(day).iter().any(|block| {
                             !block.is_task() && crate::timeblocking::block_key(block) == *key
                         })
                     })
@@ -340,7 +701,11 @@ fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Me
         })
         .map(|event| {
             if event.is_task() {
-                super::timeblocking::task_row(state, event, metrics, false)
+                if weekly {
+                    weekly_task_chip(state, event, metrics)
+                } else {
+                    super::timeblocking::task_row(state, event, metrics, false)
+                }
             } else {
                 all_day_chip(event, metrics)
             }
@@ -355,6 +720,39 @@ fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Me
         mouse_area(container(scrollable(column(chips).spacing(4.0).width(Fill))).max_height(180))
             .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
             .into(),
+    )
+}
+
+pub(super) fn weekly_task_chip<'a>(
+    state: &'a State,
+    task: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let mut check = button(text(if task.completed { "●" } else { "○" }).size(metrics.label()))
+        .padding(2)
+        .style(button::text);
+    if state.timeblocking.busy.is_empty() {
+        check = check.on_press(Message::TaskToggled(task.id.clone()));
+    }
+    let title = button(text(crate::timeblocking::task_label(task)).size(metrics.label()))
+        .padding([3, 2])
+        .width(Fill)
+        .on_press(Message::EventOpened(task.id.clone()))
+        .style(button::text);
+    super::task_drag::task_drag(
+        container(row![check, title].spacing(2).align_y(Alignment::Center))
+            .width(Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(theme.extended_palette().background.base.color.into()),
+                border: iced::Border {
+                    color: theme.extended_palette().background.strong.color,
+                    width: 1.0,
+                    radius: 5.0.into(),
+                },
+                ..container::Style::default()
+            }),
+        &task.id,
+        state.timeblocking.dragging.is_some(),
     )
 }
 
@@ -417,7 +815,11 @@ fn static_swatch<'a>(color: Color) -> Element<'a, Message> {
 
 /// A swatch that can be tapped, used for a task list's color and in the
 /// picker itself. `selected` draws a brighter ring so the current color reads.
-pub(super) fn swatch_button<'a>(color: Color, selected: bool, on_press: Message) -> Element<'a, Message> {
+pub(super) fn swatch_button<'a>(
+    color: Color,
+    selected: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
     button(iced::widget::Space::new())
         .width(Length::Fixed(14.0))
         .height(Length::Fixed(14.0))
@@ -490,21 +892,33 @@ fn task_color_picker<'a>(
 }
 
 fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> Element<'a, Message> {
+    scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
+        .id(iced::widget::Id::new(DAY_SCROLL))
+        .height(Fill)
+        .width(Fill)
+        .into()
+}
+
+fn day_canvas<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    now: DateTime<Local>,
+    day: NaiveDate,
+    weekly: bool,
+) -> Element<'a, Message> {
     let hour_height = state.calendar.hour_height;
-    let gutter = if metrics.breakpoint.is_compact() {
+    let gutter = if weekly {
+        32.0
+    } else if metrics.breakpoint.is_compact() {
         COMPACT_GUTTER
     } else {
         GUTTER
     };
 
-    let day = state.calendar.day;
     let offset = state.config.calendar.day_end_minutes();
     let day_start_hour = state.config.calendar.day_start_hour();
 
-    let timed: Vec<&Event> = state
-        .calendar
-        .timed_events(&state.config.calendar)
-        .collect();
+    let timed = state.calendar.timed_events_on(day, &state.config.calendar);
     let spans: Vec<Span> = timed
         .iter()
         .map(|event| {
@@ -552,8 +966,20 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             time_block: crate::timeblocking::is_block(event, &state.config.calendar),
             // A block owns its task rows independently of standalone task visibility.
             tasks: if crate::timeblocking::is_block(event, &state.config.calendar) {
-                crate::timeblocking::assigned(state, event)
+                let key = crate::timeblocking::block_key(event);
+                let mut tasks: Vec<_> = state
+                    .calendar
+                    .events_on(day)
                     .iter()
+                    .filter(|e| {
+                        e.is_task()
+                            && crate::timeblocking::metadata(e).block.as_deref()
+                                == Some(key.as_str())
+                    })
+                    .collect();
+                tasks.sort_by_key(|e| (crate::timeblocking::metadata(e).order, e.id.clone()));
+                tasks
+                    .into_iter()
                     .map(|e| {
                         (
                             e.id.clone(),
@@ -589,7 +1015,7 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         .collect();
 
     let travel = if state.travel.show {
-        travel_boxes(state, &blocks)
+        travel_boxes(state, &blocks, day)
     } else {
         Vec::new()
     };
@@ -599,9 +1025,8 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
 
     // Empty grid space draws out a new event, unless a card is already open:
     // then a click there is how the card is dismissed.
-    let can_create = state.calendar.open_event.is_none()
-        && state.calendar.draft.is_none()
-        && !state.alarms.mode;
+    let can_create =
+        state.calendar.open_event.is_none() && state.calendar.draft.is_none() && !state.alarms.mode;
     let create_color = state
         .calendar
         .default_calendar_id(&state.config.calendar)
@@ -609,28 +1034,23 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
             state.calendar.calendar_color(&id)
         });
 
-    scrollable(
-        canvas_widget(DayCanvas {
-            blocks,
-            travel,
-            needle,
-            alarms: alarm_marks,
-            alarm_mode: state.alarms.mode,
-            hour_height,
-            gutter,
-            compact,
-            day_start_hour,
-            day,
-            can_create,
-            create_color,
-            external_drag: state.timeblocking.dragging.is_some(),
-        })
-        .width(Fill)
-        .height(Length::Fixed(height)),
-    )
-    .id(iced::widget::Id::new(DAY_SCROLL))
-    .height(Fill)
+    canvas_widget(DayCanvas {
+        blocks,
+        travel,
+        needle,
+        alarms: alarm_marks,
+        alarm_mode: state.alarms.mode,
+        hour_height,
+        gutter,
+        compact,
+        day_start_hour,
+        day,
+        can_create,
+        create_color,
+        external_drag: state.timeblocking.dragging.is_some(),
+    })
     .width(Fill)
+    .height(Length::Fixed(height))
     .into()
 }
 
@@ -662,6 +1082,14 @@ fn minutes_into_day(when: DateTime<Local>, day: chrono::NaiveDate, offset: i32) 
 }
 
 const DAY_SCROLL: &str = "cal-day";
+const WEEK_SCROLL: &str = "cal-week";
+
+pub fn scroll_week_to_start() -> iced::Task<Message> {
+    iced::widget::operation::scroll_to(
+        iced::widget::Id::new(WEEK_SCROLL),
+        iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+    )
+}
 
 /// Scrolls the day grid so the needle sits a little below the top, the way
 /// Google Calendar opens on "now" rather than the start of the day.
@@ -789,11 +1217,21 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .on_press(Message::OpenGoogleCalendar)
         .style(button::secondary),
     );
+    panel = panel.push(
+        button(
+            text("Dock to screen edge")
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .on_press(Message::DockRequested)
+        .style(button::secondary),
+    );
 
     let card = container(scrollable(panel).height(Length::Shrink))
         .max_height(
-            (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0)
-                .max(120.0),
+            (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0).max(120.0),
         )
         .padding(metrics.padding)
         .width(Length::Fill)
@@ -832,7 +1270,14 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     let month = state.calendar.month;
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    let selected = state.calendar.day;
+    let weekly = state.weekly && state.screen == crate::app::Screen::Calendar;
+    let selected = if weekly {
+        state.week_hover.unwrap_or(state.week_anchor)
+    } else {
+        state.calendar.day
+    };
+    let preview =
+        weekly.then(|| calendar::week_dates(selected, state.config.calendar.weekly_days()));
 
     let title = row![
         nav_button("◀", Message::CalendarMonthShift(-1), metrics),
@@ -861,7 +1306,7 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     for week in days.chunks(7) {
         let cells: Vec<Element<'a, Message>> = week
             .iter()
-            .map(|&date| day_cell(date, month, selected, today, metrics))
+            .map(|&date| day_cell(date, month, selected, today, preview.as_deref(), metrics))
             .collect();
         weeks.push(row(cells).spacing(2.0).width(Fill).into());
     }
@@ -903,13 +1348,15 @@ fn day_cell<'a>(
     month: NaiveDate,
     selected: NaiveDate,
     today: NaiveDate,
+    preview: Option<&[NaiveDate]>,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let in_month = date.month() == month.month() && date.year() == month.year();
     let is_selected = date == selected;
     let is_today = date == today;
+    let in_preview = preview.is_some_and(|days| days.contains(&date));
 
-    button(
+    let cell = button(
         text(date.day().to_string())
             .size(metrics.label())
             .center()
@@ -921,6 +1368,8 @@ fn day_cell<'a>(
     .style(move |theme, status| {
         if is_selected {
             button::primary(theme, status)
+        } else if in_preview {
+            button::secondary(theme, status)
         } else if is_today {
             button::secondary(theme, status)
         } else {
@@ -930,8 +1379,15 @@ fn day_cell<'a>(
             }
             style
         }
-    })
-    .into()
+    });
+    if preview.is_some() {
+        mouse_area(cell)
+            .on_enter(Message::WeekHover(Some(date)))
+            .on_exit(Message::WeekHover(None))
+            .into()
+    } else {
+        cell.into()
+    }
 }
 
 /// The details card as a full-height pane, drawn to the right of the view.
@@ -1933,8 +2389,8 @@ struct TravelBox {
 const TRAVEL_MIN_HEIGHT: f32 = 16.0;
 
 /// The gray boxes for the day's trips, found from the blocks already laid out.
-fn travel_boxes(state: &State, blocks: &[Block]) -> Vec<TravelBox> {
-    crate::travel::day_hops(state, state.calendar.day)
+fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> Vec<TravelBox> {
+    crate::travel::day_hops(state, day)
         .into_iter()
         .filter_map(|hop| {
             let (event, below) = match (&hop.before, &hop.after) {
@@ -1952,7 +2408,11 @@ fn travel_boxes(state: &State, blocks: &[Block]) -> Vec<TravelBox> {
                 leg: hop.leg,
                 label: crate::travel::short_label(state, hop.leg),
                 between: (hop.from_title, hop.to_title),
-                anchor_min: if below { block.end_min } else { block.start_min },
+                anchor_min: if below {
+                    block.end_min
+                } else {
+                    block.start_min
+                },
                 below,
                 minutes,
                 column: block.column,
@@ -2244,12 +2704,10 @@ impl canvas::Program<Message> for DayCanvas {
                 // events, so it is asked before them.
                 if let Some(travel) = self.travel_at(point, bounds.width) {
                     return Some(
-                        canvas::Action::publish(Message::Travel(
-                            crate::travel::Action::OpenLeg(
-                                travel.leg,
-                                Some(travel.between.clone()),
-                            ),
-                        ))
+                        canvas::Action::publish(Message::Travel(crate::travel::Action::OpenLeg(
+                            travel.leg,
+                            Some(travel.between.clone()),
+                        )))
                         .and_capture(),
                     );
                 }
@@ -2902,7 +3360,10 @@ impl DayCanvas {
 
         let label = alarms::offset_label(alarms::minutes_between(now, at));
         let width = text_width_of(&label, ALARM_PILL_TEXT) + 12.0;
-        let x = (pointer.x + 14.0).clamp(self.gutter + 4.0, (frame.width() - width - 4.0).max(self.gutter));
+        let x = (pointer.x + 14.0).clamp(
+            self.gutter + 4.0,
+            (frame.width() - width - 4.0).max(self.gutter),
+        );
         let top = if y >= ALARM_PILL_HEIGHT + 4.0 {
             y - ALARM_PILL_HEIGHT - 3.0
         } else {
@@ -4022,13 +4483,21 @@ mod tests {
             )),
             "got {messages:?}"
         );
-        assert!(!messages.iter().any(|m| matches!(m, Message::EventOpened(_))));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Message::EventOpened(_)))
+        );
 
         // The event itself still opens where the box is not.
         let mut canvas = canvas_with_one_block();
         canvas.travel = vec![trip_before_standup(25)];
         let messages = click_at(canvas, Point::new(200.0, 9.0 * 60.0 + 15.0));
-        assert!(messages.iter().any(|m| matches!(m, Message::EventOpened(id) if id == "standup")));
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::EventOpened(id) if id == "standup"))
+        );
     }
 
     #[test]
@@ -4048,7 +4517,10 @@ mod tests {
                 event.details.location = "Office".into();
             }
         }
-        let route = crate::travel::Route { seconds: 1500, meters: 2100 };
+        let route = crate::travel::Route {
+            seconds: 1500,
+            meters: 2100,
+        };
         state.travel.routes.insert(
             crate::travel::RouteKey {
                 from: home,
@@ -4074,14 +4546,20 @@ mod tests {
         };
         let blocks = [at("standup", 540, 570), at("review", 840, 900)];
 
-        let found = travel_boxes(&state, &blocks);
+        let found = travel_boxes(&state, &blocks, state.calendar.day);
 
         // Home to the standup, then the review to home. The two meetings are
         // at the same place, and there is nothing between them to travel for.
         assert_eq!(found.len(), 2, "{found:?}");
-        assert_eq!((found[0].anchor_min, found[0].below, found[0].minutes), (540, false, 25));
+        assert_eq!(
+            (found[0].anchor_min, found[0].below, found[0].minutes),
+            (540, false, 25)
+        );
         assert_eq!(found[0].label, "Walk · 25 min · 2.1 km");
-        assert_eq!(found[0].between, ("Start of day".to_owned(), "Standup".to_owned()));
+        assert_eq!(
+            found[0].between,
+            ("Start of day".to_owned(), "Standup".to_owned())
+        );
         assert_eq!((found[1].anchor_min, found[1].below), (900, true));
         assert_eq!(found[1].between.1, "End of day");
         assert!(found[1].label.contains("calculating"), "{}", found[1].label);
@@ -4112,13 +4590,17 @@ mod tests {
         let tomorrow = today().succ_opt().unwrap();
 
         // The standup sits at 9:00-9:30, and this lands in the middle of it.
-        let messages = click_at(alarm_canvas(tomorrow, true), Point::new(200.0, 9.0 * 60.0 + 15.0));
+        let messages = click_at(
+            alarm_canvas(tomorrow, true),
+            Point::new(200.0, 9.0 * 60.0 + 15.0),
+        );
 
         assert!(messages.iter().any(|m| matches!(m, Message::Alarms(_))));
         assert!(
-            !messages
-                .iter()
-                .any(|m| matches!(m, Message::EventOpened(_) | Message::EventDraftStarted { .. })),
+            !messages.iter().any(|m| matches!(
+                m,
+                Message::EventOpened(_) | Message::EventDraftStarted { .. }
+            )),
             "got {messages:?}"
         );
     }

@@ -319,16 +319,11 @@ pub(super) fn location_control<'a>(
                 )
                 .into()
         }
-        None => button(
-            text(add_label)
-                .size(metrics.label())
-                .center()
-                .width(Fill),
-        )
-        .width(Fill)
-        .on_press(msg(Action::OpenPicker(target)))
-        .style(button::secondary)
-        .into(),
+        None => button(text(add_label).size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .on_press(msg(Action::OpenPicker(target)))
+            .style(button::secondary)
+            .into(),
     }
 }
 
@@ -358,13 +353,9 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
         input = input.on_submit(msg(Action::Search));
     }
 
-    let mut content = column![
-        row![input, search]
-            .spacing(6)
-            .align_y(Alignment::Center),
-    ]
-    .spacing(6)
-    .width(Fill);
+    let mut content = column![row![input, search].spacing(6).align_y(Alignment::Center),]
+        .spacing(6)
+        .width(Fill);
 
     if let Some(error) = &picker.error {
         content = content.push(text(error).size(metrics.label()).style(text::danger));
@@ -417,11 +408,7 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
 /// the day starts and ends.
 pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = &state.config.travel;
-    let label = |label: &'static str| {
-        text(label)
-            .size(metrics.label())
-            .style(text::secondary)
-    };
+    let label = |label: &'static str| text(label).size(metrics.label()).style(text::secondary);
 
     column![
         super::settings::field(
@@ -515,17 +502,18 @@ pub fn leg_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             }
         });
 
-    let backdrop = mouse_area(
-        container(Space::new())
-            .width(Fill)
-            .height(Fill)
-            .style(|_| container::Style {
-                background: Some(Color::BLACK.scale_alpha(0.58).into()),
-                ..Default::default()
-            }),
-    )
-    .on_press(msg(Action::CloseLeg))
-    .on_scroll(|_| Message::Ignored);
+    let backdrop =
+        mouse_area(
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|_| container::Style {
+                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    ..Default::default()
+                }),
+        )
+        .on_press(msg(Action::CloseLeg))
+        .on_scroll(|_| Message::Ignored);
 
     let foreground = container(
         mouse_area(card)
@@ -583,22 +571,23 @@ fn leg_details<'a>(
         .push(caption("Travel method"));
 
     let choice = |mode: TravelMode| {
-        button(text(mode.label()).size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .on_press(msg(Action::SetMode(leg, mode)))
-            .style(if mode == current {
-                button::primary
-            } else {
-                button::secondary
-            })
+        button(
+            text(mode.label())
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .on_press(msg(Action::SetMode(leg, mode)))
+        .style(if mode == current {
+            button::primary
+        } else {
+            button::secondary
+        })
     };
     content = content
-        .push(
-            row![choice(TravelMode::Walk), choice(TravelMode::Bike)].spacing(6),
-        )
-        .push(
-            row![choice(TravelMode::Car), choice(TravelMode::Multimodal)].spacing(6),
-        );
+        .push(row![choice(TravelMode::Walk), choice(TravelMode::Bike)].spacing(6))
+        .push(row![choice(TravelMode::Car), choice(TravelMode::Multimodal)].spacing(6));
     if current == TravelMode::Multimodal {
         content = content.push(
             text("Public transport, with walking between stops")
@@ -618,14 +607,24 @@ fn leg_details<'a>(
         Summary::Failed(error) => text(error).size(metrics.label()).style(text::danger),
     });
 
-    let recalculate = button(text("Recalculate").size(metrics.label()).center().width(Fill))
-        .width(Fill)
-        .on_press(msg(Action::Recalculate(leg)))
-        .style(button::secondary);
-    let maps = button(text("Open in Maps").size(metrics.label()).center().width(Fill))
-        .width(Fill)
-        .on_press(msg(Action::OpenMaps(leg)))
-        .style(button::secondary);
+    let recalculate = button(
+        text("Recalculate")
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .on_press(msg(Action::Recalculate(leg)))
+    .style(button::secondary);
+    let maps = button(
+        text("Open in Maps")
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .on_press(msg(Action::OpenMaps(leg)))
+    .style(button::secondary);
 
     // Two buttons side by side need more than a 200px window has to give.
     if metrics.breakpoint.is_compact() {

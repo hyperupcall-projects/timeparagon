@@ -57,6 +57,7 @@ rm -f "$data_home/applications/timetracker.desktop"
 rm -f "$data_home/icons/hicolor/512x512/apps/timetracker.png"
 rm -f "$prefix/bin/timetracker"
 rm -f "$prefix/bin/timetracker-panel"
+rm -f "$prefix/bin/timetracker-dock"
 rm -f "$prefix/bin/keep-bridge"
 # Also clean up a helper installed before the rename.
 rm -f "$prefix/bin/tasks-bridge"

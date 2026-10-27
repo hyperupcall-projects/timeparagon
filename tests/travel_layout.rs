@@ -227,12 +227,22 @@ fn the_trip_card_offers_every_method() -> Result<(), Error> {
         };
         let _ = app::update(
             &mut state,
-            Message::Travel(Action::OpenLeg(leg, Some(("Start of day".into(), "Standup".into())))),
+            Message::Travel(Action::OpenLeg(
+                leg,
+                Some(("Start of day".into(), "Standup".into())),
+            )),
         );
 
         let mut ui = render(&state, Size::new(width, 900.0));
         for label in [
-            "Travel", "Home", "Office", "Walk", "Bike", "Car", "Multimodal", "Close",
+            "Travel",
+            "Home",
+            "Office",
+            "Walk",
+            "Bike",
+            "Car",
+            "Multimodal",
+            "Close",
         ] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
@@ -255,7 +265,10 @@ fn choosing_a_method_changes_it_for_that_trip_only() {
     };
 
     let _ = app::update(&mut state, Message::Travel(Action::OpenLeg(leg, None)));
-    let _ = app::update(&mut state, Message::Travel(Action::SetMode(leg, TravelMode::Car)));
+    let _ = app::update(
+        &mut state,
+        Message::Travel(Action::SetMode(leg, TravelMode::Car)),
+    );
 
     assert_eq!(state.config.travel.mode_for(home, office), TravelMode::Car);
     assert_eq!(state.config.travel.mode_for(office, home), TravelMode::Walk);
@@ -302,20 +315,30 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
         state.screen = Screen::Settings;
 
         let mut ui = render(&state, Size::new(width, 4000.0));
-        for label in ["Travel", "Google Maps API key", "Start location", "End location"] {
+        for label in [
+            "Travel",
+            "Google Maps API key",
+            "Start location",
+            "End location",
+        ] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
         let _ = ui.click("Change")?;
-        assert!(messages(ui)
-            .iter()
-            .any(|m| matches!(m, Message::Travel(Action::OpenPicker(PickTarget::Start)))));
+        assert!(
+            messages(ui)
+                .iter()
+                .any(|m| matches!(m, Message::Travel(Action::OpenPicker(PickTarget::Start))))
+        );
     }
 
     // Searching shows what Google found, and choosing one sets the place.
     let (mut state, ..) = state();
     state.screen = Screen::Settings;
     state.config.travel.end = None;
-    let _ = app::update(&mut state, Message::Travel(Action::OpenPicker(PickTarget::End)));
+    let _ = app::update(
+        &mut state,
+        Message::Travel(Action::OpenPicker(PickTarget::End)),
+    );
     let picker = state.travel.picker.as_mut().unwrap();
     picker.query = "coffee".into();
     picker.searched = true;
@@ -330,14 +353,19 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(300.0, 4000.0));
     assert!(ui.find("Search").is_ok());
     let _ = ui.click("Philz Coffee")?;
-    assert!(messages(ui)
-        .iter()
-        .any(|m| matches!(m, Message::Travel(Action::Choose(0)))));
+    assert!(
+        messages(ui)
+            .iter()
+            .any(|m| matches!(m, Message::Travel(Action::Choose(0))))
+    );
 
     let _ = app::update(&mut state, Message::Travel(Action::Choose(0)));
     let end = state.config.travel.end.expect("the end place is set");
     let place = state.config.travel.place(end).unwrap();
-    assert_eq!((place.name.as_str(), place.place_id.as_str()), ("Philz Coffee", "g-philz"));
+    assert_eq!(
+        (place.name.as_str(), place.place_id.as_str()),
+        ("Philz Coffee", "g-philz")
+    );
     assert_eq!((place.lat, place.lng), (5.0, 6.0));
     Ok(())
 }
@@ -355,7 +383,9 @@ fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
         state.calendar.open_event = Some("standup".into());
 
         let mut ui = render(&state, Size::new(width, 900.0));
-        let _ = ui.click("Add location").unwrap_or_else(|_| panic!("no button at {width}px"));
+        let _ = ui
+            .click("Add location")
+            .unwrap_or_else(|_| panic!("no button at {width}px"));
         assert!(
             messages(ui).iter().any(|m| matches!(
                 m,
@@ -365,7 +395,11 @@ fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
         );
 
         // With a place set it is named, with a way to change or clear it.
-        state.config.travel.event_places.insert("standup".into(), office);
+        state
+            .config
+            .travel
+            .event_places
+            .insert("standup".into(), office);
         let mut ui = render(&state, Size::new(width, 900.0));
         assert!(ui.find("Office").is_ok() && ui.find("Change").is_ok() && ui.find("Clear").is_ok());
         assert!(ui.find("Add location").is_err());

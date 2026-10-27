@@ -70,6 +70,7 @@ unit_dir=$config_home/systemd/user
 
 binary=$bin_dir/timetracker
 panel_binary=$bin_dir/timetracker-panel
+dock_binary=$bin_dir/timetracker-dock
 
 say() { printf '%s\n' "$*"; }
 
@@ -91,12 +92,20 @@ if [ ! -x "$built_panel" ]; then
     exit 1
 fi
 
+built_dock=$repo_root/target/debug/timetracker-dock
+if [ ! -x "$built_dock" ]; then
+    echo "install.sh: $built_dock not found; run without --no-build" >&2
+    exit 1
+fi
+
 # --- Install the binaries --------------------------------------------------
 mkdir -p "$bin_dir"
 install -m 0755 "$built" "$binary"
 say "Installed binary:  $binary"
 install -m 0755 "$built_panel" "$panel_binary"
 say "Installed binary:  $panel_binary"
+install -m 0755 "$built_dock" "$dock_binary"
+say "Installed binary:  $dock_binary"
 
 # Google Keep uses this optional browser helper. Task sync uses Google APIs. Desktop
 # launchers do not inherit a shell's PATH or the checkout's working directory.

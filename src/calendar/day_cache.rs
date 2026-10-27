@@ -162,10 +162,16 @@ pub fn save(
         Err(_) => SavedMonth { events: Vec::new() },
     };
 
-    // Drop any events already stored for `day`, then add the new ones.
-    month
-        .events
-        .retain(|saved| day_at(saved.start, day_end_hour) != day);
+    // A snapshot also contains tasks from other days. Replace those by id
+    // instead of appending another copy for every day in a weekly refresh.
+    let incoming: std::collections::HashSet<_> = events
+        .iter()
+        .map(|event| (event.calendar_id.as_str(), event.id.as_str()))
+        .collect();
+    month.events.retain(|saved| {
+        day_at(saved.start, day_end_hour) != day
+            && !incoming.contains(&(saved.calendar_id.as_str(), saved.id.as_str()))
+    });
     month.events.extend(events.iter().map(SavedEvent::from));
 
     let bytes = serde_json::to_vec(&month)
@@ -274,6 +280,19 @@ mod tests {
         save(scratch.path(), day, &snapshot.events, 0).unwrap();
 
         assert_eq!(load(scratch.path(), day, 0).unwrap(), snapshot.events);
+    }
+
+    #[test]
+    fn saving_neighboring_days_does_not_duplicate_other_days_tasks() {
+        let scratch = Scratch::new("weekly-duplicates");
+        let snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let next = day.succ_opt().unwrap();
+        save(scratch.path(), day, &snapshot.events, 0).unwrap();
+        save(scratch.path(), next, &snapshot.events, 0).unwrap();
+        save(scratch.path(), next, &snapshot.events, 0).unwrap();
+        assert_eq!(load(scratch.path(), day, 0).unwrap(), snapshot.events);
+        assert!(load(scratch.path(), next, 0).unwrap().is_empty());
     }
 
     #[test]

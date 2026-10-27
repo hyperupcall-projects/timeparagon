@@ -433,22 +433,27 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let tasks = tb::assigned(state, block);
     let capacity = (block.end - block.start).num_minutes().max(0) as u32;
     let block_id = block.id.clone();
+    let compact_weekly =
+        state.weekly && state.screen == crate::app::Screen::Calendar && metrics.size.width < 240.0;
+    let edit = button(text("Edit").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .on_press(Message::EventEditRequested(block_id.clone()));
+    let delete = button(text("Delete").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .on_press(Message::EventDeleteRequested(block_id.clone()))
+        .style(button::secondary);
+    let close = button(text("Close").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .on_press(msg(Action::Close))
+        .style(button::secondary);
+    let actions: Element<'a, Message> = if compact_weekly {
+        column![edit, delete, close].spacing(metrics.spacing).into()
+    } else {
+        row![edit, delete, close].spacing(metrics.spacing).into()
+    };
     let mut body = column![
         text(block.title.clone()).size(20).width(Fill),
-        row![
-            button(text("Edit").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::EventEditRequested(block_id.clone())),
-            button(text("Delete").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::EventDeleteRequested(block_id.clone()))
-                .style(button::secondary),
-            button(text("Close").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(msg(Action::Close))
-                .style(button::secondary),
-        ]
-        .spacing(metrics.spacing),
+        actions,
         text("Planned Tasks").size(16),
         planned_slot(state, &block_id, metrics),
     ]
@@ -460,7 +465,15 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         if state.timeblocking.busy.is_empty() {
             remove = remove.on_press(msg(Action::Unassign(task.id.clone())));
         }
-        let card: Element<'a, Message> = row![task_row(state, task, metrics, false), remove].into();
+        let card: Element<'a, Message> = if compact_weekly {
+            column![
+                super::calendar::weekly_task_chip(state, task, metrics),
+                remove
+            ]
+            .into()
+        } else {
+            row![task_row(state, task, metrics, false), remove].into()
+        };
         body = body.push(if elapsed > capacity {
             container(card)
                 .style(|_| container::Style {
@@ -525,10 +538,15 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         body = body.push(text("No tasks for today").style(text::secondary));
     }
     for task in available {
-        body = body.push(row![
-            task_row(state, task, metrics, false),
-            button("+").on_press(msg(Action::Assign(task.id.clone(), block_id.clone())))
-        ]);
+        let add = button("+").on_press(msg(Action::Assign(task.id.clone(), block_id.clone())));
+        if compact_weekly {
+            body = body.push(column![
+                super::calendar::weekly_task_chip(state, task, metrics),
+                add
+            ]);
+        } else {
+            body = body.push(row![task_row(state, task, metrics, false), add]);
+        }
     }
     // A release anywhere on the panel assigns the dragged task, including on the
     // plus box. A release on a task row is captured first and reorders instead.

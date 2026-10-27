@@ -72,7 +72,10 @@ fn set_alarm_replaces_the_timer_at_the_foot_of_the_calendar() {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
         for label in ["Timer", "No target", "Go back"] {
-            assert!(ui.find(label).is_err(), "{label:?} is still there at {width}px");
+            assert!(
+                ui.find(label).is_err(),
+                "{label:?} is still there at {width}px"
+            );
         }
     }
 }
@@ -84,13 +87,19 @@ fn alarm_mode_explains_itself() {
 
     {
         let mut ui = render(&state, Size::new(260.0, 600.0));
-        assert!(ui.find("Click a time to set an alarm. Esc cancels.").is_err());
+        assert!(
+            ui.find("Click a time to set an alarm. Esc cancels.")
+                .is_err()
+        );
     }
 
     state.alarms.mode = true;
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
-    assert!(ui.find("Click a time to set an alarm. Esc cancels.").is_ok());
+    assert!(
+        ui.find("Click a time to set an alarm. Esc cancels.")
+            .is_ok()
+    );
     assert!(ui.find("Set Alarm").is_ok());
 }
 
@@ -488,6 +497,7 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
         "Tasks",
         "Sync now",
         "Open Google Calendar",
+        "Dock to screen edge",
     ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
     }
@@ -562,10 +572,16 @@ fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), 
 
     // Editing a project exposes its name, color and folder.
     let id = state.config.projects.sorted()[0].id;
-    let _ = app::update(&mut state, Message::Projects(timetracker::projects::Action::Edit(id)));
+    let _ = app::update(
+        &mut state,
+        Message::Projects(timetracker::projects::Action::Edit(id)),
+    );
     let mut ui = render(&state, Size::new(200.0, 700.0));
     for label in ["Name", "Color", "Folder", "Browse…", "Save", "Cancel"] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing from the editor");
+        assert!(
+            ui.find(label).is_ok(),
+            "{label:?} is missing from the editor"
+        );
     }
     Ok(())
 }
@@ -1360,7 +1376,10 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 
     let mut ui = render(&state, size);
     for label in ["Project", "Priority", "None", "P1", "P2", "Location"] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing from the editor");
+        assert!(
+            ui.find(label).is_ok(),
+            "{label:?} is missing from the editor"
+        );
     }
     let _ = ui.click("P1")?;
     assert!(ui.into_messages().any(|message| matches!(message,
@@ -1378,11 +1397,15 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
         Message::TimeBlocking(Action::Project("task:backlog".into(), Some(2))),
     );
     let mut saved = state.calendar.event("task:backlog").unwrap().clone();
-    let mut data = saved.details.task_data.take().unwrap_or(timetracker::task_db::TaskData {
-        id: 100,
-        metadata: Default::default(),
-        legacy_key: None,
-    });
+    let mut data = saved
+        .details
+        .task_data
+        .take()
+        .unwrap_or(timetracker::task_db::TaskData {
+            id: 100,
+            metadata: Default::default(),
+            legacy_key: None,
+        });
     data.metadata.project = Some(2);
     data.metadata.priority = Some(Priority::P2);
     saved.details.task_data = Some(data);
@@ -1394,7 +1417,10 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 
     let task = state.calendar.event("task:backlog").unwrap();
     let metadata = timetracker::timeblocking::metadata(task);
-    assert_eq!((metadata.project, metadata.priority), (Some(2), Some(Priority::P2)));
+    assert_eq!(
+        (metadata.project, metadata.priority),
+        (Some(2), Some(Priority::P2))
+    );
     Ok(())
 }
 
@@ -2164,10 +2190,7 @@ fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(), 
     let state = focus_state();
     let mut ui = render(&state, Size::new(900.0, 720.0));
     let _ = ui.click("Set Alarm")?;
-    assert!(
-        !ui.into_messages()
-            .any(|m| matches!(m, Message::Alarms(_)))
-    );
+    assert!(!ui.into_messages().any(|m| matches!(m, Message::Alarms(_))));
     Ok(())
 }
 

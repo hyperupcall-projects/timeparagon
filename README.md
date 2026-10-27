@@ -24,6 +24,20 @@ cargo run -p timetracker-dioxus
 The iced package remains the workspace's default member, so a plain `cargo run`
 still launches the original app.
 
+## Daily and weekly calendar
+
+The iced app has **Daily** and **Weekly** tabs. Weekly starts with the day
+before the selected date, followed by seven or eight days beginning with that
+date. Use the month picker to select a date; hovering a date previews the
+displayed range. The arrows move to the previous or next range. The window
+widens to fit the columns where the screen allows, then returns to its normal
+width when you leave Weekly. Scroll horizontally if the columns exceed the
+available screen width, and vertically to move through time.
+
+Calendar settings control the number of weekly days and each column's width.
+Event, task, and time-block details open over neighboring columns, leaving the
+selected day visible.
+
 ## Android
 
 The Dioxus day view also builds as an Android app:

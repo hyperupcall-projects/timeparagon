@@ -411,6 +411,9 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
     }
     state.timeblocking.focus = None;
     state.timeblocking.block = Some(id);
+    if state.screen == crate::app::Screen::Calendar && state.weekly {
+        return Task::none();
+    }
     if state.timeblocking.original_width.is_none() {
         let width = state.main_size.width;
         state.timeblocking.original_width = Some(width);
@@ -712,6 +715,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Saved(id, result) => {
             state.timeblocking.revision += 1;
             state.timeblocking.busy.remove(&id);
+            let mut refresh_week = false;
             let editing_estimate = state.timeblocking.estimate_task.as_deref() == Some(&id);
             let renaming = state.timeblocking.renaming.as_deref() == Some(&id);
             let keep_open = state
@@ -744,6 +748,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         .calendar
                         .events
                         .retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
+                    if state.screen == crate::app::Screen::Calendar && state.weekly {
+                        state.calendar.replace_cached_task(&id, &event);
+                        refresh_week = true;
+                    }
                     state.calendar.add_event(event);
                     if editing_estimate {
                         state.timeblocking.estimate_task = None;
@@ -751,7 +759,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     } else if !keep_open {
                         state.calendar.open_event = None;
                     }
-                    state.calendar.invalidate_other_days();
+                    if !refresh_week {
+                        state.calendar.invalidate_other_days();
+                    }
                 }
                 Err(error) if editing_estimate => state.timeblocking.estimate_error = Some(error),
                 Err(error) if renaming => {
@@ -768,7 +778,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 }
                 Err(error) => state.calendar.error = Some(error),
             }
-            return crate::app::queue_save(state);
+            let save = crate::app::queue_save(state);
+            return if refresh_week {
+                Task::batch([save, crate::app::refresh_week_after_write(state)])
+            } else {
+                save
+            };
         }
         Action::SaveEstimate(id) => {
             if state.timeblocking.estimate_task.as_deref() != Some(&id) {
