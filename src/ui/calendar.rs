@@ -12,11 +12,11 @@ use iced::{
     mouse,
 };
 
+use crate::alarms;
 use crate::app::{Message, State};
 use crate::calendar::colors::{self, on_color};
 use crate::calendar::layout::{self, Span};
 use crate::calendar::{self, Event};
-use crate::engine::{Precision, format};
 
 use super::layout::Metrics;
 
@@ -53,63 +53,61 @@ const MIN_DURATION: i32 = SNAP_MINUTES;
 const DEFAULT_DURATION: i32 = 60;
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    // The clock takes the day grid's place while it is open. The calendar is
-    // still one tap away: the button at the foot of the view folds it away
-    // again, and a timer left running keeps going.
-    let body: Element<'a, Message> = if state.timer_open {
-        super::clock_body(state, metrics)
+    let grid = day_grid(state, metrics, Local::now());
+
+    // The pointer watch records where the click landed without publishing a
+    // message, so scrolling stays on the widget's own path.
+    let mut body = column![].spacing(metrics.spacing).height(Fill).width(Fill);
+    if let Some(all_day) = all_day_row(state, metrics) {
+        body = body.push(all_day);
+    }
+    let body = pointer_watch(body.push(grid));
+
+    let unplanned = unplanned_task_count(state);
+    let mut unplanned_line = text(unplanned_tasks_label(unplanned))
+        .size(metrics.label() + 9.0)
+        .width(Fill);
+    if unplanned == 0 {
+        unplanned_line = unplanned_line.style(text::secondary);
     } else {
-        let grid = day_grid(state, metrics, Local::now());
+        unplanned_line = unplanned_line.font(Font {
+            weight: Weight::Bold,
+            ..Font::DEFAULT
+        });
+    }
+    let mut status = column![
+        text(state.calendar.status_line())
+            .size(metrics.label() - 1.0)
+            .style(if state.calendar.error.is_some() {
+                text::danger
+            } else {
+                text::secondary
+            }),
+        unplanned_line,
+    ]
+    .spacing(2);
 
-        // The pointer watch records where the click landed without publishing a
-        // message, so scrolling stays on the widget's own path.
-        let mut body = column![].spacing(metrics.spacing).height(Fill).width(Fill);
-        if let Some(all_day) = all_day_row(state, metrics) {
-            body = body.push(all_day);
-        }
-        pointer_watch(body.push(grid))
-    };
-
-    // The month picker, the menu, the day arrows and the sync line belong to the
-    // day view. With the clock open they would only crowd the readout, so they
-    // are left out until the clock is folded away again.
-    let mut content = column![];
-
-    if !state.timer_open {
-        let unplanned = unplanned_task_count(state);
-        let mut unplanned_line = text(unplanned_tasks_label(unplanned))
-            .size(metrics.label() + 9.0)
-            .width(Fill);
-        if unplanned == 0 {
-            unplanned_line = unplanned_line.style(text::secondary);
-        } else {
-            unplanned_line = unplanned_line.font(Font {
-                weight: Weight::Bold,
-                ..Font::DEFAULT
-            });
-        }
-        let status = column![
-            text(state.calendar.status_line())
+    // Alarm setting mode says what a click will do, since nothing else on the
+    // screen does. It sits inside the status block so the grid below keeps its
+    // place in the widget tree, and with it the scroll position.
+    if state.alarms.mode {
+        status = status.push(
+            text("Click a time to set an alarm. Esc cancels.")
                 .size(metrics.label() - 1.0)
-                .style(if state.calendar.error.is_some() {
-                    text::danger
-                } else {
-                    text::secondary
-                }),
-            unplanned_line,
-        ]
-        .spacing(2);
-
-        content = content.push(header(state, metrics)).push(status);
+                .color(colors::ALARM),
+        );
     }
 
-    let content = content
-        .push(body)
-        .push(clock_footer(state, metrics))
+    let mut content = column![header(state, metrics), status, body]
         .spacing(metrics.spacing)
         .padding(metrics.padding)
         .width(Fill)
         .height(Fill);
+
+    // The bar comes last, so it appearing and going leaves the grid alone.
+    if let Some(dismiss) = dismiss_bar(state, metrics) {
+        content = content.push(dismiss);
+    }
 
     // The root stays a stack whether or not a card is open. Swapping the root
     // widget throws away the day grid's scroll state, which jumps the bar.
@@ -118,6 +116,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         draft_overlay(state, metrics)
     } else if state.calendar.edit_draft.is_some() {
         edit_overlay(state, metrics)
+    } else if state.alarms.editor.is_some() {
+        super::alarms::editor_overlay(state, metrics)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -155,6 +155,16 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         button::secondary
     });
 
+    // Alarm setting mode turns the day view into a place to click a time, so
+    // the button that enters it is lit for as long as it lasts.
+    let set_alarm = button(text("Set Alarm").size(metrics.label()).center())
+        .on_press(Message::Alarms(crate::alarms::Action::ModeToggled))
+        .style(if state.alarms.mode {
+            button::primary
+        } else {
+            button::secondary
+        });
+
     let menu = button(text("Menu").size(metrics.label()).center())
         .on_press(Message::CalendarMenuToggled)
         .style(if state.calendar.menu_open {
@@ -172,10 +182,32 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .center()
         .width(Fill);
 
-    row![month, day, menu]
+    if stacked_header(metrics) {
+        // Three buttons and a date do not fit side by side, so the date gets a
+        // line to itself and is never squeezed into a few letters per row.
+        column![
+            day,
+            row![month, Space::new().width(Fill), set_alarm, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
+        ]
         .spacing(metrics.spacing)
-        .align_y(Alignment::Center)
         .into()
+    } else {
+        row![month, day, set_alarm, menu]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center)
+            .into()
+    }
+}
+
+/// The narrowest a calendar can be and still hold the month picker, the date,
+/// Set Alarm and Menu on one line with the date readable.
+const SINGLE_LINE_HEADER: f32 = 340.0;
+
+/// Whether the header needs two lines.
+fn stacked_header(metrics: &Metrics) -> bool {
+    metrics.size.width < SINGLE_LINE_HEADER
 }
 
 /// A square button for stepping a day or a month at a time.
@@ -191,16 +223,10 @@ fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Elemen
 
 /// The vertical space the header row takes, so an overlay can start below
 /// it rather than over it.
-///
-/// The header is put away with the clock, so the space it takes goes with it.
-fn header_offset(state: &State, metrics: &Metrics) -> f32 {
-    let mut offset = metrics.padding;
+fn header_offset(metrics: &Metrics) -> f32 {
+    let lines = if stacked_header(metrics) { 2.0 } else { 1.0 };
 
-    if !state.timer_open {
-        offset += metrics.icon_button() + metrics.spacing;
-    }
-
-    offset
+    metrics.padding + (metrics.icon_button() + metrics.spacing) * lines
 }
 
 /// Tasks on the day in view that have neither a time nor a time block.
@@ -229,71 +255,19 @@ fn unplanned_tasks_label(count: usize) -> String {
     }
 }
 
-/// The foot of the calendar: what the clock is doing, and the way into it.
+/// The foot of the calendar while an alarm is ringing: the way to silence it.
 ///
-/// The clock lives inside the calendar rather than on a screen of its own, so
-/// this row is where a timer is started and where it is put away again. The
-/// status stays even with the clock folded away, because a timer left running
-/// should still be readable at a glance.
-fn clock_footer<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    // With the clock open the readout above already says what the footer would,
-    // so the only thing left to offer is the way back.
-    if state.timer_open {
-        return button(text("Go back").size(metrics.label()).center().width(Fill))
+/// An alarm can go off with any view on screen, so this stays until it has
+/// been dismissed. With nothing ringing there is no foot at all.
+fn dismiss_bar<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
+    state.alarm_active.then(|| {
+        button(text("Dismiss").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .height(metrics.icon_button())
-            .on_press(Message::TimerClosed)
-            .style(button::secondary)
-            .into();
-    }
-
-    let allow_hours = metrics.allow_hours;
-    let elapsed = format::readout(
-        state.timer.elapsed(state.now),
-        Precision::Seconds,
-        allow_hours,
-    );
-    let target = match state.timer.target() {
-        Some(target) => format!(
-            "of {}",
-            format::readout(target, Precision::Seconds, allow_hours)
-        ),
-        None => "No target".to_owned(),
-    };
-
-    // An alarm can go off with the clock put away, so this button doubles as
-    // the way to silence it.
-    let (label, message, style) = if state.alarm_active {
-        (
-            "Dismiss",
-            Message::Dismiss,
-            button::danger as fn(&_, _) -> _,
-        )
-    } else {
-        (
-            "Timer",
-            Message::TimerOpened,
-            button::secondary as fn(&_, _) -> _,
-        )
-    };
-
-    let toggle = button(text(label).size(metrics.label()).center())
-        .height(metrics.icon_button())
-        .on_press(message)
-        .style(style);
-
-    // Each button sits at the end of the line it belongs to, so the "of 30:00"
-    // tucks in beside the count-up to leave the clock button room.
-    let status = row![
-        text(elapsed).size(metrics.label()),
-        text(target).size(metrics.label()).style(text::secondary),
-        Space::new().width(Fill),
-        toggle,
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
-
-    status.into()
+            .on_press(Message::Dismiss)
+            .style(button::danger)
+            .into()
+    })
 }
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
@@ -560,12 +534,30 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
     let needle = (day == calendar::day_at(now, day_start_hour))
         .then(|| minutes_into_day(now, day, offset).clamp(0, DAY_MINUTES));
 
+    // Alarms sit on the day their time falls in, whichever day is in view
+    // when they are set.
+    let alarm_marks: Vec<AlarmMark> = state
+        .alarms
+        .items()
+        .iter()
+        .filter_map(|alarm| {
+            let minutes = minutes_into_day(alarm.at, day, offset);
+            (0..=DAY_MINUTES).contains(&minutes).then(|| AlarmMark {
+                id: alarm.id,
+                minutes,
+                label: alarm_label(alarm),
+            })
+        })
+        .collect();
+
     let height = hour_height * 24.0;
     let compact = metrics.breakpoint.is_compact();
 
     // Empty grid space draws out a new event, unless a card is already open:
     // then a click there is how the card is dismissed.
-    let can_create = state.calendar.open_event.is_none() && state.calendar.draft.is_none();
+    let can_create = state.calendar.open_event.is_none()
+        && state.calendar.draft.is_none()
+        && !state.alarms.mode;
     let create_color = state
         .calendar
         .default_calendar_id(&state.config.calendar)
@@ -577,6 +569,8 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         canvas_widget(DayCanvas {
             blocks,
             needle,
+            alarms: alarm_marks,
+            alarm_mode: state.alarms.mode,
             hour_height,
             gutter,
             compact,
@@ -597,6 +591,19 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
 
 /// Minutes in a day, the height of the grid in minutes.
 const DAY_MINUTES: i32 = 24 * 60;
+
+/// What an alarm's needle says beside it: its time, and its label if it has
+/// one.
+fn alarm_label(alarm: &alarms::Alarm) -> String {
+    let time = alarm.at.format("%H:%M").to_string();
+    let label = alarm.label.trim();
+
+    if label.is_empty() {
+        time
+    } else {
+        format!("{time} {label}")
+    }
+}
 
 /// Minutes from the start of the displayed day.
 ///
@@ -740,7 +747,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let card = container(scrollable(panel).height(Length::Shrink))
         .max_height(
-            (state.main_size.height - header_offset(state, metrics) - metrics.padding * 2.0)
+            (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0)
                 .max(120.0),
         )
         .padding(metrics.padding)
@@ -760,7 +767,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(header_offset(state, metrics)),
+        iced::widget::Space::new().height(header_offset(metrics)),
         container(card).padding(metrics.padding).width(Fill),
     ]
     .width(Fill);
@@ -836,7 +843,7 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(header_offset(state, metrics)),
+        iced::widget::Space::new().height(header_offset(metrics)),
         container(card).padding(metrics.padding).width(Fill),
     ]
     .width(Fill);
@@ -1829,9 +1836,23 @@ struct Block {
     time_block: bool,
 }
 
+/// An alarm's needle on the day in view.
+#[derive(Debug, Clone)]
+struct AlarmMark {
+    id: u64,
+    /// Minutes from the top of the day, 0 to 24h.
+    minutes: i32,
+    label: String,
+}
+
 struct DayCanvas {
     blocks: Vec<Block>,
     needle: Option<i32>,
+    /// The alarms that fall on this day.
+    alarms: Vec<AlarmMark>,
+    /// Whether the grid is in alarm setting mode: a purple needle follows the
+    /// pointer, and a click sets an alarm where it is.
+    alarm_mode: bool,
     hour_height: f32,
     gutter: f32,
     compact: bool,
@@ -1963,6 +1984,19 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        // Alarm mode takes the pointer for itself: the grid is not a place to
+        // drag events or draw new ones until the mode is left. Zooming still
+        // works, so the time can be picked more finely.
+        if self.alarm_mode
+            && !matches!(
+                event,
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(_))
+                    | iced::Event::Mouse(mouse::Event::WheelScrolled { .. })
+            )
+        {
+            return self.alarm_mode_update(event, bounds, cursor);
+        }
+
         if matches!(
             event,
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
@@ -2078,6 +2112,15 @@ impl canvas::Program<Message> for DayCanvas {
             iced::Event::Mouse(mouse::Event::CursorLeft) => self.track_hover(state, bounds, cursor),
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
+
+                // An alarm's needle opens the alarm for editing.
+                if let Some(id) = self.alarm_at(point, bounds.width) {
+                    return Some(
+                        canvas::Action::publish(Message::Alarms(alarms::Action::Open(id)))
+                            .and_capture(),
+                    );
+                }
+
                 for block in &self.blocks {
                     if !block.time_block {
                         continue;
@@ -2193,8 +2236,23 @@ impl canvas::Program<Message> for DayCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.alarm_mode {
+            return match cursor.position_in(bounds) {
+                Some(point) if self.alarm_can_be_set(point.y) => mouse::Interaction::Crosshair,
+                Some(_) => mouse::Interaction::NotAllowed,
+                None => mouse::Interaction::default(),
+            };
+        }
+
         if self.external_drag {
             return mouse::Interaction::Grabbing;
+        }
+
+        if cursor
+            .position_in(bounds)
+            .is_some_and(|point| self.alarm_at(point, bounds.width).is_some())
+        {
+            return mouse::Interaction::Pointer;
         }
         if state.create().is_some() {
             return mouse::Interaction::Crosshair;
@@ -2276,7 +2334,12 @@ impl canvas::Program<Message> for DayCanvas {
 
         let mut overlay = Frame::new(renderer, bounds.size());
         self.draw_needle(&mut overlay);
-        if let Some(create) = state.create() {
+        self.draw_alarms(&mut overlay, cursor.position_in(bounds));
+        if self.alarm_mode {
+            if let Some(point) = cursor.position_in(bounds) {
+                self.draw_alarm_cursor(&mut overlay, point);
+            }
+        } else if let Some(create) = state.create() {
             self.draw_create(&mut overlay, &create);
         } else if let Some(drag) = drag {
             self.draw_drag(&mut overlay, &drag);
@@ -2458,6 +2521,183 @@ impl DayCanvas {
         frame.fill(
             &Path::circle(Point::new(self.gutter, y), NEEDLE_RADIUS),
             colors::NEEDLE,
+        );
+    }
+
+    /// The pixel row a minute of the day sits on.
+    fn y_of(&self, minutes: i32) -> f32 {
+        minutes as f32 * (self.hour_height / 60.0)
+    }
+
+    /// The minute of the day under a grid pixel, to the whole minute.
+    ///
+    /// Alarms are exact where events snap to the quarter hour, so the needle
+    /// follows the pointer minute by minute.
+    fn alarm_minute(&self, y: f32) -> i32 {
+        let minute_height = self.hour_height / 60.0;
+
+        ((y / minute_height).round() as i32).clamp(0, DAY_MINUTES)
+    }
+
+    /// Whether an alarm can be set at the minute under a grid pixel.
+    fn alarm_can_be_set(&self, y: f32) -> bool {
+        alarms::can_set(Local::now(), self.time_at(self.alarm_minute(y)))
+    }
+
+    /// What alarm setting mode does with the pointer: the needle follows it,
+    /// and a click sets the alarm if its time is still to come.
+    fn alarm_mode_update(
+        &self,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        match event {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) => {
+                Some(canvas::Action::request_redraw())
+            }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let point = cursor.position_in(bounds)?;
+                let at = self.time_at(self.alarm_minute(point.y));
+
+                // A time that has passed is refused here as well as where the
+                // alarm is set, and the click is still taken so it cannot fall
+                // through to an event underneath.
+                if alarms::can_set(Local::now(), at) {
+                    Some(
+                        canvas::Action::publish(Message::Alarms(alarms::Action::Place(at)))
+                            .and_capture(),
+                    )
+                } else {
+                    Some(canvas::Action::capture())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The pill an alarm's label sits in, above the right end of its needle.
+    fn alarm_pill(&self, mark: &AlarmMark, width: f32) -> Rectangle {
+        let size = Size::new(self.alarm_pill_width(&mark.label, width), ALARM_PILL_HEIGHT);
+        let y = self.y_of(mark.minutes);
+
+        Rectangle {
+            x: (width - size.width - ALARM_PILL_MARGIN).max(self.gutter),
+            // Below the needle instead when there is no room above it.
+            y: if y >= size.height + 2.0 {
+                y - size.height - 1.0
+            } else {
+                y + 2.0
+            },
+            width: size.width,
+            height: size.height,
+        }
+    }
+
+    fn alarm_pill_width(&self, label: &str, width: f32) -> f32 {
+        let room = (width - self.gutter - ALARM_PILL_MARGIN * 2.0).max(24.0);
+
+        (text_width_of(label, ALARM_PILL_TEXT) + 12.0).min(room)
+    }
+
+    /// The alarm under a grid point, if any.
+    ///
+    /// The pill and the dot on the gutter always count. The needle's own line
+    /// only counts where no event is, so an alarm never makes the event it
+    /// crosses impossible to click.
+    fn alarm_at(&self, point: Point, width: f32) -> Option<u64> {
+        let free = self.hit(Some(point), width).is_none();
+
+        self.alarms.iter().rev().find_map(|mark| {
+            let y = self.y_of(mark.minutes);
+            let on_pill = self.alarm_pill(mark, width).contains(point);
+            let on_dot = point.distance(Point::new(self.gutter, y)) <= NEEDLE_RADIUS + 3.0;
+            let on_line = free && point.x >= self.gutter && (point.y - y).abs() <= 4.0;
+
+            (on_pill || on_dot || on_line).then_some(mark.id)
+        })
+    }
+
+    /// Draws every alarm's needle, with the one under the pointer thicker.
+    fn draw_alarms(&self, frame: &mut Frame, pointer: Option<Point>) {
+        let hovered = if self.alarm_mode {
+            None
+        } else {
+            pointer.and_then(|point| self.alarm_at(point, frame.width()))
+        };
+
+        for mark in &self.alarms {
+            let y = self.y_of(mark.minutes).clamp(0.0, frame.height());
+            let lit = hovered == Some(mark.id);
+
+            frame.stroke(
+                &Path::line(Point::new(self.gutter, y), Point::new(frame.width(), y)),
+                Stroke {
+                    style: Style::Solid(colors::ALARM),
+                    width: if lit { 3.5 } else { 2.0 },
+                    ..Stroke::default()
+                },
+            );
+            frame.fill(
+                &Path::circle(Point::new(self.gutter, y), NEEDLE_RADIUS),
+                colors::ALARM,
+            );
+
+            let pill = self.alarm_pill(mark, frame.width());
+            let label = fit_line(&mark.label, ALARM_PILL_TEXT, pill.width - 8.0);
+            draw_pill(frame, pill, &label, colors::ALARM);
+        }
+    }
+
+    /// Draws the needle that follows the pointer in alarm setting mode, with
+    /// its offset from now beside it.
+    ///
+    /// The needle goes grey and the offset turns negative once the pointer is
+    /// over a time that has passed, which is the one place an alarm cannot go.
+    fn draw_alarm_cursor(&self, frame: &mut Frame, pointer: Point) {
+        let minutes = self.alarm_minute(pointer.y);
+        let at = self.time_at(minutes);
+        let now = Local::now();
+
+        let color = if alarms::can_set(now, at) {
+            colors::ALARM
+        } else {
+            colors::ALARM_REFUSED
+        };
+        let y = self.y_of(minutes);
+
+        frame.stroke(
+            &Path::line(Point::new(self.gutter, y), Point::new(frame.width(), y)),
+            Stroke {
+                style: Style::Solid(color),
+                width: 2.0,
+                ..Stroke::default()
+            },
+        );
+        frame.fill(
+            &Path::circle(Point::new(self.gutter, y), NEEDLE_RADIUS),
+            color,
+        );
+
+        let label = alarms::offset_label(alarms::minutes_between(now, at));
+        let width = text_width_of(&label, ALARM_PILL_TEXT) + 12.0;
+        let x = (pointer.x + 14.0).clamp(self.gutter + 4.0, (frame.width() - width - 4.0).max(self.gutter));
+        let top = if y >= ALARM_PILL_HEIGHT + 4.0 {
+            y - ALARM_PILL_HEIGHT - 3.0
+        } else {
+            y + 5.0
+        };
+
+        draw_pill(
+            frame,
+            Rectangle {
+                x,
+                y: top,
+                width,
+                height: ALARM_PILL_HEIGHT,
+            },
+            &label,
+            color,
         );
     }
 
@@ -2757,6 +2997,33 @@ impl DayCanvas {
             height: ((end_min - start_min) as f32 * minute_height).max(16.0),
         }
     }
+}
+
+/// The text size inside an alarm's pill.
+const ALARM_PILL_TEXT: f32 = 10.0;
+const ALARM_PILL_HEIGHT: f32 = 16.0;
+/// The gap between an alarm's pill and the right edge of the grid, which keeps
+/// it clear of the scrollbar.
+const ALARM_PILL_MARGIN: f32 = 10.0;
+
+/// A rounded label with white text on a solid color.
+fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color: Color) {
+    frame.fill(
+        &Path::rounded_rectangle(bounds.position(), bounds.size(), 4.0.into()),
+        color,
+    );
+    fill_glyphs(
+        frame,
+        Text {
+            content: label.to_owned(),
+            position: Point::new(bounds.center_x(), bounds.center_y()),
+            color: Color::WHITE,
+            size: Pixels(ALARM_PILL_TEXT),
+            align_x: iced::alignment::Horizontal::Center.into(),
+            align_y: iced::alignment::Vertical::Center,
+            ..Text::default()
+        },
+    );
 }
 
 /// View and Edit share the event's top-right corner, in that order.
@@ -3415,6 +3682,8 @@ mod tests {
                 time_block: false,
             }],
             needle: None,
+            alarms: Vec::new(),
+            alarm_mode: false,
             hour_height: 60.0,
             gutter: GUTTER,
             compact: false,
@@ -3423,6 +3692,172 @@ mod tests {
             can_create: true,
             create_color: Color::WHITE,
             external_drag: false,
+        }
+    }
+
+    /// A canvas showing `day`, with its alarm mode on or off, for the alarm
+    /// tests. The pointer is a pixel row per minute because the zoom is 60.
+    fn alarm_canvas(day: chrono::NaiveDate, alarm_mode: bool) -> DayCanvas {
+        let mut canvas = canvas_with_one_block();
+        canvas.day = day;
+        canvas.alarm_mode = alarm_mode;
+        canvas
+    }
+
+    fn today() -> chrono::NaiveDate {
+        Local::now().date_naive()
+    }
+
+    fn click_at(canvas: DayCanvas, point: Point) -> Vec<Message> {
+        let element: Element<'_, Message> = canvas_widget(canvas).width(600).height(1440).into();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(600.0, 1440.0),
+            element,
+        );
+        ui.point_at(point);
+        ui.simulate([
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]);
+        ui.into_messages().collect()
+    }
+
+    #[test]
+    fn a_click_in_alarm_mode_sets_the_alarm_at_the_minute_under_the_pointer() {
+        let tomorrow = today().succ_opt().unwrap();
+        let canvas = alarm_canvas(tomorrow, true);
+        let expected = canvas.time_at(10 * 60 + 7);
+
+        let messages = click_at(canvas, Point::new(200.0, 10.0 * 60.0 + 7.0));
+
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::Alarms(alarms::Action::Place(at)) if *at == expected
+            )),
+            "got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_click_in_alarm_mode_never_reaches_the_events_underneath() {
+        let tomorrow = today().succ_opt().unwrap();
+
+        // The standup sits at 9:00-9:30, and this lands in the middle of it.
+        let messages = click_at(alarm_canvas(tomorrow, true), Point::new(200.0, 9.0 * 60.0 + 15.0));
+
+        assert!(messages.iter().any(|m| matches!(m, Message::Alarms(_))));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Message::EventOpened(_) | Message::EventDraftStarted { .. })),
+            "got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_click_in_alarm_mode_on_a_past_day_sets_nothing() {
+        let yesterday = today().pred_opt().unwrap();
+
+        let messages = click_at(alarm_canvas(yesterday, true), Point::new(200.0, 600.0));
+
+        assert!(
+            !messages.iter().any(|m| matches!(m, Message::Alarms(_))),
+            "got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn the_pointer_says_whether_an_alarm_can_go_where_it_is() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(600.0, 1440.0));
+        let cursor = mouse::Cursor::Available(Point::new(200.0, 600.0));
+        let interaction = |day| {
+            canvas::Program::mouse_interaction(
+                &alarm_canvas(day, true),
+                &DrawState::default(),
+                bounds,
+                cursor,
+            )
+        };
+
+        assert_eq!(
+            interaction(today().succ_opt().unwrap()),
+            mouse::Interaction::Crosshair
+        );
+        assert_eq!(
+            interaction(today().pred_opt().unwrap()),
+            mouse::Interaction::NotAllowed
+        );
+    }
+
+    #[test]
+    fn an_alarm_needle_opens_when_its_dot_or_label_is_clicked() {
+        let tomorrow = today().succ_opt().unwrap();
+        let mut canvas = alarm_canvas(tomorrow, false);
+        canvas.alarms = vec![AlarmMark {
+            id: 7,
+            minutes: 12 * 60,
+            label: "12:00".into(),
+        }];
+        let pill = canvas.alarm_pill(&canvas.alarms[0], 600.0);
+
+        for point in [Point::new(canvas.gutter, 12.0 * 60.0), pill.center()] {
+            let messages = click_at(canvas_clone(&canvas), point);
+
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| matches!(m, Message::Alarms(alarms::Action::Open(7)))),
+                "{point:?} gave {messages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_alarm_needle_crossing_an_event_leaves_the_event_clickable() {
+        let tomorrow = today().succ_opt().unwrap();
+        let mut canvas = alarm_canvas(tomorrow, false);
+        // Through the middle of the 9:00-9:30 standup.
+        canvas.alarms = vec![AlarmMark {
+            id: 7,
+            minutes: 9 * 60 + 15,
+            label: "09:15".into(),
+        }];
+
+        let messages = click_at(canvas, Point::new(120.0, 9.0 * 60.0 + 15.0));
+
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::EventOpened(id) if id == "standup")),
+            "got {messages:?}"
+        );
+        assert!(!messages.iter().any(|m| matches!(m, Message::Alarms(_))));
+    }
+
+    #[test]
+    fn the_needle_line_opens_an_alarm_over_empty_time() {
+        let tomorrow = today().succ_opt().unwrap();
+        let mut canvas = alarm_canvas(tomorrow, false);
+        canvas.alarms = vec![AlarmMark {
+            id: 3,
+            minutes: 15 * 60,
+            label: "15:00".into(),
+        }];
+
+        let near = Point::new(150.0, 15.0 * 60.0 + 3.0);
+        let far = Point::new(150.0, 15.0 * 60.0 + 20.0);
+
+        assert_eq!(canvas.alarm_at(near, 600.0), Some(3));
+        assert_eq!(canvas.alarm_at(far, 600.0), None);
+    }
+
+    fn canvas_clone(canvas: &DayCanvas) -> DayCanvas {
+        DayCanvas {
+            blocks: canvas.blocks.clone(),
+            alarms: canvas.alarms.clone(),
+            ..alarm_canvas(canvas.day, canvas.alarm_mode)
         }
     }
 

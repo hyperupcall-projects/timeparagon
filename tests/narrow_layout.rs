@@ -38,91 +38,125 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
     Sim::with_size(Settings::default(), size, element)
 }
 
-/// Every width has to offer the controls the clock cannot do without, once
-/// the clock has been unfolded out of the calendar.
+/// Set Alarm has to be there, and has to work, at the narrowest size: it is
+/// the one way into alarm setting mode.
 #[test]
-fn the_clock_controls_survive_every_width() {
-    for width in WIDTHS {
-        let mut state = state();
-        state.timer_open = true;
-        let mut ui = render(&state, Size::new(width, HEIGHT));
+fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
+    let state = state();
+    let mut ui = render(&state, Size::new(180.0, 240.0));
 
-        for label in ["Start", "Reset", "Set Time", "Alarm", "0:00", "of 5:00"] {
+    let _ = ui.click("Set Alarm")?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Alarms(timetracker::alarms::Action::ModeToggled)
+        )),
+        "clicking Set Alarm produced {messages:?}"
+    );
+
+    Ok(())
+}
+
+/// Set Alarm sits beside Menu at every width, and the old timer button and
+/// its status line are gone from the foot of the calendar.
+#[test]
+fn set_alarm_replaces_the_timer_at_the_foot_of_the_calendar() {
+    for width in WIDTHS {
+        let state = state();
+        let mut ui = render(&state, Size::new(width, 600.0));
+
+        for label in ["Set Alarm", "Menu"] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
+        }
+        for label in ["Timer", "No target", "Go back"] {
+            assert!(ui.find(label).is_err(), "{label:?} is still there at {width}px");
         }
     }
 }
 
-/// Pressing Timer has to actually unfold and start the clock at the
-/// narrowest size, which is the part a broken layout silently takes away.
+/// Alarm setting mode says what a click will do, and the button stays put.
 #[test]
-fn timer_is_clickable_at_the_minimum_width() -> Result<(), Error> {
-    let state = state();
-    let mut ui = render(&state, Size::new(180.0, 240.0));
-
-    let _ = ui.click("Timer")?;
-
-    let messages: Vec<Message> = ui.into_messages().collect();
-
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::TimerOpened)),
-        "clicking Timer produced {messages:?}"
-    );
-
-    Ok(())
-}
-
-/// The clock lives inside the calendar: the button at the foot of the day
-/// view unfolds it, and folds it away again without stopping the timer.
-#[test]
-fn the_calendar_unfolds_the_clock_and_folds_it_away() -> Result<(), Error> {
+fn alarm_mode_explains_itself() {
     let mut state = state();
 
     {
         let mut ui = render(&state, Size::new(260.0, 600.0));
-        assert!(ui.find("Timer").is_ok(), "the way in is missing");
+        assert!(ui.find("Click a time to set an alarm. Esc cancels.").is_err());
     }
 
-    state.timer_open = true;
-    state.timer.start(state.now);
+    state.alarms.mode = true;
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
+    assert!(ui.find("Click a time to set an alarm. Esc cancels.").is_ok());
+    assert!(ui.find("Set Alarm").is_ok());
+}
 
-    for label in ["Pause", "Set Time", "Reset", "Alarm", "Go back"] {
+/// The popup offers what an alarm does, a way to remove it, and how far off it
+/// is, and it fits the narrowest window.
+#[test]
+fn the_alarm_popup_is_usable_at_every_width() -> Result<(), Error> {
+    for width in WIDTHS {
+        let mut state = state();
+        let at = timetracker::alarms::minute_of(Local::now()) + chrono::Duration::minutes(45);
+        let id = state.alarms.add(at, state.config.alarm.clone());
+        let _ = app::update(
+            &mut state,
+            Message::Alarms(timetracker::alarms::Action::Open(id)),
+        );
+
+        let mut ui = render(&state, Size::new(width, 700.0));
+
+        for label in [
+            "Alarm",
+            "Goes off in 45m",
+            "Time",
+            "Label",
+            // One control from each section the switches reveal: the
+            // switches' own labels are not something the simulator can find.
+            "Urgency",
+            "Preview",
+            "Volume 70%",
+            "Strength 35%",
+            "Delete",
+            "Done",
+        ] {
+            assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
+        }
+
+        let _ = ui.click("Delete")?;
+        let messages: Vec<Message> = ui.into_messages().collect();
         assert!(
-            ui.find(label).is_ok(),
-            "{label:?} is missing with the clock open"
+            messages.iter().any(|message| matches!(
+                message,
+                Message::Alarms(timetracker::alarms::Action::Delete(deleted)) if *deleted == id
+            )),
+            "Delete produced {messages:?} at {width}px"
         );
     }
-
-    let _ = ui.click("Go back")?;
-
-    let messages: Vec<Message> = ui.into_messages().collect();
-
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::TimerClosed)),
-        "folding the clock away produced {messages:?}"
-    );
 
     Ok(())
 }
 
-/// Below 240px the hours group is folded into the minutes so the target
-/// readout still fits; above it, hours are spelled out.
+/// The popup shows the alarm's own settings, not the timer's.
 #[test]
-fn the_target_readout_sheds_the_hours_group_when_it_has_to() {
+fn the_alarm_popup_reflects_the_alarm_being_edited() {
     let mut state = state();
-    state.timer.set_target(Some(Duration::from_secs(3_905)));
+    let at = timetracker::alarms::minute_of(Local::now()) + chrono::Duration::minutes(150);
+    let mut profile = state.config.alarm.clone();
+    profile.sound.volume = 41;
+    let id = state.alarms.add(at, profile);
+    let _ = app::update(
+        &mut state,
+        Message::Alarms(timetracker::alarms::Action::Open(id)),
+    );
 
-    let mut narrow = render(&state, Size::new(200.0, HEIGHT));
-    assert!(narrow.find("of 65:05").is_ok(), "expected 65:05 at 200px");
+    let mut ui = render(&state, Size::new(420.0, 900.0));
 
-    let mut wide = render(&state, Size::new(420.0, HEIGHT));
-    assert!(wide.find("of 1:05:05").is_ok(), "expected 1:05:05 at 420px");
+    assert!(ui.find("Goes off in 2h 30m").is_ok());
+    assert!(ui.find("Volume 41%").is_ok());
 }
 
 /// Every setting has to be reachable at 200px, including the ones that are
@@ -220,35 +254,27 @@ fn the_set_time_screen_is_usable_at_two_hundred_pixels() {
     }
 }
 
-/// A fired alarm has to be silenceable however the clock is showing: as the
-/// clock's own button, and as the foot of the calendar when it is put away.
+/// A fired alarm has to be silenceable from the foot of the calendar, and the
+/// foot is empty the rest of the time.
 #[test]
 fn a_firing_alarm_offers_a_dismiss_button() {
     let mut state = state();
-    state.alarm_active = true;
 
     for width in WIDTHS {
-        state.timer_open = false;
+        state.alarm_active = false;
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        assert!(
+            ui.find("Dismiss").is_err(),
+            "nothing is ringing at {width}px"
+        );
+        drop(ui);
 
-        {
-            let mut ui = render(&state, Size::new(width, HEIGHT));
-
-            assert!(
-                ui.find("Dismiss").is_ok(),
-                "no way to dismiss the alarm at {width}px"
-            );
-        }
-
-        state.timer_open = true;
-
-        {
-            let mut ui = render(&state, Size::new(width, HEIGHT));
-
-            assert!(
-                ui.find("Dismiss").is_ok(),
-                "no way to dismiss the alarm at {width}px with the clock open"
-            );
-        }
+        state.alarm_active = true;
+        let mut ui = render(&state, Size::new(width, HEIGHT));
+        assert!(
+            ui.find("Dismiss").is_ok(),
+            "no way to dismiss the alarm at {width}px"
+        );
     }
 }
 
@@ -265,7 +291,7 @@ fn rendering_never_panics_at_any_size() {
         Size::new(4_000.0, 4_000.0),
     ] {
         let mut ui = render(&state, size);
-        let _: Result<_, _> = ui.find("Timer");
+        let _: Result<_, _> = ui.find("Set Alarm");
     }
 }
 
@@ -274,7 +300,6 @@ fn rendering_never_panics_at_any_size() {
 fn the_settings_tab_uses_the_whole_window() {
     let mut state = state();
     state.screen = Screen::Settings;
-    state.timer_open = true;
 
     for width in [200.0, 420.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 600.0));
@@ -350,7 +375,7 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
 
 /// The calendar has to stay usable at 200px: the day heading, the menu, a
 /// way to open Google Calendar even before anyone has signed in, and the way
-/// in to the clock.
+/// in to setting an alarm.
 #[test]
 fn the_calendar_view_is_usable_at_two_hundred_pixels() {
     let mut state = state();
@@ -360,7 +385,7 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Menu", "Team offsite", "Timer"] {
+    for label in ["Menu", "Team offsite", "Set Alarm"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -533,7 +558,7 @@ fn projects_lists_directory_names() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(200.0, 500.0));
     assert!(ui.find("Personal").is_ok());
     assert!(ui.find("School").is_ok());
-    assert!(ui.find("Timer").is_err());
+    assert!(ui.find("Set Alarm").is_err());
     assert!(ui.find("Theme").is_err());
     assert!(ui.find(tab_label(200.0, 0)).is_ok());
     Ok(())
@@ -764,18 +789,18 @@ fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
     Ok(())
 }
 
-/// The clock keeps reporting itself at the foot of the calendar, so the
-/// elapsed time and target are visible even with the clock put away.
+/// The calendar no longer reports the clock: nothing is timed from there, so
+/// the elapsed time and the target stay off the day view.
 #[test]
-fn the_calendar_view_shows_the_clock_status() {
+fn the_calendar_view_no_longer_shows_the_clock_status() {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.timer.set_target(Some(Duration::from_secs(300)));
 
     let mut ui = render(&state, Size::new(320.0, 600.0));
 
-    assert!(ui.find("0:00").is_ok(), "the elapsed time is missing");
-    assert!(ui.find("of 5:00").is_ok(), "the target is missing");
+    assert!(ui.find("0:00").is_err(), "the elapsed time is still there");
+    assert!(ui.find("of 5:00").is_err(), "the target is still there");
 }
 
 /// The day view counts tasks without a time or time block. Tasks on the grid
@@ -859,21 +884,6 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
     );
 
     Ok(())
-}
-
-/// The open clock keeps its way back to the calendar.
-#[test]
-fn the_timer_view_offers_only_a_way_back() {
-    let mut state = state();
-    state.timer_open = true;
-
-    let mut ui = render(&state, Size::new(260.0, 600.0));
-
-    assert!(ui.find("Go back").is_ok(), "the way back is missing");
-    assert!(
-        ui.find("Todos").is_err(),
-        "the scratchpad button should be gone"
-    );
 }
 
 /// Calendar connection and sync controls remain available in settings.
@@ -2055,10 +2065,10 @@ fn start_and_stop_are_local_and_do_not_change_google_task_status() {
 fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(), Error> {
     let state = focus_state();
     let mut ui = render(&state, Size::new(900.0, 720.0));
-    let _ = ui.click("Timer")?;
+    let _ = ui.click("Set Alarm")?;
     assert!(
         !ui.into_messages()
-            .any(|m| matches!(m, Message::TimerOpened))
+            .any(|m| matches!(m, Message::Alarms(_)))
     );
     Ok(())
 }

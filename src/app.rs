@@ -19,7 +19,7 @@ use crate::calendar::{self, Connection, SyncState};
 use crate::config::{self, Config};
 use crate::engine::{TIMER_TICK, Timer};
 use crate::theme::Catalog;
-use crate::{alarm, blocking, notify, panel, theme, timeblocking, tracks, ui};
+use crate::{alarm, alarms, blocking, notify, panel, theme, timeblocking, tracks, ui};
 
 /// The smallest window we are willing to be asked to draw.
 ///
@@ -40,10 +40,6 @@ const STATUS_POLL: Duration = Duration::from_millis(500);
 
 /// How often the current-time needle is redrawn on the calendar.
 const NEEDLE_TICK: Duration = Duration::from_secs(15);
-
-/// How close, in minutes, to an event's start you have to be for a freshly
-/// started timer to take the event's length as its target.
-const NEAR_EVENT_START: i64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -162,10 +158,8 @@ pub struct State {
     /// from writing its own geometry back over the user's saved window.
     pub sidebar: Option<Sidebar>,
 
-    /// Whether the clock is showing inside the calendar. The clock has no
-    /// section of its own any more: it lives at the foot of the day view and
-    /// is put away behind "Hide timer".
-    pub timer_open: bool,
+    /// The alarms set on the calendar, and the state of setting them.
+    pub alarms: alarms::Alarms,
     /// Every stretch of time the timer has been running, kept on disk.
     pub recorder: tracks::Recorder,
 
@@ -241,10 +235,7 @@ pub enum Message {
     /// The text on the notepad was made bigger or smaller, by a number of
     /// percentage points.
     NotepadFontSizeChanged(i32),
-    /// Unfold the clock inside the calendar and set it going.
-    TimerOpened,
-    /// Fold the clock away again; a timer that is running keeps going.
-    TimerClosed,
+    Alarms(alarms::Action),
 
     ScreenSelected(Screen),
     ProjectsLoaded(Result<Vec<String>, String>),
@@ -468,7 +459,7 @@ impl State {
             timer: Timer::new(config.timer.last_duration()),
             now: Instant::now(),
             sidebar: None,
-            timer_open: false,
+            alarms: alarms::Alarms::default(),
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
             projects: None,
@@ -718,6 +709,7 @@ fn boot_state() -> State {
     // The same goes for the time tracks: the file is the user's own, so only
     // a real boot is allowed to pick it up.
     state.recorder.keep_in(tracks::path());
+    state.alarms.keep_in(alarms::path());
 
     state
 }
@@ -867,33 +859,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
-        Message::TimerOpened => {
-            state.now = Instant::now();
-            state.timer_open = true;
-
-            // A timer set going from scratch takes the length of whatever is
-            // about to happen, so opening the clock while a standup is
-            // starting times the standup rather than the last thing armed.
-            if state.timer.is_idle() {
-                let wall = Local::now();
-                let target = nearby_span(state, wall).or_else(|| state.timer.target());
-                state.timer.set_target(target);
-            }
-
-            if !state.timer.is_running() {
-                state.timer.start(state.now);
-            }
-
-            sync_tracks(state)
-        }
-
-        Message::TimerClosed => {
-            state.timer_open = false;
-            Task::none()
-        }
+        Message::Alarms(action) => alarms::update(state, action),
 
         Message::ScreenSelected(screen) => {
             state.view_layout_input = None;
+            // Alarm setting belongs to the day view, so leaving it ends both.
+            state.alarms.mode = false;
+            state.alarms.editor = None;
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
             // Whatever was open belongs to the screen being left: the Inbox
@@ -2468,6 +2440,21 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(iced::time::every(NEEDLE_TICK).map(|_| Message::CalendarTick));
     }
 
+    // Alarms are checked once a second, and only while there is one waiting,
+    // so an idle TimeTracker with nothing set still costs nothing.
+    if alarms::needs_poll(&state.alarms) {
+        subscriptions.push(
+            iced::time::every(Duration::from_secs(1))
+                .map(|_| Message::Alarms(alarms::Action::Poll)),
+        );
+    }
+    if alarms::needs_flush(&state.alarms) {
+        subscriptions.push(
+            iced::time::every(config::SAVE_DEBOUNCE)
+                .map(|_| Message::Alarms(alarms::Action::Flush)),
+        );
+    }
+
     if state.timeblocking.focus.is_some() || state.config.task_work.active().is_some() {
         subscriptions.push(
             iced::time::every(Duration::from_secs(1))
@@ -2527,6 +2514,21 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
 
+    // The alarm popup and alarm setting mode are put away with Escape before
+    // anything behind them is.
+    if state.alarms.editor.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Alarms(alarms::Action::CloseEditor)),
+            _ => None,
+        };
+    }
+    if state.alarms.mode {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Alarms(alarms::Action::ModeToggled)),
+            _ => None,
+        };
+    }
+
     if state.timeblocking.estimate_task.is_some() {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(
@@ -2557,9 +2559,8 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         };
     }
 
-    // The notepad is for writing, so the shortcuts that drive the clock are
-    // left off while it is on show: a space would otherwise start the timer
-    // halfway through a word.
+    // The notepad is for writing, so the shortcuts are left off while it is on
+    // show: a space would otherwise silence an alarm halfway through a word.
     if matches!(
         state.screen,
         Screen::Notepad | Screen::KeepNotes | Screen::Inbox
@@ -2577,7 +2578,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     }
 
     match key.as_ref() {
-        Key::Named(Named::Space) => Some(Message::StartPause),
+        // The clock no longer has a place on the calendar, so a space only
+        // has something to do while an alarm is ringing.
+        Key::Named(Named::Space) if state.alarm_active => Some(Message::Dismiss),
         Key::Named(Named::Escape) => {
             if state.calendar.open_event.is_some() {
                 Some(Message::EventClosed)
@@ -2594,22 +2597,32 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
                 None
             }
         }
-        Key::Character("r") => Some(Message::Reset),
         _ => None,
     }
 }
 
 /// Runs the whole alarm: sound, notification, flash and raising the window.
 fn fire_alarm(state: &mut State) -> Task<Message> {
-    let actions = alarm::on_finished(&state.config.alarm);
+    let profile = state.config.alarm.clone();
     let target = state.timer.target().unwrap_or_default();
 
-    state.alarm_active = actions.is_dismissable();
-
-    perform(state, actions, target)
+    fire(state, &profile, target)
 }
 
-fn perform(state: &mut State, actions: alarm::Actions, duration: Duration) -> Task<Message> {
+/// Runs one alarm profile, whether it belongs to the timer or to an alarm set
+/// on the calendar.
+///
+/// An alarm already ringing stays dismissable if a quieter one goes off on
+/// top of it.
+pub(crate) fn fire(state: &mut State, profile: &config::AlarmProfile, duration: Duration) -> Task<Message> {
+    let actions = alarm::on_finished(profile);
+
+    state.alarm_active = state.alarm_active || actions.is_dismissable();
+
+    perform(state, actions, duration)
+}
+
+pub(crate) fn perform(state: &mut State, actions: alarm::Actions, duration: Duration) -> Task<Message> {
     let mut tasks = Vec::new();
 
     if let Some(sound) = actions.sound {
@@ -2731,29 +2744,6 @@ fn save_tracks(state: &State) -> Task<Message> {
     let recorder = state.recorder.clone();
     blocking::run(move || recorder.save().map_err(|error| error.to_string()))
         .map(Message::TracksSaved)
-}
-
-/// The length of the nearest event or task that is just starting, if there
-/// is one.
-///
-/// A timer set going while a standup is starting should time the standup, so
-/// an event starting within [`NEAR_EVENT_START`] minutes donates its length.
-/// All-day entries are left out: they have no hour to sit next to. A task
-/// that has already been ticked off is not what anyone is timing either.
-fn nearby_span(state: &State, now: DateTime<Local>) -> Option<Duration> {
-    let window = chrono::Duration::minutes(NEAR_EVENT_START);
-
-    state
-        .calendar
-        .visible_events(&state.config.calendar)
-        .filter(|event| !event.all_day && !event.completed)
-        .filter_map(|event| {
-            let since = now.signed_duration_since(event.start);
-            (since <= window && since >= -window).then(|| (since.abs(), event))
-        })
-        .min_by_key(|(distance, _)| *distance)
-        .and_then(|(_, event)| (event.end - event.start).to_std().ok())
-        .filter(|span| !span.is_zero())
 }
 
 /// Re-syncs when the day in view has rolled over at the configured boundary.
@@ -3095,19 +3085,24 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_shortcuts_still_work_on_the_calendar() {
+    fn a_space_on_the_calendar_only_silences_a_ringing_alarm() {
         let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let space = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Space),
-            keyboard::Modifiers::default(),
-        );
+        let space = |state: &mut State| {
+            key_message(
+                state,
+                Key::Named(keyboard::key::Named::Space),
+                keyboard::Modifiers::default(),
+            )
+        };
 
         assert!(
-            matches!(space, Some(Message::StartPause)),
-            "a space should start the clock on the calendar"
+            space(&mut state).is_none(),
+            "there is no clock on the calendar for a space to start"
         );
+
+        state.alarm_active = true;
+
+        assert!(matches!(space(&mut state), Some(Message::Dismiss)));
     }
 
     #[test]
@@ -3467,12 +3462,11 @@ mod tests {
     }
 
     #[test]
-    fn opening_the_timer_records_a_track_that_pausing_closes() {
+    fn starting_the_timer_records_a_track_that_pausing_closes() {
         let mut state = State::new(Config::default(), Catalog::built_in());
 
-        let _ = update(&mut state, Message::TimerOpened);
+        let _ = update(&mut state, Message::StartPause);
 
-        assert!(state.timer_open);
         assert!(state.timer.is_running());
         assert!(state.recorder.is_recording());
         assert_eq!(state.recorder.tracks().len(), 1);
@@ -3492,45 +3486,238 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hiding_the_timer_leaves_a_running_one_and_its_track_alone() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
+    fn at_in(minutes: i64) -> DateTime<Local> {
+        alarms::minute_of(Local::now()) + chrono::Duration::minutes(minutes)
+    }
 
-        let _ = update(&mut state, Message::TimerOpened);
-        let _ = update(&mut state, Message::TimerClosed);
-
-        assert!(!state.timer_open);
-        assert!(state.timer.is_running());
-        assert!(state.recorder.is_recording());
+    fn place(state: &mut State, minutes: i64) {
+        let _ = update(state, Message::Alarms(alarms::Action::Place(at_in(minutes))));
     }
 
     #[test]
-    fn a_timer_started_near_an_event_takes_the_event_length() {
+    fn set_alarm_enters_and_leaves_alarm_mode() {
         let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state.calendar.menu_open = true;
 
-        // Move the standup to now, so the clock is opened as it is starting.
-        let standup = state.calendar.event_mut("standup").unwrap();
-        standup.start = Local::now();
-        standup.end = standup.start + chrono::Duration::minutes(30);
+        let _ = update(&mut state, Message::Alarms(alarms::Action::ModeToggled));
 
-        let _ = update(&mut state, Message::TimerOpened);
+        assert!(state.alarms.mode);
+        assert!(!state.calendar.menu_open, "the menu gets out of the way");
 
-        assert_eq!(state.timer.target(), Some(Duration::from_secs(30 * 60)));
+        let _ = update(&mut state, Message::Alarms(alarms::Action::ModeToggled));
+
+        assert!(!state.alarms.mode);
     }
 
     #[test]
-    fn a_timer_started_far_from_anything_keeps_the_target_it_had() {
+    fn escape_leaves_alarm_mode() {
         let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state.alarms.mode = true;
 
-        // The sample day is a week back, so nothing is starting right now.
-        let _ = update(&mut state, Message::TimerOpened);
-
-        assert_eq!(
-            state.timer.target(),
-            Config::default().timer.last_duration()
+        let escape = key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Escape),
+            keyboard::Modifiers::default(),
         );
+
+        assert!(matches!(
+            escape,
+            Some(Message::Alarms(alarms::Action::ModeToggled))
+        ));
+    }
+
+    #[test]
+    fn clicking_a_future_time_sets_the_alarm_and_opens_its_options() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.alarms.mode = true;
+
+        place(&mut state, 45);
+
+        assert_eq!(state.alarms.items().len(), 1);
+        assert!(!state.alarms.mode, "placing an alarm ends the mode");
+
+        let editor = state.alarms.editor.as_ref().expect("the popup opens");
+        assert_eq!(editor.id, state.alarms.items()[0].id);
+        assert_eq!(
+            alarms::minutes_between(Local::now(), state.alarms.items()[0].at),
+            45
+        );
+    }
+
+    #[test]
+    fn an_alarm_cannot_be_set_in_the_past() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.alarms.mode = true;
+
+        place(&mut state, -30);
+        place(&mut state, 0);
+
+        assert!(state.alarms.is_empty());
+        assert!(state.alarms.editor.is_none());
+    }
+
+    #[test]
+    fn a_new_alarm_starts_from_the_alarm_profile_without_the_timer_wording() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.config.alarm.sound.volume = 33;
+
+        place(&mut state, 10);
+
+        let alarm = &state.alarms.items()[0];
+        assert_eq!(alarm.profile.sound.volume, 33);
+        assert_eq!(alarm.profile.notification.summary, "Alarm");
+    }
+
+    #[test]
+    fn opening_an_alarm_shows_its_time_and_closing_puts_it_away() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        place(&mut state, 90);
+        let id = state.alarms.items()[0].id;
+
+        let _ = update(&mut state, Message::Alarms(alarms::Action::CloseEditor));
+        assert!(state.alarms.editor.is_none());
+
+        let _ = update(&mut state, Message::Alarms(alarms::Action::Open(id)));
+        assert_eq!(
+            state.alarms.editor.as_ref().map(|e| e.time_text.clone()),
+            Some(state.alarms.items()[0].at.format("%H:%M").to_string())
+        );
+    }
+
+    #[test]
+    fn an_alarm_can_be_removed_before_it_goes_off() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        place(&mut state, 60);
+        place(&mut state, 120);
+        let id = state.alarms.editor.as_ref().expect("the last one is open").id;
+
+        let _ = update(&mut state, Message::Alarms(alarms::Action::Delete(id)));
+
+        assert_eq!(state.alarms.items().len(), 1);
+        assert!(state.alarms.get(id).is_none());
+        assert!(state.alarms.editor.is_none(), "its popup goes with it");
+    }
+
+    #[test]
+    fn editing_an_alarm_changes_what_it_does_and_nothing_else() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        place(&mut state, 60);
+        let before = state.alarms.items()[0].at;
+
+        for edit in [
+            alarms::Edit::Label("Tea".into()),
+            alarms::Edit::Sound(false),
+            alarms::Edit::Volume(12),
+            alarms::Edit::Flash(false),
+        ] {
+            let _ = update(&mut state, Message::Alarms(alarms::Action::Edit(edit)));
+        }
+
+        let alarm = &state.alarms.items()[0];
+        assert_eq!(alarm.label, "Tea");
+        assert!(!alarm.profile.sound.enabled);
+        assert_eq!(alarm.profile.sound.volume, 12);
+        assert!(!alarm.profile.flash.enabled);
+        assert_eq!(alarm.at, before);
+        assert_eq!(state.config.alarm, Config::default().alarm, "defaults stay put");
+    }
+
+    #[test]
+    fn an_alarm_time_can_be_edited_but_not_into_the_past() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        place(&mut state, 24 * 60 + 30);
+        let alarm = state.alarms.items()[0].clone();
+
+        // The same time of day, tomorrow, is still ahead.
+        let later = (alarm.at + chrono::Duration::minutes(5)).format("%H:%M").to_string();
+        let _ = update(
+            &mut state,
+            Message::Alarms(alarms::Action::Edit(alarms::Edit::Time(later.clone()))),
+        );
+        assert_eq!(
+            state.alarms.items()[0].at.format("%H:%M").to_string(),
+            later
+        );
+        assert!(state.alarms.editor.as_ref().unwrap().time_error.is_none());
+
+        // Nonsense is refused and the alarm stays where it was.
+        let kept = state.alarms.items()[0].at;
+        let _ = update(
+            &mut state,
+            Message::Alarms(alarms::Action::Edit(alarms::Edit::Time("soon".into()))),
+        );
+        assert_eq!(state.alarms.items()[0].at, kept);
+        assert!(state.alarms.editor.as_ref().unwrap().time_error.is_some());
+    }
+
+    #[test]
+    fn an_alarm_for_today_cannot_be_edited_into_the_past() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        place(&mut state, 2);
+        let alarm = state.alarms.items()[0].clone();
+        if alarm.at.date_naive() != Local::now().date_naive() {
+            return; // set a hair before midnight, so it landed on tomorrow
+        }
+
+        // Midnight has always passed by the time today has an alarm in it.
+        let _ = update(
+            &mut state,
+            Message::Alarms(alarms::Action::Edit(alarms::Edit::Time("00:00".into()))),
+        );
+
+        assert_eq!(state.alarms.items()[0].at, alarm.at, "the alarm did not move");
+        assert!(state.alarms.editor.as_ref().unwrap().time_error.is_some());
+    }
+
+    #[test]
+    fn an_alarm_that_comes_due_goes_off_and_leaves_the_calendar() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        place(&mut state, 60);
+        state.alarms.add(
+            Local::now() - chrono::Duration::seconds(1),
+            config::AlarmProfile::default(),
+        );
+        assert_eq!(state.alarms.items().len(), 2);
+
+        let _ = update(&mut state, Message::Alarms(alarms::Action::Poll));
+
+        assert_eq!(state.alarms.items().len(), 1, "only the due one went");
+        assert!(state.alarm_active, "it rings until dismissed");
+    }
+
+    #[test]
+    fn an_alarm_going_off_closes_its_own_popup() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let id = state.alarms.add(
+            Local::now() - chrono::Duration::seconds(1),
+            config::AlarmProfile::default(),
+        );
+        let _ = update(&mut state, Message::Alarms(alarms::Action::Open(id)));
+        assert!(state.alarms.editor.is_some());
+
+        let _ = update(&mut state, Message::Alarms(alarms::Action::Poll));
+
+        assert!(state.alarms.editor.is_none());
+    }
+
+    #[test]
+    fn leaving_the_calendar_ends_alarm_setting() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.alarms.mode = true;
+
+        let _ = update(&mut state, Message::ScreenSelected(Screen::Notepad));
+
+        assert!(!state.alarms.mode);
+    }
+
+    #[test]
+    fn the_alarm_poll_only_runs_while_an_alarm_is_waiting() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        assert!(!alarms::needs_poll(&state.alarms));
+
+        place(&mut state, 5);
+
+        assert!(alarms::needs_poll(&state.alarms));
     }
 
     /// A state with the standup already dragged an hour later and pending.

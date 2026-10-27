@@ -33,8 +33,8 @@ impl std::fmt::Display for CalendarOption {
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    // The clock lives inside the calendar now, so there is one menu rather
-    // than one per tab: everything is set from the same place.
+    // There is one settings page rather than one per tab: everything is set
+    // from the same place.
     let content = column![
         heading("Appearance", metrics),
         appearance(state, metrics),
@@ -70,7 +70,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 /// What happens when the clock reaches zero.
 ///
 /// These settings change the timer rather than the calendar, so they are kept
-/// off the main settings page and reached from the clock itself.
+/// off the main settings page. Nothing on the calendar opens the clock any
+/// more, so this page is only reached by selecting its screen directly.
 pub fn timer_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         heading("When time is up", metrics),
@@ -97,7 +98,7 @@ fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
 ///
 /// The label is owned rather than borrowed because most callers build it
 /// from the value they are showing.
-fn field<'a>(
+pub(super) fn field<'a>(
     label: impl Into<String>,
     control: Element<'a, Message>,
     metrics: &Metrics,
@@ -118,7 +119,7 @@ fn field<'a>(
 ///
 /// Dropdown overlays need more width than they have in compact mode, so there
 /// the control becomes a button that cycles to the next option on each tap.
-fn choice<'a, T>(
+pub(super) fn choice<'a, T>(
     label: &'a str,
     options: Vec<T>,
     selected: Option<T>,
@@ -831,7 +832,7 @@ fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     indent(section.into(), metrics)
 }
 
-fn repeat_label(repeats: u8) -> String {
+pub(super) fn repeat_label(repeats: u8) -> String {
     match repeats {
         0 => "Repeat until dismissed".to_owned(),
         1 => "Play once".to_owned(),
@@ -910,7 +911,7 @@ fn countdown_label(seconds: u8) -> String {
     }
 }
 
-fn switch<'a>(
+pub(super) fn switch<'a>(
     label: &'a str,
     value: bool,
     on_toggle: impl Fn(bool) -> Message + 'a,
@@ -925,7 +926,7 @@ fn switch<'a>(
 }
 
 /// Indents a subsection so the sliders visibly belong to their toggle.
-fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> Element<'a, Message> {
+pub(super) fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> Element<'a, Message> {
     container(content)
         .padding(iced::Padding {
             left: if metrics.breakpoint.is_compact() {

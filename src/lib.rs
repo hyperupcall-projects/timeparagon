@@ -8,6 +8,7 @@
 //!   left-anchored strip summoned with a global shortcut.
 
 pub mod alarm;
+pub mod alarms;
 pub mod app;
 pub mod audio;
 pub mod blocking;

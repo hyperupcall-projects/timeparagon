@@ -17,6 +17,23 @@ pub const NEEDLE: Color = Color {
     a: 1.0,
 };
 
+/// The purple of an alarm's needle, picked to read apart from the red of the
+/// current-time needle even where the two sit close together.
+pub const ALARM: Color = Color {
+    r: 0x8E as f32 / 255.0,
+    g: 0x44 as f32 / 255.0,
+    b: 0xC9 as f32 / 255.0,
+    a: 1.0,
+};
+
+/// An alarm needle that cannot be set, because its time has passed.
+pub const ALARM_REFUSED: Color = Color {
+    r: 0x9A as f32 / 255.0,
+    g: 0x8F as f32 / 255.0,
+    b: 0xA6 as f32 / 255.0,
+    a: 1.0,
+};
+
 /// Hour-grid lines, matching the light Google Calendar day view.
 pub const GRID_LINE: Color = Color {
     r: 0xDA as f32 / 255.0,

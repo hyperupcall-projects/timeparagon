@@ -4,6 +4,7 @@
 //! space the window actually has rather than from a guess made at startup.
 //! That is what lets the same code look deliberate at 180px and at 900px.
 
+pub mod alarms;
 pub mod calendar;
 pub mod controls;
 pub mod digits;
@@ -395,8 +396,8 @@ pub(crate) fn page<'a>(
 /// The clock: the readout, the one action button, and the row of secondary
 /// controls.
 ///
-/// The clock has no section of its own any more, so this is drawn inside the
-/// calendar in the place the day grid usually holds. The padding around it
+/// The calendar no longer unfolds the clock, so nothing draws this on the day
+/// view now. It is kept with the timer engine behind it. The padding around it
 /// belongs to the caller, which already has some.
 pub fn clock_body<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![

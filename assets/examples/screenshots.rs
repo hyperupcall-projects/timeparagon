@@ -4,8 +4,6 @@
 //! `screenshots/` and are how the narrow layouts get eyeballed without
 //! resizing a window by hand forty times.
 
-use std::time::Duration;
-
 use iced::{Element, Size};
 use iced_test::Simulator;
 use iced_test::core::Settings;
@@ -47,41 +45,22 @@ fn main() {
         for width in WIDTHS {
             let size = Size::new(width, 360.0);
 
-            count += shoot(directory, theme, size, "armed", |state| {
-                state.timer_open = true;
-                state.timer.set_target(Some(Duration::from_secs(1_500)));
-            });
-
-            count += shoot(directory, theme, size, "running", |state| {
-                state.timer_open = true;
-                state.timer.set_target(Some(Duration::from_secs(300)));
-                state.timer.start(state.now);
-                state.now += Duration::from_secs(73);
-            });
-
-            count += shoot(directory, theme, size, "running-todos", |state| {
-                state.timer_open = true;
-                state.timer.set_target(Some(Duration::from_secs(300)));
-                state.timer.start(state.now);
-                state.now += Duration::from_secs(73);
-                state.config.todos.add("Draft the report");
-                state.config.todos.add("Collect the numbers");
-                state.config.todos.set_current(0);
-            });
-
-            count += shoot(directory, theme, size, "count-up", |state| {
-                state.timer_open = true;
-                state.timer.set_target(None);
-                state.timer.start(state.now);
-                state.now += Duration::from_secs(45);
-            });
-
             count += shoot(directory, theme, size, "finished", |state| {
-                state.timer_open = true;
-                state.timer.set_target(Some(Duration::from_secs(300)));
-                state.timer.start(state.now);
-                let _ = state.timer.poll(state.now + Duration::from_secs(300));
                 state.alarm_active = true;
+            });
+
+            count += shoot(directory, theme, size, "alarm-mode", |state| {
+                state.alarms.mode = true;
+            });
+
+            count += shoot(directory, theme, size, "alarm-popup", |state| {
+                let at = timetracker::alarms::minute_of(chrono::Local::now())
+                    + chrono::Duration::minutes(45);
+                let id = state.alarms.add(at, state.config.alarm.clone());
+                let _ = app::update(
+                    state,
+                    Message::Alarms(timetracker::alarms::Action::Open(id)),
+                );
             });
 
             count += shoot(directory, theme, size, "settings", |state| {
@@ -251,18 +230,6 @@ fn main() {
                 },
             );
         }
-    }
-
-    // A squarish window, which is where the readout has the headroom for a
-    // progress ring. The ring is dropped automatically in short windows, so
-    // this is the only shape that exercises it.
-    for theme in ["Sakura", "Matcha"] {
-        count += shoot(directory, theme, Size::new(360.0, 520.0), "ring", |state| {
-            state.timer_open = true;
-            state.timer.set_target(Some(Duration::from_secs(300)));
-            state.timer.start(state.now);
-            state.now += Duration::from_secs(73);
-        });
     }
 
     // And the widest layout, where the settings sit beside the calendar.
