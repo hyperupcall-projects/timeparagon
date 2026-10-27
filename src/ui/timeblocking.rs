@@ -68,14 +68,12 @@ pub fn task_row<'a>(
         .style(button::text)
         .on_press(Message::EventOpened(task.id.clone()));
     let handle = text("⠿").size(17);
-    let mut line = row![
-        handle,
-        check,
-        title,
-        estimate_button(state, task, metrics.label())
-    ]
-    .spacing(4)
-    .align_y(iced::Center);
+    let mut line = row![handle, check].spacing(4).align_y(iced::Center);
+    // Where the task came from, if a service we know put it here.
+    if let Some(source) = crate::integrations::source_in(&task.details.description) {
+        line = line.push(super::source_icon::link(&source, 14.0));
+    }
+    line = line.push(title).push(estimate_button(state, task, metrics.label()));
     if backlog {
         line = line.push(
             button(text("Reschedule").size(metrics.label()))

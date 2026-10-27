@@ -16,6 +16,8 @@ pub mod config;
 pub mod config_sync;
 pub mod engine;
 pub mod hex;
+pub mod inbox;
+pub mod integrations;
 pub mod keep;
 pub mod notify;
 pub mod panel;

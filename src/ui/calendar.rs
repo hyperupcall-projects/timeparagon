@@ -980,6 +980,20 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .into(),
         );
     }
+    if let Some(source) = crate::integrations::source_in(&details.description) {
+        buttons.push(
+            button(
+                text(format!("Open in {}", source.kind.name()))
+                    .size(metrics.label())
+                    .center()
+                    .width(Fill),
+            )
+            .width(Fill)
+            .on_press(Message::OpenEventLink(source.url))
+            .style(button::secondary)
+            .into(),
+        );
+    }
     if !details.link.is_empty() {
         let link = details.link.clone();
         let label = if is_task(event) {

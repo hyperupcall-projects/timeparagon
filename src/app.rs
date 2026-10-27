@@ -48,6 +48,8 @@ const NEAR_EVENT_START: i64 = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Calendar,
+    /// Tasks that have not been triaged yet.
+    Inbox,
     Backlog,
     Projects,
     /// The notepad: a page of free text kept between sessions.
@@ -213,11 +215,13 @@ pub struct State {
     pub calendar: calendar::Store,
     pub timeblocking: crate::timeblocking::Workspace,
     pub keep: crate::keep::Store,
+    pub inbox: crate::inbox::Inbox,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     TimeBlocking(crate::timeblocking::Action),
+    Inbox(crate::inbox::Action),
     Tick(Instant),
     FlashFrame(Instant),
 
@@ -490,6 +494,7 @@ impl State {
             keep: crate::keep::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
             timeblocking: crate::timeblocking::Workspace::default(),
+            inbox: crate::inbox::Inbox::default(),
         }
     }
 
@@ -768,6 +773,7 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
+        Message::Inbox(action) => crate::inbox::update(state, action),
         Message::Tick(now) => {
             state.now = now;
 
@@ -2515,6 +2521,13 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             _ => None,
         };
     }
+    if state.inbox.draft.is_some() {
+        // Typing into the popup must not reach the clock shortcuts.
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Inbox(crate::inbox::Action::Cancel)),
+            _ => None,
+        };
+    }
     if state.timeblocking.focus.is_some() {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(
@@ -2533,7 +2546,10 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     // The notepad is for writing, so the shortcuts that drive the clock are
     // left off while it is on show: a space would otherwise start the timer
     // halfway through a word.
-    if matches!(state.screen, Screen::Notepad | Screen::KeepNotes) {
+    if matches!(
+        state.screen,
+        Screen::Notepad | Screen::KeepNotes | Screen::Inbox
+    ) {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::ScreenSelected(Screen::Calendar)),
             _ => None,

@@ -293,8 +293,12 @@ pub struct CalendarSettings {
     pub hide_overdue_tasks: bool,
     pub time_block_calendar: Option<String>,
     pub time_block_list: Option<String>,
-    /// Google Tasks list for tasks moved to the backlog. None uses Not Time Blocked.
+    /// Google Tasks list for tasks moved to the backlog. None uses Triaged.
     pub backlog_list: Option<String>,
+    /// Google Tasks list that collects new tasks until they are triaged. None
+    /// uses Inbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox_list: Option<String>,
     /// Calendar for individual scheduled task events; independent of container blocks.
     pub tasks_calendar: Option<String>,
     /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
@@ -329,6 +333,7 @@ impl Default for CalendarSettings {
             time_block_calendar: None,
             time_block_list: None,
             backlog_list: None,
+            inbox_list: None,
             tasks_calendar: None,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),

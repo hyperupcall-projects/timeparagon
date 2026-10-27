@@ -31,7 +31,10 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // Drive's `drive.appdata` is limited to the app's own hidden folder; it is how
 // the config follows the user between devices (see `config_sync`), and it
 // cannot see any of the user's other Drive files.
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/drive.appdata";
+// Gmail is read-only: a link pasted into a new task is read for its subject, and
+// the mail is never changed. Tokens minted before that scope was asked for get
+// a "Reconnect Google" message from the Gmail integration.
+const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.appdata";
 
 /// How long we wait for the browser to come back with a code.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(180);

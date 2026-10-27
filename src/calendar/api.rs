@@ -774,10 +774,51 @@ pub struct CreatedTask {
 ///
 /// Blocking: call it from [`crate::blocking::run`].
 pub fn insert_task(access_token: &str, list_id: &str, title: &str) -> Result<CreatedTask, String> {
+    insert_task_with(
+        access_token,
+        list_id,
+        &NewTask {
+            title,
+            notes: "",
+            due: None,
+        },
+    )
+}
+
+/// Everything a task can be created with.
+pub struct NewTask<'a> {
+    pub title: &'a str,
+    /// Empty leaves the task without notes.
+    pub notes: &'a str,
+    /// The day it is planned for, which is what makes it leave the inbox.
+    pub due: Option<NaiveDate>,
+}
+
+impl NewTask<'_> {
+    fn body(&self) -> serde_json::Value {
+        let mut body = serde_json::json!({ "title": self.title });
+        if !self.notes.is_empty() {
+            body["notes"] = self.notes.into();
+        }
+        if let Some(day) = self.due {
+            // Tasks stores a day as midnight UTC, whatever the time zone.
+            body["due"] = format!("{day}T00:00:00.000Z").into();
+        }
+        body
+    }
+}
+
+/// Creates a task on `list_id` and returns the identity Google assigned.
+///
+/// Blocking: call it from [`crate::blocking::run`].
+pub fn insert_task_with(
+    access_token: &str,
+    list_id: &str,
+    task: &NewTask<'_>,
+) -> Result<CreatedTask, String> {
     let url = format!("{TASKS}/{}/tasks", urlencoding::encode(list_id));
-    let body = serde_json::json!({ "title": title }).to_string();
-    let response = post(&url, access_token, &body, "Google Tasks")?;
-    created_task(&response, title)
+    let response = post(&url, access_token, &task.body().to_string(), "Google Tasks")?;
+    created_task(&response, task.title)
 }
 
 fn created_task(response: &str, title: &str) -> Result<CreatedTask, String> {

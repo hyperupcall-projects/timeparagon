@@ -220,7 +220,7 @@ pub fn parse_clock(text: &str) -> Option<(u32, u32)> {
 
 /// A local instant at a clock time on a given date, resolving the daylight
 /// saving gaps the same way the rest of the calendar does.
-fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
+pub(crate) fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
     let naive = day.and_hms_opt(hour, minute, 0).unwrap_or_default();
     match Local.from_local_datetime(&naive) {
         chrono::offset::LocalResult::Single(when)

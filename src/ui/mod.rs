@@ -8,11 +8,13 @@ pub mod calendar;
 pub mod controls;
 pub mod digits;
 pub mod flash;
+pub mod inbox;
 pub mod keep;
 pub mod layout;
 pub mod links;
 pub mod notepad;
 pub mod settings;
+pub mod source_icon;
 mod task_drag;
 pub mod timeblocking;
 mod timeblocking_focus;
@@ -64,6 +66,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // somewhere to write, not somewhere to watch the clock from.
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
+            (Screen::Inbox, _) => inbox::view(state, &metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects(state, &metrics),
             (Screen::Calendar, _) => {
@@ -98,7 +101,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         // The details pane is drawn last, so on the calendar it sits to the
         // right of the time-block editor rather than over it.
         let content: Element<'_, Message> = if details_open {
-            let detail_metrics = Metrics::of(Size::new(detail, size.height));
+            // The pane sits below the tabs, so it only has what they leave.
+            let detail_metrics = Metrics::of(Size::new(
+                detail,
+                (size.height - tabs_height(&metrics)).max(1.0),
+            ));
             row![
                 container(content).width(Fill),
                 container(calendar::details_pane(state, &detail_metrics))
@@ -125,6 +132,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         }
         if state.calendar.pending_delete.is_some() {
             layers.push(calendar::delete_confirmation(state, &metrics));
+        }
+        if state.inbox.draft.is_some() {
+            layers.push(inbox::new_task_overlay(state, &metrics));
         }
         iced::widget::stack(layers).into()
     });
@@ -202,6 +212,12 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     } else {
         metrics.spacing
     };
+    let inbox = tab(
+        "Inbox",
+        state.screen == Screen::Inbox,
+        Screen::Inbox,
+        metrics,
+    );
     let calendar = tab(
         "Calendar",
         state.screen == Screen::Calendar,
@@ -240,7 +256,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         Element<'a, Message>,
     ) = if metrics.size.width < 720.0 {
         (
-            column![calendar, backlog].spacing(spacing).into(),
+            column![inbox, calendar, backlog].spacing(spacing).into(),
             column![notepad, keep]
                 .spacing(spacing)
                 .align_x(Center)
@@ -252,7 +268,9 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         )
     } else {
         (
-            row![calendar, backlog, projects].spacing(spacing).into(),
+            row![inbox, calendar, backlog, projects]
+                .spacing(spacing)
+                .into(),
             row![notepad, keep].spacing(spacing).into(),
             settings,
         )
@@ -274,6 +292,21 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     })
     .width(Fill)
     .into()
+}
+
+/// The height `tabs` takes: one row on wide windows, a stack of three below
+/// 720px.
+fn tabs_height(metrics: &Metrics) -> f32 {
+    let tab = if metrics.breakpoint.is_compact() {
+        16.0
+    } else {
+        metrics.icon_button()
+    };
+    if metrics.size.width < 720.0 {
+        tab * 3.0 + 2.0 * 2.0
+    } else {
+        tab
+    }
 }
 
 /// One tab, lit when it is the page on show.

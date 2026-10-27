@@ -145,6 +145,8 @@ pub enum Action {
     /// Restrict the backlog to one task list, or all lists when `None`.
     BacklogList(Option<String>),
     Reschedule(String),
+    /// Plan the task for this day, keeping its list.
+    ScheduleDay(String, NaiveDate),
     Assign(String, String),
     /// The name being typed for an existing task changed.
     Title(String),
@@ -723,6 +725,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
             (id, Change::Day(day))
         }
+        Action::ScheduleDay(id, day) => (id, Change::Day(day)),
         Action::Assign(id, block) => {
             let Some(event) = state
                 .calendar
@@ -953,7 +956,7 @@ enum Change {
     Time(DateTime<Local>, DateTime<Local>),
 }
 
-fn access(settings: &CalendarSettings) -> Result<String, String> {
+pub(crate) fn access(settings: &CalendarSettings) -> Result<String, String> {
     let tokens = calendar::oauth::load_tokens().ok_or("Not connected to Google")?;
     calendar::oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)
         .map(|tokens| tokens.access_token)
