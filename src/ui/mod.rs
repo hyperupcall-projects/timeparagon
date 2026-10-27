@@ -14,6 +14,7 @@ pub mod keep;
 pub mod layout;
 pub mod links;
 pub mod notepad;
+pub mod projects;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;
@@ -69,7 +70,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
-            (Screen::Projects, _) => projects(state, &metrics),
+            (Screen::Projects, _) => projects::view(state, &metrics),
             (Screen::Calendar, _) => {
                 // Keep the calendar at the same place in the widget tree when
                 // the block editor opens or closes, preserving its scroll state.
@@ -180,28 +181,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
         body.into()
     }
-}
-
-/// A plain list of the immediate project directories.
-fn projects<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let mut items = column![].spacing(metrics.spacing).width(Fill);
-    match &state.projects {
-        None => items = items.push(text("Loading projects…").size(metrics.label())),
-        Some(Err(error)) => {
-            items =
-                items.push(text(format!("Could not list projects: {error}")).size(metrics.label()));
-        }
-        Some(Ok(names)) => {
-            for name in names {
-                items = items.push(text(name).size(metrics.label()).width(Fill));
-            }
-        }
-    }
-    container(scrollable(items).width(Fill).height(Fill))
-        .padding(metrics.padding)
-        .width(Fill)
-        .height(Fill)
-        .into()
 }
 
 /// Full tab names, in display order: Calendar, then Inbox/Projects/Backlog,

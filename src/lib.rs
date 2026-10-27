@@ -22,6 +22,7 @@ pub mod integrations;
 pub mod keep;
 pub mod notify;
 pub mod panel;
+pub mod projects;
 pub mod theme;
 pub mod todos;
 pub mod tracks;

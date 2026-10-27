@@ -25,6 +25,30 @@ pub struct Metadata {
     pub ignored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<calendar::scheduled::Link>,
+    /// The project this task is filed under, by `config::Project::id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
+}
+
+/// How urgent a task is. P1 is the most urgent; a task with neither has no
+/// priority at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Priority {
+    P1,
+    P2,
+}
+
+impl Priority {
+    pub const ALL: [Priority; 2] = [Priority::P1, Priority::P2];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::P1 => "P1",
+            Self::P2 => "P2",
+        }
+    }
 }
 
 /// Completed and ignored tasks both count as completed in Google Tasks.
@@ -103,6 +127,10 @@ pub struct Workspace {
     pub available_planned: bool,
     pub dragging: Option<String>,
     pub busy: std::collections::HashSet<String>,
+    /// A task whose project or priority is being saved. Saving those leaves
+    /// the details open, since they are picked with a click and the next one
+    /// often follows.
+    pub keep_open: Option<String>,
     /// Text that narrows the backlog by task title or list name.
     pub backlog_query: String,
     /// When set, the backlog shows only tasks from this Google Tasks list.
@@ -152,6 +180,10 @@ pub enum Action {
     Title(String),
     /// Save the edited name of this task.
     SaveTitle(String),
+    /// File this task under a project, or under none.
+    Project(String, Option<u64>),
+    /// Give this task a priority, or clear it.
+    Priority(String, Option<Priority>),
     /// Open the planned-tasks box so a task can be typed.
     OpenTodo,
     /// Close the typed-task box without saving.
@@ -671,6 +703,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.busy.remove(&id);
             let editing_estimate = state.timeblocking.estimate_task.as_deref() == Some(&id);
             let renaming = state.timeblocking.renaming.as_deref() == Some(&id);
+            let keep_open = state
+                .timeblocking
+                .keep_open
+                .take_if(|task| *task == id)
+                .is_some();
             match result {
                 Ok(event) => {
                     if renaming {
@@ -700,7 +737,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     if editing_estimate {
                         state.timeblocking.estimate_task = None;
                         state.timeblocking.estimate_error = None;
-                    } else {
+                    } else if !keep_open {
                         state.calendar.open_event = None;
                     }
                     state.calendar.invalidate_other_days();
@@ -785,6 +822,24 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.title_error = None;
             (id, Change::Title(title))
         }
+        Action::Project(id, project) => {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            if metadata(task).project == project {
+                return Task::none();
+            }
+            (id, Change::Project(project))
+        }
+        Action::Priority(id, priority) => {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            if metadata(task).priority == priority {
+                return Task::none();
+            }
+            (id, Change::Priority(priority))
+        }
         Action::OpenTodo => {
             state.timeblocking.todo_open = true;
             return iced::widget::operation::focus(iced::widget::Id::new("time-block-todo"));
@@ -825,6 +880,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     };
     if matches!(change, Change::Title(_)) {
         state.timeblocking.renaming = Some(id.clone());
+    }
+    if matches!(change, Change::Project(_) | Change::Priority(_)) {
+        state.timeblocking.keep_open = Some(id.clone());
     }
     let settings = state.config.calendar.clone();
     let order = state
@@ -969,6 +1027,8 @@ fn new_todo_event(
 enum Change {
     Title(String),
     Estimate(u32),
+    Project(Option<u64>),
+    Priority(Option<Priority>),
     Deadline(Option<calendar::deadline::Deadline>),
     Backlog,
     Unassign,
@@ -1120,6 +1180,14 @@ fn save(
         }
         Change::Estimate(minutes) => {
             data.metadata.minutes = minutes;
+            database.save(&task, &data)?;
+        }
+        Change::Project(project) => {
+            data.metadata.project = project;
+            database.save(&task, &data)?;
+        }
+        Change::Priority(priority) => {
+            data.metadata.priority = priority;
             database.save(&task, &data)?;
         }
         Change::Deadline(deadline) => {

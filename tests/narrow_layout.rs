@@ -531,7 +531,7 @@ fn the_tabs_are_one_row_in_three_groups() {
 }
 
 #[test]
-fn projects_lists_directory_names() -> Result<(), Error> {
+fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(200.0, 500.0));
     ui.click(tab_label(200.0, 2))?;
@@ -541,26 +541,32 @@ fn projects_lists_directory_names() -> Result<(), Error> {
         .expect("Projects should select its view");
     let _ = app::update(&mut state, message);
     assert_eq!(state.screen, Screen::Projects);
-    assert_eq!(state.projects, Some(Ok(Vec::new())));
+
     let mut ui = render(&state, Size::new(200.0, 500.0));
-    assert!(ui.find("Loading projects…").is_err());
-    assert!(ui.find("No project directories found.").is_err());
-    drop(ui);
-    state.config.projects.directory = Some(std::env::temp_dir());
-    let _ = app::update(&mut state, Message::ScreenSelected(Screen::Projects));
-    let mut ui = render(&state, Size::new(200.0, 500.0));
-    assert!(ui.find("Loading projects…").is_ok());
-    drop(ui);
-    let _ = app::update(
-        &mut state,
-        Message::ProjectsLoaded(Ok(vec!["Personal".into(), "School".into()])),
-    );
-    let mut ui = render(&state, Size::new(200.0, 500.0));
-    assert!(ui.find("Personal").is_ok());
-    assert!(ui.find("School").is_ok());
+    let mut tops = Vec::new();
+    for name in [
+        "Personal",
+        "Personal/Chores",
+        "School/Calculus",
+        "School/Homework",
+        "Work",
+    ] {
+        tops.push(ui.find(name).expect(name).bounds().y);
+    }
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "{tops:?}");
+    assert!(ui.find("Add").is_ok());
     assert!(ui.find("Set Alarm").is_err());
     assert!(ui.find("Theme").is_err());
     assert!(ui.find(tab_label(200.0, 0)).is_ok());
+    drop(ui);
+
+    // Editing a project exposes its name, color and folder.
+    let id = state.config.projects.sorted()[0].id;
+    let _ = app::update(&mut state, Message::Projects(timetracker::projects::Action::Edit(id)));
+    let mut ui = render(&state, Size::new(200.0, 700.0));
+    for label in ["Name", "Color", "Folder", "Browse…", "Save", "Cancel"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing from the editor");
+    }
     Ok(())
 }
 
@@ -1290,6 +1296,55 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
     let _ = ui.click("−")?;
     assert!(ui.into_messages().any(|m| matches!(m,
         Message::TimeBlocking(tb::Action::Unassign(id)) if id == "task:planned")));
+    Ok(())
+}
+
+/// The task editor has a project, a priority and a location. Picking one
+/// saves it without closing the details.
+#[test]
+fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(), Error> {
+    use timetracker::timeblocking::{Action, Priority};
+
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+    let size = Size::new(560.0, 1000.0);
+
+    let mut ui = render(&state, size);
+    for label in ["Project", "Priority", "None", "P1", "P2", "Location"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing from the editor");
+    }
+    let _ = ui.click("P1")?;
+    assert!(ui.into_messages().any(|message| matches!(message,
+        Message::TimeBlocking(Action::Priority(id, Some(Priority::P1))) if id == "task:backlog")));
+
+    // The location button is a placeholder: it does nothing yet.
+    let mut ui = render(&state, size);
+    let _ = ui.click("Add location")?;
+    assert!(ui.into_messages().all(|message| matches!(message, Message::Ignored)));
+
+    // The saved choice comes back on the task, and the details stay open.
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::Project("task:backlog".into(), Some(2))),
+    );
+    let mut saved = state.calendar.event("task:backlog").unwrap().clone();
+    let mut data = saved.details.task_data.take().unwrap_or(timetracker::task_db::TaskData {
+        id: 100,
+        metadata: Default::default(),
+        legacy_key: None,
+    });
+    data.metadata.project = Some(2);
+    data.metadata.priority = Some(Priority::P2);
+    saved.details.task_data = Some(data);
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::Saved("task:backlog".into(), Ok(saved))),
+    );
+    assert_eq!(state.calendar.open_event.as_deref(), Some("task:backlog"));
+
+    let task = state.calendar.event("task:backlog").unwrap();
+    let metadata = timetracker::timeblocking::metadata(task);
+    assert_eq!((metadata.project, metadata.priority), (Some(2), Some(Priority::P2)));
     Ok(())
 }
 

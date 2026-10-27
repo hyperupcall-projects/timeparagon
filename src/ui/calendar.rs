@@ -379,7 +379,7 @@ fn static_swatch<'a>(color: Color) -> Element<'a, Message> {
 
 /// A swatch that can be tapped, used for a task list's color and in the
 /// picker itself. `selected` draws a brighter ring so the current color reads.
-fn swatch_button<'a>(color: Color, selected: bool, on_press: Message) -> Element<'a, Message> {
+pub(super) fn swatch_button<'a>(color: Color, selected: bool, on_press: Message) -> Element<'a, Message> {
     button(iced::widget::Space::new())
         .width(Length::Fixed(14.0))
         .height(Length::Fixed(14.0))
@@ -1456,7 +1456,7 @@ impl std::fmt::Display for CalendarChoice {
 }
 
 /// A small colored circle used as a calendar swatch in the dropdown.
-fn color_circle<'a>(color: Color) -> Element<'a, Message> {
+pub(super) fn color_circle<'a>(color: Color) -> Element<'a, Message> {
     container(iced::widget::Space::new().width(10.0).height(10.0))
         .style(move |_theme| container::Style {
             background: Some(color.into()),

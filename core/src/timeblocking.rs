@@ -23,6 +23,30 @@ pub struct Metadata {
     pub ignored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<calendar::scheduled::Link>,
+    /// The project this task is filed under, by `config::Project::id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
+}
+
+/// How urgent a task is. P1 is the most urgent; a task with neither has no
+/// priority at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Priority {
+    P1,
+    P2,
+}
+
+impl Priority {
+    pub const ALL: [Priority; 2] = [Priority::P1, Priority::P2];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::P1 => "P1",
+            Self::P2 => "P2",
+        }
+    }
 }
 
 /// Completed and ignored tasks both count as completed in Google Tasks.

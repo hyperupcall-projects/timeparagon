@@ -261,12 +261,142 @@ impl TimerSettings {
     }
 }
 
-/// The fold/// The optional folder whose immediate subdirectories appear in the Projects tab.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+/// A project that tasks can be filed under.
+///
+/// Tasks refer to a project by `id`, never by name, so a project can be
+/// renamed without losing track of what belongs to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: u64,
+    /// Slash-separated, so `School/Calculus` reads as a part of `School`.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<HexColor>,
+    /// Where the project's files are kept on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<PathBuf>,
+}
+
+impl Project {
+    pub fn color(&self) -> Option<Color> {
+        self.color.map(Color::from)
+    }
+}
+
+/// The projects shown in the Projects tab and offered when editing a task.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectsSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub directory: Option<PathBuf>,
+    pub items: Vec<Project>,
+}
+
+impl Default for ProjectsSettings {
+    fn default() -> Self {
+        // Fixed ids, so the defaults mean the same project on every machine.
+        let items = [
+            "Work",
+            "School/Homework",
+            "School/Calculus",
+            "Personal",
+            "Personal/Chores",
+        ]
+        .into_iter()
+        .zip(1..)
+        .map(|(name, id)| Project {
+            id,
+            name: name.to_owned(),
+            color: None,
+            directory: None,
+        })
+        .collect();
+
+        let mut settings = Self { items };
+        settings.sort();
+        settings
+    }
+}
+
+impl ProjectsSettings {
+    /// Keeps the projects in alphabetical order, ignoring case.
+    pub fn sort(&mut self) {
+        self.items
+            .sort_by_cached_key(|project| (project.name.to_lowercase(), project.id));
+    }
+
+    /// The projects in alphabetical order, whatever order the file lists them in.
+    pub fn sorted(&self) -> Vec<&Project> {
+        let mut projects: Vec<&Project> = self.items.iter().collect();
+        projects.sort_by_cached_key(|project| (project.name.to_lowercase(), project.id));
+        projects
+    }
+
+    pub fn get(&self, id: u64) -> Option<&Project> {
+        self.items.iter().find(|project| project.id == id)
+    }
+
+    /// Tidies `input` into a project name and checks that no other project
+    /// (`except` is the one being renamed) already has it.
+    ///
+    /// Spaces around a `/` are dropped and empty segments removed, so
+    /// `School / Physics/` is the same project as `School/Physics`.
+    pub fn clean_name(&self, input: &str, except: Option<u64>) -> Result<String, String> {
+        let name = input
+            .split('/')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+
+        if name.is_empty() {
+            return Err("A project needs a name".to_owned());
+        }
+
+        let taken = self.items.iter().any(|project| {
+            Some(project.id) != except && project.name.to_lowercase() == name.to_lowercase()
+        });
+
+        if taken {
+            return Err(format!("There is already a project named {name}"));
+        }
+
+        Ok(name)
+    }
+
+    /// Adds a project and returns its id.
+    pub fn add(&mut self, name: String) -> u64 {
+        let id = self.next_id();
+        self.items.push(Project {
+            id,
+            name,
+            color: None,
+            directory: None,
+        });
+        self.sort();
+        id
+    }
+
+    pub fn remove(&mut self, id: u64) {
+        self.items.retain(|project| project.id != id);
+    }
+
+    /// An id that no project has had before, as far as the file can tell.
+    ///
+    /// Ids are never handed out again after a removal that took the highest
+    /// one, so a task left pointing at a removed project does not suddenly
+    /// belong to a new one. The clock keeps them unique between runs.
+    fn next_id(&self) -> u64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64);
+        let highest = self
+            .items
+            .iter()
+            .map(|project| project.id)
+            .max()
+            .unwrap_or(0);
+
+        now.max(highest + 1)
+    }
 }
 
 /// Google Calendar connection and which calendars are shown on the calendar.

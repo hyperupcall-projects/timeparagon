@@ -715,6 +715,8 @@ mod tests {
                 order,
                 ignored: false,
                 schedule: None,
+                project: None,
+                priority: None,
             },
             legacy_key: None,
         });

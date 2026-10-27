@@ -5,8 +5,8 @@ use crate::{
     timeblocking::{self as tb, Action},
 };
 use iced::widget::{
-    button, column, container, mouse_area, rich_text, row, scrollable, span, text, text_input,
-    toggler,
+    button, column, container, mouse_area, pick_list, rich_text, row, scrollable, span, text,
+    text_input, toggler,
 };
 use iced::{Color, Element, Fill, Length};
 fn msg(a: Action) -> Message {
@@ -207,6 +207,9 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
     body = body.push(estimate_button(state, task, metrics.label()));
+    body = body.push(project_field(state, task, metrics));
+    body = body.push(priority_field(state, task, metrics));
+    body = body.push(location_field(metrics));
     body = body.push(
         text("Deadline")
             .size(metrics.label())
@@ -251,6 +254,125 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
     body.into()
+}
+
+/// A project offered in the task editor, or the choice of none.
+#[derive(Clone, PartialEq)]
+struct ProjectChoice {
+    id: Option<u64>,
+    name: String,
+}
+
+impl std::fmt::Display for ProjectChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
+    text(label)
+        .size(metrics.label())
+        .style(text::secondary)
+        .into()
+}
+
+/// Which project the task is filed under, picked from the Projects tab's list.
+fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let none = ProjectChoice {
+        id: None,
+        name: "No project".to_owned(),
+    };
+    let mut options = vec![none.clone()];
+    options.extend(
+        state
+            .config
+            .projects
+            .sorted()
+            .into_iter()
+            .map(|project| ProjectChoice {
+                id: Some(project.id),
+                name: project.name.clone(),
+            }),
+    );
+
+    // A project that has since been removed reads as no project.
+    let current = tb::metadata(task)
+        .project
+        .and_then(|id| state.config.projects.get(id));
+    let selected = current
+        .and_then(|project| options.iter().find(|choice| choice.id == Some(project.id)))
+        .cloned()
+        .unwrap_or(none);
+
+    let busy = state.timeblocking.busy.contains(&task.id);
+    let id = task.id.clone();
+    let picker = pick_list(options, Some(selected), move |choice: ProjectChoice| {
+        if busy {
+            Message::Ignored
+        } else {
+            msg(Action::Project(id.clone(), choice.id))
+        }
+    })
+    .text_size(metrics.label())
+    .width(Fill);
+
+    let mut line = row![].spacing(8).align_y(iced::Center);
+    if let Some(color) = current.and_then(|project| project.color()) {
+        line = line.push(super::calendar::color_circle(color));
+    }
+
+    column![field_label("Project", metrics), line.push(picker)]
+        .spacing(4)
+        .into()
+}
+
+/// The task's priority: none, P1 or P2.
+fn priority_field<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let current = tb::metadata(task).priority;
+    let busy = state.timeblocking.busy.contains(&task.id);
+
+    let choices = std::iter::once((None, "None")).chain(
+        tb::Priority::ALL
+            .into_iter()
+            .map(|priority| (Some(priority), priority.label())),
+    );
+
+    let mut options = row![].spacing(6);
+    for (priority, label) in choices {
+        let mut choice = button(text(label).size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(if priority == current {
+                button::primary
+            } else {
+                button::secondary
+            });
+        if !busy {
+            choice = choice.on_press(msg(Action::Priority(task.id.clone(), priority)));
+        }
+        options = options.push(choice);
+    }
+
+    column![field_label("Priority", metrics), options]
+        .spacing(4)
+        .into()
+}
+
+/// Where the task happens. The button is a placeholder until locations exist.
+fn location_field<'a>(metrics: &Metrics) -> Element<'a, Message> {
+    column![
+        field_label("Location", metrics),
+        button(
+            text("Add location")
+                .size(metrics.label())
+                .center()
+                .width(Fill)
+        )
+        .width(Fill)
+        .on_press(Message::Ignored)
+        .style(button::secondary),
+    ]
+    .spacing(4)
+    .into()
 }
 
 /// Keep task actions in the same order in details and the backlog editor.
