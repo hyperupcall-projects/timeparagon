@@ -99,33 +99,46 @@ pub fn view(state: &State) -> Element<'_, Message> {
         }
         iced::widget::stack(layers).into()
     });
-    if let Some(sidebar) = &state.sidebar {
-        let margin = state.screen_margin();
-        container(
-            container(content)
-                .width(Fill)
-                .height(Fill)
-                .style(|theme: &iced::Theme| container::background(theme.palette().background)),
-        )
-        .padding(Padding {
-            top: margin,
-            bottom: margin,
-            left: if sidebar.side == crate::panel::Side::Left {
-                margin
-            } else {
-                0.0
-            },
-            right: if sidebar.side == crate::panel::Side::Right {
-                margin
-            } else {
-                0.0
-            },
+    let radius = state.config.views.border_radius();
+    let body = container(content)
+        .id(if state.sidebar.is_some() {
+            "sidebar-body"
+        } else {
+            "application-body"
         })
         .width(Fill)
         .height(Fill)
-        .into()
+        .clip(true)
+        .style(move |theme: &iced::Theme| container::Style {
+            background: Some(theme.palette().background.into()),
+            border: iced::Border {
+                radius: radius.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    if let Some(sidebar) = &state.sidebar {
+        let margin = state.screen_margin();
+        container(body)
+            .padding(Padding {
+                top: margin,
+                bottom: margin,
+                left: if sidebar.side == crate::panel::Side::Left {
+                    margin
+                } else {
+                    0.0
+                },
+                right: if sidebar.side == crate::panel::Side::Right {
+                    margin
+                } else {
+                    0.0
+                },
+            })
+            .width(Fill)
+            .height(Fill)
+            .into()
     } else {
-        content.into()
+        body.into()
     }
 }
 

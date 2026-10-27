@@ -24,11 +24,9 @@ fn main() -> iced::Result {
     iced::daemon(boot, app::update, app::view)
         .title(app::title)
         .theme(app::active_theme)
-        .style(|state, theme| {
+        .style(|_state, theme| {
             let mut style = iced::theme::default(theme);
-            if state.sidebar.is_some() {
-                style.background_color = iced::Color::TRANSPARENT;
-            }
+            style.background_color = iced::Color::TRANSPARENT;
             style
         })
         .subscription(app::subscription)

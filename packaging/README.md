@@ -79,6 +79,25 @@ journalctl --user -u timetracker.service -f
 
 ## The side panel
 
+**Settings → View layout** controls the calendar width, the width of the time
+block pane beside it, and the screen margin. Changes apply immediately and
+save automatically in `config.toml`. Width fields have −10/+10 buttons; the
+margin field has −1/+1 buttons and accepts 0–30 pixels. Values can also be typed
+directly:
+
+```toml
+[views]
+calendar_width = 280.0
+time_block_width = 400.0
+margin = 8.0
+```
+
+Widths are in logical pixels. If `calendar_width` is omitted, the main window
+keeps its saved width and the side panel uses `panel.toml`. The margin defaults
+to 8 and leaves transparent space along the panel's screen edge, top and bottom
+(mirrored for a right-side panel). It also applies while the time block pane is
+open. The regular desktop window keeps its normal window placement.
+
 `Meta+U` opens **TimeTracker itself** as a slim panel — 200px wide by default —
 down the **left** edge of the screen. It is a separate instance of the real
 application, not a second, cut-down view: the same clock, calendar, todos and

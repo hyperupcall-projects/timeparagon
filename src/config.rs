@@ -170,6 +170,8 @@ pub struct ViewSettings {
     pub time_block_width: f32,
     /// Visible inset from the side panel's screen edge, top and bottom.
     pub margin: f32,
+    /// Radius of the application's visible outer corners, in logical pixels.
+    pub border_radius: f32,
 }
 
 impl Default for ViewSettings {
@@ -177,7 +179,8 @@ impl Default for ViewSettings {
         Self {
             calendar_width: None,
             time_block_width: 400.0,
-            margin: 5.0,
+            margin: 8.0,
+            border_radius: 4.0,
         }
     }
 }
@@ -185,7 +188,8 @@ impl Default for ViewSettings {
 impl ViewSettings {
     pub const MIN_WIDTH: f32 = 180.0;
     pub const MAX_WIDTH: f32 = 3840.0;
-    pub const MAX_MARGIN: f32 = 100.0;
+    pub const MAX_MARGIN: f32 = 30.0;
+    pub const MAX_BORDER_RADIUS: f32 = 30.0;
 
     pub fn calendar_width(&self, fallback: f32) -> f32 {
         Self::width(self.calendar_width.unwrap_or(fallback), fallback)
@@ -199,7 +203,15 @@ impl ViewSettings {
         if self.margin.is_finite() {
             self.margin.clamp(0.0, Self::MAX_MARGIN)
         } else {
-            5.0
+            Self::default().margin
+        }
+    }
+
+    pub fn border_radius(&self) -> f32 {
+        if self.border_radius.is_finite() {
+            self.border_radius.clamp(0.0, Self::MAX_BORDER_RADIUS)
+        } else {
+            Self::default().border_radius
         }
     }
 
@@ -762,6 +774,33 @@ fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_settings_keep_legacy_widths_and_round_trip_custom_sizes() {
+        let config: Config = toml::from_str("[window]\nwidth = 320.0").unwrap();
+        assert_eq!(config.views.calendar_width(config.window.width), 320.0);
+        assert_eq!(config.views.time_block_width(), 400.0);
+        assert_eq!(config.views.margin(), 8.0);
+
+        let config: Config = toml::from_str(
+            "[views]\ncalendar_width = 280.0\ntime_block_width = 360.0\nmargin = 12.0",
+        )
+        .unwrap();
+        let restored: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored, config);
+        assert_eq!(restored.views.calendar_width(200.0), 280.0);
+        assert_eq!(restored.views.time_block_width(), 360.0);
+        assert_eq!(restored.views.margin(), 12.0);
+    }
+
+    #[test]
+    fn hand_edited_view_sizes_cannot_break_the_layout() {
+        let views: ViewSettings =
+            toml::from_str("calendar_width = nan\ntime_block_width = -1.0\nmargin = inf").unwrap();
+        assert_eq!(views.calendar_width(260.0), 260.0);
+        assert_eq!(views.time_block_width(), ViewSettings::MIN_WIDTH);
+        assert_eq!(views.margin(), 8.0);
+    }
 
     #[test]
     fn unknown_fields_warn_without_discarding_known_settings() {

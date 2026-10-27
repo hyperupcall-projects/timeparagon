@@ -5,7 +5,7 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length};
 
-use crate::app::{Message, State};
+use crate::app::{LayoutField, Message, State};
 use crate::audio::Tone;
 use crate::calendar;
 use crate::config;
@@ -195,32 +195,65 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let settings = &state.config.views;
-    let calendar = state.calendar_width();
-    let block = settings.time_block_width();
-    let margin = settings.margin();
     column![
-        field(
-            format!("Calendar width: {calendar:.0} px"),
-            slider(config::ViewSettings::MIN_WIDTH..=config::ViewSettings::MAX_WIDTH,
-                calendar, Message::CalendarWidthChanged).step(10.0_f32).into(),
-            metrics,
-        ),
-        field(
-            format!("Time block width: {block:.0} px"),
-            slider(config::ViewSettings::MIN_WIDTH..=config::ViewSettings::MAX_WIDTH,
-                block, Message::TimeBlockWidthChanged).step(10.0_f32).into(),
-            metrics,
-        ),
-        field(
-            format!("Screen margin: {margin:.0} px"),
-            slider(0.0..=config::ViewSettings::MAX_MARGIN,
-                margin, Message::ScreenMarginChanged).step(1.0_f32).into(),
-            metrics,
-        ),
+        layout_number("Calendar width (px)", LayoutField::CalendarWidth, state, metrics),
+        layout_number("Time block width (px)", LayoutField::TimeBlockWidth, state, metrics),
+        layout_number("Screen margin (px, 0–30)", LayoutField::ScreenMargin, state, metrics),
+        layout_number("Border radius (px, 0–30)", LayoutField::BorderRadius, state, metrics),
         text("Widths apply to the calendar and the time block pane beside it. The screen margin insets the side panel from its screen edge, top and bottom.")
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).into()
+}
+
+fn layout_number<'a>(
+    label: &str,
+    kind: LayoutField,
+    state: &'a State,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let value = kind.value(state);
+    let step = match kind {
+        LayoutField::CalendarWidth | LayoutField::TimeBlockWidth => 10.0,
+        LayoutField::ScreenMargin | LayoutField::BorderRadius => 1.0,
+    };
+    let (min, max) = kind.bounds();
+    let shown = state
+        .view_layout_input
+        .as_ref()
+        .filter(|(field, _)| *field == kind)
+        .map_or_else(|| format!("{value:.0}"), |(_, input)| input.clone());
+    let decrement = button(
+        text(format!("-{step:.0}"))
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .padding([4, 4])
+    .width(38)
+    .on_press_maybe((value > min).then(|| kind.changed((value - step).max(min))));
+    let increment = button(
+        text(format!("+{step:.0}"))
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .padding([4, 4])
+    .width(38)
+    .on_press_maybe((value < max).then(|| kind.changed((value + step).min(max))));
+    let input = text_input("", &shown)
+        .id(format!("layout-{kind:?}"))
+        .size(metrics.label())
+        .width(Fill)
+        .on_input(move |input| Message::ViewLayoutInputChanged(kind, input))
+        .on_submit(Message::ViewLayoutInputSubmitted(kind));
+    field(
+        label,
+        row![decrement, input, increment]
+            .spacing(3)
+            .align_y(Center)
+            .into(),
+        metrics,
+    )
 }
 
 fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -805,6 +838,62 @@ fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> Element<'a, M
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_number_buttons_step_and_stop_at_the_limits() {
+        use crate::{app, config::Config, theme::Catalog};
+        use iced_test::{Simulator, core::Settings};
+
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        for (kind, step) in [
+            (LayoutField::CalendarWidth, 10.0),
+            (LayoutField::TimeBlockWidth, 10.0),
+            (LayoutField::ScreenMargin, 1.0),
+        ] {
+            for width in [180.0, 420.0] {
+                let size = iced::Size::new(width, 100.0);
+                let metrics = Metrics::of(size);
+                for delta in [-step, step] {
+                    let before = kind.value(&state);
+                    let mut ui = Simulator::with_size(
+                        Settings::default(),
+                        size,
+                        layout_number("Size (px)", kind, &state, &metrics),
+                    );
+                    let input = ui
+                        .find(iced::widget::Id::from(format!("layout-{kind:?}")))
+                        .unwrap()
+                        .bounds();
+                    assert!(
+                        input.width >= 30.0,
+                        "number must remain editable at {width}px"
+                    );
+                    assert!(input.x >= 0.0 && input.x + input.width <= width);
+                    ui.click(format!("{delta:+.0}")).unwrap();
+                    for message in ui.into_messages() {
+                        let _ = app::update(&mut state, message);
+                    }
+                    assert_eq!(kind.value(&state), before + delta);
+                }
+            }
+        }
+        for (value, label) in [(0.0, "-1"), (30.0, "+1")] {
+            state.config.views.margin = value;
+            let size = iced::Size::new(180.0, 100.0);
+            let mut ui = Simulator::with_size(
+                Settings::default(),
+                size,
+                layout_number(
+                    "Margin",
+                    LayoutField::ScreenMargin,
+                    &state,
+                    &Metrics::of(size),
+                ),
+            );
+            ui.click(label).unwrap();
+            assert_eq!(ui.into_messages().count(), 0);
+        }
+    }
 
     #[test]
     fn cycling_wraps_around_the_options() {

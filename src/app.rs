@@ -62,6 +62,45 @@ pub enum Screen {
     TimerSettings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutField {
+    CalendarWidth,
+    TimeBlockWidth,
+    ScreenMargin,
+    BorderRadius,
+}
+
+impl LayoutField {
+    pub fn value(self, state: &State) -> f32 {
+        match self {
+            Self::CalendarWidth => state.calendar_width(),
+            Self::TimeBlockWidth => state.config.views.time_block_width(),
+            Self::ScreenMargin => state.config.views.margin(),
+            Self::BorderRadius => state.config.views.border_radius(),
+        }
+    }
+
+    pub fn bounds(self) -> (f32, f32) {
+        match self {
+            Self::ScreenMargin => (0.0, config::ViewSettings::MAX_MARGIN),
+            Self::BorderRadius => (0.0, config::ViewSettings::MAX_BORDER_RADIUS),
+            _ => (
+                config::ViewSettings::MIN_WIDTH,
+                config::ViewSettings::MAX_WIDTH,
+            ),
+        }
+    }
+
+    pub fn changed(self, value: f32) -> Message {
+        match self {
+            Self::CalendarWidth => Message::CalendarWidthChanged(value),
+            Self::TimeBlockWidth => Message::TimeBlockWidthChanged(value),
+            Self::ScreenMargin => Message::ScreenMarginChanged(value),
+            Self::BorderRadius => Message::BorderRadiusChanged(value),
+        }
+    }
+}
+
 /// A flash overlay that is currently on screen.
 pub struct Flash {
     pub window: window::Id,
@@ -149,6 +188,8 @@ pub struct State {
     pub panel_shortcut_input: String,
     pub panel_shortcut_busy: bool,
     pub panel_shortcut_result: Option<Result<String, String>>,
+    /// Keep empty or incomplete numbers editable until they are submitted.
+    pub view_layout_input: Option<(LayoutField, String)>,
 
     /// Set while a config write is already queued, so a slider drag does not
     /// schedule one save per pixel.
@@ -210,6 +251,9 @@ pub enum Message {
     CalendarWidthChanged(f32),
     TimeBlockWidthChanged(f32),
     ScreenMarginChanged(f32),
+    BorderRadiusChanged(f32),
+    ViewLayoutInputChanged(LayoutField, String),
+    ViewLayoutInputSubmitted(LayoutField),
     PanelShortcutChanged(String),
     PanelShortcutApply,
     PanelShortcutApplied(Result<String, String>),
@@ -429,6 +473,7 @@ impl State {
             panel_shortcut_input: String::new(),
             panel_shortcut_busy: false,
             panel_shortcut_result: None,
+            view_layout_input: None,
             save_queued: false,
             disk_config: config.clone(),
             catalog,
@@ -535,6 +580,7 @@ pub fn boot() -> (State, Task<Message>) {
     // overlay be a peer window rather than a child of the clock.
     let (_id, open) = window::open(window::Settings {
         size: state.main_size,
+        transparent: true,
         min_size: Some(MIN_SIZE),
         level: level(state.config.window.always_on_top),
         exit_on_close_request: true,
@@ -803,6 +849,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::ScreenSelected(screen) => {
+            state.view_layout_input = None;
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
             state.screen = screen;
@@ -900,7 +947,34 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::ViewLayoutInputChanged(field, input) => {
+            if !input.chars().all(|c| c.is_ascii_digit()) {
+                return Task::none();
+            }
+            let (min, max) = field.bounds();
+            if let Ok(value) = input.parse::<f32>()
+                && (min..=max).contains(&value)
+            {
+                update(state, field.changed(value))
+            } else {
+                state.view_layout_input = Some((field, input));
+                Task::none()
+            }
+        }
+
+        Message::ViewLayoutInputSubmitted(field) => {
+            let value = state
+                .view_layout_input
+                .take()
+                .filter(|(edited, _)| *edited == field)
+                .and_then(|(_, input)| input.parse::<f32>().ok())
+                .filter(|value| value.is_finite())
+                .unwrap_or_else(|| field.value(state));
+            update(state, field.changed(value))
+        }
+
         Message::CalendarWidthChanged(width) => {
+            state.view_layout_input = None;
             if !width.is_finite() {
                 return Task::none();
             }
@@ -919,6 +993,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TimeBlockWidthChanged(width) => {
+            state.view_layout_input = None;
             if !width.is_finite() {
                 return Task::none();
             }
@@ -932,6 +1007,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::ScreenMarginChanged(margin) => {
+            state.view_layout_input = None;
             if !margin.is_finite() {
                 return Task::none();
             }
@@ -947,6 +1023,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 Task::none()
             };
             Task::batch([resize, queue_save(state)])
+        }
+
+        Message::BorderRadiusChanged(radius) => {
+            state.view_layout_input = None;
+            if !radius.is_finite() {
+                return Task::none();
+            }
+            state.config.views.border_radius =
+                radius.clamp(0.0, config::ViewSettings::MAX_BORDER_RADIUS);
+            queue_save(state)
         }
 
         Message::ThemeSelected(name) => {
@@ -1104,6 +1190,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
             let previous = std::mem::replace(&mut state.config, config);
+            if previous.views != state.config.views {
+                state.view_layout_input = None;
+            }
             // An external edit wins over a save that has not started yet.
             state.save_queued = false;
             if previous.notepad.text != state.config.notepad.text {
@@ -1129,6 +1218,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                 && previous.window.time_block_width == state.config.window.time_block_width
             {
                 state.config.window.time_block_width = None;
+            } else if state.sidebar.is_some()
+                && previous.views.margin != state.config.views.margin
+                && previous.window.time_block_width == state.config.window.time_block_width
+            {
+                if let Some(width) = &mut state.config.window.time_block_width {
+                    *width += state.config.views.margin() - previous.views.margin();
+                }
             }
             if views_changed {
                 if state.sidebar.is_none() {
@@ -3007,8 +3103,8 @@ mod tests {
 
         // The width is fixed from both sides, so the compositor cannot stretch
         // the strip, but the height is free to fill the screen.
-        assert_eq!(settings.min_size.unwrap().width, 205.0);
-        assert_eq!(settings.max_size.unwrap().width, 205.0);
+        assert_eq!(settings.min_size.unwrap().width, 208.0);
+        assert_eq!(settings.max_size.unwrap().width, 208.0);
         assert!(settings.min_size.unwrap().height < settings.max_size.unwrap().height);
         assert!(!settings.decorations);
         assert!(settings.transparent);

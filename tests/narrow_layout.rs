@@ -145,9 +145,9 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
         // Side panel.
         "New shortcut",
         "Apply shortcut",
-        "Calendar width: 260 px",
-        "Time block width: 400 px",
-        "Screen margin: 5 px",
+        "Calendar width (px)",
+        "Time block width (px)",
+        "Screen margin (px, 0–30)",
         // Google Calendar.
         "OAuth client ID",
         "Sync every 15 minutes",
