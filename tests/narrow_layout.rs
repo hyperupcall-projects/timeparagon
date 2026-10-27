@@ -493,14 +493,14 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
     }
 }
 
-/// The tab label at `index` (Calendar, Inbox, Projects, Backlog, Keep,
+/// The tab label at `index` (Calendar, Inbox, Projects, Backlog, Travel, Keep,
 /// Notepad, Settings) for a window of `width`.
 fn tab_label(width: f32, index: usize) -> &'static str {
     timetracker::ui::tab_labels(width)[index]
 }
 
 /// Navigation is one row in three groups at every width, never overflowing:
-/// Calendar, then Inbox/Projects/Backlog, then Keep/Notepad/Settings.
+/// Calendar, then Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
 #[test]
 fn the_tabs_are_one_row_in_three_groups() {
     let state = state();
@@ -516,7 +516,7 @@ fn the_tabs_are_one_row_in_three_groups() {
             );
             bounds.push(found);
         }
-        // Order: Calendar, Inbox, Projects, Backlog, Keep, Notepad, Settings.
+        // Order: Calendar, Inbox, Projects, Backlog, Travel, Keep, Notepad, Settings.
         for pair in bounds.windows(2) {
             assert!(pair[0].x + pair[0].width <= pair[1].x, "order at {width}px");
             assert!(
@@ -526,7 +526,7 @@ fn the_tabs_are_one_row_in_three_groups() {
         }
         // Space separates the groups more than it separates tabs within one.
         let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
-        assert!(gap(0, 1) > gap(1, 2) && gap(3, 4) > gap(4, 5));
+        assert!(gap(0, 1) > gap(1, 2) && gap(4, 5) > gap(5, 6));
     }
 }
 
@@ -576,7 +576,7 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(420.0, 600.0));
 
-    let _ = ui.click("Settings")?;
+    let _ = ui.click(tab_label(420.0, 7))?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -941,7 +941,7 @@ fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
 
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
-        let notepad = tab_label(width, 5);
+        let notepad = tab_label(width, 6);
         assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
 
         let calendar = tab_label(width, 0);
@@ -958,7 +958,7 @@ fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(420.0, 600.0));
 
-    let _ = ui.click("Notepad")?;
+    let _ = ui.click(tab_label(420.0, 6))?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -981,7 +981,7 @@ fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 600.0));
 
-    for label in [tab_label(200.0, 5), tab_label(200.0, 0), "A-", "A+", "100%"] {
+    for label in [tab_label(200.0, 6), tab_label(200.0, 0), "A-", "A+", "100%"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -1133,8 +1133,9 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     assert!(state.calendar.open_event.is_none());
     let mut ui = render(&state, Size::new(660.0, 720.0));
     for label in [
-        "Edit time block",
-        "Show Event Details",
+        "Edit",
+        "Delete",
+        "Close",
         "Planned Tasks",
         "Write proposal",
         "Available tasks",
@@ -1144,6 +1145,8 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     ] {
         assert!(ui.find(label).is_ok(), "missing {label}");
     }
+    assert!(ui.find("Show Event Details").is_err());
+    assert!(ui.find("Edit time block").is_err());
     assert!(ui.find("90m planned / 60m available").is_err());
     assert!(ui.find("Add a todo").is_err());
     // Generate a preview only when explicitly requested for visual inspection.
@@ -1172,6 +1175,51 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
 }
 
 #[test]
+fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+
+    for width in [500.0, 660.0] {
+        let mut ui = render(&state, Size::new(width, 720.0));
+        let edit = ui.find("Edit")?.bounds();
+        let delete = ui.find("Delete")?.bounds();
+        let close = ui.find("Close")?.bounds();
+        assert_eq!(edit.y, delete.y);
+        assert_eq!(delete.y, close.y);
+        assert!(edit.x + edit.width <= delete.x);
+        assert!(delete.x + delete.width <= close.x);
+        assert!(close.x + close.width <= width);
+        let _ = ui.click("Delete")?;
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::EventDeleteRequested(id) if id == "standup"
+        )));
+    }
+
+    let mut ui = render(&state, Size::new(660.0, 720.0));
+    let _ = ui.click("Close")?;
+    assert!(
+        ui.into_messages()
+            .any(|message| matches!(message, Message::TimeBlocking(Action::Close)))
+    );
+
+    let _ = app::update(&mut state, Message::EventDeleteRequested("standup".into()));
+    assert_eq!(state.calendar.pending_delete.as_deref(), Some("standup"));
+    let mut ui = render(&state, Size::new(660.0, 720.0));
+    assert!(ui.find("Delete this event?").is_ok());
+    let _ = ui.click("Cancel")?;
+    assert!(
+        ui.into_messages()
+            .any(|message| matches!(message, Message::EventDeleteCancelled))
+    );
+    let _ = app::update(&mut state, Message::EventDeleteCancelled);
+    assert!(state.calendar.event("standup").is_some());
+    assert!(state.timeblocking.block.is_some());
+    Ok(())
+}
+
+#[test]
 fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error> {
     use timetracker::timeblocking::Action;
     let mut state = timeblocking_state();
@@ -1185,7 +1233,7 @@ fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error
 
     let mut ui = render(&state, Size::new(260.0 + 400.0 + 360.0, 900.0));
     let calendar = ui.find("Menu")?.bounds();
-    let block = ui.find("Edit time block")?.bounds();
+    let block = ui.find("Edit")?.bounds();
     let details = ui.find("Complete task")?.bounds();
 
     assert!(
@@ -1304,6 +1352,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
 #[test]
 fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(), Error> {
     use timetracker::timeblocking::{Action, Priority};
+    use timetracker::travel::{Action as Travel, PickTarget};
 
     let mut state = timeblocking_state();
     let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
@@ -1317,10 +1366,11 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
     assert!(ui.into_messages().any(|message| matches!(message,
         Message::TimeBlocking(Action::Priority(id, Some(Priority::P1))) if id == "task:backlog")));
 
-    // The location button is a placeholder: it does nothing yet.
+    // The location button opens the place search for this task.
     let mut ui = render(&state, size);
     let _ = ui.click("Add location")?;
-    assert!(ui.into_messages().all(|message| matches!(message, Message::Ignored)));
+    assert!(ui.into_messages().any(|message| matches!(message,
+        Message::Travel(Travel::OpenPicker(PickTarget::Task(id))) if id == "task:backlog")));
 
     // The saved choice comes back on the task, and the details stay open.
     let _ = app::update(
@@ -1450,17 +1500,10 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
         Message::TimeBlocking(Action::AvailableAll(true)),
     );
     let mut ui = render(&state, Size::new(900.0, 900.0));
-    let _ = ui.click("Edit time block")?;
+    let _ = ui.click("Edit")?;
     assert!(ui.into_messages().any(|message| matches!(
         message,
         Message::EventEditRequested(id) if id == "standup"
-    )));
-
-    let mut ui = render(&state, Size::new(900.0, 900.0));
-    let _ = ui.click("Show Event Details")?;
-    assert!(ui.into_messages().any(|message| matches!(
-        message,
-        Message::TimeBlocking(Action::Details(id)) if id == "standup"
     )));
 
     let mut ui = render(&state, Size::new(900.0, 900.0));
@@ -2200,7 +2243,7 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
     for width in WIDTHS {
         let mut state = state();
         let mut ui = render(&state, Size::new(width, HEIGHT));
-        ui.click(tab_label(width, 4))?;
+        ui.click(tab_label(width, 5))?;
         assert!(
             ui.into_messages()
                 .any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes)))

@@ -209,7 +209,7 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     body = body.push(estimate_button(state, task, metrics.label()));
     body = body.push(project_field(state, task, metrics));
     body = body.push(priority_field(state, task, metrics));
-    body = body.push(location_field(metrics));
+    body = body.push(location_field(state, task, metrics));
     body = body.push(
         text("Deadline")
             .size(metrics.label())
@@ -357,19 +357,21 @@ fn priority_field<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element
         .into()
 }
 
-/// Where the task happens. The button is a placeholder until locations exist.
-fn location_field<'a>(metrics: &Metrics) -> Element<'a, Message> {
+/// Where the task happens: the place it was given, or a way to search for one.
+fn location_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let current = tb::metadata(task)
+        .location
+        .and_then(|id| state.config.travel.place(id));
+
     column![
         field_label("Location", metrics),
-        button(
-            text("Add location")
-                .size(metrics.label())
-                .center()
-                .width(Fill)
-        )
-        .width(Fill)
-        .on_press(Message::Ignored)
-        .style(button::secondary),
+        super::travel::location_control(
+            state,
+            crate::travel::PickTarget::Task(task.id.clone()),
+            current,
+            "Add location",
+            metrics,
+        ),
     ]
     .spacing(4)
     .into()
@@ -432,12 +434,21 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let capacity = (block.end - block.start).num_minutes().max(0) as u32;
     let block_id = block.id.clone();
     let mut body = column![
+        text(block.title.clone()).size(20).width(Fill),
         row![
-            text(block.title.clone()).size(20).width(Fill),
-            button("×").on_press(msg(Action::Close)).style(button::text)
-        ],
-        button("Edit time block").on_press(Message::EventEditRequested(block_id.clone())),
-        button("Show Event Details").on_press(msg(Action::Details(block_id.clone()))),
+            button(text("Edit").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::EventEditRequested(block_id.clone())),
+            button(text("Delete").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::EventDeleteRequested(block_id.clone()))
+                .style(button::secondary),
+            button(text("Close").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(msg(Action::Close))
+                .style(button::secondary),
+        ]
+        .spacing(metrics.spacing),
         text("Planned Tasks").size(16),
         planned_slot(state, &block_id, metrics),
     ]

@@ -717,6 +717,7 @@ mod tests {
                 schedule: None,
                 project: None,
                 priority: None,
+                location: None,
             },
             legacy_key: None,
         });

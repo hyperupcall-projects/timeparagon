@@ -26,6 +26,7 @@ pub mod projects;
 pub mod theme;
 pub mod todos;
 pub mod tracks;
+pub mod travel;
 pub mod ui;
 
 pub mod timeblocking;

@@ -48,6 +48,8 @@ pub enum Screen {
     Inbox,
     Backlog,
     Projects,
+    /// The places events happen at, and the trips between them.
+    Travel,
     /// The notepad: a page of free text kept between sessions.
     Notepad,
     KeepNotes,
@@ -166,6 +168,8 @@ pub struct State {
     pub screen: Screen,
     /// What the Projects tab is in the middle of.
     pub projects: crate::projects::Workspace,
+    /// Places, place searches and trips: the Travel tab and travel on the day view.
+    pub travel: crate::travel::Workspace,
     pub main_window: Option<window::Id>,
     pub main_size: Size,
     /// Receiver for show/hide commands from the panel daemon, when this process
@@ -239,6 +243,7 @@ pub enum Message {
 
     ScreenSelected(Screen),
     Projects(crate::projects::Action),
+    Travel(crate::travel::Action),
     KeepRefresh,
     KeepSignin,
     KeepLoaded(Result<crate::keep::Snapshot, String>),
@@ -463,6 +468,7 @@ impl State {
             recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
             projects: Default::default(),
+            travel: Default::default(),
             main_window: None,
             main_size: Size::new(
                 config.views.calendar_width(config.window.width),
@@ -677,6 +683,7 @@ fn boot_state() -> State {
     // test must not read or rewrite the user's cache.
     state.calendar.cache_days_in(config::cache_days_dir());
     state.keep.cache_in(config::cache_keep_path());
+    state.travel.cache_in(config::cache_travel_path());
 
     // The same goes for the time tracks: the file is the user's own, so only
     // a real boot is allowed to pick it up.
@@ -718,8 +725,15 @@ fn window_icon() -> Option<window::Icon> {
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
+    // The clock ticks many times a second and changes nothing travel reads.
+    let ticking = matches!(message, Message::Tick(_) | Message::FlashFrame(_));
     let task = dispatch(state, message);
-    Task::batch([task, reconcile_detail_pane(state)])
+    let travel = if ticking {
+        Task::none()
+    } else {
+        crate::travel::reconcile(state)
+    };
+    Task::batch([task, reconcile_detail_pane(state), travel])
 }
 
 /// Opens or closes the event details pane by widening or narrowing the window
@@ -857,6 +871,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::Projects(action) => crate::projects::update(state, action),
+        Message::Travel(action) => crate::travel::update(state, action),
 
         Message::KeepRefresh => refresh_keep(state),
         Message::KeepSignin => {
@@ -1774,10 +1789,21 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // The event is gone on Google's side, so drop it from the day in
             // view. The next sync reconciles the cache.
             state.calendar.events.retain(|event| event.id != id);
-            if state.calendar.open_event.as_deref() == Some(id.as_str()) {
+            let closing_details = state.calendar.open_event.as_deref() == Some(id.as_str());
+            if closing_details {
                 state.calendar.open_event = None;
             }
-            Task::none()
+            if state.timeblocking.block.as_deref() == Some(id.as_str()) {
+                let close = crate::timeblocking::close(state);
+                if closing_details && state.details_pane_open {
+                    // Detail-pane reconciliation will resize both panes together.
+                    Task::none()
+                } else {
+                    close
+                }
+            } else {
+                Task::none()
+            }
         }
 
         Message::EventDeleted(_id, Err(error)) => {
@@ -2498,6 +2524,12 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(
                 crate::timeblocking::Action::CloseEstimate,
             )),
+            _ => None,
+        };
+    }
+    if state.travel.open.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Travel(crate::travel::Action::CloseLeg)),
             _ => None,
         };
     }

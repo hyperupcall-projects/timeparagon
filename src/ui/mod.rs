@@ -20,6 +20,7 @@ pub mod source_icon;
 mod task_drag;
 pub mod timeblocking;
 mod timeblocking_focus;
+pub mod travel;
 
 use std::time::Duration;
 
@@ -71,6 +72,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects::view(state, &metrics),
+            (Screen::Travel, _) => travel::view(state, &main_metrics),
             (Screen::Calendar, _) => {
                 // Keep the calendar at the same place in the widget tree when
                 // the block editor opens or closes, preserving its scroll state.
@@ -135,6 +137,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.calendar.pending_delete.is_some() {
             layers.push(calendar::delete_confirmation(state, &metrics));
         }
+        if state.travel.open.is_some() {
+            layers.push(travel::leg_overlay(state, &metrics));
+        }
         if state.inbox.draft.is_some() {
             layers.push(inbox::new_task_overlay(state, &metrics));
         }
@@ -183,14 +188,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
     }
 }
 
-/// Full tab names, in display order: Calendar, then Inbox/Projects/Backlog,
-/// then Keep/Notepad/Settings.
-const TAB_LABELS: [&str; 7] = [
-    "Calendar", "Inbox", "Projects", "Backlog", "Keep", "Notepad", "Settings",
+/// How many tabs there are.
+const TAB_COUNT: usize = 8;
+
+/// Full tab names, in display order: Calendar, then
+/// Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
+const TAB_LABELS: [&str; TAB_COUNT] = [
+    "Calendar", "Inbox", "Projects", "Backlog", "Travel", "Keep", "Notepad", "Settings",
 ];
 
 /// Short names for windows too narrow to fit the full ones legibly.
-const TAB_SHORT_LABELS: [&str; 7] = ["Cal", "Inbox", "Proj", "Back", "Keep", "Note", "Set"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] =
+    ["Cal", "Inbox", "Proj", "Back", "Trav", "Keep", "Note", "Set"];
 
 /// Average glyph width as a fraction of the font size, with some slack.
 const TAB_GLYPH_WIDTH: f32 = 0.6;
@@ -208,7 +217,7 @@ pub struct TabFit {
 }
 
 /// The labels shown at `width`, so tests and callers agree with `tabs`.
-pub fn tab_labels(width: f32) -> [&'static str; 7] {
+pub fn tab_labels(width: f32) -> [&'static str; TAB_COUNT] {
     if tab_fit(Metrics::of(Size::new(width, 0.0))).short {
         TAB_SHORT_LABELS
     } else {
@@ -225,11 +234,12 @@ fn tab_fit(metrics: Metrics) -> TabFit {
     } else {
         (5.0, metrics.spacing.min(6.0))
     };
-    let size_for = |labels: &[&str; 7]| {
+    let size_for = |labels: &[&str; TAB_COUNT]| {
         let chars: usize = labels.iter().map(|label| label.chars().count()).sum();
-        // Seven tabs with padding each side, a gap inside each group of
-        // three (two gaps in each of the two groups), and two group gaps.
-        let fixed = 14.0 * pad + 4.0 * gap + 2.0 * (gap * 2.0).max(4.0);
+        // Eight tabs with padding each side, a gap between the tabs inside
+        // each group (three in the group of four, two in the group of three),
+        // and two group gaps.
+        let fixed = 16.0 * pad + 5.0 * gap + 2.0 * (gap * 2.0).max(4.0);
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_LABELS);
@@ -251,7 +261,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Calendar, then Inbox/Projects/Backlog, then Keep/Notepad/Settings.
+/// Calendar, then Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
@@ -266,6 +276,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         Screen::Inbox,
         Screen::Projects,
         Screen::Backlog,
+        Screen::Travel,
         Screen::KeepNotes,
         Screen::Notepad,
         Screen::Settings,
@@ -282,7 +293,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             tab(label, active, screen, metrics, fit)
         })
         .collect();
-    let right: Vec<_> = tabs.drain(4..).collect();
+    let right: Vec<_> = tabs.drain(5..).collect();
     let middle: Vec<_> = tabs.drain(1..).collect();
     let calendar = tabs.remove(0);
 

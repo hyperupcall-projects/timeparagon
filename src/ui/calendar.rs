@@ -173,6 +173,24 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             button::secondary
         });
 
+    // Travel shows how long the trip to each event takes, so the button is lit
+    // for as long as those are on the grid.
+    let toggle_travel = |wide: bool| {
+        button(
+            text("Toggle Travel")
+                .size(metrics.label())
+                .center()
+                .width(if wide { Fill } else { Length::Shrink }),
+        )
+        .width(if wide { Fill } else { Length::Shrink })
+        .on_press(Message::Travel(crate::travel::Action::Toggle))
+        .style(if state.travel.show {
+            button::primary
+        } else {
+            button::secondary
+        })
+    };
+
     let day = text(heading)
         .size(metrics.label() + 1.0)
         .font(Font {
@@ -182,32 +200,52 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .center()
         .width(Fill);
 
-    if stacked_header(metrics) {
-        // Three buttons and a date do not fit side by side, so the date gets a
+    match header_lines(metrics) {
+        // Four buttons and a date do not fit side by side, so the date gets a
         // line to itself and is never squeezed into a few letters per row.
-        column![
+        // Below that there is not room for a fourth button either, so it
+        // takes a line of its own.
+        3 => column![
             day,
             row![month, Space::new().width(Fill), set_alarm, menu]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
+            toggle_travel(true),
         ]
         .spacing(metrics.spacing)
-        .into()
-    } else {
-        row![month, day, set_alarm, menu]
+        .into(),
+        2 => column![
+            day,
+            row![month, Space::new().width(Fill), toggle_travel(false), set_alarm, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
+        ]
+        .spacing(metrics.spacing)
+        .into(),
+        _ => row![month, day, toggle_travel(false), set_alarm, menu]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
-            .into()
+            .into(),
     }
 }
 
 /// The narrowest a calendar can be and still hold the month picker, the date,
-/// Set Alarm and Menu on one line with the date readable.
-const SINGLE_LINE_HEADER: f32 = 340.0;
+/// Toggle Travel, Set Alarm and Menu on one line with the date readable.
+const SINGLE_LINE_HEADER: f32 = 460.0;
 
-/// Whether the header needs two lines.
-fn stacked_header(metrics: &Metrics) -> bool {
-    metrics.size.width < SINGLE_LINE_HEADER
+/// The narrowest a calendar can be and still hold the month picker and all
+/// three buttons on one line under the date.
+const TWO_LINE_HEADER: f32 = 340.0;
+
+/// How many lines the header takes: one, two, or three.
+fn header_lines(metrics: &Metrics) -> u8 {
+    if metrics.size.width >= SINGLE_LINE_HEADER {
+        1
+    } else if metrics.size.width >= TWO_LINE_HEADER {
+        2
+    } else {
+        3
+    }
 }
 
 /// A square button for stepping a day or a month at a time.
@@ -224,7 +262,7 @@ fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Elemen
 /// The vertical space the header row takes, so an overlay can start below
 /// it rather than over it.
 fn header_offset(metrics: &Metrics) -> f32 {
-    let lines = if stacked_header(metrics) { 2.0 } else { 1.0 };
+    let lines = f32::from(header_lines(metrics));
 
     metrics.padding + (metrics.icon_button() + metrics.spacing) * lines
 }
@@ -550,6 +588,12 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
         })
         .collect();
 
+    let travel = if state.travel.show {
+        travel_boxes(state, &blocks)
+    } else {
+        Vec::new()
+    };
+
     let height = hour_height * 24.0;
     let compact = metrics.breakpoint.is_compact();
 
@@ -568,6 +612,7 @@ fn day_grid<'a>(state: &'a State, metrics: &Metrics, now: DateTime<Local>) -> El
     scrollable(
         canvas_widget(DayCanvas {
             blocks,
+            travel,
             needle,
             alarms: alarm_marks,
             alarm_mode: state.alarms.mode,
@@ -941,8 +986,26 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     if !is_task(event) && !details.status.is_empty() {
         body = body.push(detail_line("Status", details.status.clone(), metrics));
     }
-    if !details.location.is_empty() {
-        body = body.push(detail_line("Location", details.location.clone(), metrics));
+    if is_task(event) {
+        if !details.location.is_empty() {
+            body = body.push(detail_line("Location", details.location.clone(), metrics));
+        }
+    } else {
+        // A calendar event gets a place to search for and choose, the same as
+        // a task does. Where Google holds a location no saved place matches,
+        // that text stays above the button.
+        let place = crate::travel::place_of(&state.config.travel, event)
+            .and_then(|id| state.config.travel.place(id));
+        if place.is_none() && !details.location.is_empty() {
+            body = body.push(detail_line("Location", details.location.clone(), metrics));
+        }
+        body = body.push(super::travel::location_control(
+            state,
+            crate::travel::PickTarget::Event(event.id.clone()),
+            place,
+            "Add location",
+            metrics,
+        ));
     }
     if !details.organizer.is_empty() {
         body = body.push(detail_line("Organizer", details.organizer.clone(), metrics));
@@ -1845,8 +1908,64 @@ struct AlarmMark {
     label: String,
 }
 
+/// A trip drawn beside the events it joins: in a gray box just before the
+/// event it leads to, or just after the day's last event for the trip home.
+#[derive(Debug, Clone)]
+struct TravelBox {
+    leg: crate::travel::Leg,
+    /// What the trip leaves and what it reaches, for its details card.
+    between: (String, String),
+    label: String,
+    /// The minute of the day the box is fixed to: the start of the event it
+    /// comes before, or the end of the event it follows.
+    anchor_min: i32,
+    /// Whether the box hangs below its anchor rather than above it.
+    below: bool,
+    /// How long the trip takes, once known, which sets the box's height.
+    minutes: u32,
+    /// Where the event it belongs to sits, so the box lines up with it.
+    column: usize,
+    columns: usize,
+    time_block: bool,
+}
+
+/// The shortest a travel box is drawn, so its words fit in it.
+const TRAVEL_MIN_HEIGHT: f32 = 16.0;
+
+/// The gray boxes for the day's trips, found from the blocks already laid out.
+fn travel_boxes(state: &State, blocks: &[Block]) -> Vec<TravelBox> {
+    crate::travel::day_hops(state, state.calendar.day)
+        .into_iter()
+        .filter_map(|hop| {
+            let (event, below) = match (&hop.before, &hop.after) {
+                (Some(id), _) => (id, false),
+                (None, Some(id)) => (id, true),
+                (None, None) => return None,
+            };
+            let block = blocks.iter().find(|block| &block.id == event)?;
+            let minutes = match crate::travel::summary(state, hop.leg) {
+                crate::travel::Summary::Ready(route) => route.seconds.div_ceil(60),
+                _ => 0,
+            };
+
+            Some(TravelBox {
+                leg: hop.leg,
+                label: crate::travel::short_label(state, hop.leg),
+                between: (hop.from_title, hop.to_title),
+                anchor_min: if below { block.end_min } else { block.start_min },
+                below,
+                minutes,
+                column: block.column,
+                columns: block.columns,
+                time_block: block.time_block,
+            })
+        })
+        .collect()
+}
+
 struct DayCanvas {
     blocks: Vec<Block>,
+    travel: Vec<TravelBox>,
     needle: Option<i32>,
     /// The alarms that fall on this day.
     alarms: Vec<AlarmMark>,
@@ -2121,6 +2240,20 @@ impl canvas::Program<Message> for DayCanvas {
                     );
                 }
 
+                // A travel box opens the trip's details. It is drawn over the
+                // events, so it is asked before them.
+                if let Some(travel) = self.travel_at(point, bounds.width) {
+                    return Some(
+                        canvas::Action::publish(Message::Travel(
+                            crate::travel::Action::OpenLeg(
+                                travel.leg,
+                                Some(travel.between.clone()),
+                            ),
+                        ))
+                        .and_capture(),
+                    );
+                }
+
                 for block in &self.blocks {
                     if !block.time_block {
                         continue;
@@ -2254,6 +2387,12 @@ impl canvas::Program<Message> for DayCanvas {
         {
             return mouse::Interaction::Pointer;
         }
+        if cursor
+            .position_in(bounds)
+            .is_some_and(|point| self.travel_at(point, bounds.width).is_some())
+        {
+            return mouse::Interaction::Pointer;
+        }
         if state.create().is_some() {
             return mouse::Interaction::Crosshair;
         }
@@ -2322,7 +2461,9 @@ impl canvas::Program<Message> for DayCanvas {
             self.compact,
             self.day_start_hour,
             dragging,
-        );
+        )
+        .wrapping_mul(31)
+        .wrapping_add(travel_key(&self.travel));
         if state.key.get() != key {
             state.grid.clear();
             state.key.set(key);
@@ -2330,6 +2471,7 @@ impl canvas::Program<Message> for DayCanvas {
 
         let grid = state.grid.draw(renderer, bounds.size(), |frame| {
             self.draw_grid(frame, dragging);
+            self.draw_travel(frame);
         });
 
         let mut overlay = Frame::new(renderer, bounds.size());
@@ -2343,6 +2485,11 @@ impl canvas::Program<Message> for DayCanvas {
             self.draw_create(&mut overlay, &create);
         } else if let Some(drag) = drag {
             self.draw_drag(&mut overlay, &drag);
+        } else if cursor
+            .position_in(bounds)
+            .is_some_and(|point| self.travel_at(point, bounds.width).is_some())
+        {
+            // The box is what a click would open, not the event under it.
         } else if let Some(index) = self.hit(cursor.position_in(bounds), bounds.width) {
             self.draw_hover(&mut overlay, index);
         }
@@ -2502,6 +2649,80 @@ impl DayCanvas {
                 }
             }
         }
+    }
+
+    /// Draws the gray boxes for the trips, over the events they lead to.
+    fn draw_travel(&self, frame: &mut Frame) {
+        let size = if self.compact { 10.0 } else { 11.0 };
+
+        for trip in &self.travel {
+            let bounds = self.travel_rect(trip, frame.width());
+            let shape = Path::rounded_rectangle(
+                Point::new(bounds.x, bounds.y),
+                Size::new(bounds.width, bounds.height),
+                EVENT_RADIUS.into(),
+            );
+
+            frame.fill(&shape, colors::TRAVEL);
+            frame.stroke(
+                &shape,
+                Stroke {
+                    style: Style::Solid(Color::BLACK.scale_alpha(0.45)),
+                    width: 1.0,
+                    ..Stroke::default()
+                },
+            );
+
+            let room = (bounds.width - BLOCK_PADDING - BLOCK_PADDING_RIGHT).max(8.0);
+            fill_glyphs(
+                frame,
+                Text {
+                    content: fit_line(&trip.label, size, room),
+                    position: Point::new(bounds.x + BLOCK_PADDING, bounds.y + 2.0),
+                    color: on_color(colors::TRAVEL),
+                    size: Pixels(size),
+                    font: Font::DEFAULT,
+                    align_x: iced::alignment::Horizontal::Left.into(),
+                    align_y: iced::alignment::Vertical::Top,
+                    line_height: text::LineHeight::default(),
+                    shaping: text::Shaping::Basic,
+                    max_width: room,
+                },
+            );
+        }
+    }
+
+    /// Where a trip's box sits: on the event it belongs to, hanging off its
+    /// start (or its end, for the trip home) by as long as the trip takes.
+    fn travel_rect(&self, trip: &TravelBox, width: f32) -> Rectangle {
+        let minute_height = self.hour_height / 60.0;
+        let grid_width = (width - self.gutter).max(40.0);
+        let columns = trip.columns.max(1) as f32;
+        let height = (trip.minutes as f32 * minute_height).max(TRAVEL_MIN_HEIGHT);
+        let anchor = trip.anchor_min as f32 * minute_height;
+        let mut box_width = (grid_width / columns - EVENT_GAP).max(8.0);
+        if trip.time_block {
+            box_width = (box_width - 6.0) * 0.5;
+        }
+
+        Rectangle {
+            x: self.gutter + trip.column as f32 * (grid_width / columns) + EVENT_GAP / 2.0,
+            y: if trip.below {
+                anchor
+            } else {
+                (anchor - height).max(0.0)
+            },
+            width: box_width,
+            height,
+        }
+    }
+
+    /// The trip box under a grid point, if any. The last drawn is on top.
+    fn travel_at(&self, point: Point, width: f32) -> Option<&TravelBox> {
+        self.travel
+            .iter()
+            .rev()
+            .find(|trip| self.travel_rect(trip, width).contains(point))
     }
 
     fn draw_needle(&self, frame: &mut Frame) {
@@ -3392,6 +3613,27 @@ fn cache_key(
     hash
 }
 
+/// The part of the grid's cache key that comes from the travel boxes.
+fn travel_key(travel: &[TravelBox]) -> u64 {
+    let mut hash = 0u64;
+
+    for trip in travel {
+        hash = hash.wrapping_mul(31).wrapping_add(trip.anchor_min as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(u64::from(trip.below));
+        hash = hash.wrapping_mul(31).wrapping_add(u64::from(trip.minutes));
+        hash = hash.wrapping_mul(31).wrapping_add(trip.column as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(trip.columns as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(u64::from(trip.time_block));
+        for byte in trip.label.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte));
+        }
+    }
+
+    hash
+}
+
 /// Wheel notches to apply. Scroll up is positive.
 ///
 /// Pixel deltas from a trackpad are large, so they are scaled down to the
@@ -3681,6 +3923,7 @@ mod tests {
                 tasks: Vec::new(),
                 time_block: false,
             }],
+            travel: Vec::new(),
             needle: None,
             alarms: Vec::new(),
             alarm_mode: false,
@@ -3721,6 +3964,130 @@ mod tests {
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
         ]);
         ui.into_messages().collect()
+    }
+
+    /// A trip of `minutes` hanging off the top of the 9:00 standup.
+    fn trip_before_standup(minutes: u32) -> TravelBox {
+        TravelBox {
+            leg: crate::travel::Leg { from: 1, to: 2 },
+            between: ("Start of day".into(), "Standup".into()),
+            label: "Walk".into(),
+            anchor_min: 9 * 60,
+            below: false,
+            minutes,
+            column: 0,
+            columns: 1,
+            time_block: false,
+        }
+    }
+
+    #[test]
+    fn a_travel_box_sits_just_before_its_event_as_tall_as_the_trip() {
+        let mut canvas = canvas_with_one_block();
+        canvas.travel = vec![trip_before_standup(25)];
+
+        // The grid is a pixel a minute, so 25 minutes ends where 9:00 starts.
+        let rect = canvas.travel_rect(&canvas.travel[0], 600.0);
+        assert_eq!((rect.y, rect.height), (9.0 * 60.0 - 25.0, 25.0));
+        let event = canvas.block_rect(&canvas.blocks[0], 600.0);
+        assert_eq!((rect.x, rect.width), (event.x, event.width));
+
+        // A trip too short to hold a line of text is still tall enough to read.
+        let short = trip_before_standup(2);
+        assert_eq!(canvas.travel_rect(&short, 600.0).height, TRAVEL_MIN_HEIGHT);
+
+        // The trip home hangs off the end of the last event instead.
+        let home = TravelBox {
+            anchor_min: 9 * 60 + 30,
+            below: true,
+            ..trip_before_standup(20)
+        };
+        let rect = canvas.travel_rect(&home, 600.0);
+        assert_eq!((rect.y, rect.height), (9.0 * 60.0 + 30.0, 20.0));
+    }
+
+    #[test]
+    fn clicking_a_travel_box_opens_the_trip_and_not_the_event() {
+        let mut canvas = canvas_with_one_block();
+        canvas.travel = vec![trip_before_standup(25)];
+
+        let messages = click_at(canvas, Point::new(200.0, 9.0 * 60.0 - 10.0));
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::Travel(crate::travel::Action::OpenLeg(leg, Some((from, to))))
+                    if *leg == (crate::travel::Leg { from: 1, to: 2 })
+                        && from == "Start of day"
+                        && to == "Standup"
+            )),
+            "got {messages:?}"
+        );
+        assert!(!messages.iter().any(|m| matches!(m, Message::EventOpened(_))));
+
+        // The event itself still opens where the box is not.
+        let mut canvas = canvas_with_one_block();
+        canvas.travel = vec![trip_before_standup(25)];
+        let messages = click_at(canvas, Point::new(200.0, 9.0 * 60.0 + 15.0));
+        assert!(messages.iter().any(|m| matches!(m, Message::EventOpened(id) if id == "standup")));
+    }
+
+    #[test]
+    fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
+        use crate::config::Config;
+
+        let mut state = State::new(Config::default(), crate::theme::Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let travel = &mut state.config.travel;
+        let home = travel.add_place("Home", "1 Elm St", "g-home", 0.0, 0.0);
+        let office = travel.add_place("Office", "2 Oak St", "g-office", 0.0, 1.0);
+        travel.start = Some(home);
+        travel.end = Some(home);
+        travel.api_key = "key".into();
+        for event in &mut state.calendar.events {
+            if matches!(event.id.as_str(), "standup" | "review") {
+                event.details.location = "Office".into();
+            }
+        }
+        let route = crate::travel::Route { seconds: 1500, meters: 2100 };
+        state.travel.routes.insert(
+            crate::travel::RouteKey {
+                from: home,
+                to: office,
+                mode: crate::config::TravelMode::Walk,
+            },
+            crate::travel::RouteState::Ready(route),
+        );
+
+        let at = |id: &str, start, end| Block {
+            id: id.into(),
+            title: id.into(),
+            when: String::new(),
+            start_min: start,
+            end_min: end,
+            column: 0,
+            columns: 1,
+            color: Color::WHITE,
+            editable: true,
+            pending: false,
+            tasks: Vec::new(),
+            time_block: false,
+        };
+        let blocks = [at("standup", 540, 570), at("review", 840, 900)];
+
+        let found = travel_boxes(&state, &blocks);
+
+        // Home to the standup, then the review to home. The two meetings are
+        // at the same place, and there is nothing between them to travel for.
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!((found[0].anchor_min, found[0].below, found[0].minutes), (540, false, 25));
+        assert_eq!(found[0].label, "Walk · 25 min · 2.1 km");
+        assert_eq!(found[0].between, ("Start of day".to_owned(), "Standup".to_owned()));
+        assert_eq!((found[1].anchor_min, found[1].below), (900, true));
+        assert_eq!(found[1].between.1, "End of day");
+        assert!(found[1].label.contains("calculating"), "{}", found[1].label);
+
+        // The cache key moves when a trip does, so the grid redraws.
+        assert_ne!(travel_key(&found), travel_key(&[]));
     }
 
     #[test]

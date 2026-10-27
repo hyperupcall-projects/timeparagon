@@ -31,6 +31,10 @@ pub struct Config {
     pub alarm: AlarmProfile,
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
+    /// Places and travel. It is left out of the file until something is set,
+    /// so a config that never used it stays as it was.
+    #[serde(default, skip_serializing_if = "TravelSettings::is_empty")]
+    pub travel: TravelSettings,
     #[serde(default, skip_serializing_if = "crate::task_work::WorkLog::is_empty")]
     pub task_work: crate::task_work::WorkLog,
     /// The temporary todo scratchpad. It is left out of the file while it is
@@ -53,6 +57,7 @@ impl Default for Config {
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
             projects: ProjectsSettings::default(),
+            travel: TravelSettings::default(),
             task_work: crate::task_work::WorkLog::default(),
             todos: TodoList::default(),
             notepad: Notepad::default(),
@@ -396,6 +401,199 @@ impl ProjectsSettings {
             .unwrap_or(0);
 
         now.max(highest + 1)
+    }
+}
+
+/// A place that tasks and events can happen at, found with Google Places.
+///
+/// Everything Google needs to find the place again is kept apart from the
+/// title, so the title can be renamed to whatever reads best ("Home",
+/// "Campus") without the place losing its address or its Google place ID.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Place {
+    /// What tasks refer to. Unlike the title, it never changes.
+    pub id: u64,
+    /// The title shown in the app. Free to edit.
+    pub name: String,
+    /// The address as Google spelled it when the place was chosen.
+    #[serde(default)]
+    pub address: String,
+    /// Google's place ID, which routes can start and end at.
+    #[serde(default)]
+    pub place_id: String,
+    pub lat: f64,
+    pub lng: f64,
+}
+
+/// How a trip between two places is made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TravelMode {
+    #[default]
+    Walk,
+    Bike,
+    Car,
+    /// Public transport, with walking between stops.
+    Multimodal,
+}
+
+impl TravelMode {
+    pub const ALL: [TravelMode; 4] = [Self::Walk, Self::Bike, Self::Car, Self::Multimodal];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Walk => "Walk",
+            Self::Bike => "Bike",
+            Self::Car => "Car",
+            Self::Multimodal => "Multimodal",
+        }
+    }
+
+    /// The `travelMode` the Google Routes API expects.
+    pub fn routes_api(self) -> &'static str {
+        match self {
+            Self::Walk => "WALK",
+            Self::Bike => "BICYCLE",
+            Self::Car => "DRIVE",
+            Self::Multimodal => "TRANSIT",
+        }
+    }
+
+    /// The `travelmode` of a Google Maps URL.
+    pub fn maps_url(self) -> &'static str {
+        match self {
+            Self::Walk => "walking",
+            Self::Bike => "bicycling",
+            Self::Car => "driving",
+            Self::Multimodal => "transit",
+        }
+    }
+
+    /// The mode after this one, wrapping around.
+    pub fn next(self) -> Self {
+        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+}
+
+impl std::fmt::Display for TravelMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// How the trip from one place to another is made, when that is not the default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteMode {
+    pub from: u64,
+    pub to: u64,
+    pub mode: TravelMode,
+}
+
+/// Places, the Google Maps key, and how trips between places are made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct TravelSettings {
+    /// A Google Cloud API key with the Places API (New) and Routes API on.
+    pub api_key: String,
+    /// Where a day's travel starts: the first event is reached from here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
+    /// Where a day's travel ends: the last event is left for here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<u64>,
+    /// How a trip is made until it is set otherwise.
+    pub default_mode: TravelMode,
+    pub places: Vec<Place>,
+    /// Trips whose method was chosen by hand.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<RouteMode>,
+    /// The place each calendar event, by id, was given.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub event_places: std::collections::BTreeMap<String, u64>,
+}
+
+impl TravelSettings {
+    /// Whether nothing has been set, which keeps the table out of the file.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn place(&self, id: u64) -> Option<&Place> {
+        self.places.iter().find(|place| place.id == id)
+    }
+
+    /// The places in alphabetical order, ignoring case.
+    pub fn sorted(&self) -> Vec<&Place> {
+        let mut places: Vec<&Place> = self.places.iter().collect();
+        places.sort_by_cached_key(|place| (place.name.to_lowercase(), place.id));
+        places
+    }
+
+    /// The key to send to Google: the one in settings, or else the
+    /// `GOOGLE_MAPS_API_KEY` environment variable.
+    pub fn key(&self) -> Option<String> {
+        let key = self.api_key.trim();
+        if !key.is_empty() {
+            return Some(key.to_owned());
+        }
+        std::env::var("GOOGLE_MAPS_API_KEY")
+            .ok()
+            .map(|key| key.trim().to_owned())
+            .filter(|key| !key.is_empty())
+    }
+
+    /// Saves a place Google found, unless it is saved already, and returns
+    /// its id. Choosing the same place twice gives the same place back, with
+    /// the title it has been renamed to.
+    pub fn add_place(
+        &mut self,
+        name: &str,
+        address: &str,
+        place_id: &str,
+        lat: f64,
+        lng: f64,
+    ) -> u64 {
+        if !place_id.is_empty()
+            && let Some(existing) = self.places.iter().find(|place| place.place_id == place_id)
+        {
+            return existing.id;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64);
+        let highest = self.places.iter().map(|place| place.id).max().unwrap_or(0);
+        let id = now.max(highest + 1);
+
+        self.places.push(Place {
+            id,
+            name: name.trim().to_owned(),
+            address: address.trim().to_owned(),
+            place_id: place_id.to_owned(),
+            lat,
+            lng,
+        });
+        id
+    }
+
+    /// How the trip from `from` to `to` is made.
+    pub fn mode_for(&self, from: u64, to: u64) -> TravelMode {
+        self.modes
+            .iter()
+            .find(|route| route.from == from && route.to == to)
+            .map_or(self.default_mode, |route| route.mode)
+    }
+
+    pub fn set_mode(&mut self, from: u64, to: u64, mode: TravelMode) {
+        match self
+            .modes
+            .iter_mut()
+            .find(|route| route.from == from && route.to == to)
+        {
+            Some(route) => route.mode = mode,
+            None => self.modes.push(RouteMode { from, to, mode }),
+        }
     }
 }
 
@@ -745,6 +943,11 @@ pub fn cache_days_dir() -> Option<PathBuf> {
 /// Last successful Keep snapshot, including original card previews.
 pub fn cache_keep_path() -> Option<PathBuf> {
     Some(project_dirs()?.cache_dir().join("keep").join("notes.json"))
+}
+
+/// Travel times already worked out, so a restart does not ask Google again.
+pub fn cache_travel_path() -> Option<PathBuf> {
+    Some(project_dirs()?.cache_dir().join("travel").join("routes.json"))
 }
 
 impl Config {

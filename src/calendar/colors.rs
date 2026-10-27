@@ -26,6 +26,14 @@ pub const ALARM: Color = Color {
     a: 1.0,
 };
 
+/// The gray of a travel box, which has to read apart from every event color.
+pub const TRAVEL: Color = Color {
+    r: 0x70 as f32 / 255.0,
+    g: 0x75 as f32 / 255.0,
+    b: 0x7A as f32 / 255.0,
+    a: 1.0,
+};
+
 /// An alarm needle that cannot be set, because its time has passed.
 pub const ALARM_REFUSED: Color = Color {
     r: 0x9A as f32 / 255.0,

@@ -30,6 +30,9 @@ pub struct Metadata {
     pub project: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    /// Where the task happens, by `config::Place::id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<u64>,
 }
 
 /// How urgent a task is. P1 is the most urgent; a task with neither has no
@@ -184,6 +187,8 @@ pub enum Action {
     Project(String, Option<u64>),
     /// Give this task a priority, or clear it.
     Priority(String, Option<Priority>),
+    /// Set where this task happens, by `config::Place::id`, or clear it.
+    Location(String, Option<u64>),
     /// Open the planned-tasks box so a task can be typed.
     OpenTodo,
     /// Close the typed-task box without saving.
@@ -367,8 +372,14 @@ pub fn close(state: &mut State) -> Task<Message> {
     }
     match (state.main_window, state.timeblocking.original_width.take()) {
         (Some(id), Some(width)) => {
+            let width = width
+                + if state.details_pane_open {
+                    state.config.views.detail_width()
+                } else {
+                    0.0
+                };
             let resize = window::resize(id, Size::new(width, state.main_size.height));
-            if state.sidebar.is_some() {
+            if state.sidebar.is_some() && !state.details_pane_open {
                 resize.chain(window::set_max_size(id, Some(Size::new(width, 100_000.0))))
             } else {
                 resize
@@ -840,6 +851,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             (id, Change::Priority(priority))
         }
+        Action::Location(id, location) => {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            if metadata(task).location == location {
+                return Task::none();
+            }
+            (id, Change::Location(location))
+        }
         Action::OpenTodo => {
             state.timeblocking.todo_open = true;
             return iced::widget::operation::focus(iced::widget::Id::new("time-block-todo"));
@@ -881,7 +901,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     if matches!(change, Change::Title(_)) {
         state.timeblocking.renaming = Some(id.clone());
     }
-    if matches!(change, Change::Project(_) | Change::Priority(_)) {
+    if matches!(
+        change,
+        Change::Project(_) | Change::Priority(_) | Change::Location(_)
+    ) {
         state.timeblocking.keep_open = Some(id.clone());
     }
     let settings = state.config.calendar.clone();
@@ -1029,6 +1052,7 @@ enum Change {
     Estimate(u32),
     Project(Option<u64>),
     Priority(Option<Priority>),
+    Location(Option<u64>),
     Deadline(Option<calendar::deadline::Deadline>),
     Backlog,
     Unassign,
@@ -1188,6 +1212,10 @@ fn save(
         }
         Change::Priority(priority) => {
             data.metadata.priority = priority;
+            database.save(&task, &data)?;
+        }
+        Change::Location(location) => {
+            data.metadata.location = location;
             database.save(&task, &data)?;
         }
         Change::Deadline(deadline) => {

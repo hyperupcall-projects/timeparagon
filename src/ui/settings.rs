@@ -46,6 +46,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         calendar_order(state, metrics),
         heading("Google Calendar", metrics),
         calendar(state, metrics),
+        heading("Travel", metrics),
+        super::travel::settings_section(state, metrics),
         heading("Account integrations", metrics),
         integrations(state, metrics),
     ]

@@ -712,6 +712,14 @@ impl Store {
         self.events.iter_mut().find(|event| event.id == id)
     }
 
+    /// Sets the location text of an event wherever it is held, so the details
+    /// pane shows a place at once rather than after the next sync.
+    pub fn set_location(&mut self, id: &str, location: &str) {
+        if let Some(event) = self.event_mut_anywhere(id) {
+            event.details.location = location.to_owned();
+        }
+    }
+
     /// A mutable handle to an event, whether it is on the day in view or parked
     /// in the cache. A write can land while the user is looking at another day.
     fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
@@ -909,19 +917,64 @@ impl Store {
         &'a self,
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
+        timed_in(
+            self.visible_events(settings),
+            self.time_block_keys(settings),
+            self.day,
+            settings,
+        )
+    }
+
+    /// The timed events of `day` that the grid would draw, in start order,
+    /// for any day that has been loaded, not only the one in view. Empty for
+    /// a day that was never visited.
+    pub fn timed_events_on<'a>(
+        &'a self,
+        day: NaiveDate,
+        settings: &'a CalendarSettings,
+    ) -> Vec<&'a Event> {
+        let events: &[Event] = if day == self.day {
+            &self.events
+        } else {
+            match self.cache.get(&day) {
+                Some(events) => events,
+                None => return Vec::new(),
+            }
+        };
+
         let blocks = self.time_block_keys(settings);
-        let start = at_clock(self.day, settings.day_start_hour(), 0);
-        let end = at_clock(
-            self.day.succ_opt().unwrap_or(self.day),
-            settings.day_start_hour(),
-            0,
-        );
-        self.visible_events(settings).filter(move |event| {
-            !event.all_day
-                && event.start < end
-                && event.end > start
-                && !omit_managed_tasks_event(event, &blocks, settings)
-        })
+        let mut found: Vec<&Event> = timed_in(
+            events
+                .iter()
+                .filter(|event| self.calendar_enabled(event.source_id(), settings))
+                .filter(|event| {
+                    event
+                        .details
+                        .scheduled
+                        .as_ref()
+                        .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
+                }),
+            blocks,
+            day,
+            settings,
+        )
+        .collect();
+        found.sort_by_key(|event| (event.start, event.end));
+        found
+    }
+
+    /// Every day whose events are in hand: the day in view and the days
+    /// visited before it, oldest first.
+    pub fn loaded_days(&self) -> Vec<NaiveDate> {
+        let mut days: Vec<NaiveDate> = self
+            .cache
+            .keys()
+            .copied()
+            .filter(|day| *day != self.day)
+            .collect();
+        days.push(self.day);
+        days.sort();
+        days
     }
 
     /// Keys of the time blocks currently loaded, so a scheduled task can be
@@ -944,6 +997,27 @@ impl Store {
             _ => "Not connected".to_owned(),
         }
     }
+}
+
+/// The events of `events` that sit on the grid for `day`.
+fn timed_in<'a>(
+    events: impl Iterator<Item = &'a Event> + 'a,
+    blocks: Vec<String>,
+    day: NaiveDate,
+    settings: &'a CalendarSettings,
+) -> impl Iterator<Item = &'a Event> {
+    let start = at_clock(day, settings.day_start_hour(), 0);
+    let end = at_clock(
+        day.succ_opt().unwrap_or(day),
+        settings.day_start_hour(),
+        0,
+    );
+    events.filter(move |event| {
+        !event.all_day
+            && event.start < end
+            && event.end > start
+            && !omit_managed_tasks_event(event, &blocks, settings)
+    })
 }
 
 /// The calendar that holds a task's assigned time. The app writes those
@@ -1234,6 +1308,24 @@ pub fn delete_task(
         scheduled::remove_task_copies(&tokens.access_token, calendar, task_id)?;
     }
     Ok(())
+}
+
+/// Sets where an event happens on Google. Only the location is sent, so
+/// nothing else about the event changes. Blocking: run it on a worker thread
+/// through [`crate::blocking::run`].
+pub fn set_event_location(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+    location: &str,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+
+    api::patch_event_location(&tokens.access_token, calendar_id, event_id, location)
+        .map_err(describe_event_write_error)
 }
 
 /// Turns a read-only-token rejection into something a user can act on.

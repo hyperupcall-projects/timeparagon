@@ -867,6 +867,24 @@ pub fn patch_event_time(
     patch(&url, access_token, &body, "Google Calendar")
 }
 
+/// Sets an event's location on Google and nothing else. An empty location
+/// clears it. Blocking: call it from [`crate::blocking::run`].
+pub fn patch_event_location(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    location: &str,
+) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+    let body = serde_json::json!({ "location": location }).to_string();
+
+    patch(&url, access_token, &body, "Google Calendar")
+}
+
 /// Updates an existing event on Google: title, description, start and end.
 /// Blocking: call it from [`crate::blocking::run`].
 pub fn patch_event(

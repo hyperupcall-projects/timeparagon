@@ -28,6 +28,9 @@ pub struct Metadata {
     pub project: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    /// Where the task happens, by `config::Place::id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<u64>,
 }
 
 /// How urgent a task is. P1 is the most urgent; a task with neither has no

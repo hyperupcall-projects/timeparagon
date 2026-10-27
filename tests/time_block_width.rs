@@ -115,6 +115,98 @@ fn time_block_editor_remembers_its_width_after_closing_and_restarting() {
 }
 
 #[test]
+fn deleting_an_open_block_closes_its_editor_only_on_success() {
+    for sidebar in [false, true] {
+        for details in [false, true] {
+            let mut state = state(Config::default(), sidebar);
+            let original = state.main_size;
+            let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+            if details {
+                let _ = app::update(
+                    &mut state,
+                    Message::TimeBlocking(timeblocking::Action::Details("lunch".into())),
+                );
+            }
+            let _ = app::update(&mut state, Message::EventDeleteRequested("standup".into()));
+            let _ = app::update(
+                &mut state,
+                Message::EventDeleted("standup".into(), Err("Delete failed".into())),
+            );
+            assert!(state.calendar.event("standup").is_some());
+            assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
+            assert_eq!(state.calendar.error.as_deref(), Some("Delete failed"));
+
+            let expected = Size::new(
+                state.timeblocking.original_width.unwrap()
+                    + if details {
+                        state.config.views.detail_width()
+                    } else {
+                        0.0
+                    },
+                original.height,
+            );
+            assert_resize(
+                app::update(&mut state, Message::EventDeleted("standup".into(), Ok(()))),
+                expected,
+            );
+            assert!(state.calendar.event("standup").is_none());
+            assert!(state.timeblocking.block.is_none());
+            assert!(state.timeblocking.original_width.is_none());
+            assert_eq!(state.details_pane_open, details);
+        }
+    }
+}
+
+#[test]
+fn closing_a_block_preserves_an_open_details_pane() {
+    for sidebar in [false, true] {
+        let mut state = state(Config::default(), sidebar);
+        let original = state.main_size;
+        let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+        let _ = app::update(
+            &mut state,
+            Message::TimeBlocking(timeblocking::Action::Details("lunch".into())),
+        );
+        let expected = Size::new(
+            state.timeblocking.original_width.unwrap() + state.config.views.detail_width(),
+            original.height,
+        );
+        let actions = assert_resize(
+            app::update(
+                &mut state,
+                Message::TimeBlocking(timeblocking::Action::Close),
+            ),
+            expected,
+        );
+        assert!(state.details_pane_open);
+        assert!(
+            actions.iter().all(|action| !matches!(
+                action,
+                Action::Window(WindowAction::SetMaxSize(_, Some(_)))
+            ))
+        );
+    }
+}
+
+#[test]
+fn deleting_a_block_also_shown_in_details_resizes_once() {
+    let mut state = state(Config::default(), false);
+    let original = state.main_size;
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timeblocking::Action::Details("standup".into())),
+    );
+    assert_resize(
+        app::update(&mut state, Message::EventDeleted("standup".into(), Ok(()))),
+        original,
+    );
+    assert!(state.timeblocking.block.is_none());
+    assert!(state.calendar.open_event.is_none());
+    assert!(!state.details_pane_open);
+}
+
+#[test]
 fn reloading_window_settings_keeps_the_saved_time_block_width() {
     let mut state = state(Config::default(), false);
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
