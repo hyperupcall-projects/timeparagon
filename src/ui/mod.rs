@@ -32,6 +32,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let content = responsive(move |size| {
         let metrics = Metrics::of(size);
 
+        // The event details pane is a column of its own to the right of the
+        // view. The view keeps its width and the window is widened to match,
+        // so the metrics for the main content are measured over that width.
+        let details_open =
+            state.calendar.open_event.is_some() && crate::app::shows_details(state.screen);
+        let detail = if details_open {
+            state.config.views.detail_width()
+        } else {
+            0.0
+        };
+        let main_width = (size.width - detail).max(1.0);
+        let main_metrics = Metrics::of(Size::new(main_width, size.height));
+
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
             (Screen::Settings, _) => settings::view(state, &metrics),
             // The alarm and set-time panes need the whole window below Wide.
@@ -51,7 +64,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // somewhere to write, not somewhere to watch the clock from.
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
-            (Screen::Backlog, _) => timeblocking::backlog(state, &metrics),
+            (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects(state, &metrics),
             (Screen::Calendar, _) => {
                 // Keep the calendar at the same place in the widget tree when
@@ -66,18 +79,34 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     // The calendar keeps the width it had before the editor
                     // opened, and the editor takes whatever the window gained.
                     Some(base) => {
-                        let pane = (base - state.screen_margin()).min(size.width);
+                        let pane = (base - state.screen_margin()).min(main_width);
                         let calendar_metrics = Metrics::of(Size::new(pane, size.height));
                         row![
                             container(calendar::view(state, &calendar_metrics))
                                 .width(Length::Fixed(pane)),
-                            container(timeblocking::panel(state, &metrics)).width(Fill),
+                            container(timeblocking::panel(state, &main_metrics)).width(Fill),
                         ]
                         .into()
                     }
-                    None => row![container(calendar::view(state, &metrics)).width(Fill)].into(),
+                    None => {
+                        row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
+                    }
                 }
             }
+        };
+
+        // The details pane is drawn last, so on the calendar it sits to the
+        // right of the time-block editor rather than over it.
+        let content: Element<'_, Message> = if details_open {
+            let detail_metrics = Metrics::of(Size::new(detail, size.height));
+            row![
+                container(content).width(Fill),
+                container(calendar::details_pane(state, &detail_metrics))
+                    .width(Length::Fixed(detail)),
+            ]
+            .into()
+        } else {
+            content
         };
 
         // The tabs are the window's navigation, so they sit above whatever is

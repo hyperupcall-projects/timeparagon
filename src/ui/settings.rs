@@ -198,9 +198,10 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
     column![
         layout_number("Calendar width (px)", LayoutField::CalendarWidth, state, metrics),
         layout_number("Time block width (px)", LayoutField::TimeBlockWidth, state, metrics),
+        layout_number("Details width (px)", LayoutField::DetailWidth, state, metrics),
         layout_number("Screen margin (px, 0–30)", LayoutField::ScreenMargin, state, metrics),
         layout_number("Border radius (px, 0–30)", LayoutField::BorderRadius, state, metrics),
-        text("Widths apply to the calendar and the time block pane beside it. The screen margin insets the side panel from its screen edge, top and bottom.")
+        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel from its screen edge, top and bottom.")
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).into()
 }
@@ -213,7 +214,7 @@ fn layout_number<'a>(
 ) -> Element<'a, Message> {
     let value = kind.value(state);
     let step = match kind {
-        LayoutField::CalendarWidth | LayoutField::TimeBlockWidth => 10.0,
+        LayoutField::CalendarWidth | LayoutField::TimeBlockWidth | LayoutField::DetailWidth => 10.0,
         LayoutField::ScreenMargin | LayoutField::BorderRadius => 1.0,
     };
     let (min, max) = kind.bounds();
@@ -848,6 +849,7 @@ mod tests {
         for (kind, step) in [
             (LayoutField::CalendarWidth, 10.0),
             (LayoutField::TimeBlockWidth, 10.0),
+            (LayoutField::DetailWidth, 10.0),
             (LayoutField::ScreenMargin, 1.0),
         ] {
             for width in [180.0, 420.0] {

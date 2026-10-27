@@ -147,6 +147,7 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
         "Apply shortcut",
         "Calendar width (px)",
         "Time block width (px)",
+        "Details width (px)",
         "Screen margin (px, 0–30)",
         // Google Calendar.
         "OAuth client ID",
@@ -703,9 +704,9 @@ fn a_long_event_keeps_its_buttons_out_of_the_scroll() -> Result<(), Error> {
     state.calendar.open_event = Some("standup".into());
 
     for size in [
-        Size::new(180.0, 240.0),
-        Size::new(200.0, 300.0),
-        Size::new(260.0, 400.0),
+        Size::new(180.0 + 360.0, 320.0),
+        Size::new(200.0 + 360.0, 360.0),
+        Size::new(260.0 + 360.0, 420.0),
     ] {
         let mut ui = render(&state, size);
         let _ = ui.click("Close")?;
@@ -837,7 +838,7 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
     state.calendar.open_event = Some("all-day".into());
     state.calendar.details_below = true;
 
-    let mut ui = render(&state, Size::new(320.0, 700.0));
+    let mut ui = render(&state, Size::new(320.0 + 360.0, 700.0));
     let _ = ui.click("Second thing")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
@@ -1147,6 +1148,35 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
 }
 
 #[test]
+fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error> {
+    use timetracker::timeblocking::Action;
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::Details("task:planned".into())),
+    );
+    assert!(state.timeblocking.block.is_some());
+    assert!(state.calendar.open_event.is_some());
+
+    let mut ui = render(&state, Size::new(260.0 + 400.0 + 360.0, 900.0));
+    let calendar = ui.find("Menu")?.bounds();
+    let block = ui.find("Edit time block")?.bounds();
+    let details = ui.find("Complete task")?.bounds();
+
+    assert!(
+        calendar.x < block.x,
+        "the calendar should be left of the editor: {calendar:?} {block:?}"
+    );
+    assert!(
+        block.x < details.x,
+        "the editor should be left of the details: {block:?} {details:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Result<(), Error> {
     use timetracker::timeblocking::{self as tb, TaskStatus};
     let mut state = timeblocking_state();
@@ -1253,7 +1283,10 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
             state.screen = screen;
             let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
             let size = Size::new(width, 720.0);
-            let mut ui = render(&state, size);
+            // The details pane sits to the right of the view, so render the
+            // window at the width it would be widened to.
+            let render_size = Size::new(width + 360.0, 720.0);
+            let mut ui = render(&state, render_size);
             let mut bottom = 0.0;
             for label in [
                 "Complete task",
@@ -1272,7 +1305,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
             let _ = ui.click("Ignore Task")?;
             assert!(ui.into_messages().any(|message| matches!(message,
                 Message::TaskIgnoreToggled(id) if id == "task:backlog")));
-            let mut ui = render(&state, size);
+            let mut ui = render(&state, render_size);
             let _ = ui.click("Delete task")?;
             assert!(ui.into_messages().any(|message| matches!(message,
                 Message::TaskDeleteRequested(id) if id == "task:backlog")));
@@ -1282,7 +1315,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
             );
             assert!(state.calendar.event("task:backlog").is_some());
             assert!(state.timeblocking.busy.is_empty());
-            let mut ui = render(&state, size);
+            let mut ui = render(&state, render_size);
             assert!(
                 ui.find("Are you sure you want to delete this task?")
                     .is_ok()

@@ -66,6 +66,7 @@ pub enum Screen {
 pub enum LayoutField {
     CalendarWidth,
     TimeBlockWidth,
+    DetailWidth,
     ScreenMargin,
     BorderRadius,
 }
@@ -75,6 +76,7 @@ impl LayoutField {
         match self {
             Self::CalendarWidth => state.calendar_width(),
             Self::TimeBlockWidth => state.config.views.time_block_width(),
+            Self::DetailWidth => state.config.views.detail_width(),
             Self::ScreenMargin => state.config.views.margin(),
             Self::BorderRadius => state.config.views.border_radius(),
         }
@@ -95,6 +97,7 @@ impl LayoutField {
         match self {
             Self::CalendarWidth => Message::CalendarWidthChanged(value),
             Self::TimeBlockWidth => Message::TimeBlockWidthChanged(value),
+            Self::DetailWidth => Message::DetailWidthChanged(value),
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
             Self::BorderRadius => Message::BorderRadiusChanged(value),
         }
@@ -190,6 +193,9 @@ pub struct State {
     pub panel_shortcut_result: Option<Result<String, String>>,
     /// Keep empty or incomplete numbers editable until they are submitted.
     pub view_layout_input: Option<(LayoutField, String)>,
+    /// Whether the window has been widened for the event details pane. Kept so
+    /// the pane can be opened and closed from anywhere without resizing twice.
+    pub details_pane_open: bool,
 
     /// Set while a config write is already queued, so a slider drag does not
     /// schedule one save per pixel.
@@ -250,6 +256,7 @@ pub enum Message {
     AlwaysOnTopToggled(bool),
     CalendarWidthChanged(f32),
     TimeBlockWidthChanged(f32),
+    DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
     BorderRadiusChanged(f32),
     ViewLayoutInputChanged(LayoutField, String),
@@ -474,6 +481,7 @@ impl State {
             panel_shortcut_busy: false,
             panel_shortcut_result: None,
             view_layout_input: None,
+            details_pane_open: false,
             save_queued: false,
             disk_config: config.clone(),
             catalog,
@@ -517,13 +525,17 @@ impl State {
 /// outside the calendar's configured width.
 fn apply_view_sizes(state: &mut State) -> Task<Message> {
     let base = state.calendar_width() + state.screen_margin();
-    let expanded = state.timeblocking.original_width.is_some();
-    let width = if expanded {
+    let block_open = state.timeblocking.original_width.is_some();
+    let mut width = if block_open {
         state.timeblocking.original_width = Some(base);
         crate::timeblocking::editor_width(state, base)
     } else {
         base
     };
+    if state.details_pane_open {
+        width += state.config.views.detail_width();
+    }
+    let widened = block_open || state.details_pane_open;
     let Some(id) = state.main_window else {
         return Task::none();
     };
@@ -538,7 +550,7 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
             .chain(resize)
             .chain(window::set_max_size(
                 id,
-                (!expanded).then_some(Size::new(base, 100_000.0)),
+                (!widened).then_some(Size::new(base, 100_000.0)),
             ))
     } else {
         resize
@@ -733,6 +745,27 @@ fn window_icon() -> Option<window::Icon> {
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
+    let task = dispatch(state, message);
+    Task::batch([task, reconcile_detail_pane(state)])
+}
+
+/// Opens or closes the event details pane by widening or narrowing the window
+/// to match, whatever code changed which event is open.
+fn reconcile_detail_pane(state: &mut State) -> Task<Message> {
+    let open = state.calendar.open_event.is_some() && shows_details(state.screen);
+    if open == state.details_pane_open {
+        return Task::none();
+    }
+    state.details_pane_open = open;
+    apply_view_sizes(state)
+}
+
+/// The screens that show the event details pane beside their content.
+pub(crate) fn shows_details(screen: Screen) -> bool {
+    matches!(screen, Screen::Calendar | Screen::Backlog)
+}
+
+fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::Tick(now) => {
@@ -1006,6 +1039,19 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([resize, queue_save(state)])
         }
 
+        Message::DetailWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.detail_width = width.clamp(
+                config::ViewSettings::MIN_WIDTH,
+                config::ViewSettings::MAX_WIDTH,
+            );
+            let resize = apply_view_sizes(state);
+            Task::batch([resize, queue_save(state)])
+        }
+
         Message::ScreenMarginChanged(margin) => {
             state.view_layout_input = None;
             if !margin.is_finite() {
@@ -1211,7 +1257,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut tasks = Vec::new();
             let pane_widths_changed = previous.views.calendar_width
                 != state.config.views.calendar_width
-                || previous.views.time_block_width != state.config.views.time_block_width;
+                || previous.views.time_block_width != state.config.views.time_block_width
+                || previous.views.detail_width != state.config.views.detail_width;
             let views_changed = pane_widths_changed
                 || (state.sidebar.is_some() && previous.views.margin != state.config.views.margin);
             if pane_widths_changed
@@ -1247,13 +1294,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                                 && previous.window.time_block_width
                                     != state.config.window.time_block_width))
                     {
-                        let width = if state.timeblocking.original_width.is_some() {
+                        let mut width = if state.timeblocking.original_width.is_some() {
                             let base = state.calendar_width();
                             state.timeblocking.original_width = Some(base);
                             crate::timeblocking::editor_width(state, base)
                         } else {
                             state.calendar_width()
                         };
+                        if state.details_pane_open {
+                            width += state.config.views.detail_width();
+                        }
                         tasks.push(window::resize(
                             id,
                             Size::new(width, state.config.window.height),
@@ -1331,6 +1381,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
                         settings.size = Size::new(width, PANEL_FILL);
                         settings.max_size = None;
                     }
+                    // The details pane widens the panel further while it is open.
+                    if state.details_pane_open {
+                        settings.size.width += state.config.views.detail_width();
+                        settings.max_size = None;
+                    }
                     let (_id, open) = window::open(settings);
                     open.map(Message::WindowOpened)
                 }
@@ -1380,12 +1435,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             // The panel is pinned to its configured width and the full height
             // of the monitor, and never widens to the default fraction.
             if let Some(sidebar) = &state.sidebar {
-                let width = match state.timeblocking.original_width {
+                let mut width = match state.timeblocking.original_width {
                     Some(base) => crate::timeblocking::editor_width(state, base),
                     None => {
                         state.config.views.calendar_width(sidebar.width) + state.screen_margin()
                     }
                 };
+                if state.details_pane_open {
+                    width += state.config.views.detail_width();
+                }
                 log::debug!("panel filling {}x{}", width, size.height);
                 return window::resize(id, Size::new(width, size.height));
             }
@@ -1419,12 +1477,29 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             log::debug!("window is now {}x{}", size.width, size.height);
 
             // The expanded editor has its own saved width. Keep the width to
-            // restore on close, including in the side-panel companion.
+            // restore on close, including in the side-panel companion. The
+            // details pane, when open beside it, is not part of that width.
             if state.timeblocking.original_width.is_some() {
-                state.config.window.time_block_width = Some(size.width);
+                let detail = if state.details_pane_open {
+                    state.config.views.detail_width()
+                } else {
+                    0.0
+                };
+                state.config.window.time_block_width = Some((size.width - detail).max(0.0));
                 if state.sidebar.is_none() {
                     state.config.window.height = size.height;
                 }
+                return queue_save(state);
+            }
+
+            // The details pane widens the window on its own. The width the user
+            // drags out is the pane's, not the window's, so it is not saved as
+            // the normal window size.
+            if state.details_pane_open {
+                if state.sidebar.is_some() {
+                    return Task::none();
+                }
+                state.config.window.height = size.height;
                 return queue_save(state);
             }
 
@@ -2469,8 +2544,7 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         Key::Named(Named::Space) => Some(Message::StartPause),
         Key::Named(Named::Escape) => {
             if state.calendar.open_event.is_some() {
-                state.calendar.open_event = None;
-                None
+                Some(Message::EventClosed)
             } else if state.timeblocking.block.is_some() {
                 Some(Message::TimeBlocking(crate::timeblocking::Action::Close))
             } else if state.calendar.menu_open {
@@ -3199,6 +3273,23 @@ mod tests {
 
         assert_eq!(state.calendar.open_event.as_deref(), Some("lunch"));
         assert!(!state.calendar.details_below);
+    }
+
+    #[test]
+    fn escape_closes_the_event_details_pane() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar.open_event = Some("standup".into());
+
+        let escape = key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Escape),
+            keyboard::Modifiers::default(),
+        );
+
+        assert!(
+            matches!(escape, Some(Message::EventClosed)),
+            "escape should close the details pane, got {escape:?}"
+        );
     }
 
     #[test]

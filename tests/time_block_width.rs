@@ -94,10 +94,11 @@ fn time_block_editor_remembers_its_width_after_closing_and_restarting() {
             wider,
         );
         resize(&mut state, wider);
+        // Switching to another time block reuses the open editor's width.
         assert!(
             actions(app::update(
                 &mut state,
-                Message::EventOpened("lunch".into())
+                Message::EventOpened("review".into())
             ))
             .is_empty()
         );

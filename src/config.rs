@@ -168,6 +168,8 @@ pub struct ViewSettings {
     pub calendar_width: Option<f32>,
     /// Width added alongside the calendar when editing a time block.
     pub time_block_width: f32,
+    /// Width of the event/task details pane shown to the right of the view.
+    pub detail_width: f32,
     /// Visible inset from the side panel's screen edge, top and bottom.
     pub margin: f32,
     /// Radius of the application's visible outer corners, in logical pixels.
@@ -179,6 +181,7 @@ impl Default for ViewSettings {
         Self {
             calendar_width: None,
             time_block_width: 400.0,
+            detail_width: 360.0,
             margin: 8.0,
             border_radius: 4.0,
         }
@@ -197,6 +200,10 @@ impl ViewSettings {
 
     pub fn time_block_width(&self) -> f32 {
         Self::width(self.time_block_width, 400.0)
+    }
+
+    pub fn detail_width(&self) -> f32 {
+        Self::width(self.detail_width, 360.0)
     }
 
     pub fn margin(&self) -> f32 {
@@ -780,25 +787,30 @@ mod tests {
         let config: Config = toml::from_str("[window]\nwidth = 320.0").unwrap();
         assert_eq!(config.views.calendar_width(config.window.width), 320.0);
         assert_eq!(config.views.time_block_width(), 400.0);
+        assert_eq!(config.views.detail_width(), 360.0);
         assert_eq!(config.views.margin(), 8.0);
 
         let config: Config = toml::from_str(
-            "[views]\ncalendar_width = 280.0\ntime_block_width = 360.0\nmargin = 12.0",
+            "[views]\ncalendar_width = 280.0\ntime_block_width = 360.0\ndetail_width = 320.0\nmargin = 12.0",
         )
         .unwrap();
         let restored: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored, config);
         assert_eq!(restored.views.calendar_width(200.0), 280.0);
         assert_eq!(restored.views.time_block_width(), 360.0);
+        assert_eq!(restored.views.detail_width(), 320.0);
         assert_eq!(restored.views.margin(), 12.0);
     }
 
     #[test]
     fn hand_edited_view_sizes_cannot_break_the_layout() {
-        let views: ViewSettings =
-            toml::from_str("calendar_width = nan\ntime_block_width = -1.0\nmargin = inf").unwrap();
+        let views: ViewSettings = toml::from_str(
+            "calendar_width = nan\ntime_block_width = -1.0\ndetail_width = inf\nmargin = inf",
+        )
+        .unwrap();
         assert_eq!(views.calendar_width(260.0), 260.0);
         assert_eq!(views.time_block_width(), ViewSettings::MIN_WIDTH);
+        assert_eq!(views.detail_width(), 360.0);
         assert_eq!(views.margin(), 8.0);
     }
 

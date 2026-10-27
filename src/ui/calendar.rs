@@ -113,12 +113,11 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     // The root stays a stack whether or not a card is open. Swapping the root
     // widget throws away the day grid's scroll state, which jumps the bar.
+    // Event details are no longer an overlay: they are a pane beside the view.
     let overlay = if state.calendar.draft.is_some() {
         draft_overlay(state, metrics)
     } else if state.calendar.edit_draft.is_some() {
         edit_overlay(state, metrics)
-    } else if state.calendar.open_event.is_some() {
-        details_overlay(state, metrics)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -883,7 +882,12 @@ fn day_cell<'a>(
     .into()
 }
 
-fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+/// The details card as a full-height pane, drawn to the right of the view.
+///
+/// It is the same information the old floating card held, but it lives in a
+/// column of its own rather than over the calendar, so the day grid and the
+/// backlog both keep their full width.
+pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(event) = state
         .calendar
         .open_event
@@ -1020,37 +1024,32 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .into(),
     );
 
-    let max_height = if event.is_task() {
-        (metrics.size.height * 0.85).clamp(140.0, 720.0)
-    } else {
-        (metrics.size.height * 0.42).clamp(140.0, 420.0)
-    };
-    // A button is normally one line of text plus its vertical padding, so
-    // reserving that leaves the scroll every pixel the buttons do not need.
-    // The reserve is generous enough that a label wrapping at the narrowest
-    // widths still lands inside the card rather than under the scrollbar.
-    let button_height = metrics.label() * 1.3 + 10.0;
+    // The actions are a fixed footer. The scroll is capped so the footer keeps
+    // the room it needs, however long the description above it runs; the
+    // buttons come first in the budget, so they can never be squeezed out.
+    let button_height = metrics.button;
     let button_count = buttons.len() + if event.is_task() { 3 } else { 0 };
     let reserved = button_height * button_count as f32
         + metrics.spacing * button_count.saturating_sub(1) as f32;
-    // The buttons come first in the budget: the scroll gets whatever is left,
-    // even if that is nothing, so the actions can never be squeezed out.
-    let scroll_max = (max_height - reserved - metrics.spacing).max(0.0);
+    let scroll_max =
+        (metrics.size.height - metrics.padding * 2.0 - metrics.spacing - reserved).max(0.0);
 
     let scrolling = container(scrollable(body).width(Fill).height(Length::Shrink))
         .max_height(scroll_max)
         .width(Fill);
 
-    let card = container(
+    let pane = container(
         column![
             scrolling,
-            column(buttons).spacing(metrics.spacing).width(Fill)
+            column(buttons).spacing(metrics.spacing).width(Fill),
         ]
         .spacing(metrics.spacing)
-        .width(Fill),
+        .width(Fill)
+        .height(Fill),
     )
     .padding(metrics.padding)
     .width(Fill)
+    .height(Fill)
     .style(|theme: &Theme| {
         let palette = theme.extended_palette();
         container::Style {
@@ -1064,29 +1063,7 @@ fn details_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         }
     });
 
-    let card = container(card).padding(metrics.padding).width(Fill);
-
-    // Swallow presses on the card itself so a click on its blank area cannot
-    // fall through to the day grid and open whatever event sits underneath.
-    // There is deliberately no full-screen dismiss layer: with one, clicking a
-    // different event would only close the card instead of opening the new one.
-    let card = mouse_area(card).on_press(Message::Ignored);
-
-    // A click in the top half parks the card at the bottom, and the reverse,
-    // so the event that was clicked stays visible.
-    let aligned = if state.calendar.details_below {
-        column![iced::widget::Space::new().height(Fill), card]
-    } else {
-        column![
-            iced::widget::Space::new().height(metrics.icon_button() + metrics.spacing),
-            card,
-            iced::widget::Space::new().height(Fill),
-        ]
-    }
-    .width(Fill)
-    .height(Fill);
-
-    aligned.into()
+    pane.into()
 }
 
 /// The "are you sure" prompt that covers the details card while a delete is

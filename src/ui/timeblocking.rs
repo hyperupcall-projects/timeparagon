@@ -553,30 +553,7 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         .width(Fill)
         .height(Fill)
         .into();
-    if let Some(task) = state
-        .calendar
-        .open_event
-        .as_deref()
-        .and_then(|id| state.calendar.event(id))
-        .filter(|e| e.is_task())
-    {
-        column![
-            content,
-            container(column![
-                text(task.title.clone()).size(18),
-                text(tb::task_list_name(state, &task.calendar_id))
-                    .size(metrics.label())
-                    .style(text::secondary),
-                editor(state, task, metrics),
-                task_actions(state, task, metrics),
-                button("Done").on_press(Message::EventClosed)
-            ])
-            .padding(16)
-        ]
-        .into()
-    } else {
-        content
-    }
+    content
 }
 
 pub use super::timeblocking_focus::view as focus_overlay;
