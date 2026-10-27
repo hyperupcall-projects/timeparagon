@@ -287,7 +287,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .into(),
             metrics,
         ),
-        text("Create a Desktop OAuth client in Google Cloud, enable the Calendar API and the Tasks API, and allow http://127.0.0.1 as a redirect. Reconnect after enabling Tasks so they can be read and ticked off, and so events can be dragged to a new time.")
+        text("Create a Desktop OAuth client in Google Cloud, enable the Calendar API and the Tasks API, and allow http://127.0.0.1 as a redirect. Reconnect after enabling Tasks so they can be read and ticked off, and so events can be dragged to a new time. To turn Gmail links pasted into a new task into titles, also enable the Gmail API and reconnect to grant read-only access to Gmail.")
             .size((metrics.label() - 1.0).max(10.0))
             .style(text::secondary),
     ]
@@ -464,7 +464,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     let mut backlog_options = vec![CalendarOption {
         id: String::new(),
-        name: "Default: Not Time Blocked".to_owned(),
+        name: "Default: Triaged".to_owned(),
     }];
     backlog_options.extend(
         state
@@ -485,6 +485,37 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         "Google Tasks list for backlog tasks",
         pick_list(backlog_options, selected, |option: CalendarOption| {
             Message::TimeBlocking(crate::timeblocking::Action::BacklogDestination(
+                (!option.id.is_empty()).then_some(option.id),
+            ))
+        })
+        .text_size(metrics.label())
+        .width(Fill)
+        .into(),
+        metrics,
+    ));
+    let mut inbox_options = vec![CalendarOption {
+        id: String::new(),
+        name: format!("Default: {}", crate::inbox::DEFAULT_LIST),
+    }];
+    inbox_options.extend(
+        state
+            .calendar
+            .calendars
+            .iter()
+            .filter(|c| c.is_task_list())
+            .map(|c| CalendarOption {
+                id: c.id.clone(),
+                name: c.name.clone(),
+            }),
+    );
+    let selected = inbox_options
+        .iter()
+        .find(|option| settings.inbox_list.as_deref().unwrap_or("") == option.id)
+        .cloned();
+    section = section.push(field(
+        "Google Tasks list for new tasks (the Inbox)",
+        pick_list(inbox_options, selected, |option: CalendarOption| {
+            Message::Inbox(crate::inbox::Action::List(
                 (!option.id.is_empty()).then_some(option.id),
             ))
         })
@@ -517,7 +548,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
-    section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. Moving a task to Backlog also moves it to the selected backlog list. The Tasks calendar, Has Time list, and Not Time Blocked backlog list are created on first use if needed. Task notes can start with reserved lines: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+    section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. Moving a task to Backlog also moves it to the selected backlog list. The Tasks calendar, Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can start with reserved lines: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }

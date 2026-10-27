@@ -409,7 +409,7 @@ impl Remote for Google<'_> {
                 api::TASK_LISTS,
                 api::TASK_LISTS,
                 "title",
-                "Not Time Blocked",
+                "Triaged",
             ),
         }
     }
@@ -432,6 +432,22 @@ impl Remote for Google<'_> {
     }
     fn remove_event(&self, link: &Link) -> Result<(), String> {
         remove(self.token, link)
+    }
+}
+
+/// The Google Tasks list new tasks land in until they are triaged. An explicit
+/// choice wins; otherwise the list called "Inbox" is reused, or created the
+/// first time a task is added.
+pub fn inbox_destination(token: &str, list: Option<&str>) -> Result<String, String> {
+    match list {
+        Some(id) => Ok(id.trim_start_matches("tasks:").to_owned()),
+        None => find_or_create(
+            token,
+            api::TASK_LISTS,
+            api::TASK_LISTS,
+            "title",
+            crate::inbox::DEFAULT_LIST,
+        ),
     }
 }
 

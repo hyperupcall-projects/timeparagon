@@ -471,7 +471,7 @@ fn the_tabs_keep_the_requested_groups() {
     for width in [180.0, 200.0, 260.0, 420.0, 640.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 500.0));
         for label in [
-            "Calendar", "Backlog", "Projects", "Notepad", "Keep", "Settings",
+            "Inbox", "Calendar", "Backlog", "Projects", "Notepad", "Keep", "Settings",
         ] {
             let bounds = ui.find(label).unwrap().bounds();
             assert!(
@@ -479,6 +479,7 @@ fn the_tabs_keep_the_requested_groups() {
                 "{label} extends beyond the window at {width}px"
             );
         }
+        let inbox = ui.find("Inbox").unwrap().bounds();
         let calendar = ui.find("Calendar").unwrap().bounds();
         let notepad = ui.find("Notepad").unwrap().bounds();
         let settings = ui.find("Settings").unwrap().bounds();
@@ -486,9 +487,9 @@ fn the_tabs_keep_the_requested_groups() {
         let backlog = ui.find("Backlog").unwrap().bounds();
         let keep = ui.find("Keep").unwrap().bounds();
         if width < 720.0 {
-            assert!(backlog.y > calendar.y && keep.y > notepad.y);
+            assert!(calendar.y > inbox.y && backlog.y > calendar.y && keep.y > notepad.y);
         } else {
-            assert!(backlog.x > calendar.x && keep.x > notepad.x);
+            assert!(inbox.x < calendar.x && backlog.x > calendar.x && keep.x > notepad.x);
         }
     }
 }
@@ -700,9 +701,10 @@ fn a_long_event_keeps_its_buttons_out_of_the_scroll() -> Result<(), Error> {
     state.calendar.open_event = Some("standup".into());
 
     for size in [
-        Size::new(180.0, 240.0),
-        Size::new(200.0, 300.0),
-        Size::new(260.0, 400.0),
+        // The tab bar takes a third row below 720px, since Inbox joined it.
+        Size::new(180.0, 260.0),
+        Size::new(200.0, 320.0),
+        Size::new(260.0, 420.0),
     ] {
         let mut ui = render(&state, size);
         let _ = ui.click("Close")?;
@@ -1249,7 +1251,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
             let mut state = timeblocking_state();
             state.screen = screen;
             let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
-            let size = Size::new(width, 720.0);
+            let size = Size::new(width, 800.0);
             let mut ui = render(&state, size);
             let mut bottom = 0.0;
             for label in [
