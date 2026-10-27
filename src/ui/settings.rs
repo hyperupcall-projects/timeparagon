@@ -9,6 +9,7 @@ use crate::app::{LayoutField, Message, State};
 use crate::audio::Tone;
 use crate::calendar;
 use crate::config;
+use crate::integrations::accounts;
 
 use super::layout::Metrics;
 
@@ -45,6 +46,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         calendar_order(state, metrics),
         heading("Google Calendar", metrics),
         calendar(state, metrics),
+        heading("Account integrations", metrics),
+        integrations(state, metrics),
     ]
     .spacing(metrics.spacing * 1.5)
     .padding(iced::Padding {
@@ -614,6 +617,75 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
     section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. Moving a task to Backlog also moves it to the selected backlog list. The Tasks calendar, Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can start with reserved lines: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+
+    indent(section.into(), metrics)
+}
+
+/// Services a pasted link can come from, and the accounts each one reads as.
+fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let accounts = &state.accounts;
+    let small = (metrics.label() - 1.0).max(10.0);
+
+    let mut section = column![
+        text("Gmail").size(metrics.label()),
+        text("Connect every Google account whose mail you link to. When a Gmail link is pasted into a new task, each account is checked to find the one that has the message. Accounts are asked for read-only access to Gmail and share the OAuth client above. The Google Calendar account is checked too.")
+            .size(small)
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing);
+
+    if accounts.emails.is_empty() {
+        section = section.push(
+            text("No extra accounts connected")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
+    }
+    for email in &accounts.emails {
+        let remove = button(text("Remove").size(metrics.label()))
+            .style(button::secondary)
+            .on_press(Message::Accounts(accounts::Action::Remove(email.clone())));
+        let entry: Element<'a, Message> = if metrics.breakpoint.is_compact() {
+            column![text(email.as_str()).size(metrics.label()), remove]
+                .spacing(2.0)
+                .width(Fill)
+                .into()
+        } else {
+            row![
+                text(email.as_str()).size(metrics.label()).width(Fill),
+                remove
+            ]
+            .spacing(metrics.spacing)
+            .align_y(Center)
+            .into()
+        };
+        section = section.push(entry);
+    }
+
+    let mut add = button(
+        text(if accounts.connecting {
+            "Waiting for Google…"
+        } else {
+            "Add Google account"
+        })
+        .size(metrics.label())
+        .center()
+        .width(Fill),
+    )
+    .width(Fill)
+    .style(button::primary);
+    if !accounts.connecting {
+        add = add.on_press(Message::Accounts(accounts::Action::Add));
+    }
+    section = section.push(add);
+
+    if let Some(error) = &accounts.error {
+        section = section.push(
+            text(error.as_str())
+                .size(metrics.label())
+                .style(text::danger),
+        );
+    }
 
     indent(section.into(), metrics)
 }

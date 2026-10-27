@@ -8,10 +8,11 @@ use iced::{Center, Color, Element, Fill};
 use super::layout::Metrics;
 use super::source_icon;
 use crate::app::{Message, State};
-use crate::calendar::Event;
+use crate::calendar::{self, Event};
 use crate::inbox::{self, Action, Draft};
 use crate::integrations;
 use crate::timeblocking as tb;
+use chrono::Local;
 
 fn msg(action: Action) -> Message {
     Message::Inbox(action)
@@ -73,7 +74,15 @@ fn task_card<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Elemen
     if let Some(source) = integrations::source_in(&task.details.description) {
         heading = heading.push(source_icon::link(&source, 16.0));
     }
-    heading = heading.push(text(&task.title).size(metrics.label() + 1.0).width(Fill));
+    // The title opens the task's details beside the list.
+    heading = heading.push(
+        button(text(&task.title).size(metrics.label() + 1.0).width(Fill))
+            .width(Fill)
+            .padding(0)
+            .style(button::text)
+            .on_press(Message::EventOpened(task.id.clone())),
+    );
+    let shown = state.calendar.open_event.as_deref() == Some(task.id.as_str());
 
     let mut card = column![heading].spacing(6);
     if let Ok(Some(deadline)) = crate::calendar::deadline::read_deadline(&task.details.description)
@@ -116,12 +125,16 @@ fn task_card<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Elemen
     container(card)
         .padding([6, 8])
         .width(Fill)
-        .style(|theme: &iced::Theme| {
+        .style(move |theme: &iced::Theme| {
             let palette = theme.extended_palette();
             container::Style {
                 background: Some(palette.background.base.color.into()),
                 border: iced::Border {
-                    color: palette.background.strong.color,
+                    color: if shown {
+                        palette.primary.base.color
+                    } else {
+                        palette.background.strong.color
+                    },
                     width: 1.0,
                     radius: 5.0.into(),
                 },
@@ -159,6 +172,131 @@ fn day_chooser<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Elem
         typed,
     ]
     .spacing(6)
+    .into()
+}
+
+/// The "Schedule Day" button for a task's details pane, and under it, once
+/// pressed, a small calendar of the month. A day pressed there plans the task
+/// for that day, the same as picking it in the list's own day chooser.
+pub fn day_picker<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let open = state
+        .inbox
+        .picker
+        .as_ref()
+        .filter(|(id, _)| *id == task.id)
+        .map(|(_, month)| *month);
+    let busy = state.timeblocking.busy.contains(&task.id);
+
+    let toggle = button(
+        text(if busy { "Saving…" } else { "Schedule Day" })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .style(if open.is_some() {
+        button::secondary
+    } else {
+        button::primary
+    });
+    let toggle = if busy {
+        toggle
+    } else {
+        toggle.on_press(msg(Action::TogglePicker(task.id.clone())))
+    };
+    let mut section = column![toggle].spacing(metrics.spacing).width(Fill);
+    let Some(month) = open else {
+        return section.into();
+    };
+
+    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let planned = (task.start.date_naive() != tb::UNDATED).then(|| task.start.date_naive());
+    let arrow = |label: &'static str, months: i32| {
+        button(text(label).size(metrics.label()).center())
+            .padding([2, 8])
+            .style(button::text)
+            .on_press(msg(Action::PickerShift(months)))
+    };
+    let title = row![
+        arrow("◀", -1),
+        text(calendar::month_heading(month))
+            .size(metrics.label())
+            .width(Fill)
+            .center(),
+        arrow("▶", 1),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Center);
+    let weekdays = row(calendar::WEEKDAY_INITIALS.iter().map(|label| {
+        text(*label)
+            .size(metrics.label() - 1.0)
+            .width(Fill)
+            .center()
+            .style(text::secondary)
+            .into()
+    }))
+    .spacing(2.0)
+    .width(Fill);
+    let weeks = column(
+        calendar::month_grid(month)
+            .chunks(7)
+            .map(|week| {
+                row(week
+                    .iter()
+                    .map(|&day| picker_day(task, day, month, planned, today, metrics)))
+                .spacing(2.0)
+                .width(Fill)
+                .into()
+            })
+            .collect::<Vec<Element<'a, Message>>>(),
+    )
+    .spacing(2.0)
+    .width(Fill);
+
+    section = section.push(column![title, weekdays, weeks].spacing(4).width(Fill));
+    section.into()
+}
+
+/// One day of the picker. The task's current day is filled, today is
+/// outlined, and days of the neighbouring months are dimmed.
+fn picker_day<'a>(
+    task: &Event,
+    day: chrono::NaiveDate,
+    month: chrono::NaiveDate,
+    planned: Option<chrono::NaiveDate>,
+    today: chrono::NaiveDate,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    use chrono::Datelike;
+    let in_month = day.month() == month.month() && day.year() == month.year();
+    let is_planned = planned == Some(day);
+    let is_today = day == today;
+    button(
+        text(day.day().to_string())
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .padding([3.0, 0.0])
+    .on_press(msg(Action::ScheduleOn(task.id.clone(), day)))
+    .style(move |theme, status| {
+        if is_planned {
+            button::primary(theme, status)
+        } else if is_today {
+            button::secondary(theme, status)
+        } else {
+            let mut style = button::text(theme, status);
+            if !in_month {
+                style.text_color = style.text_color.scale_alpha(0.4);
+            }
+            style
+        }
+    })
     .into()
 }
 
@@ -286,7 +424,7 @@ fn form<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calendar;
+    use chrono::Datelike;
     use iced::Size;
 
     fn state_with_task(notes: &str) -> State {
@@ -321,9 +459,13 @@ mod tests {
     }
 
     fn simulator(state: &State, width: f32) -> iced_test::Simulator<'_, Message> {
+        simulator_of(state, Size::new(width, 700.0))
+    }
+
+    fn simulator_of(state: &State, size: Size) -> iced_test::Simulator<'_, Message> {
         iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
-            Size::new(width, 700.0),
+            size,
             crate::ui::view(state),
         )
     }
@@ -343,6 +485,49 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn a_task_title_opens_its_details_beside_the_list() {
+        for width in [300.0, 800.0] {
+            let state = state_with_task("");
+            let mut ui = simulator(&state, width);
+            ui.click("Reply to Sam").unwrap();
+            assert!(
+                ui.into_messages()
+                    .any(|m| matches!(m, Message::EventOpened(id) if id == "task:one"))
+            );
+        }
+    }
+
+    #[test]
+    fn the_details_pane_offers_schedule_day_and_a_month_to_pick_from() {
+        let mut state = state_with_task("");
+        let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
+        assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
+        assert!(state.details_pane_open);
+
+        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        ui.click("Schedule Day").unwrap();
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::Inbox(Action::TogglePicker(id)) if id == "task:one"))
+        );
+
+        let _ = crate::app::update(
+            &mut state,
+            Message::Inbox(Action::TogglePicker("task:one".into())),
+        );
+        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        // The 15th is in no month's margin, so there is only one such button.
+        ui.click("15").unwrap();
+        let messages: Vec<_> = ui.into_messages().collect();
+        let today = calendar::day_at(Local::now(), 0);
+        let fifteenth = calendar::first_of_month(today).with_day(15).unwrap();
+        assert!(messages.iter().any(|m| matches!(
+            m,
+            Message::Inbox(Action::ScheduleOn(id, day)) if id == "task:one" && *day == fifteenth
+        )));
     }
 
     #[test]

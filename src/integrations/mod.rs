@@ -8,6 +8,7 @@
 //!
 //! To add a service, implement [`Integration`] in its own module and list it
 //! in [`REGISTRY`]. Nothing else needs to know about it.
+pub mod accounts;
 pub mod gmail;
 
 use chrono::NaiveDate;
@@ -51,9 +52,16 @@ pub struct Auth {
 }
 
 impl Auth {
-    /// A fresh Google access token, refreshed if the stored one has expired.
-    pub fn google_token(&self) -> Result<String, String> {
-        crate::timeblocking::access(&self.settings)
+    /// Every Google account a link might belong to: the calendar's, if it is
+    /// signed in, and each one connected for Gmail in Settings.
+    pub fn google_accounts(&self) -> Vec<accounts::Login> {
+        accounts::logins()
+    }
+
+    /// A fresh access token for one of them, refreshed if the stored one has
+    /// expired.
+    pub fn google_token(&self, account: &accounts::Login) -> Result<String, String> {
+        accounts::token(&self.settings, account)
     }
 }
 

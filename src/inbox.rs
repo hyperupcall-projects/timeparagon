@@ -29,6 +29,9 @@ pub struct Inbox {
     pub scheduling: Option<String>,
     /// The day typed into the open chooser.
     pub date: String,
+    /// The month calendar open in the details pane: the task it schedules, and
+    /// the first day of the month on show.
+    pub picker: Option<(String, NaiveDate)>,
     pub error: Option<String>,
     /// The list a task was last created on, for the time before a sync has
     /// brought that list's name back.
@@ -75,6 +78,10 @@ pub enum Action {
     ScheduleTyped(String),
     /// The list that collects new tasks was chosen in Settings.
     List(Option<String>),
+    /// Open or close the month calendar in a task's details pane.
+    TogglePicker(String),
+    /// Show the month this many months after (or before) the one on show.
+    PickerShift(i32),
 }
 
 /// Whether `calendar_id` is the list that collects new tasks.
@@ -164,6 +171,32 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::List(list) => {
             state.config.calendar.inbox_list = list;
             crate::app::queue_save(state)
+        }
+        Action::TogglePicker(id) => {
+            state.inbox.error = None;
+            state.inbox.picker = match state.inbox.picker {
+                Some((ref open, _)) if *open == id => None,
+                _ => {
+                    let today =
+                        calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+                    Some((id, calendar::first_of_month(today)))
+                }
+            };
+            Task::none()
+        }
+        Action::PickerShift(months) => {
+            if let Some((_, month)) = state.inbox.picker.as_mut() {
+                let step = chrono::Months::new(months.unsigned_abs());
+                let shifted = if months >= 0 {
+                    month.checked_add_months(step)
+                } else {
+                    month.checked_sub_months(step)
+                };
+                if let Some(shifted) = shifted {
+                    *month = shifted;
+                }
+            }
+            Task::none()
         }
     }
 }
@@ -384,6 +417,7 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
 fn schedule(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
     state.inbox.error = None;
     state.inbox.scheduling = None;
+    state.inbox.picker = None;
     tb::update(state, tb::Action::ScheduleDay(id, day))
 }
 
@@ -702,6 +736,43 @@ mod tests {
             assert_eq!(days[1].1, day(today) + Duration::days(1));
             assert_eq!(days[2].1, day(monday));
         }
+    }
+
+    #[test]
+    fn the_month_picker_opens_on_this_month_and_steps_through_the_others() {
+        let mut state = state();
+        let this_month = calendar::first_of_month(calendar::day_at(
+            Local::now(),
+            state.config.calendar.day_start_hour(),
+        ));
+        let _ = update(&mut state, Action::TogglePicker("task:a".into()));
+        assert_eq!(state.inbox.picker, Some(("task:a".into(), this_month)));
+        let _ = update(&mut state, Action::PickerShift(1));
+        let _ = update(&mut state, Action::PickerShift(1));
+        let _ = update(&mut state, Action::PickerShift(-3));
+        let last_month = this_month - chrono::Months::new(1);
+        assert_eq!(state.inbox.picker, Some(("task:a".into(), last_month)));
+        // Another task starts again from this month; the same one closes it.
+        let _ = update(&mut state, Action::TogglePicker("task:b".into()));
+        assert_eq!(state.inbox.picker, Some(("task:b".into(), this_month)));
+        let _ = update(&mut state, Action::TogglePicker("task:b".into()));
+        assert_eq!(state.inbox.picker, None);
+        // Nothing to step while it is closed.
+        let _ = update(&mut state, Action::PickerShift(1));
+        assert_eq!(state.inbox.picker, None);
+    }
+
+    #[test]
+    fn a_day_picked_in_the_month_plans_the_task_and_closes_the_picker() {
+        let mut state = state();
+        state.calendar.events = vec![task("a", "inbox", UNDATED)];
+        let _ = update(&mut state, Action::TogglePicker("task:a".into()));
+        let _ = update(
+            &mut state,
+            Action::ScheduleOn("task:a".into(), day("2026-11-12")),
+        );
+        assert_eq!(state.inbox.picker, None);
+        assert!(state.timeblocking.busy.contains("task:a"));
     }
 
     #[test]

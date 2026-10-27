@@ -91,7 +91,17 @@ pub fn task_row<'a>(
                 .style(text::secondary),
         );
     }
-    if let Ok(Some(deadline)) = crate::calendar::deadline::read_deadline(&task.details.description)
+    if backlog {
+        if let Some(due) = tb::due(task) {
+            let late = due.is_past(chrono::Local::now().naive_local());
+            content = content.push(
+                text(due_label(&due))
+                    .size(metrics.label() - 1.0)
+                    .style(if late { text::danger } else { text::secondary }),
+            );
+        }
+    } else if let Ok(Some(deadline)) =
+        crate::calendar::deadline::read_deadline(&task.details.description)
     {
         content = content.push(
             text(deadline.to_string())
@@ -130,6 +140,25 @@ pub fn task_row<'a>(
             }
         });
     super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.is_some())
+}
+
+/// "Due Today", "Due Tomorrow", or "Due Mon, Oct 26" (with the year when it
+/// isn't this one), followed by the time when the deadline has one.
+fn due_label(due: &crate::calendar::deadline::Deadline) -> String {
+    let today = chrono::Local::now().date_naive();
+    let day = if due.date == today {
+        "Today".to_owned()
+    } else if today.succ_opt() == Some(due.date) {
+        "Tomorrow".to_owned()
+    } else if chrono::Datelike::year(&due.date) == chrono::Datelike::year(&today) {
+        due.date.format("%a, %b %-d").to_string()
+    } else {
+        due.date.format("%a, %b %-d, %Y").to_string()
+    };
+    match due.time {
+        Some(time) => format!("Due {day} at {}", time.format("%H:%M")),
+        None => format!("Due {day}"),
+    }
 }
 
 pub(super) fn task_title<'a>(task: &'a Event, size: f32) -> Element<'a, Message> {
@@ -213,7 +242,11 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         ]
         .spacing(6),
     );
-    body = body.push(schedule).push(day);
+    // Right under "Schedule time": give the task a day from a month calendar.
+    body = body
+        .push(schedule)
+        .push(super::inbox::day_picker(state, task, metrics))
+        .push(day);
     if let Err(error) = crate::calendar::deadline::check(&task.details.description) {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
@@ -482,7 +515,7 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         .iter()
         .filter(|event| tb::in_backlog(event))
         .collect();
-    tasks.sort_by_key(|event| tb::metadata(event).order);
+    tasks.sort_by_key(|event| tb::backlog_order(event));
     let mut lists = vec![ListFilter {
         id: None,
         name: "All lists".into(),

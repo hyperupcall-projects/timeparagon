@@ -66,7 +66,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // somewhere to write, not somewhere to watch the clock from.
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
-            (Screen::Inbox, _) => inbox::view(state, &metrics),
+            (Screen::Inbox, _) => inbox::view(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects(state, &metrics),
             (Screen::Calendar, _) => {

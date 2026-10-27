@@ -216,12 +216,15 @@ pub struct State {
     pub timeblocking: crate::timeblocking::Workspace,
     pub keep: crate::keep::Store,
     pub inbox: crate::inbox::Inbox,
+    /// Google accounts connected for the Gmail integration.
+    pub accounts: crate::integrations::accounts::Accounts,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     TimeBlocking(crate::timeblocking::Action),
     Inbox(crate::inbox::Action),
+    Accounts(crate::integrations::accounts::Action),
     Tick(Instant),
     FlashFrame(Instant),
 
@@ -495,6 +498,7 @@ impl State {
             calendar: calendar::Store::new(day_end_hour),
             timeblocking: crate::timeblocking::Workspace::default(),
             inbox: crate::inbox::Inbox::default(),
+            accounts: crate::integrations::accounts::Accounts::load(),
         }
     }
 
@@ -767,13 +771,14 @@ fn reconcile_detail_pane(state: &mut State) -> Task<Message> {
 
 /// The screens that show the event details pane beside their content.
 pub(crate) fn shows_details(screen: Screen) -> bool {
-    matches!(screen, Screen::Calendar | Screen::Backlog)
+    matches!(screen, Screen::Calendar | Screen::Backlog | Screen::Inbox)
 }
 
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::Inbox(action) => crate::inbox::update(state, action),
+        Message::Accounts(action) => crate::integrations::accounts::update(state, action),
         Message::Tick(now) => {
             state.now = now;
 
@@ -891,6 +896,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.view_layout_input = None;
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
+            // Whatever was open belongs to the screen being left: the Inbox
+            // shows its details pane only for its own tasks.
+            if screen != state.screen && (screen == Screen::Inbox || state.screen == Screen::Inbox)
+            {
+                state.calendar.open_event = None;
+                state.inbox.picker = None;
+            }
             state.screen = screen;
             let close = crate::timeblocking::close(state);
             if screen == Screen::Projects {
@@ -1706,11 +1718,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.open_event = Some(id);
             // Recorded during this click, before the message is handled.
             state.calendar.details_below = ui::calendar::click_was_in_the_top_half();
+            state.inbox.picker = None;
             Task::none()
         }
 
         Message::EventClosed => {
             state.calendar.open_event = None;
+            state.inbox.picker = None;
             Task::none()
         }
 
@@ -2551,6 +2565,12 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         Screen::Notepad | Screen::KeepNotes | Screen::Inbox
     ) {
         return match key.as_ref() {
+            // A task's details come away first; a second press leaves.
+            Key::Named(Named::Escape)
+                if state.screen == Screen::Inbox && state.calendar.open_event.is_some() =>
+            {
+                Some(Message::EventClosed)
+            }
             Key::Named(Named::Escape) => Some(Message::ScreenSelected(Screen::Calendar)),
             _ => None,
         };

@@ -5,7 +5,7 @@ use crate::{
     calendar::{self, Event},
     config::CalendarSettings,
 };
-use chrono::{DateTime, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone};
 use iced::{Size, Task, window};
 use serde::{Deserialize, Serialize};
 
@@ -298,6 +298,28 @@ pub fn overdue(event: &Event) -> bool {
             .flatten()
             .is_some_and(|deadline| deadline.is_past(Local::now().naive_local()))
 }
+/// When a task is due: its notes deadline if it has one, otherwise the
+/// Google Tasks due day. `None` for a task with neither.
+pub fn due(event: &Event) -> Option<calendar::deadline::Deadline> {
+    if let Ok(Some(deadline)) = calendar::deadline::read_deadline(&event.details.description) {
+        return Some(deadline);
+    }
+    let date = event.start.date_naive();
+    (date != UNDATED).then_some(calendar::deadline::Deadline { date, time: None })
+}
+
+/// Backlog order: soonest due first, then later ones, then tasks with no due
+/// date. Ties keep the manual order.
+pub fn backlog_order(event: &Event) -> (bool, Option<NaiveDate>, Option<NaiveTime>, i64) {
+    let due = due(event);
+    (
+        due.is_none(),
+        due.map(|due| due.date),
+        due.and_then(|due| due.time),
+        metadata(event).order,
+    )
+}
+
 pub fn close(state: &mut State) -> Task<Message> {
     state.timeblocking.block = None;
     state.timeblocking.focus = None;

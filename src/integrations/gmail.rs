@@ -9,10 +9,16 @@
 //! `msg-f:` in some places), base64-encoded, and then respelled with a
 //! consonant-only alphabet so it never spells a word. Undoing that is plain
 //! base conversion.
+//!
+//! The link does not say which mailbox it belongs to (the `/u/0/` in it is a
+//! position in the browser's account switcher, not an address), so every
+//! connected Google account is asked and the one that has the conversation
+//! answers. See [`super::accounts`].
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
+use super::accounts::Login;
 use super::{Auth, Details, Integration, Kind};
 use crate::calendar::api;
 
@@ -45,8 +51,11 @@ impl Integration for Gmail {
         let reference = reference(url).ok_or(
             "This Gmail link does not point at a conversation. Open the message, then copy the address bar.",
         )?;
-        let token = auth.google_token()?;
-        let response = get(&reference.url(), &token)?;
+        let accounts = auth.google_accounts();
+        let response = first_match(&accounts, |account| {
+            let token = auth.google_token(account).map_err(Failure::Other)?;
+            get(&reference.url(), &token)
+        })?;
         let title = subject(&response, &reference).unwrap_or_default();
         Ok(Details {
             title: if title.is_empty() {
@@ -58,6 +67,55 @@ impl Integration for Gmail {
             due: None,
         })
     }
+}
+
+/// Why one account could not answer.
+#[derive(Debug, PartialEq, Eq)]
+enum Failure {
+    /// The mailbox has no such conversation: the link belongs to another one.
+    NotFound,
+    Other(String),
+}
+
+/// Asks each account in turn until one has the conversation.
+///
+/// An account that simply does not have it is not an error, since that is the
+/// expected answer from every account but one. Only when none does is the
+/// reason reported: either no account has it, or some could not be asked.
+fn first_match<T>(
+    accounts: &[Login],
+    mut ask: impl FnMut(&Login) -> Result<T, Failure>,
+) -> Result<T, String> {
+    if accounts.is_empty() {
+        return Err("Connect a Google account in Settings to read Gmail links".to_owned());
+    }
+    let mut problems = Vec::new();
+    let mut missing = 0;
+    for account in accounts {
+        match ask(account) {
+            Ok(found) => {
+                log::debug!("Gmail link found in {}", account.label);
+                return Ok(found);
+            }
+            Err(Failure::NotFound) => missing += 1,
+            Err(Failure::Other(problem)) if accounts.len() == 1 => return Err(problem),
+            Err(Failure::Other(problem)) => problems.push(format!("{}: {problem}", account.label)),
+        }
+    }
+    if problems.is_empty() {
+        return Err(if accounts.len() == 1 {
+            "Gmail cannot find this message. It may belong to a different Google account; add that account in Settings".to_owned()
+        } else {
+            format!(
+                "None of the {} connected Google accounts can see this message",
+                accounts.len()
+            )
+        });
+    }
+    if missing > 0 {
+        problems.push(format!("not found in the other {missing}"));
+    }
+    Err(problems.join("; "))
 }
 
 /// A thread or a single message, by the hex ID the API uses.
@@ -175,7 +233,7 @@ fn subject(response: &Value, id: &Id) -> Option<String> {
     Some(value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-fn get(url: &str, token: &str) -> Result<Value, String> {
+fn get(url: &str, token: &str) -> Result<Value, Failure> {
     let result = api::agent()
         .get(url)
         .set("Authorization", &format!("Bearer {token}"))
@@ -184,7 +242,7 @@ fn get(url: &str, token: &str) -> Result<Value, String> {
     match result {
         Ok(response) => response
             .into_json()
-            .map_err(|error| format!("Gmail response: {error}")),
+            .map_err(|error| Failure::Other(format!("Gmail response: {error}"))),
         Err(ureq::Error::Status(status, response)) => {
             let detail = response
                 .into_json::<Value>()
@@ -193,13 +251,13 @@ fn get(url: &str, token: &str) -> Result<Value, String> {
                 .unwrap_or_else(|| format!("HTTP {status}"));
             Err(describe_error(status, &detail))
         }
-        Err(error) => Err(format!("Gmail: {error}")),
+        Err(error) => Err(Failure::Other(format!("Gmail: {error}"))),
     }
 }
 
-fn describe_error(status: u16, detail: &str) -> String {
+fn describe_error(status: u16, detail: &str) -> Failure {
     let lower = detail.to_lowercase();
-    match status {
+    Failure::Other(match status {
         401 | 403 if lower.contains("scope") || lower.contains("insufficient") => {
             "Reconnect Google in Settings to allow read access to Gmail".to_owned()
         }
@@ -207,11 +265,10 @@ fn describe_error(status: u16, detail: &str) -> String {
             "Turn on the Gmail API for your Google Cloud project, then try again".to_owned()
         }
         401 => "Google sign-in expired. Reconnect Google in Settings".to_owned(),
-        404 | 400 => {
-            "Gmail cannot find this message. It may belong to a different Google account than the one connected".to_owned()
-        }
+        // 400 is how Gmail answers an ID that is not in this mailbox's format.
+        404 | 400 => return Failure::NotFound,
         _ => format!("Gmail: {detail}"),
-    }
+    })
 }
 
 /// The pieces of a URL this module cares about. Good enough for the addresses
@@ -377,18 +434,101 @@ mod tests {
 
     #[test]
     fn failures_say_what_to_do() {
+        let text = |failure| match failure {
+            Failure::Other(text) => text,
+            Failure::NotFound => panic!("expected a message"),
+        };
         assert!(
-            describe_error(403, "Request had insufficient authentication scopes.")
-                .contains("Reconnect")
+            text(describe_error(
+                403,
+                "Request had insufficient authentication scopes."
+            ))
+            .contains("Reconnect")
         );
         assert!(
-            describe_error(403, "Gmail API has not been used in project 1 before")
-                .contains("Gmail API")
+            text(describe_error(
+                403,
+                "Gmail API has not been used in project 1 before"
+            ))
+            .contains("Gmail API")
         );
-        assert!(
-            describe_error(404, "Requested entity was not found.")
-                .contains("different Google account")
+        assert_eq!(
+            text(describe_error(500, "Backend Error")),
+            "Gmail: Backend Error"
         );
-        assert_eq!(describe_error(500, "Backend Error"), "Gmail: Backend Error");
+    }
+
+    #[test]
+    fn a_missing_conversation_is_not_a_failure_of_the_account() {
+        assert_eq!(
+            describe_error(404, "Requested entity was not found."),
+            Failure::NotFound
+        );
+        assert_eq!(describe_error(400, "Invalid id value"), Failure::NotFound);
+    }
+
+    fn logins(emails: &[&str]) -> Vec<Login> {
+        emails.iter().map(|email| Login::extra(email)).collect()
+    }
+
+    #[test]
+    fn the_account_that_has_the_conversation_answers() {
+        let accounts = logins(&["a@x.org", "b@x.org", "c@x.org"]);
+        let mut asked = Vec::new();
+        let found = first_match(&accounts, |account| {
+            asked.push(account.label.clone());
+            if account.label == "b@x.org" {
+                Ok("subject")
+            } else {
+                Err(Failure::NotFound)
+            }
+        });
+        assert_eq!(found, Ok("subject"));
+        // Nothing is asked once an account has answered.
+        assert_eq!(asked, ["a@x.org", "b@x.org"]);
+    }
+
+    #[test]
+    fn an_account_that_cannot_be_asked_does_not_hide_one_that_can() {
+        let accounts = logins(&["a@x.org", "b@x.org"]);
+        let found = first_match(&accounts, |account| {
+            if account.label == "a@x.org" {
+                Err(Failure::Other("expired".to_owned()))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(found, Ok(7));
+    }
+
+    #[test]
+    fn when_no_account_has_it_the_error_says_so() {
+        let one = first_match::<()>(&logins(&["a@x.org"]), |_| Err(Failure::NotFound));
+        assert!(one.unwrap_err().contains("different Google account"));
+        let many = first_match::<()>(&logins(&["a@x.org", "b@x.org"]), |_| Err(Failure::NotFound));
+        assert_eq!(
+            many.unwrap_err(),
+            "None of the 2 connected Google accounts can see this message"
+        );
+        let none = first_match::<()>(&[], |_| Err(Failure::NotFound));
+        assert!(none.unwrap_err().contains("Connect a Google account"));
+    }
+
+    #[test]
+    fn errors_name_the_account_they_came_from() {
+        let accounts = logins(&["a@x.org", "b@x.org"]);
+        let error = first_match::<()>(&accounts, |account| {
+            if account.label == "a@x.org" {
+                Err(Failure::Other("expired".to_owned()))
+            } else {
+                Err(Failure::NotFound)
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "a@x.org: expired; not found in the other 1");
+        // With a single account there is nothing to tell apart.
+        let error = first_match::<()>(&accounts[..1], |_| Err(Failure::Other("expired".into())))
+            .unwrap_err();
+        assert_eq!(error, "expired");
     }
 }

@@ -36,6 +36,11 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // a "Reconnect Google" message from the Gmail integration.
 const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.appdata";
 
+/// The one scope an extra Gmail account is asked for. Calendar and Tasks stay
+/// with the main Google account; these accounts are only ever read for a
+/// message's subject.
+pub const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+
 /// How long we wait for the browser to come back with a code.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -150,6 +155,18 @@ pub fn clear_tokens() {
 /// Blocking: the local socket waits for Google to redirect back. Call this
 /// from [`crate::blocking::run`], not from the UI thread.
 pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String> {
+    authorize_for(client_id, client_secret, SCOPE, "consent")
+}
+
+/// Like [`authorize`], for any scope. `prompt` is Google's `prompt` parameter:
+/// `select_account consent` makes the browser ask which account to use, which
+/// is what lets a second account be added while the first is signed in.
+pub fn authorize_for(
+    client_id: &str,
+    client_secret: &str,
+    scope: &str,
+    prompt: &str,
+) -> Result<Tokens, String> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
         return Err("add a Google OAuth client ID in Settings before connecting".to_owned());
@@ -170,12 +187,13 @@ pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String>
     let state = random_token(16)?;
 
     let url = format!(
-        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt=consent",
+        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt={}",
         urlencoding::encode(client_id),
         urlencoding::encode(&redirect),
-        urlencoding::encode(SCOPE),
+        urlencoding::encode(scope),
         urlencoding::encode(&challenge),
         urlencoding::encode(&state),
+        urlencoding::encode(prompt),
     );
 
     open_in_browser(&url)?;
