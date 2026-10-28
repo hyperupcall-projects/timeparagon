@@ -1,13 +1,13 @@
 [package]
-name = "timetracker-dioxus"
+name = "time-slay-dioxus"
 version = "0.1.0"
 edition = "2024"
-description = "TimeTracker's day view, built with Dioxus"
+description = "Slay the day with TimeSlay"
 license = "MPL-2.0"
 
 [[bin]]
 # `dx` turns the binary name into the Android launcher label.
-name = "TimeTracker"
+name = "TimeSlay"
 path = "src/main.rs"
 
 [dependencies]
@@ -15,7 +15,7 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 tokio = { version = "1", features = ["rt", "time"] }
 # Renderer-agnostic calendar/OAuth/Tasks/time-block data shared with the iced
 # app, and safe to cross-compile for Android.
-timetracker-core = { path = "../core" }
+time-slay-core = { path = "../core" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 dioxus = { version = "0.7.3", default-features = false, features = ["mobile", "lib", "launch"] }

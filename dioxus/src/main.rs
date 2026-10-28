@@ -1,4 +1,4 @@
-//! TimeTracker's Dioxus day view.
+//! TimeSlay's Dioxus day view.
 //!
 //! This is deliberately just the day: a single screen showing every calendar
 //! event, every Google Task, and every time block for one day. Clicking a time
@@ -8,10 +8,10 @@ mod day;
 
 use chrono::Datelike;
 use dioxus::prelude::*;
-use timetracker_core::calendar::{self, Event};
-use timetracker_core::config::CalendarSettings;
-use timetracker_core::config_sync;
-use timetracker_core::timeblocking as tb;
+use time_slay_core::calendar::{self, Event};
+use time_slay_core::config::CalendarSettings;
+use time_slay_core::config_sync;
+use time_slay_core::timeblocking as tb;
 
 use day::{AssignedTask, BlockRef, DayModel, TaskGroup, TaskRow, Theme, TimeBlock, TimedEvent};
 
@@ -40,7 +40,7 @@ fn main() {
             dioxus::desktop::Config::new()
                 .with_window(
                     dioxus::desktop::WindowBuilder::new()
-                        .with_title("TimeTracker — Day")
+                        .with_title("TimeSlay — Day")
                         .with_inner_size(dioxus::desktop::LogicalSize::new(1180.0, 900.0))
                         .with_min_inner_size(dioxus::desktop::LogicalSize::new(760.0, 560.0)),
                 )
@@ -126,7 +126,7 @@ fn App() -> Element {
     let mut config = use_signal(day::load_config);
     let settings = config.read().calendar.clone();
     let mut config_status = use_signal(config_sync::status);
-    let config_hint = timetracker_core::config::config_path()
+    let config_hint = time_slay_core::config::config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "config.toml".to_owned());
 
@@ -143,7 +143,7 @@ fn App() -> Element {
     let mut client_secret_input = use_signal(String::new);
     let mut client_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
-    let mut last_good = use_signal(|| None::<timetracker_core::calendar::Snapshot>);
+    let mut last_good = use_signal(|| None::<time_slay_core::calendar::Snapshot>);
 
     let data = use_resource(move || {
         let requested_day = current_day();
@@ -318,7 +318,7 @@ fn App() -> Element {
             div { class: "brand",
                 div { class: "brand-mark", "⏳" }
                 div {
-                    div { class: "brand-name", "TimeTracker" }
+                    div { class: "brand-name", "TimeSlay" }
                     div { class: "brand-sub", "Day view" }
                 }
             }
@@ -550,7 +550,7 @@ fn App() -> Element {
     });
 
     rsx! {
-        document::Title { "TimeTracker · Day" }
+        document::Title { "TimeSlay · Day" }
         document::Style { {CSS} }
         div { class: "app",
             {topbar}
@@ -1060,7 +1060,7 @@ fn event_style(timed: &TimedEvent) -> String {
     )
 }
 
-fn css_color(color: timetracker_core::Color) -> String {
+fn css_color(color: time_slay_core::Color) -> String {
     let red = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
     let green = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
     let blue = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;

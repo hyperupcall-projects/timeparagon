@@ -25,9 +25,9 @@ class AndroidReleaseTests(unittest.TestCase):
         shutil.copyfile(Path(__file__).resolve().parents[1] / "scripts/build-android.sh", self.script)
         config = self.root / "dioxus/Dioxus.toml"
         config.parent.mkdir()
-        self.config_text = '[application]\nname = "TimeTracker"\n'
+        self.config_text = '[application]\nname = "TimeSlay"\n'
         config.write_text(self.config_text)
-        self.apk = self.root / "target/dx/TimeTracker/release/android/app/app/build/outputs/apk/release/app-release.apk"
+        self.apk = self.root / "target/dx/TimeSlay/release/android/app/app/build/outputs/apk/release/app-release.apk"
         self.apk.parent.mkdir(parents=True)
         self.apk.write_bytes(b"fixture apk")
         self.output = self.root / "output"
@@ -44,16 +44,16 @@ class AndroidReleaseTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         JAVA_HOME=str(java), ANDROID_HOME=str(sdk),
                         ANDROID_NDK_HOME=str(sdk / "ndk/test"),
-                        TIMETRACKER_KEYSTORE=str(keystore),
-                        TIMETRACKER_KEYSTORE_PASSWORD="synthetic-password",
-                        TIMETRACKER_KEY_PASSWORD="synthetic-password", TIMETRACKER_KEY_ALIAS="fixture")
+                        TIME_SLAY_KEYSTORE=str(keystore),
+                        TIME_SLAY_KEYSTORE_PASSWORD="synthetic-password",
+                        TIME_SLAY_KEY_PASSWORD="synthetic-password", TIME_SLAY_KEY_ALIAS="fixture")
         self.tool(self.bin / "dx", "pass")
         self.tool(self.bin / "rustup", "print('aarch64-linux-android')")
         self.tool(java / "bin/java", "print('openjdk version \"21.0.1\"')")
         self.tool(java / "bin/keytool", "from pathlib import Path\nPath(sys.argv[sys.argv.index('-file')+1]).write_bytes(b'fixture certificate')")
         self.tool(build_tools / "aapt2", """
 if os.environ.get('INSPECTION_FAIL'): sys.exit(1)
-print('package: name=dev.timetracker.day')
+print('package: name=dev.timeslay.day')
 if os.environ.get('DEBUGGABLE'): print('application-debuggable')
 """)
         self.tool(build_tools / "apksigner", """
@@ -72,10 +72,10 @@ print('Signer #1 certificate SHA-256 digest: ' + os.environ.get('SIGNER_DIGEST',
                                 env=dict(self.env, **environment), capture_output=True, text=True)
         self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
         self.assertEqual((self.root / "dioxus/Dioxus.toml").read_text(), self.config_text)
-        self.assertEqual((self.output / "timetracker-arm64-v8a-release.apk").exists(), accepted)
+        self.assertEqual((self.output / "time-slay-arm64-v8a-release.apk").exists(), accepted)
 
     def test_missing_signing_key_is_rejected(self):
-        self.build(TIMETRACKER_KEYSTORE="")
+        self.build(TIME_SLAY_KEYSTORE="")
 
     def test_debuggable_apk_is_rejected(self):
         self.build(DEBUGGABLE="1")

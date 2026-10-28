@@ -7012,7 +7012,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timetracker"
+name = "time-slay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -7048,7 +7048,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timetracker-core"
+name = "time-slay-core"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -7071,14 +7071,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "timetracker-dioxus"
+name = "time-slay-dioxus"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "dioxus",
  "jni 0.21.1",
  "ndk-context",
- "timetracker-core",
+ "time-slay-core",
  "tokio",
 ]
 

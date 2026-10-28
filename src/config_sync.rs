@@ -91,7 +91,7 @@ pub fn start() {
         let (sender, receiver) = mpsc::channel();
         let watcher_sender = sender.clone();
         let spawned = std::thread::Builder::new()
-            .name("timetracker-config-sync".to_owned())
+            .name("time-slay-config-sync".to_owned())
             .spawn(move || run(receiver, watcher_sender));
         if let Err(error) = spawned {
             log::warn!("could not start the config sync worker: {error}");
@@ -619,7 +619,7 @@ impl Drive for GoogleDrive {
             );
         }
 
-        let mut boundary = String::from("timetracker-config-boundary");
+        let mut boundary = String::from("time-slay-config-boundary");
         while text.contains(&boundary) {
             boundary.push('x');
         }
@@ -740,7 +740,7 @@ mod tests {
     impl Dir {
         fn new(name: &str) -> Self {
             let path = std::env::temp_dir().join(format!(
-                "timetracker-config-sync-{name}-{}-{}",
+                "time-slay-config-sync-{name}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove the TimeTracker desktop application installed by install.sh.
+# Remove the TimeSlay desktop application installed by install.sh.
 #
 # Usage:
 #   packaging/uninstall.sh [--prefix DIR] [--purge] [--help]
@@ -46,27 +46,27 @@ say() { printf '%s\n' "$*"; }
 
 # --- Stop and disable the service ------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user disable --now timetracker.service >/dev/null 2>&1 || true
-    systemctl --user disable --now timetracker-shortcuts.service >/dev/null 2>&1 || true
-    systemctl --user disable --now timetracker-panel.service >/dev/null 2>&1 || true
+    systemctl --user disable --now time-slay.service >/dev/null 2>&1 || true
+    systemctl --user disable --now time-slay-shortcuts.service >/dev/null 2>&1 || true
+    systemctl --user disable --now time-slay-panel.service >/dev/null 2>&1 || true
 fi
 
 # --- Remove installed files ------------------------------------------------
-rm -f "$config_home/systemd/user/timetracker.service"
-rm -f "$config_home/systemd/user/timetracker-shortcuts.service"
-rm -f "$config_home/systemd/user/timetracker-panel.service"
-rm -f "$data_home/applications/timetracker.desktop"
-rm -f "$data_home/icons/hicolor/512x512/apps/timetracker.png"
-rm -f "$prefix/bin/timetracker"
-rm -f "$prefix/bin/timetracker-panel"
-rm -f "$prefix/bin/timetracker-dock"
+rm -f "$config_home/systemd/user/time-slay.service"
+rm -f "$config_home/systemd/user/time-slay-shortcuts.service"
+rm -f "$config_home/systemd/user/time-slay-panel.service"
+rm -f "$data_home/applications/time-slay.desktop"
+rm -f "$data_home/icons/hicolor/512x512/apps/time-slay.png"
+rm -f "$prefix/bin/time-slay"
+rm -f "$prefix/bin/time-slay-panel"
+rm -f "$prefix/bin/time-slay-dock"
 rm -f "$prefix/bin/keep-bridge"
 # Also clean up a helper installed before the rename.
 rm -f "$prefix/bin/tasks-bridge"
 say "Removed binaries, desktop entry, icon and systemd units."
 
 # --- Remove the KWin window rule -------------------------------------------
-rule="TimeTracker Sidebar"
+rule="TimeSlay Sidebar"
 if command -v kwriteconfig6 >/dev/null 2>&1; then
     rules_file="$config_home/kwinrulesrc"
     current=$(sed -n 's/^Order=//p' "$rules_file" 2>/dev/null | tail -n 1)
@@ -93,8 +93,8 @@ fi
 
 # --- Optionally remove user data -------------------------------------------
 if [ "$purge" -eq 1 ]; then
-    rm -rf "$config_home/timetracker"
-    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/timetracker"
+    rm -rf "$config_home/time-slay"
+    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/time-slay"
     say "Purged config and cache."
 fi
 

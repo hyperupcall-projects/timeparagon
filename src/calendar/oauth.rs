@@ -238,7 +238,7 @@ pub fn authorize_for(
             Redirect::Done(result) => {
                 let _ = stream.write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-                     <!doctype html><title>TimeTracker</title><p>You can close this tab and return to TimeTracker.</p>",
+                     <!doctype html><title>TimeSlay</title><p>You can close this tab and return to TimeSlay.</p>",
                 );
                 break result?;
             }

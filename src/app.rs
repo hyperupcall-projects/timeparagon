@@ -732,13 +732,13 @@ fn boot_state() -> State {
     state
 }
 
-/// The desktop-file basename, `timetracker.desktop`.
+/// The desktop-file basename, `time-slay.desktop`.
 ///
 /// On Wayland the title-bar icon is not the pixmap passed to `set_window_icon`
 /// (winit ignores that). KWin looks up this id, finds the desktop entry, and
-/// paints `Icon=timetracker`. An empty id leaves the generic Wayland logo, the
+/// paints `Icon=time-slay`. An empty id leaves the generic Wayland logo, the
 /// yellow W, in the corner while the dock still shows the hourglass.
-const APPLICATION_ID: &str = "timetracker";
+const APPLICATION_ID: &str = "time-slay";
 
 fn window_platform() -> window::settings::PlatformSpecific {
     window::settings::PlatformSpecific {
@@ -2559,16 +2559,16 @@ pub fn title(state: &State, window: window::Id) -> String {
         .as_ref()
         .is_some_and(|flash| flash.window == window)
     {
-        return "TimeTracker".to_owned();
+        return "TimeSlay".to_owned();
     }
 
     // The panel carries a stable, distinctive title so a window rule can pick
     // it out from the main window; see the packaging README.
     if state.sidebar.is_some() {
-        return "TimeTracker Sidebar".to_owned();
+        return "TimeSlay Sidebar".to_owned();
     }
 
-    "TimeTracker".to_owned()
+    "TimeSlay".to_owned()
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {
@@ -2602,7 +2602,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
 
     // Alarms are checked once a second, and only while there is one waiting,
-    // so an idle TimeTracker with nothing set still costs nothing.
+    // so an idle TimeSlay with nothing set still costs nothing.
     if alarms::needs_poll(&state.alarms) {
         subscriptions.push(
             iced::time::every(Duration::from_secs(1))

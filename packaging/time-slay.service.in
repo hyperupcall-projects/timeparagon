@@ -1,5 +1,5 @@
 [Unit]
-Description=TimeTracker daemon
+Description=TimeSlay daemon
 # A GUI process: only start it once a graphical session exists, and stop it
 # when that session goes away.
 After=graphical-session.target

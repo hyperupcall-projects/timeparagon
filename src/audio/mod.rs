@@ -291,7 +291,7 @@ impl Audio {
         shared.alive.store(true, Ordering::Release);
 
         match std::thread::Builder::new()
-            .name("timetracker-audio".to_owned())
+            .name("time-slay-audio".to_owned())
             .spawn(move || backend::run(shared, receiver))
         {
             Ok(_handle) => self.sender = Some(sender),

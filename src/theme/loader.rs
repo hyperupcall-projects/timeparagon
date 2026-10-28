@@ -1,4 +1,4 @@
-//! Reading themes out of `~/.config/timetracker/themes/*.toml`.
+//! Reading themes out of `~/.config/time-slay/themes/*.toml`.
 //!
 //! Adding a theme should not require rebuilding the app, so the picker is
 //! populated from disk at startup. A broken file is skipped with a warning
@@ -119,7 +119,7 @@ fn parse_file(path: &Path) -> Result<Entry, Box<dyn std::error::Error>> {
 /// something to copy rather than a bare empty directory.
 pub const EXAMPLE: &str = "\
 # Drop a file like this one in this directory and it shows up in the theme
-# picker the next time TimeTracker starts. `name` is what the picker displays.
+# picker the next time TimeSlay starts. `name` is what the picker displays.
 #
 # `digits`, `ring` and `flash` are optional; leave them out and they are
 # derived from `primary` and `danger`.
@@ -209,6 +209,6 @@ mod tests {
 
     #[test]
     fn a_missing_directory_yields_no_themes() {
-        assert!(load(Path::new("/nonexistent/timetracker/themes")).is_empty());
+        assert!(load(Path::new("/nonexistent/time-slay/themes")).is_empty());
     }
 }

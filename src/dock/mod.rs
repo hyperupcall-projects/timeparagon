@@ -71,7 +71,7 @@ const TICK: Duration = Duration::from_secs(30);
 ///
 /// `origin` is what the dock replaced, which its back button returns to.
 pub fn run(origin: launch::Origin) -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
         .init();
 
     anyhow::ensure!(
@@ -98,7 +98,7 @@ pub fn run(origin: launch::Origin) -> Result<()> {
 
     let surface = compositor.create_surface(&qh);
     let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("timetracker-dock"), None);
+        layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("time-slay-dock"), None);
     let (anchor, margin) = match dock_config.side {
         Side::Left => (
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,

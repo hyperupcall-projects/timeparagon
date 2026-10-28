@@ -1,5 +1,5 @@
 [Unit]
-Description=TimeTracker shortcut daemon
+Description=TimeSlay shortcut daemon
 # Owns the global shortcuts (Toggle Visibility, Meta+U by default, and Toggle
 # Shape, Meta+Shift+U) and shows, hides and switches the side panel and the
 # dock when they fire. The dock is Wayland-only: a layer surface needs a

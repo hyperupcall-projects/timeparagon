@@ -1,25 +1,25 @@
-# TimeTracker — Dioxus day view
+# TimeSlay — Dioxus day view
 
-This is the Dioxus implementation of TimeTracker. It deliberately implements
+This is the Dioxus implementation of TimeSlay. It deliberately implements
 one screen: **the day**. Everything on it comes from the same Google Calendar
 and Google Tasks data the iced application uses.
 
 The iced application is still the root package of this repository and is
 untouched. Both apps share data through the renderer-agnostic
-`timetracker-core` crate:
+`time-slay-core` crate:
 
-- the config at `~/.config/timetracker/config.toml`,
-- the OAuth token at `~/.config/timetracker/google-token.toml`,
+- the config at `~/.config/time-slay/config.toml`,
+- the OAuth token at `~/.config/time-slay/google-token.toml`,
 - the local task database and time-block metadata,
 - the calendar sync and Google Tasks code in `core/` / `src/calendar/`.
 
-`timetracker-core` contains no iced UI, which is what lets it cross-compile for
+`time-slay-core` contains no iced UI, which is what lets it cross-compile for
 Android.
 
 ## Run it
 
 ```sh
-cargo run -p timetracker-dioxus
+cargo run -p time-slay-dioxus
 ```
 
 Dioxus desktop needs the usual WebKitGTK and GTK 3 development packages on
@@ -29,7 +29,7 @@ dependencies.
 The iced app still builds and runs with the normal command:
 
 ```sh
-cargo run -p timetracker --release
+cargo run -p time-slay --release
 ```
 
 ## Android APK
@@ -45,24 +45,24 @@ Useful options:
 ./scripts/build-android.sh --abi x86_64
 
 # Release profile, signed with your own keystore (see below)
-TIMETRACKER_KEYSTORE=~/keys/timetracker.jks \
-TIMETRACKER_KEYSTORE_PASSWORD=... \
-TIMETRACKER_KEY_ALIAS=timetracker \
+TIME_SLAY_KEYSTORE=~/keys/time-slay.jks \
+TIME_SLAY_KEYSTORE_PASSWORD=... \
+TIME_SLAY_KEY_ALIAS=time-slay \
 ./scripts/build-android.sh --release
 
 # Build, install and launch on a connected device
 ./scripts/build-android.sh --install
 ```
 
-The APK is copied to `dist/timetracker-<abi>-<profile>.apk`.
+The APK is copied to `dist/time-slay-<abi>-<profile>.apk`.
 
 The default (debug) APK is debuggable and debug-signed: use it for development
 only. `--release` builds Gradle's release variant, signs it with the keystore
-named by `TIMETRACKER_KEYSTORE`, `TIMETRACKER_KEYSTORE_PASSWORD`,
-`TIMETRACKER_KEY_ALIAS` and (optionally) `TIMETRACKER_KEY_PASSWORD`, and fails
+named by `TIME_SLAY_KEYSTORE`, `TIME_SLAY_KEYSTORE_PASSWORD`,
+`TIME_SLAY_KEY_ALIAS` and (optionally) `TIME_SLAY_KEY_PASSWORD`, and fails
 unless the result is non-debuggable and not signed with the Android debug key.
 Create a keystore once with `keytool -genkeypair -v -keystore
-~/keys/timetracker.jks -alias timetracker -keyalg RSA -keysize 4096 -validity
+~/keys/time-slay.jks -alias time-slay -keyalg RSA -keysize 4096 -validity
 10000` and keep it outside the repository. Passwords must avoid the characters
 `" ' \` $ \ & < > =`. The signing block is added to `dioxus/Dioxus.toml` only
 while the build runs.
@@ -98,7 +98,7 @@ concurrent builds are rejected while signing settings are in use.
   ```
 
 The Android build does **not** compile iced or any desktop-only crates; it uses
-`timetracker-core` only.
+`time-slay-core` only.
 
 ### Config on the device
 
@@ -107,7 +107,7 @@ launch the app asks for the Google OAuth client ID and secret and saves them to
 its private storage (`config.toml`, readable only by the app):
 
 ```text
-/data/user/0/dev.timetracker.day/files/config/timetracker/config.toml
+/data/user/0/dev.timeslay.day/files/config/time-slay/config.toml
 ```
 
 After **Save and connect**, sign in with Google in the browser. The rest of the

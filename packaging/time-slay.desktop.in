@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=TimeTracker
+Name=TimeSlay
 GenericName=Calendar
-Comment=A low-resource calendar that stays usable at 200px wide
+Comment=Slay the day with TimeSlay
 Exec=@EXEC@
-Icon=timetracker
+Icon=time-slay
 Terminal=false
 Categories=Utility;Clock;
 Keywords=calendar;alarm;
 StartupNotify=true
-StartupWMClass=timetracker
+StartupWMClass=time-slay

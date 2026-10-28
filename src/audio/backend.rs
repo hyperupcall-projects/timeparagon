@@ -6,7 +6,7 @@
 //! parked inside a PipeWire loop.
 //!
 //! The stream is only connected when there is something to play and is torn
-//! down again once things go quiet, so an idle TimeTracker holds no audio
+//! down again once things go quiet, so an idle TimeSlay holds no audio
 //! device and puts no node on the graph.
 
 use std::cell::RefCell;
@@ -172,7 +172,7 @@ fn try_run(shared: &Arc<Shared>, receiver: pw::channel::Receiver<Command>) -> Re
     let core = context.connect_rc(None).map_err(describe)?;
 
     let stream =
-        pw::stream::StreamRc::new(core, "TimeTracker", stream_properties()).map_err(describe)?;
+        pw::stream::StreamRc::new(core, "TimeSlay", stream_properties()).map_err(describe)?;
 
     // The listener has to stay alive for the callback to keep firing, so it
     // is bound here for as long as the loop runs.
@@ -288,15 +288,15 @@ fn try_run(shared: &Arc<Shared>, receiver: pw::channel::Receiver<Command>) -> Re
 ///
 /// `MEDIA_ROLE = Notification` is what lets it route the alarm to the right
 /// sink and duck whatever else is playing, and `APP_NAME` is what gives
-/// TimeTracker its own slider in the system mixer.
+/// TimeSlay its own slider in the system mixer.
 fn stream_properties() -> pw::properties::PropertiesBox {
     pw::properties::properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Playback",
         *pw::keys::MEDIA_ROLE => "Notification",
-        *pw::keys::APP_NAME => "TimeTracker",
-        *pw::keys::APP_ID => "dev.timetracker.TimeTracker",
-        *pw::keys::NODE_NAME => "timetracker",
+        *pw::keys::APP_NAME => "TimeSlay",
+        *pw::keys::APP_ID => "dev.timeslay.TimeSlay",
+        *pw::keys::NODE_NAME => "time-slay",
         *pw::keys::AUDIO_CHANNELS => "2",
     }
 }

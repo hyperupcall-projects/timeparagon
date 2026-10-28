@@ -8,9 +8,9 @@ use iced::{Element, Size};
 use iced_test::Simulator;
 use iced_test::core::Settings;
 
-use timetracker::app::{self, Message, Screen, State};
-use timetracker::config::Config;
-use timetracker::theme::Catalog;
+use time_slay::app::{self, Message, Screen, State};
+use time_slay::config::Config;
+use time_slay::theme::Catalog;
 
 /// The widths the layout is designed around.
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
@@ -54,12 +54,12 @@ fn main() {
             });
 
             count += shoot(directory, theme, size, "alarm-popup", |state| {
-                let at = timetracker::alarms::minute_of(chrono::Local::now())
+                let at = time_slay::alarms::minute_of(chrono::Local::now())
                     + chrono::Duration::minutes(45);
                 let id = state.alarms.add(at, state.config.alarm.clone());
                 let _ = app::update(
                     state,
-                    Message::Alarms(timetracker::alarms::Action::Open(id)),
+                    Message::Alarms(time_slay::alarms::Action::Open(id)),
                 );
             });
 
@@ -74,8 +74,8 @@ fn main() {
                 "calendar",
                 |state| {
                     state.screen = Screen::Calendar;
-                    state.calendar = timetracker::calendar::Store::with_snapshot(
-                        timetracker::calendar::sample_snapshot(),
+                    state.calendar = time_slay::calendar::Store::with_snapshot(
+                        time_slay::calendar::sample_snapshot(),
                     );
                 },
             );
@@ -92,7 +92,7 @@ fn main() {
                 |state| {
                     state.screen = Screen::Calendar;
 
-                    let mut snapshot = timetracker::calendar::sample_snapshot();
+                    let mut snapshot = time_slay::calendar::sample_snapshot();
                     let day = snapshot.day;
                     let at = |hour, minute| {
                         day.and_hms_opt(hour, minute, 0)
@@ -107,7 +107,7 @@ fn main() {
 
                     // A quarter of an hour is barely a line of text, which is
                     // the case that used to spill over the events below it.
-                    snapshot.events.push(timetracker::calendar::Event {
+                    snapshot.events.push(time_slay::calendar::Event {
                         id: "long-title".into(),
                         calendar_id: work.id.clone(),
                         title: "17-4 HW10/22 (Thu)2pm: L18\nReading.Inaka vs Tokai-->Changed\nfrom the L18 department store\nSupercalifragilisticexpialidocious".into(),
@@ -119,7 +119,7 @@ fn main() {
                         details: Default::default(),
                     });
 
-                    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+                    state.calendar = time_slay::calendar::Store::with_snapshot(snapshot);
                 },
             );
 
@@ -130,8 +130,8 @@ fn main() {
                 "calendar-month",
                 |state| {
                     state.screen = Screen::Calendar;
-                    state.calendar = timetracker::calendar::Store::with_snapshot(
-                        timetracker::calendar::sample_snapshot(),
+                    state.calendar = time_slay::calendar::Store::with_snapshot(
+                        time_slay::calendar::sample_snapshot(),
                     );
                     state.calendar.month_open = true;
                 },
@@ -144,8 +144,8 @@ fn main() {
                 "calendar-todos",
                 |state| {
                     state.screen = Screen::Calendar;
-                    state.calendar = timetracker::calendar::Store::with_snapshot(
-                        timetracker::calendar::sample_snapshot(),
+                    state.calendar = time_slay::calendar::Store::with_snapshot(
+                        time_slay::calendar::sample_snapshot(),
                     );
                     state.config.todos.add("Draft the report");
                     state.config.todos.add("Collect the numbers");
@@ -165,13 +165,13 @@ fn main() {
 
                     // The sample events are in the past, so a couple are moved to
                     // later today to give the "Coming up" list something to show.
-                    let mut snapshot = timetracker::calendar::sample_snapshot();
+                    let mut snapshot = time_slay::calendar::sample_snapshot();
                     let soon = chrono::Local::now() + chrono::Duration::minutes(20);
                     snapshot.events[1].start = soon;
                     snapshot.events[1].end = soon + chrono::Duration::minutes(30);
                     snapshot.events[3].start = soon + chrono::Duration::minutes(45);
                     snapshot.events[3].end = soon + chrono::Duration::minutes(105);
-                    state.calendar = timetracker::calendar::Store::with_snapshot(snapshot);
+                    state.calendar = time_slay::calendar::Store::with_snapshot(snapshot);
 
                     state.config.todos.add("Draft the report");
                     state.config.todos.add("Collect the numbers");
@@ -203,7 +203,7 @@ fn main() {
                 "notepad-large",
                 |state| {
                     state.screen = Screen::Notepad;
-                    state.config.notepad.font_size = timetracker::config::Notepad::MAX_FONT_SIZE;
+                    state.config.notepad.font_size = time_slay::config::Notepad::MAX_FONT_SIZE;
                     state.set_notepad(
                         "Things to sort out before Friday:\n\n- the draft\n- the numbers"
                             .to_owned(),
@@ -218,7 +218,7 @@ fn main() {
                 "notepad-small",
                 |state| {
                     state.screen = Screen::Notepad;
-                    state.config.notepad.font_size = timetracker::config::Notepad::MIN_FONT_SIZE;
+                    state.config.notepad.font_size = time_slay::config::Notepad::MIN_FONT_SIZE;
                     state.set_notepad(
                         "Things to sort out before Friday:\n\n- the draft\n- the numbers"
                             .to_owned(),

@@ -5,11 +5,11 @@ use iced::{Element, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
-use timetracker::app::{self, Message, Screen, State};
-use timetracker::calendar::{Store, sample_snapshot};
-use timetracker::config::{Config, TravelMode};
-use timetracker::theme::Catalog;
-use timetracker::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
+use time_slay::app::{self, Message, Screen, State};
+use time_slay::calendar::{Store, sample_snapshot};
+use time_slay::config::{Config, TravelMode};
+use time_slay::theme::Catalog;
+use time_slay::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
 
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
 
@@ -24,7 +24,7 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
 }
 
 fn tab_label(width: f32, index: usize) -> &'static str {
-    timetracker::ui::tab_labels(width)[index]
+    time_slay::ui::tab_labels(width)[index]
 }
 
 /// A day with a start and end at home and meetings at two other places.

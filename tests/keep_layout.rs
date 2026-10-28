@@ -1,6 +1,6 @@
 use iced::{Size, widget::image::Handle};
 use iced_test::{Simulator, core::Settings};
-use timetracker::{
+use time_slay::{
     app::{self, Screen, State},
     config::Config,
     theme::Catalog,
@@ -10,7 +10,7 @@ fn state() -> State {
     let mut state = State::new(Config::default(), Catalog::built_in());
     state.screen = Screen::KeepNotes;
     for index in 0..6 {
-        state.keep.snapshot.notes.push(timetracker::keep::Note {
+        state.keep.snapshot.notes.push(time_slay::keep::Note {
             id: index.to_string(),
             title: format!("Note {index}"),
             description: "A clear native text note.".into(),

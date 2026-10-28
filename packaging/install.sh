@@ -1,10 +1,10 @@
 #!/bin/sh
-# Install TimeTracker as a desktop application.
+# Install TimeSlay as a desktop application.
 #
 # This builds the debug binary, drops it on your PATH, registers a desktop
 # entry and icon so it shows up in the application menu, and installs systemd
 # *user* services so the app and the shortcut daemon start with your graphical
-# session. There is one `timetracker` binary: the side panel, the dock and the
+# session. There is one `time-slay` binary: the side panel, the dock and the
 # shortcut daemon are its --sidebar, --dock and --daemon modes.
 #
 # Everything lands under your home directory by default; nothing needs root.
@@ -13,7 +13,7 @@
 #   packaging/install.sh [--prefix DIR] [--no-build] [--no-enable] [--help]
 #
 #   --prefix DIR   Install the binary under DIR/bin (default: ~/.local)
-#   --no-build     Use an existing target/debug/timetracker instead of
+#   --no-build     Use an existing target/debug/time-slay instead of
 #                  building it
 #   --no-enable    Install the systemd units but do not enable them or start
 #                  the shortcut daemon
@@ -69,7 +69,7 @@ app_dir=$data_home/applications
 icon_dir=$data_home/icons/hicolor/512x512/apps
 unit_dir=$config_home/systemd/user
 
-binary=$bin_dir/timetracker
+binary=$bin_dir/time-slay
 
 say() { printf '%s\n' "$*"; }
 
@@ -79,7 +79,7 @@ if [ "$build" -eq 1 ]; then
     ( cd "$repo_root" && cargo build )
 fi
 
-built=$repo_root/target/debug/timetracker
+built=$repo_root/target/debug/time-slay
 if [ ! -x "$built" ]; then
     echo "install.sh: $built not found; run without --no-build" >&2
     exit 1
@@ -92,7 +92,7 @@ say "Installed binary:  $binary"
 
 # Earlier versions installed separate panel and dock binaries. They are now
 # modes of the one binary (--sidebar, --dock, --daemon).
-rm -f "$bin_dir/timetracker-panel" "$bin_dir/timetracker-dock"
+rm -f "$bin_dir/time-slay-panel" "$bin_dir/time-slay-dock"
 
 # Google Keep uses this optional browser helper. Task sync uses Google APIs. Desktop
 # launchers do not inherit a shell's PATH or the checkout's working directory.
@@ -109,39 +109,39 @@ fi
 
 # --- Install the desktop entry and icon ------------------------------------
 mkdir -p "$app_dir" "$icon_dir"
-sed "s|@EXEC@|$binary|g" "$script_dir/timetracker.desktop.in" \
-    > "$app_dir/timetracker.desktop"
-chmod 0644 "$app_dir/timetracker.desktop"
-say "Installed desktop: $app_dir/timetracker.desktop"
+sed "s|@EXEC@|$binary|g" "$script_dir/time-slay.desktop.in" \
+    > "$app_dir/time-slay.desktop"
+chmod 0644 "$app_dir/time-slay.desktop"
+say "Installed desktop: $app_dir/time-slay.desktop"
 
-install -m 0644 "$repo_root/assets/noto-hourglass-done.png" "$icon_dir/timetracker.png"
-say "Installed icon:    $icon_dir/timetracker.png"
+install -m 0644 "$repo_root/assets/noto-hourglass-done.png" "$icon_dir/time-slay.png"
+say "Installed icon:    $icon_dir/time-slay.png"
 
 # --- Install the systemd user services -------------------------------------
 mkdir -p "$unit_dir"
-sed "s|@EXEC@|$binary|g" "$script_dir/timetracker.service.in" \
-    > "$unit_dir/timetracker.service"
-chmod 0644 "$unit_dir/timetracker.service"
-say "Installed unit:    $unit_dir/timetracker.service"
+sed "s|@EXEC@|$binary|g" "$script_dir/time-slay.service.in" \
+    > "$unit_dir/time-slay.service"
+chmod 0644 "$unit_dir/time-slay.service"
+say "Installed unit:    $unit_dir/time-slay.service"
 
-sed "s|@EXEC@|$binary|g" "$script_dir/timetracker-shortcuts.service.in" \
-    > "$unit_dir/timetracker-shortcuts.service"
-chmod 0644 "$unit_dir/timetracker-shortcuts.service"
-say "Installed unit:    $unit_dir/timetracker-shortcuts.service"
+sed "s|@EXEC@|$binary|g" "$script_dir/time-slay-shortcuts.service.in" \
+    > "$unit_dir/time-slay-shortcuts.service"
+chmod 0644 "$unit_dir/time-slay-shortcuts.service"
+say "Installed unit:    $unit_dir/time-slay-shortcuts.service"
 
-# The shortcut daemon used to be the separate timetracker-panel.service.
+# The shortcut daemon used to be the separate time-slay-panel.service.
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user disable --now timetracker-panel.service >/dev/null 2>&1 || true
+    systemctl --user disable --now time-slay-panel.service >/dev/null 2>&1 || true
 fi
-rm -f "$unit_dir/timetracker-panel.service"
+rm -f "$unit_dir/time-slay-panel.service"
 
 # --- Pin the panel with a KWin window rule --------------------------------
 # A Wayland client cannot position or raise its own window, so the panel is
 # pinned to the left edge by KWin instead. The rule matches the panel's
-# distinctive title ("TimeTracker Sidebar") and is added to KWin's ordered rule
+# distinctive title ("TimeSlay Sidebar") and is added to KWin's ordered rule
 # list so it is loaded. kwriteconfig6 edits the file in place, so any rules you
 # already have are left alone.
-rule="TimeTracker Sidebar"
+rule="TimeSlay Sidebar"
 if command -v kwriteconfig6 >/dev/null 2>&1; then
     for pair in \
         "Description=$rule" \
@@ -190,15 +190,15 @@ fi
 if [ "$enable" -eq 1 ]; then
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload
-        systemctl --user enable timetracker.service
-        systemctl --user enable timetracker-shortcuts.service
-        systemctl --user restart timetracker-shortcuts.service
-        say "Enabled for the next graphical session: timetracker.service"
-        say "Enabled and restarted: timetracker-shortcuts.service"
+        systemctl --user enable time-slay.service
+        systemctl --user enable time-slay-shortcuts.service
+        systemctl --user restart time-slay-shortcuts.service
+        say "Enabled for the next graphical session: time-slay.service"
+        say "Enabled and restarted: time-slay-shortcuts.service"
     else
         say "systemctl not found; enable the units yourself with:"
-        say "  systemctl --user enable timetracker.service timetracker-shortcuts.service"
-        say "  systemctl --user start timetracker-shortcuts.service"
+        say "  systemctl --user enable time-slay.service time-slay-shortcuts.service"
+        say "  systemctl --user start time-slay-shortcuts.service"
     fi
 fi
 
@@ -208,10 +208,10 @@ case ":$PATH:" in
     *)
         say ""
         say "Note: $bin_dir is not on your PATH."
-        say "Add it so the desktop entry and the 'timetracker' command resolve:"
+        say "Add it so the desktop entry and the 'time-slay' command resolve:"
         say "  export PATH=\"$bin_dir:\$PATH\""
         ;;
 esac
 
 say ""
-say "Done. TimeTracker is installed as a desktop application."
+say "Done. TimeSlay is installed as a desktop application."

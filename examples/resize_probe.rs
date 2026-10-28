@@ -87,7 +87,7 @@ fn view(_state: &Probe, _id: window::Id) -> Element<'_, Message> {
 }
 fn main() -> iced::Result {
     iced::daemon(boot, update, view)
-        .title("TimeTracker resize probe")
+        .title("TimeSlay resize probe")
         .subscription(|_| -> Subscription<Message> {
             iced::time::every(Duration::from_millis(150)).map(|_| Message::Tick)
         })

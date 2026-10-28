@@ -1,5 +1,5 @@
-//! The shortcut daemon (`timetracker --daemon`): global shortcuts that show,
-//! hide and reshape TimeTracker **itself**.
+//! The shortcut daemon (`time-slay --daemon`): global shortcuts that show,
+//! hide and reshape TimeSlay **itself**.
 //!
 //! Two mechanisms, the ones `../sidepanel` uses:
 //!
@@ -7,9 +7,9 @@
 //! 2. a long-running daemon that owns them, so pressing one never pays for a
 //!    process to be registered first.
 //!
-//! TimeTracker has two shapes, both started from the one binary: the **panel**
-//! (`timetracker --sidebar`, the full app in a wide edge strip) and the
-//! **dock** (`timetracker --dock`, a very thin strip of today). The daemon
+//! TimeSlay has two shapes, both started from the one binary: the **panel**
+//! (`time-slay --sidebar`, the full app in a wide edge strip) and the
+//! **dock** (`time-slay --dock`, a very thin strip of today). The daemon
 //! draws neither. It has two actions, each of which can have several
 //! shortcuts:
 //!
@@ -47,7 +47,7 @@ use crate::ipc;
 /// How long a freshly started shape gets to announce itself.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The two forms TimeTracker takes on screen besides its regular window.
+/// The two forms TimeSlay takes on screen besides its regular window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Panel,
@@ -180,7 +180,7 @@ impl Controller {
 
 /// Runs the daemon: register the shortcuts, then act on every press.
 pub fn run() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
         .init();
 
     let config = PanelConfig::load();

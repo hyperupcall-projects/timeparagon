@@ -1,6 +1,6 @@
 use iced::{Size, Task, futures::StreamExt, window};
 use iced_test::runtime::{self, Action, window::Action as WindowAction};
-use timetracker::{
+use time_slay::{
     app::{self, LayoutField, Message, Sidebar, State},
     calendar,
     config::Config,
@@ -308,7 +308,7 @@ fn side_panel_margin_preserves_pane_widths_and_leaves_three_clear_edges() {
         let mut ui = Simulator::with_size(
             Settings::default(),
             Size::new(620.0, 600.0),
-            timetracker::ui::view(&state),
+            time_slay::ui::view(&state),
         );
         let body = ui
             .find(iced::widget::Id::new("sidebar-body"))

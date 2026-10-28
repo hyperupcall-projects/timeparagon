@@ -16,8 +16,8 @@ use std::sync::mpsc::Sender;
 use super::config::{Action, PanelConfig};
 
 /// Component (application) id used with KGlobalAccel.
-pub const COMPONENT: &str = "timetracker";
-const COMPONENT_FRIENDLY: &str = "TimeTracker";
+pub const COMPONENT: &str = "time-slay";
+const COMPONENT_FRIENDLY: &str = "TimeSlay";
 
 /// The one action older versions registered, "Toggle Side Panel". Its binding
 /// carries over to [`Action::ToggleVisibility`] and the action is removed.
@@ -99,7 +99,7 @@ pub fn rebind(action: Action, specs: &[String]) -> Result<()> {
     // Do not create an action owned by this temporary connection: the daemon
     // must already own it and be listening for presses.
     kga.get_component(COMPONENT)
-        .context("Shortcut daemon unavailable. Start timetracker-shortcuts.service and try again")?;
+        .context("Shortcut daemon unavailable. Start time-slay-shortcuts.service and try again")?;
     let id = action_id(action);
     let previous = kga
         .shortcut_keys(&id)

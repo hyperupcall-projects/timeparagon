@@ -165,7 +165,7 @@ impl Catalog {
 /// background color verbatim, alpha included, which is what lets this work.
 pub static FLASH: LazyLock<Theme> = LazyLock::new(|| {
     Theme::custom(
-        "TimeTracker Flash",
+        "TimeSlay Flash",
         Palette {
             background: Color::TRANSPARENT,
             text: Color::WHITE,

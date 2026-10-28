@@ -1,4 +1,4 @@
-//! Settings for the dock strip, from `$XDG_CONFIG_HOME/timetracker/dock.toml`.
+//! Settings for the dock strip, from `$XDG_CONFIG_HOME/time-slay/dock.toml`.
 //!
 //! Like the panel's config this is a file of its own, so a broken dock config
 //! can never stop the clock from starting. Every field is optional.

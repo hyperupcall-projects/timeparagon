@@ -1,8 +1,8 @@
 [package]
-name = "timetracker-core"
+name = "time-slay-core"
 version = "0.1.0"
 edition = "2024"
-description = "Renderer-agnostic TimeTracker data layer"
+description = "Slay the day with TimeSlay"
 license = "MPL-2.0"
 
 [dependencies]

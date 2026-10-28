@@ -1,18 +1,18 @@
 [application]
-name = "TimeTracker"
+name = "TimeSlay"
 out_dir = "dist"
 # Opts out of Auto Backup; see the comment in that file.
 android_manifest = "AndroidManifest.xml"
 
 [web.app]
-title = "TimeTracker"
+title = "TimeSlay"
 
 [bundle]
-identifier = "dev.timetracker.day"
-publisher = "TimeTracker"
+identifier = "dev.timeslay.day"
+publisher = "TimeSlay"
 category = "Productivity"
-short_description = "TimeTracker day view"
-long_description = "A day view for Google Calendar and Google Tasks, sharing its data with the iced TimeTracker application."
+short_description = "Slay the day with TimeSlay"
+long_description = "Slay the day with TimeSlay"
 
 [android]
 min_sdk = 24

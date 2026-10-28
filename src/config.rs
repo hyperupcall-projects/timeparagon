@@ -918,7 +918,7 @@ fn has_panel_table(contents: &str) -> bool {
 
 /// Where the config and user themes live.
 pub fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("dev", "TimeTracker", "timetracker")
+    ProjectDirs::from("dev", "TimeSlay", "time-slay")
 }
 
 pub fn config_path() -> Option<PathBuf> {
@@ -930,8 +930,8 @@ pub fn themes_dir() -> Option<PathBuf> {
     Some(project_dirs()?.config_dir().join("themes"))
 }
 
-/// Where cached days live: `$XDG_CACHE_HOME/timetracker/days`, which is
-/// `~/.cache/timetracker/days` unless the environment says otherwise. It is
+/// Where cached days live: `$XDG_CACHE_HOME/time-slay/days`, which is
+/// `~/.cache/time-slay/days` unless the environment says otherwise. It is
 /// a cache rather than state: losing it only costs a re-sync.
 pub fn cache_days_dir() -> Option<PathBuf> {
     Some(project_dirs()?.cache_dir().join("days"))
@@ -1076,7 +1076,7 @@ fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item =
         }
         let reload_path = path.clone();
         let worker = std::thread::Builder::new()
-            .name("timetracker-config-watch".into())
+            .name("time-slay-config-watch".into())
             .spawn(move || {
                 while event_rx.recv().is_ok() {
                     // Wait for the write burst to settle: a truncate-and-write
@@ -1231,7 +1231,7 @@ mod tests {
     fn watcher_survives_atomic_replacements_and_invalid_edits() {
         use iced::futures::StreamExt;
         let directory = std::env::temp_dir().join(format!(
-            "timetracker-config-watch-{}-{}",
+            "time-slay-config-watch-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1348,7 +1348,7 @@ mod tests {
     fn cached_days_live_under_the_xdg_cache_directory() {
         let days = cache_days_dir().expect("a cache directory");
         assert!(
-            days.ends_with(Path::new("timetracker").join("days")),
+            days.ends_with(Path::new("time-slay").join("days")),
             "{} should sit under the XDG cache directory",
             days.display()
         );

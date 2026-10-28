@@ -16,10 +16,10 @@ pub const FROM_FLAG: &str = "--from";
 /// What the dock replaced, and so what its back button returns to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Origin {
-    /// The regular `timetracker` window.
+    /// The regular `time-slay` window.
     #[default]
     Window,
-    /// The `timetracker --sidebar` panel.
+    /// The `time-slay --sidebar` panel.
     Sidebar,
 }
 
@@ -100,15 +100,15 @@ pub fn close_dock(origin: Origin) -> Result<()> {
     }
 }
 
-/// The `timetracker` binary: this very program when that is what is running,
+/// The `time-slay` binary: this very program when that is what is running,
 /// and otherwise the one installed beside it.
 pub(crate) fn main_binary() -> Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
-        && exe.file_stem().is_some_and(|stem| stem == "timetracker")
+        && exe.file_stem().is_some_and(|stem| stem == "time-slay")
     {
         return Ok(exe);
     }
-    find_binary("timetracker")
+    find_binary("time-slay")
 }
 
 /// A binary installed beside this one, or else on `PATH`, so a manual

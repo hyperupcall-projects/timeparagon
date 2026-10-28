@@ -1,4 +1,4 @@
-//! Tiny request/reply messaging between TimeTracker processes.
+//! Tiny request/reply messaging between TimeSlay processes.
 //!
 //! The side panel, the dock and the shortcut daemon are all this one binary
 //! started with different flags, so they talk over Unix sockets in the runtime
@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 /// The side panel's socket: `show`, `hide` and `status`.
-pub const SIDEBAR: &str = "timetracker-sidebar.sock";
+pub const SIDEBAR: &str = "time-slay-sidebar.sock";
 /// The dock's socket: `hide` and `status`.
-pub const DOCK: &str = "timetracker-dock.sock";
+pub const DOCK: &str = "time-slay-dock.sock";
 
 /// What `status` answers while the window or strip is on screen.
 pub const VISIBLE: &str = "visible";
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn a_request_gets_the_reply_of_the_server() {
-        let name = format!("timetracker-test-{}.sock", std::process::id());
+        let name = format!("time-slay-test-{}.sock", std::process::id());
         let listener = bind(&name).unwrap();
         std::thread::spawn(move || {
             let _ = serve(listener, |command| match command {

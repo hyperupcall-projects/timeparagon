@@ -1,12 +1,14 @@
-# TimeTracker
+# TimeSlay
 
-TimeTracker has two implementations that live side by side:
+Slay the day with TimeSlay.
+
+TimeSlay has two implementations that live side by side:
 
 | Crate | UI | Status |
 | --- | --- | --- |
-| `timetracker` (workspace root) | [iced](https://iced.rs) | The complete application, unchanged |
-| `timetracker-core` | none | Shared calendar, OAuth, tasks and time-block data layer |
-| `dioxus` (`timetracker-dioxus`) | [Dioxus](https://dioxuslabs.com) | Day view only |
+| `time-slay` (workspace root) | [iced](https://iced.rs) | The complete application, unchanged |
+| `time-slay-core` | none | Shared calendar, OAuth, tasks and time-block data layer |
+| `dioxus` (`time-slay-dioxus`) | [Dioxus](https://dioxuslabs.com) | Day view only |
 
 Both UIs use the same Google Calendar and Google Tasks data, the same OAuth
 token, the same config file, and the same local task database.
@@ -15,10 +17,10 @@ token, the same config file, and the same local task database.
 
 ```sh
 # The original iced application
-cargo run -p timetracker --release
+cargo run -p time-slay --release
 
 # The Dioxus day view
-cargo run -p timetracker-dioxus
+cargo run -p time-slay-dioxus
 ```
 
 The iced package remains the workspace's default member, so a plain `cargo run`

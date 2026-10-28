@@ -11,8 +11,8 @@ function profileDir(): string {
   const override = setting("PROFILE");
   if (override) return override;
   const xdg = Deno.env.get("XDG_DATA_HOME") ?? `${Deno.env.get("HOME") ?? "."}/.local/share`;
-  const current = `${xdg}/timetracker/keep-bridge/chrome-profile`;
-  const legacy = `${xdg}/timetracker/tasks-bridge/chrome-profile`;
+  const current = `${xdg}/time-slay/keep-bridge/chrome-profile`;
+  const legacy = `${xdg}/time-slay/tasks-bridge/chrome-profile`;
   // Reuse the old profile in place, including its advisory lock, so renaming
   // the executable does not discard the user's Keep sign-in session.
   for (const profile of [current, legacy]) {

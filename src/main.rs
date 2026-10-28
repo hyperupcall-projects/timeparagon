@@ -1,7 +1,7 @@
-//! TimeTracker: a calendar with alarms that stays out of the way.
+//! TimeSlay: slay the day with TimeSlay.
 
-use timetracker::cli::{self, Mode};
-use timetracker::{app, dock, panel};
+use time_slay::cli::{self, Mode};
+use time_slay::{app, dock, panel};
 
 /// The boot function the daemon starts from.
 type Boot = fn() -> (app::State, iced::Task<app::Message>);
@@ -14,11 +14,11 @@ fn main() -> iced::Result {
             return Ok(());
         }
         Ok(cli::Action::Version) => {
-            println!("timetracker {}", env!("CARGO_PKG_VERSION"));
+            println!("time-slay {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Err(error) => {
-            eprintln!("timetracker: {error}\nTry 'timetracker --help'.");
+            eprintln!("time-slay: {error}\nTry 'time-slay --help'.");
             std::process::exit(2);
         }
     };
@@ -32,13 +32,13 @@ fn main() -> iced::Result {
     };
     if let Some(result) = result {
         if let Err(error) = result {
-            eprintln!("timetracker: {error:#}");
+            eprintln!("time-slay: {error:#}");
             std::process::exit(1);
         }
         return Ok(());
     }
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
         .init();
 
     let boot: Boot = if mode == Mode::Sidebar {

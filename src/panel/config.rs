@@ -22,7 +22,7 @@ pub enum Side {
 /// What a global shortcut does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
-    /// Hides TimeTracker in whatever shape it is in, or brings it back in the
+    /// Hides TimeSlay in whatever shape it is in, or brings it back in the
     /// same shape.
     ToggleVisibility,
     /// Switches between the side panel and the dock.
@@ -62,7 +62,7 @@ impl Action {
     pub fn description(self) -> &'static str {
         match self {
             Self::ToggleVisibility => {
-                "Hides TimeTracker, as the side panel or the dock, or shows it again exactly as it was."
+                "Hides TimeSlay, as the side panel or the dock, or shows it again exactly as it was."
             }
             Self::ToggleShape => "Switches between the side panel and the dock.",
         }

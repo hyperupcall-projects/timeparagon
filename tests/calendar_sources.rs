@@ -1,6 +1,6 @@
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
-use timetracker::{
+use time_slay::{
     app::{self, Message, Screen, State},
     calendar::{self, Calendar, Event, deadline},
     config::{CalendarSettings, Config},

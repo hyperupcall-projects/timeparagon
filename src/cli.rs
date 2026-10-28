@@ -1,4 +1,4 @@
-//! The command line of the one `timetracker` binary.
+//! The command line of the one `time-slay` binary.
 //!
 //! The window, the side panel, the dock and the shortcut daemon are all this
 //! binary; the flag picks which one runs. With no flags it is the window.
@@ -28,11 +28,11 @@ pub enum Action {
 }
 
 pub const HELP: &str = "\
-TimeTracker: a calendar with alarms that stays out of the way.
+TimeSlay: slay the day with TimeSlay.
 
-Usage: timetracker [OPTIONS]
+Usage: time-slay [OPTIONS]
 
-With no options, TimeTracker opens its regular window.
+With no options, TimeSlay opens its regular window.
 
 Options:
       --sidebar        Open the side panel: the full app in a wide strip

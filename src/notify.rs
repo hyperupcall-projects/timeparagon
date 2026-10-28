@@ -8,12 +8,12 @@ use notify_rust::{Notification, Timeout, Urgency};
 use crate::config;
 
 /// The icon name notification daemons look up in the icon theme.
-const ICON: &str = "timetracker";
+const ICON: &str = "time-slay";
 
 /// Shows the alarm notification described by `settings`.
 pub fn show(settings: &config::Notification) -> Result<(), String> {
     Notification::new()
-        .appname("TimeTracker")
+        .appname("TimeSlay")
         .summary(&settings.summary)
         .body(&settings.body)
         .icon(ICON)

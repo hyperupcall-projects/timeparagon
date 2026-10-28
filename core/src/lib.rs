@@ -1,4 +1,4 @@
-//! The renderer-agnostic half of TimeTracker.
+//! The renderer-agnostic half of TimeSlay.
 //!
 //! Both the iced application and the Dioxus day view need calendars, OAuth,
 //! Google Tasks and time-block metadata. Those modules live here without any
