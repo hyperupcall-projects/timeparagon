@@ -41,6 +41,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         view_layout(state, metrics),
         heading("Dock", metrics),
         dock(state, metrics),
+        heading("Side panel", metrics),
+        panel(state, metrics),
         heading("Windowing", metrics),
         windowing(state, metrics),
         heading("Application", metrics),
@@ -247,6 +249,44 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .into()
 }
 
+fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let views = &state.config.views;
+
+    column![
+        layout_number(
+            "Outer border (first layer, px, 0–5)",
+            LayoutField::PanelBorderOuterWidth,
+            state,
+            metrics,
+        ),
+        panel_color_input(
+            "Outer border color",
+            0,
+            views.panel_border_outer_color,
+            state,
+            metrics,
+        ),
+        layout_number(
+            "Inner border (second layer, px, 0–5)",
+            LayoutField::PanelBorderInnerWidth,
+            state,
+            metrics,
+        ),
+        panel_color_input(
+            "Inner border color",
+            1,
+            views.panel_border_inner_color,
+            state,
+            metrics,
+        ),
+        text("The two borders are drawn inside the side panel, outermost first, so a dark inner border still shows on a white background and a light outer border still shows on a black one. A border width of 0 hides that layer. Border colors are hex values such as #FFFFFF or #000000. Changes apply the next time the panel opens.")
+            .size(metrics.label())
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing)
+    .into()
+}
+
 fn dock_color_input<'a>(
     label: &str,
     layer: usize,
@@ -254,17 +294,60 @@ fn dock_color_input<'a>(
     state: &'a State,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let shown = state
-        .dock_border_input
-        .as_ref()
+    let input = state.dock_border_input.as_ref();
+    border_color_input(
+        label,
+        "dock-border-color",
+        layer,
+        current,
+        input,
+        Message::DockBorderColorInput,
+        Message::DockBorderColorSubmitted,
+        metrics,
+    )
+}
+
+fn panel_color_input<'a>(
+    label: &str,
+    layer: usize,
+    current: crate::hex::HexColor,
+    state: &'a State,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let input = state.panel_border_input.as_ref();
+    border_color_input(
+        label,
+        "panel-border-color",
+        layer,
+        current,
+        input,
+        Message::PanelBorderColorInput,
+        Message::PanelBorderColorSubmitted,
+        metrics,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn border_color_input<'a>(
+    label: &str,
+    id_prefix: &str,
+    layer: usize,
+    current: crate::hex::HexColor,
+    edited: Option<&(usize, String)>,
+    on_input: impl Fn(usize, String) -> Message + 'a,
+    on_submit: impl Fn(usize) -> Message + 'a,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let shown = edited
         .filter(|(edited, _)| *edited == layer)
         .map_or_else(|| current.to_string(), |(_, input)| input.clone());
+    let submitted = on_submit(layer);
     let input = text_input("#RRGGBB", &shown)
-        .id(format!("dock-border-color-{layer}"))
+        .id(format!("{id_prefix}-{layer}"))
         .size(metrics.label())
         .width(Fill)
-        .on_input(move |input| Message::DockBorderColorInput(layer, input))
-        .on_submit(Message::DockBorderColorSubmitted(layer));
+        .on_input(move |input| on_input(layer, input))
+        .on_submit(submitted);
 
     field(label, input.into(), metrics)
 }
@@ -334,7 +417,9 @@ fn layout_number<'a>(
         | LayoutField::DockWidth
         | LayoutField::DockMargin
         | LayoutField::DockBorderOuterWidth
-        | LayoutField::DockBorderInnerWidth => 1.0,
+        | LayoutField::DockBorderInnerWidth
+        | LayoutField::PanelBorderOuterWidth
+        | LayoutField::PanelBorderInnerWidth => 1.0,
         LayoutField::FadeDuration => 10.0,
     };
     let (min, max) = kind.bounds();
@@ -957,6 +1042,8 @@ mod tests {
             (LayoutField::DockWidth, 1.0),
             (LayoutField::DockBorderOuterWidth, 1.0),
             (LayoutField::DockBorderInnerWidth, 1.0),
+            (LayoutField::PanelBorderOuterWidth, 1.0),
+            (LayoutField::PanelBorderInnerWidth, 1.0),
         ] {
             for width in [180.0, 420.0] {
                 let size = iced::Size::new(width, 100.0);

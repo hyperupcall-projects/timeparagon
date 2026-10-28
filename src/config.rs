@@ -197,6 +197,16 @@ pub struct ViewSettings {
     pub dock_border_inner_width: f32,
     /// Colour of the dock's inner border.
     pub dock_border_inner_color: HexColor,
+    /// Thickness of the side panel's outer border, in logical pixels. Zero
+    /// hides it.
+    pub panel_border_outer_width: f32,
+    /// Colour of the side panel's outer border.
+    pub panel_border_outer_color: HexColor,
+    /// Thickness of the side panel's inner border, in logical pixels. Zero
+    /// hides it.
+    pub panel_border_inner_width: f32,
+    /// Colour of the side panel's inner border.
+    pub panel_border_inner_color: HexColor,
     /// How the dock appears on screen.
     pub window_animation: WindowAnimation,
     /// Length of the fade-in, in milliseconds.
@@ -292,6 +302,10 @@ impl Default for ViewSettings {
             dock_border_outer_color: HexColor(Color::WHITE),
             dock_border_inner_width: 1.0,
             dock_border_inner_color: HexColor(Color::BLACK),
+            panel_border_outer_width: 1.0,
+            panel_border_outer_color: HexColor(Color::WHITE),
+            panel_border_inner_width: 1.0,
+            panel_border_inner_color: HexColor(Color::BLACK),
             window_animation: WindowAnimation::DesktopDefault,
             fade_duration_ms: 150,
             dock_hour_lines: true,
@@ -307,7 +321,7 @@ impl ViewSettings {
     pub const MIN_DOCK_WIDTH: f32 = 2.0;
     pub const MAX_DOCK_WIDTH: f32 = 40.0;
     pub const MAX_DOCK_MARGIN: f32 = 100.0;
-    pub const MAX_DOCK_BORDER_WIDTH: f32 = 5.0;
+    pub const MAX_BORDER_WIDTH: f32 = 5.0;
     pub const MAX_FADE_DURATION_MS: u32 = 5000;
 
     pub fn fade_duration_ms(&self) -> u32 {
@@ -369,9 +383,17 @@ impl ViewSettings {
         Self::border_width(self.dock_border_inner_width)
     }
 
+    pub fn panel_border_outer_width(&self) -> f32 {
+        Self::border_width(self.panel_border_outer_width)
+    }
+
+    pub fn panel_border_inner_width(&self) -> f32 {
+        Self::border_width(self.panel_border_inner_width)
+    }
+
     fn border_width(value: f32) -> f32 {
         if value.is_finite() {
-            value.clamp(0.0, Self::MAX_DOCK_BORDER_WIDTH)
+            value.clamp(0.0, Self::MAX_BORDER_WIDTH)
         } else {
             Self::default().dock_border_outer_width
         }
@@ -1438,9 +1460,37 @@ mod tests {
                 .unwrap();
         assert_eq!(
             views.dock_border_outer_width(),
-            ViewSettings::MAX_DOCK_BORDER_WIDTH
+            ViewSettings::MAX_BORDER_WIDTH
         );
         assert_eq!(views.dock_border_inner_width(), 1.0);
+    }
+
+    #[test]
+    fn the_panel_borders_round_trip() {
+        let views = ViewSettings::default();
+        assert_eq!(views.panel_border_outer_width(), 1.0);
+        assert_eq!(views.panel_border_inner_width(), 1.0);
+
+        let views: ViewSettings = toml::from_str(
+            "panel_border_outer_width = 2.0\npanel_border_outer_color = \"#112233\"\npanel_border_inner_width = 4.0\npanel_border_inner_color = \"#445566\"",
+        )
+        .unwrap();
+        assert_eq!(views.panel_border_outer_width(), 2.0);
+        assert_eq!(views.panel_border_inner_width(), 4.0);
+        assert_eq!(views.panel_border_outer_color.to_string(), "#112233");
+        assert_eq!(views.panel_border_inner_color.to_string(), "#445566");
+
+        let back: ViewSettings = toml::from_str(&toml::to_string(&views).unwrap()).unwrap();
+        assert_eq!(back, views);
+
+        let views: ViewSettings =
+            toml::from_str("panel_border_outer_width = 99.0\npanel_border_inner_width = nan")
+                .unwrap();
+        assert_eq!(
+            views.panel_border_outer_width(),
+            ViewSettings::MAX_BORDER_WIDTH
+        );
+        assert_eq!(views.panel_border_inner_width(), 1.0);
     }
 
     #[test]

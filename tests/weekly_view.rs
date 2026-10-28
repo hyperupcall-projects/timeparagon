@@ -416,9 +416,9 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
     state.calendar.month_open = false;
     for width in [180.0, 260.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 700.0));
-        let weekly = ui.find("Weekly")?.bounds();
+        let weekly = ui.find("Week")?.bounds();
         assert!(weekly.x >= 0.0 && weekly.x + weekly.width <= width);
-        let _ = ui.click("Weekly")?;
+        let _ = ui.click("Week")?;
         assert!(
             ui.into_messages()
                 .any(|m| matches!(m, Message::CalendarModeSelected(true)))

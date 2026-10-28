@@ -21,8 +21,8 @@ pub mod timeblocking;
 mod timeblocking_focus;
 pub mod travel;
 
-use iced::widget::{Space, button, column, container, responsive, row, text};
-use iced::{Center, Element, Fill, Length, Padding, Size};
+use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text};
+use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
 
 use crate::app::{Message, Screen, State};
 
@@ -45,6 +45,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
         };
         let main_width = (size.width - detail).max(1.0);
         let main_metrics = Metrics::of(Size::new(main_width, size.height));
+
+        // The menu keeps the width the window had before a pane widened it.
+        // The details pane and block editor grow out of the view underneath,
+        // not out of the navigation above it.
+        let nav_width = if let Some(original) = state.timeblocking.original_width {
+            (original - state.screen_margin()).max(1.0).min(size.width)
+        } else if details_open {
+            main_width
+        } else {
+            size.width
+        };
+        let nav_metrics = Metrics::of(Size::new(nav_width, size.height));
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
             (Screen::Settings, _) => settings::view(state, &metrics),
@@ -96,7 +108,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // The pane sits below the tabs, so it only has what they leave.
             let detail_metrics = Metrics::of(Size::new(
                 detail,
-                (size.height - tabs_height(&metrics)).max(1.0),
+                (size.height - tabs_height(state, &nav_metrics)).max(1.0),
             ));
             row![
                 container(content).width(Fill),
@@ -109,13 +121,20 @@ pub fn view(state: &State) -> Element<'_, Message> {
         };
 
         // The tabs are the window's navigation, so they sit above whatever is
-        // on show rather than inside it.
-        let base = column![tabs(state, &metrics), content]
-            .width(Fill)
-            .height(Fill);
+        // on show rather than inside it. Constraining the bar to `nav_width`
+        // keeps it the size it was before a pane widened the window.
+        let base = column![
+            container(tabs(state, &nav_metrics)).width(Length::Fixed(nav_width)),
+            content
+        ]
+        .width(Fill)
+        .height(Fill);
         // Adding/removing a wrapper resets the state of all its descendants.
         // Keep one stack with the calendar first, and append active dialogs.
         let mut layers = vec![base.into()];
+        if state.more_menu_open {
+            layers.push(more_menu(state, &nav_metrics));
+        }
         if state.timeblocking.focus.is_some() {
             layers.push(timeblocking::focus_overlay(state, &metrics));
         }
@@ -140,23 +159,72 @@ pub fn view(state: &State) -> Element<'_, Message> {
         iced::widget::stack(layers).into()
     });
     let radius = state.config.views.border_radius();
-    let body = container(content)
-        .id(if state.sidebar.is_some() {
-            "sidebar-body"
-        } else {
-            "application-body"
-        })
-        .width(Fill)
-        .height(Fill)
-        .clip(true)
-        .style(move |theme: &iced::Theme| container::Style {
-            background: Some(theme.palette().background.into()),
-            border: iced::Border {
-                radius: radius.into(),
+    let content = container(content).width(Fill).height(Fill).clip(true);
+    let body: Element<'_, Message> = if state.sidebar.is_some() {
+        let outer_width = state.config.views.panel_border_outer_width();
+        let inner_width = state.config.views.panel_border_inner_width();
+        let outer_color = state.config.views.panel_border_outer_color.0;
+        let inner_color = state.config.views.panel_border_inner_color.0;
+        let body_radius = (radius - outer_width - inner_width).max(0.0);
+        let inner_radius = (radius - outer_width).max(0.0);
+
+        let body = container(content)
+            .width(Fill)
+            .height(Fill)
+            .clip(true)
+            .style(move |theme: &iced::Theme| container::Style {
+                background: Some(theme.palette().background.into()),
+                border: iced::Border {
+                    radius: body_radius.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        });
+            });
+        let inner = container(body)
+            .width(Fill)
+            .height(Fill)
+            .clip(true)
+            .padding(inner_width)
+            .style(move |_: &iced::Theme| container::Style {
+                background: Some(inner_color.into()),
+                border: iced::Border {
+                    radius: inner_radius.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+
+        container(inner)
+            .id("sidebar-body")
+            .width(Fill)
+            .height(Fill)
+            .clip(true)
+            .padding(outer_width)
+            .style(move |_: &iced::Theme| container::Style {
+                background: Some(outer_color.into()),
+                border: iced::Border {
+                    radius: radius.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .into()
+    } else {
+        container(content)
+            .id("application-body")
+            .width(Fill)
+            .height(Fill)
+            .clip(true)
+            .style(move |theme: &iced::Theme| container::Style {
+                background: Some(theme.palette().background.into()),
+                border: iced::Border {
+                    radius: radius.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .into()
+    };
     if let Some(sidebar) = &state.sidebar {
         let margin = state.screen_margin();
         container(body)
@@ -178,23 +246,33 @@ pub fn view(state: &State) -> Element<'_, Message> {
             .height(Fill)
             .into()
     } else {
-        body.into()
+        body
     }
 }
 
-/// How many tabs there are.
-const TAB_COUNT: usize = 9;
+/// How many top-level navigation items there are: Day/Week, Tasks/Projects,
+/// then Note/More/Settings.
+const TAB_COUNT: usize = 7;
 
-/// Full tab names, excluding the separately rendered Weekly tab.
-/// Inbox/Projects/Backlog/Travel/Habits, then Keep/Notepad/Settings.
+/// The visible top-level names, in the order they appear.
 const TAB_LABELS: [&str; TAB_COUNT] = [
-    "Daily", "Inbox", "Projects", "Backlog", "Travel", "Habits", "Keep", "Notepad", "Settings",
+    "Day", "Week", "Tasks", "Projects", "Note", "More", "Settings",
 ];
 
 /// Short names for windows too narrow to fit the full ones legibly.
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = [
-    "Daily", "Inbox", "Proj", "Back", "Trav", "Habit", "Keep", "Note", "Set",
-];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Week", "Tasks", "Proj", "Note", "More", "Set"];
+
+/// The two tabs that live inside Tasks, shown beneath the top menu while
+/// either of them is open.
+pub const TASKS_LABELS: [&str; 2] = ["Inbox", "Backlog"];
+
+/// The destinations kept inside the More menu.
+pub const MORE_LABELS: [&str; 3] = ["Travel", "Habits", "Keep"];
+
+/// A little breathing room between the menu and the top of the window.
+const TAB_TOP_MARGIN: f32 = 6.0;
+/// The gap between the top menu and the Tasks tabs below it.
+const TASKS_ROW_GAP: f32 = 2.0;
 
 /// Average glyph width as a fraction of the font size, with some slack.
 const TAB_GLYPH_WIDTH: f32 = 0.6;
@@ -235,8 +313,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
             .map(|label| label.chars().count())
             .sum::<usize>()
             + 6;
-        // Nine tabs, gaps within groups, and two gaps between groups.
-        let fixed = 18.0 * pad + 6.0 * gap + 2.0 * (gap * 2.0).max(4.0);
+        // Seven tabs, gaps within the three groups, and two gaps between them.
+        let fixed = 14.0 * pad + 4.0 * gap + 2.0 * (gap * 2.0).max(4.0);
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_LABELS);
@@ -258,9 +336,11 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Daily/Weekly, then Inbox/Projects/Backlog/Travel/Habits, then
-/// Keep/Notepad/Settings. Labels shrink (and shorten, when very narrow)
-/// rather than wrapping.
+/// Day/Week, then Tasks/Projects, then Note/More/Settings. Labels shrink
+/// (and shorten, when very narrow) rather than wrapping.
+///
+/// While a Tasks screen is open, a second row with the Inbox and Backlog tabs
+/// is placed beneath the menu.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
     let labels = if fit.short {
@@ -268,58 +348,75 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     } else {
         TAB_LABELS
     };
-    let settings_active = matches!(state.screen, Screen::Settings);
-    let screens = [
-        Screen::Calendar,
-        Screen::Inbox,
-        Screen::Projects,
-        Screen::Backlog,
-        Screen::Travel,
-        Screen::Habits,
-        Screen::KeepNotes,
-        Screen::Notepad,
-        Screen::Settings,
-    ];
-    let mut tabs: Vec<Element<'a, Message>> = screens
-        .iter()
-        .zip(labels)
-        .map(|(&screen, label)| {
-            let active = if screen == Screen::Settings {
-                settings_active
-            } else if screen == Screen::Calendar {
-                state.screen == screen && !state.weekly
-            } else {
-                state.screen == screen
-            };
-            tab(label, active, screen, metrics, fit)
-        })
-        .collect();
-    let right: Vec<_> = tabs.drain(6..).collect();
-    let middle: Vec<_> = tabs.drain(1..).collect();
-    let calendar = tabs.remove(0);
-    let weekly = button(
-        text("Weekly")
-            .size(fit.size)
-            .wrapping(text::Wrapping::None)
-            .center(),
-    )
-    .height(tab_height(metrics))
-    .padding(Padding::from([0.0, fit.pad]))
-    .on_press(Message::CalendarModeSelected(true))
-    .style(if state.screen == Screen::Calendar && state.weekly {
-        button::primary
-    } else {
-        button::secondary
-    });
+    let tasks_open = matches!(state.screen, Screen::Inbox | Screen::Backlog);
+    let more_active = state.more_menu_open
+        || matches!(
+            state.screen,
+            Screen::Travel | Screen::Habits | Screen::KeepNotes
+        );
+
+    let day = tab(
+        labels[0],
+        state.screen == Screen::Calendar && !state.weekly,
+        Message::CalendarModeSelected(false),
+        metrics,
+        fit,
+    );
+    let week = tab(
+        labels[1],
+        state.screen == Screen::Calendar && state.weekly,
+        Message::CalendarModeSelected(true),
+        metrics,
+        fit,
+    );
+    let tasks = tab(
+        labels[2],
+        tasks_open,
+        match state.screen {
+            // Within the section, Tasks keeps the tab that is open.
+            Screen::Backlog => Message::ScreenSelected(Screen::Backlog),
+            _ => Message::ScreenSelected(Screen::Inbox),
+        },
+        metrics,
+        fit,
+    );
+    let projects = tab(
+        labels[3],
+        state.screen == Screen::Projects,
+        Message::ScreenSelected(Screen::Projects),
+        metrics,
+        fit,
+    );
+    let note = tab(
+        labels[4],
+        state.screen == Screen::Notepad,
+        Message::ScreenSelected(Screen::Notepad),
+        metrics,
+        fit,
+    );
+    let more = tab(
+        labels[5],
+        more_active,
+        Message::MoreMenuToggled,
+        metrics,
+        fit,
+    );
+    let settings = tab(
+        labels[6],
+        state.screen == Screen::Settings,
+        Message::ScreenSelected(Screen::Settings),
+        metrics,
+        fit,
+    );
 
     let group_gap = (fit.gap * 2.0).max(4.0);
-    container(
+    let bar = container(
         row![
-            row![calendar, weekly].spacing(fit.gap),
+            row![day, week].spacing(fit.gap),
             Space::new().width(Fill),
-            row(middle).spacing(fit.gap),
+            row![tasks, projects].spacing(fit.gap),
             Space::new().width(Fill),
-            row(right).spacing(fit.gap),
+            row![note, more, settings].spacing(fit.gap),
         ]
         .spacing(group_gap)
         .align_y(Center),
@@ -327,16 +424,54 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .padding(Padding {
         left: metrics.padding,
         right: metrics.padding,
-        top: 0.0,
+        top: TAB_TOP_MARGIN,
         bottom: 0.0,
     })
+    .width(Fill);
+
+    if !tasks_open {
+        return bar.into();
+    }
+
+    let subtabs = row![
+        tab(
+            TASKS_LABELS[0],
+            state.screen == Screen::Inbox,
+            Message::ScreenSelected(Screen::Inbox),
+            metrics,
+            fit,
+        ),
+        tab(
+            TASKS_LABELS[1],
+            state.screen == Screen::Backlog,
+            Message::ScreenSelected(Screen::Backlog),
+            metrics,
+            fit,
+        ),
+    ]
+    .spacing(fit.gap);
+
+    column![
+        bar,
+        container(subtabs).padding(Padding {
+            left: metrics.padding,
+            right: metrics.padding,
+            top: TASKS_ROW_GAP,
+            bottom: 0.0,
+        }),
+    ]
     .width(Fill)
     .into()
 }
 
-/// The height `tabs` takes: always one row.
-fn tabs_height(metrics: &Metrics) -> f32 {
-    tab_height(metrics)
+/// The height `tabs` takes: the menu, plus the Tasks row when it is showing.
+fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
+    let tasks_row = if matches!(state.screen, Screen::Inbox | Screen::Backlog) {
+        TASKS_ROW_GAP + tab_height(metrics)
+    } else {
+        0.0
+    };
+    TAB_TOP_MARGIN + tab_height(metrics) + tasks_row
 }
 
 fn tab_height(metrics: &Metrics) -> f32 {
@@ -351,7 +486,7 @@ fn tab_height(metrics: &Metrics) -> f32 {
 fn tab<'a>(
     label: &'a str,
     active: bool,
-    screen: Screen,
+    message: Message,
     metrics: &Metrics,
     fit: TabFit,
 ) -> Element<'a, Message> {
@@ -363,15 +498,67 @@ fn tab<'a>(
     )
     .height(tab_height(metrics))
     .padding(Padding::from([0.0, fit.pad]))
-    .on_press(if screen == Screen::Calendar {
-        Message::CalendarModeSelected(false)
-    } else {
-        Message::ScreenSelected(screen)
-    })
+    .on_press(message)
     .style(if active {
         button::primary
     } else {
         button::secondary
     })
     .into()
+}
+
+/// The More menu: Travel, Habits and Keep, in a card below the menu bar.
+fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+        .on_press(Message::MoreMenuToggled);
+
+    let mut panel = column![].spacing(4.0).width(Fill);
+    for (label, screen) in
+        MORE_LABELS
+            .iter()
+            .zip([Screen::Travel, Screen::Habits, Screen::KeepNotes])
+    {
+        panel = panel.push(
+            button(text(*label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::ScreenSelected(screen))
+                .style(if state.screen == screen {
+                    button::primary
+                } else {
+                    button::secondary
+                }),
+        );
+    }
+
+    let width = (metrics.size.width - metrics.padding * 2.0).clamp(96.0, 180.0);
+    let card = container(panel)
+        .width(Length::Fixed(width))
+        .padding(6.0)
+        .style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+
+    let aligned = column![
+        Space::new().height(tabs_height(state, metrics) + metrics.spacing),
+        container(row![Space::new().width(Fill), card])
+            .padding(Padding {
+                right: metrics.padding,
+                ..Default::default()
+            })
+            .width(Fill),
+    ]
+    .width(Fill)
+    .align_x(Alignment::Start);
+
+    let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
+    iced::widget::stack(layers).into()
 }

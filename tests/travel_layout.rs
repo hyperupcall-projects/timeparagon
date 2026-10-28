@@ -23,10 +23,6 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
     Sim::with_size(Settings::default(), size, element)
 }
 
-fn tab_label(width: f32, index: usize) -> &'static str {
-    time_slay::ui::tab_labels(width)[index]
-}
-
 /// A day with a start and end at home and meetings at two other places.
 /// Returns the state with the ids of home, the office and the cafe.
 fn state() -> (State, u64, u64, u64) {
@@ -109,20 +105,20 @@ fn toggling_travel_turns_the_day_view_trips_on_and_off() {
     assert!(!state.travel.show);
 }
 
-/// Travel sits to the left of Habits, in the group with Inbox, Projects and
-/// Backlog, and opens the Travel screen.
+/// Travel and Habits live together in the More menu, with Travel first, and
+/// clicking Travel opens the Travel screen.
 #[test]
-fn the_travel_tab_is_left_of_keep() -> Result<(), Error> {
+fn the_travel_item_is_in_the_more_menu() -> Result<(), Error> {
     for width in WIDTHS {
-        let (state, ..) = state();
+        let (mut state, ..) = state();
+        state.more_menu_open = true;
         let mut ui = render(&state, Size::new(width, 400.0));
 
-        let travel = ui.find(tab_label(width, 4)).expect("Travel tab").bounds();
-        let habits = ui.find(tab_label(width, 5)).expect("Habits tab").bounds();
-        assert!(travel.x + travel.width <= habits.x, "order at {width}px");
-        assert!((travel.y - habits.y).abs() < 1.0, "one row at {width}px");
+        let travel = ui.find("Travel").expect("Travel item").bounds();
+        let habits = ui.find("Habits").expect("Habits item").bounds();
+        assert!(travel.y + travel.height <= habits.y, "order at {width}px");
 
-        let _ = ui.click(tab_label(width, 4))?;
+        let _ = ui.click("Travel")?;
         assert!(
             messages(ui)
                 .iter()
@@ -305,7 +301,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
         let (mut state, ..) = state();
         state.screen = Screen::Settings;
 
-        let mut ui = render(&state, Size::new(width, 4400.0));
+        let mut ui = render(&state, Size::new(width, 5200.0));
         for label in [
             "Travel",
             "Mapbox access token",
@@ -341,7 +337,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
         lng: 6.0,
     }];
 
-    let mut ui = render(&state, Size::new(300.0, 4000.0));
+    let mut ui = render(&state, Size::new(300.0, 5000.0));
     assert!(ui.find("Search").is_ok());
     let _ = ui.click("Philz Coffee")?;
     assert!(

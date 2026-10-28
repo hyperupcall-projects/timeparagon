@@ -67,6 +67,8 @@ pub enum LayoutField {
     DockMargin,
     DockBorderOuterWidth,
     DockBorderInnerWidth,
+    PanelBorderOuterWidth,
+    PanelBorderInnerWidth,
     FadeDuration,
 }
 
@@ -82,6 +84,8 @@ impl LayoutField {
             Self::DockMargin => state.config.views.dock_margin(),
             Self::DockBorderOuterWidth => state.config.views.dock_border_outer_width(),
             Self::DockBorderInnerWidth => state.config.views.dock_border_inner_width(),
+            Self::PanelBorderOuterWidth => state.config.views.panel_border_outer_width(),
+            Self::PanelBorderInnerWidth => state.config.views.panel_border_inner_width(),
             Self::FadeDuration => state.config.views.fade_duration_ms() as f32,
         }
     }
@@ -95,9 +99,10 @@ impl LayoutField {
                 config::ViewSettings::MAX_DOCK_WIDTH,
             ),
             Self::DockMargin => (0.0, config::ViewSettings::MAX_DOCK_MARGIN),
-            Self::DockBorderOuterWidth | Self::DockBorderInnerWidth => {
-                (0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH)
-            }
+            Self::DockBorderOuterWidth
+            | Self::DockBorderInnerWidth
+            | Self::PanelBorderOuterWidth
+            | Self::PanelBorderInnerWidth => (0.0, config::ViewSettings::MAX_BORDER_WIDTH),
             Self::FadeDuration => (0.0, config::ViewSettings::MAX_FADE_DURATION_MS as f32),
             _ => (
                 config::ViewSettings::MIN_WIDTH,
@@ -117,6 +122,8 @@ impl LayoutField {
             Self::DockMargin => Message::DockMarginChanged(value),
             Self::DockBorderOuterWidth => Message::DockBorderOuterWidthChanged(value),
             Self::DockBorderInnerWidth => Message::DockBorderInnerWidthChanged(value),
+            Self::PanelBorderOuterWidth => Message::PanelBorderOuterWidthChanged(value),
+            Self::PanelBorderInnerWidth => Message::PanelBorderInnerWidthChanged(value),
             Self::FadeDuration => Message::FadeDurationChanged(value),
         }
     }
@@ -193,6 +200,8 @@ pub struct State {
 
     pub screen: Screen,
     pub weekly: bool,
+    /// Whether the More menu under the right-hand navigation group is open.
+    pub more_menu_open: bool,
     pub week_anchor: chrono::NaiveDate,
     pub week_hover: Option<chrono::NaiveDate>,
     pub week_scroll_x: f32,
@@ -233,6 +242,9 @@ pub struct State {
     /// The dock border colour box being typed into: 0 for the outer border,
     /// 1 for the inner one, and the text as it currently reads.
     pub dock_border_input: Option<(usize, String)>,
+    /// The panel border colour box being typed into: 0 for the outer border,
+    /// 1 for the inner one, and the text as it currently reads.
+    pub panel_border_input: Option<(usize, String)>,
     /// Whether the window has been widened for the event details pane. Kept so
     /// the pane can be opened and closed from anywhere without resizing twice.
     pub details_pane_open: bool,
@@ -275,6 +287,7 @@ pub enum Message {
     Alarms(alarms::Action),
 
     ScreenSelected(Screen),
+    MoreMenuToggled,
     CalendarModeSelected(bool),
     WeekDayAction(chrono::NaiveDate, Box<Message>),
     WeekHover(Option<chrono::NaiveDate>),
@@ -306,6 +319,10 @@ pub enum Message {
     DockBorderInnerWidthChanged(f32),
     DockBorderColorInput(usize, String),
     DockBorderColorSubmitted(usize),
+    PanelBorderOuterWidthChanged(f32),
+    PanelBorderInnerWidthChanged(f32),
+    PanelBorderColorInput(usize, String),
+    PanelBorderColorSubmitted(usize),
     FadeDurationChanged(f32),
     WindowAnimationSelected(config::WindowAnimation),
     DockHourLinesToggled(bool),
@@ -516,6 +533,7 @@ impl State {
             alarms: alarms::Alarms::default(),
             screen: Screen::Calendar,
             weekly: false,
+            more_menu_open: false,
             week_anchor: calendar::day_at(Local::now(), day_end_hour),
             week_hover: None,
             week_scroll_x: 0.0,
@@ -540,6 +558,7 @@ impl State {
             panel_visible: Arc::new(AtomicBool::new(true)),
             view_layout_input: None,
             dock_border_input: None,
+            panel_border_input: None,
             details_pane_open: false,
             save_queued: false,
             disk_config: config.clone(),
@@ -922,11 +941,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::Alarms(action) => alarms::update(state, action),
 
+        Message::MoreMenuToggled => {
+            state.more_menu_open = !state.more_menu_open;
+            Task::none()
+        }
+
         Message::ScreenSelected(screen) => {
             let was_weekly = state.weekly_active();
             let returning_to_week =
                 screen == Screen::Calendar && state.screen != Screen::Calendar && state.weekly;
             state.view_layout_input = None;
+            // Choosing a destination puts the More menu away.
+            state.more_menu_open = false;
             // Alarm setting belongs to the day view, so leaving it ends both.
             state.alarms.mode = false;
             state.alarms.editor = None;
@@ -967,6 +993,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.open_event = None;
             state.calendar.month_open = false;
             state.calendar.menu_open = false;
+            state.more_menu_open = false;
             state.week_hover = None;
             state.screen = Screen::Calendar;
             state.weekly = weekly;
@@ -1272,7 +1299,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
             state.config.views.dock_border_outer_width =
-                width.clamp(0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH);
+                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
             queue_save(state)
         }
 
@@ -1282,7 +1309,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
             state.config.views.dock_border_inner_width =
-                width.clamp(0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH);
+                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
             queue_save(state)
         }
 
@@ -1304,6 +1331,47 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::DockBorderColorSubmitted(_) => {
             state.dock_border_input = None;
+            Task::none()
+        }
+
+        Message::PanelBorderOuterWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.panel_border_outer_width =
+                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
+            queue_save(state)
+        }
+
+        Message::PanelBorderInnerWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.panel_border_inner_width =
+                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
+            queue_save(state)
+        }
+
+        Message::PanelBorderColorInput(layer, input) => {
+            let digits = input.trim().trim_start_matches('#');
+            if digits.len() > 8 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Task::none();
+            }
+            state.panel_border_input = Some((layer, input.clone()));
+            let Ok(color) = crate::hex::parse(&input) else {
+                return Task::none();
+            };
+            match layer {
+                0 => state.config.views.panel_border_outer_color = color.into(),
+                _ => state.config.views.panel_border_inner_color = color.into(),
+            }
+            queue_save(state)
+        }
+
+        Message::PanelBorderColorSubmitted(_) => {
+            state.panel_border_input = None;
             Task::none()
         }
 
@@ -1426,6 +1494,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             if previous.views != state.config.views {
                 state.view_layout_input = None;
                 state.dock_border_input = None;
+                state.panel_border_input = None;
             }
             // An external edit wins over a save that has not started yet.
             state.save_queued = false;
@@ -2968,6 +3037,12 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     if state.alarms.mode {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::Alarms(alarms::Action::ModeToggled)),
+            _ => None,
+        };
+    }
+    if state.more_menu_open {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::MoreMenuToggled),
             _ => None,
         };
     }

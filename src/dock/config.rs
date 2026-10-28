@@ -129,7 +129,7 @@ impl DockConfig {
 
     fn border_width(value: f32) -> f32 {
         if value.is_finite() {
-            value.clamp(0.0, crate::config::ViewSettings::MAX_DOCK_BORDER_WIDTH)
+            value.clamp(0.0, crate::config::ViewSettings::MAX_BORDER_WIDTH)
         } else {
             0.0
         }
