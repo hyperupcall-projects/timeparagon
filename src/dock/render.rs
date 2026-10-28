@@ -4,6 +4,14 @@
 //! Everything is laid out in logical pixels and multiplied by the output scale
 //! only when it touches the pixmap, so the pointer maths never needs to know
 //! about HiDPI.
+//!
+//! The pixmap is painted in blue-green-red byte order, which is what a
+//! `wl_shm` ARGB8888 buffer holds on little-endian machines, so a frame goes
+//! to the compositor as a plain copy. tiny-skia treats the channels alike, so
+//! the only places that care are where a colour enters: [`paint_for`] and
+//! [`text_color`] swap red and blue on the way in.
+
+use std::sync::mpsc;
 
 use cosmic_text::{
     Attrs, Buffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, SwashCache, Weight,
@@ -168,15 +176,106 @@ pub struct Scene<'a> {
     pub palette: Palette,
 }
 
-/// Owns the font database, which is slow to build and so loaded on first use.
+/// How many laid-out cards are kept, so hovering back and forth between
+/// segments does not shape the same text again.
+const CARD_CACHE: usize = 12;
+
+/// A rectangle in surface pixels, as damage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl PixelRect {
+    fn from_logical(layout: &Layout, (x, y, w, h): (f32, f32, f32, f32), grow: f32) -> Self {
+        let s = layout.scale;
+        let left = (x * s - grow).floor() as i32;
+        let top = (y * s - grow).floor() as i32;
+        let right = ((x + w) * s + grow).ceil() as i32;
+        let bottom = ((y + h) * s + grow).ceil() as i32;
+        Self {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        }
+    }
+
+    pub fn clamped(self, width: u32, height: u32) -> Self {
+        let left = self.x.clamp(0, width as i32);
+        let top = self.y.clamp(0, height as i32);
+        let right = (self.x + self.width).clamp(left, width as i32);
+        let bottom = (self.y + self.height).clamp(top, height as i32);
+        Self {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        }
+    }
+}
+
+/// What a laid-out card depends on.
+#[derive(PartialEq)]
+struct CardKey {
+    card: Card,
+    width: f32,
+    scale: f32,
+    palette: Palette,
+}
+
+type TextSystem = (FontSystem, SwashCache);
+
+/// Loads the system fonts on a thread of their own. Building the font
+/// database takes long enough to be felt as lag on the first hover, so it
+/// happens while the dock starts instead.
+pub fn warm_up_text() -> mpsc::Receiver<TextSystem> {
+    let (sender, receiver) = mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("dock-fonts".into())
+        .spawn(move || {
+            let _ = sender.send((FontSystem::new(), SwashCache::new()));
+        });
+    receiver
+}
+
+/// Owns the font database, which is slow to build and so loaded ahead of time
+/// or on first use, and remembers what was last drawn so that a frame only has
+/// to redo what changed.
 #[derive(Default)]
 pub struct Renderer {
-    text: Option<(FontSystem, SwashCache)>,
+    text: Option<TextSystem>,
+    warmup: Option<mpsc::Receiver<TextSystem>>,
+    cards: Vec<(CardKey, Vec<Block>)>,
+    /// Where the last card landed, to be wiped before the next frame.
+    last_card: Option<PixelRect>,
 }
 
 impl Renderer {
-    pub fn paint(&mut self, layout: &Layout, scene: &Scene, pixmap: &mut Pixmap) {
-        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+    pub fn with_warmup(warmup: mpsc::Receiver<TextSystem>) -> Self {
+        Self {
+            warmup: Some(warmup),
+            ..Self::default()
+        }
+    }
+
+    /// Paints a frame onto `pixmap` and says which parts of it changed.
+    ///
+    /// The pixmap is meant to be kept between frames: only the strip is
+    /// repainted and only the old card's patch is cleared, so everything else
+    /// stays transparent without being touched.
+    pub fn paint(&mut self, layout: &Layout, scene: &Scene, pixmap: &mut Pixmap) -> Vec<PixelRect> {
+        let (surface_width, surface_height) = (pixmap.width(), pixmap.height());
+        let strip = PixelRect::from_logical(layout, layout.strip_rect(), 0.0);
+        let mut damage = vec![strip];
+
+        if let Some(old) = self.last_card.take() {
+            clear_rect(pixmap, old);
+            damage.push(old);
+        }
 
         let palette = &scene.palette;
         let (x, y, w, h) = layout.strip_rect();
@@ -217,20 +316,32 @@ impl Renderer {
 
         paint_button(pixmap, layout, scene);
 
-        if scene.button_hovered {
+        let card = if scene.button_hovered {
             let card = Card {
                 title: scene.back_label.to_owned(),
                 when: "Click to switch".to_owned(),
                 lines: Vec::new(),
             };
-            self.paint_card(layout, palette, &card, 0.0, pixmap);
+            Some(self.paint_card(layout, palette, &card, 0.0, pixmap))
         } else if let Some(segment) = scene.hovered.and_then(|index| scene.segments.get(index)) {
             let (_, top, _, _) = layout.segment_rect(segment);
-            self.paint_card(layout, palette, &segment.card, top, pixmap);
+            Some(self.paint_card(layout, palette, &segment.card, top, pixmap))
+        } else {
+            None
+        };
+
+        if let Some(card) = card {
+            damage.push(card);
+            self.last_card = Some(card);
         }
+        for rect in &mut damage {
+            *rect = rect.clamped(surface_width, surface_height);
+        }
+        damage
     }
 
-    /// Paints a card as close to `top` as the surface allows.
+    /// Paints a card as close to `top` as the surface allows, and returns the
+    /// patch it covers.
     fn paint_card(
         &mut self,
         layout: &Layout,
@@ -238,13 +349,40 @@ impl Renderer {
         card: &Card,
         top: f32,
         pixmap: &mut Pixmap,
-    ) {
-        let (font_system, swash) = self
-            .text
-            .get_or_insert_with(|| (FontSystem::new(), SwashCache::new()));
+    ) -> PixelRect {
+        let Self {
+            text,
+            warmup,
+            cards,
+            ..
+        } = self;
+        let (font_system, swash) = text.get_or_insert_with(|| {
+            warmup
+                .take()
+                .and_then(|loading| loading.recv().ok())
+                .unwrap_or_else(|| (FontSystem::new(), SwashCache::new()))
+        });
 
         let inner = (layout.card_width - 2.0 * CARD_PADDING).max(10.0);
-        let blocks = card_blocks(font_system, layout, palette, card, inner);
+        let key = CardKey {
+            card: card.clone(),
+            width: inner,
+            scale: layout.scale,
+            palette: *palette,
+        };
+        let index = match cards.iter().position(|(cached, _)| *cached == key) {
+            Some(index) => index,
+            None => {
+                let blocks = card_blocks(font_system, layout, palette, card, inner);
+                if cards.len() >= CARD_CACHE {
+                    cards.remove(0);
+                }
+                cards.push((key, blocks));
+                cards.len() - 1
+            }
+        };
+        let blocks = &cards[index].1;
+
         let content: f32 = blocks.iter().map(|block| block.height).sum::<f32>()
             + BLOCK_GAP * blocks.len().saturating_sub(1) as f32;
         let height = (content + 2.0 * CARD_PADDING).min(layout.height);
@@ -257,7 +395,7 @@ impl Renderer {
         stroke_rounded(pixmap, layout, rect, CARD_RADIUS, palette.border, 1.0);
 
         let mut cursor = y + CARD_PADDING;
-        for block in &blocks {
+        for block in blocks {
             if cursor + block.height > y + height - CARD_PADDING + 0.5 {
                 break;
             }
@@ -279,6 +417,42 @@ impl Renderer {
                 });
             cursor += block.height + BLOCK_GAP;
         }
+
+        PixelRect::from_logical(layout, rect, 2.0)
+    }
+}
+
+/// Copies a patch of the pixmap into a buffer of the same size and stride.
+/// Both are already in the same byte order, so this is one copy per row.
+pub fn copy_patch(pixmap: &Pixmap, canvas: &mut [u8], patch: PixelRect) {
+    let patch = patch.clamped(pixmap.width(), pixmap.height());
+    if patch.width == 0 {
+        return;
+    }
+    let stride = pixmap.width() as usize * 4;
+    let (start, len) = (patch.x as usize * 4, patch.width as usize * 4);
+    let source = pixmap.data();
+    for row in patch.y as usize..(patch.y + patch.height) as usize {
+        let at = row * stride + start;
+        canvas[at..at + len].copy_from_slice(&source[at..at + len]);
+    }
+}
+
+/// Wipes a patch of the pixmap back to transparent.
+fn clear_rect(pixmap: &mut Pixmap, patch: PixelRect) {
+    let patch = patch.clamped(pixmap.width(), pixmap.height());
+    if let Some(rect) = Rect::from_xywh(
+        patch.x as f32,
+        patch.y as f32,
+        patch.width as f32,
+        patch.height as f32,
+    ) {
+        let paint = Paint {
+            blend_mode: tiny_skia::BlendMode::Clear,
+            anti_alias: false,
+            ..Paint::default()
+        };
+        pixmap.fill_rect(rect, &paint, Transform::identity(), None);
     }
 }
 
@@ -403,15 +577,15 @@ fn text_block(
 
 fn text_color(color: Color) -> TextColor {
     let [r, g, b, a] = color.into_rgba8();
-    TextColor::rgba(r, g, b, a)
+    TextColor::rgba(b, g, r, a)
 }
 
 fn paint_for(color: Color, alpha: f32) -> Paint<'static> {
     let mut paint = Paint::default();
     paint.set_color_rgba8(
-        (color.r * 255.0).round() as u8,
-        (color.g * 255.0).round() as u8,
         (color.b * 255.0).round() as u8,
+        (color.g * 255.0).round() as u8,
+        (color.r * 255.0).round() as u8,
         (color.a * alpha * 255.0).round() as u8,
     );
     paint.anti_alias = true;
@@ -607,7 +781,7 @@ mod tests {
         let accent = scene.palette.accent.into_rgba8();
         let corner = pixmap.pixel(1, 5).unwrap();
         assert_eq!(corner.alpha(), 255);
-        assert_eq!(corner.red(), accent[0]);
+        assert_eq!(corner.blue(), accent[0]);
         assert_eq!(pixmap.pixel(150, 20).unwrap().alpha(), 255);
         assert_eq!(pixmap.pixel(150, 700).unwrap().alpha(), 0);
     }
@@ -644,14 +818,14 @@ mod tests {
         assert_eq!(gap.alpha(), 255);
         let background = scene.palette.background.into_rgba8();
         assert_eq!(
-            (gap.red(), gap.green(), gap.blue()),
+            (gap.blue(), gap.green(), gap.red()),
             (background[0], background[1], background[2])
         );
         // The segment is its own colour.
         assert_ne!(at(5, 90), gap);
         // The "now" line is the danger colour.
         let now = scene.palette.now.into_rgba8();
-        assert_eq!(at(5, 607).red(), now[0]);
+        assert_eq!(at(5, 607).blue(), now[0]);
         // Beyond the strip nothing is painted, so clicks and eyes pass through.
         assert_eq!(at(100, 300).alpha(), 0);
     }
@@ -676,5 +850,89 @@ mod tests {
 
         assert_eq!(pixmap.pixel(150, 615).unwrap().alpha(), 255);
         assert_eq!(pixmap.pixel(150, 100).unwrap().alpha(), 0);
+    }
+
+    #[test]
+    fn moving_off_a_card_clears_it_and_only_damages_what_changed() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let (width, height) = layout.pixel_size();
+        let mut pixmap = Pixmap::new(width, height).unwrap();
+        let segments = [segment(600, 630)];
+        let scene = |hovered| Scene {
+            segments: &segments,
+            now_minute: None,
+            hovered,
+            button_hovered: false,
+            back_label: "Open the full window",
+            side: Side::Left,
+            palette: palette(),
+        };
+        let mut renderer = Renderer::default();
+
+        let covers = |damage: &[PixelRect], x: i32, y: i32| {
+            damage
+                .iter()
+                .any(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+        };
+
+        let hovered = renderer.paint(&layout, &scene(Some(0)), &mut pixmap);
+        assert_eq!(pixmap.pixel(150, 615).unwrap().alpha(), 255);
+        assert!(covers(&hovered, 150, 615));
+
+        let left = renderer.paint(&layout, &scene(None), &mut pixmap);
+        assert_eq!(pixmap.pixel(150, 615).unwrap().alpha(), 0);
+        assert!(covers(&left, 150, 615));
+        assert!(!covers(&left, 150, 100));
+
+        let idle = renderer.paint(&layout, &scene(None), &mut pixmap);
+        assert_eq!(idle.len(), 1);
+        assert!(!covers(&idle, 150, 615));
+    }
+
+    #[test]
+    fn the_same_card_is_only_shaped_once() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let (width, height) = layout.pixel_size();
+        let mut pixmap = Pixmap::new(width, height).unwrap();
+        let segments = [segment(600, 630), segment(700, 730)];
+        let mut renderer = Renderer::default();
+
+        for hovered in [0, 1, 0, 1, 0] {
+            let scene = Scene {
+                segments: &segments,
+                now_minute: None,
+                hovered: Some(hovered),
+                button_hovered: false,
+                back_label: "Open the full window",
+                side: Side::Left,
+                palette: palette(),
+            };
+            renderer.paint(&layout, &scene, &mut pixmap);
+        }
+
+        // Both segments carry identical card text, so one entry serves both.
+        assert_eq!(renderer.cards.len(), 1);
+    }
+
+    #[test]
+    fn copying_a_patch_leaves_the_rest_of_the_buffer_alone() {
+        let mut pixmap = Pixmap::new(4, 2).unwrap();
+        pixmap.data_mut().copy_from_slice(&[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, //
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ]);
+        let mut canvas = [0u8; 32];
+        let patch = PixelRect {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 1,
+        };
+
+        copy_patch(&pixmap, &mut canvas, patch);
+
+        assert_eq!(&canvas[..20], &[0; 20]);
+        assert_eq!(&canvas[20..28], &[21, 22, 23, 24, 25, 26, 27, 28]);
+        assert_eq!(&canvas[28..], &[0; 4]);
     }
 }

@@ -13,7 +13,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use directories::BaseDirs;
@@ -436,7 +435,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
 
             let actions = crate::alarm::preview(&alarm.profile.sound);
-            app::perform(state, actions, Duration::ZERO)
+            app::perform(state, actions)
         }
 
         Action::Poll => ring_due(state),
@@ -580,7 +579,7 @@ fn ring_due(state: &mut State) -> Task<Message> {
             state.alarms.editor = None;
         }
 
-        tasks.push(app::fire(state, &alarm.firing_profile(), Duration::ZERO));
+        tasks.push(app::fire(state, &alarm.firing_profile()));
     }
 
     tasks.push(save(state));

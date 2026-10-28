@@ -2,7 +2,7 @@
 name = "timetracker"
 version = "0.1.0"
 edition = "2024"
-description = "A low-resource timer that stays usable at 200px wide"
+description = "A low-resource calendar that stays usable at 200px wide"
 license = "MPL-2.0"
 
 [dependencies]
@@ -70,6 +70,43 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# The dock paints and shapes text on the CPU on every hover. Unoptimized (the
+# installer ships the debug build) or size-optimized code makes that visibly
+# sluggish, so the crates doing the work stay fully optimized in both profiles.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.cosmic-text]
+opt-level = 3
+[profile.dev.package.harfrust]
+opt-level = 3
+[profile.dev.package.swash]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.fontdb]
+opt-level = 3
+
+[profile.release.package.tiny-skia]
+opt-level = 3
+[profile.release.package.tiny-skia-path]
+opt-level = 3
+[profile.release.package.cosmic-text]
+opt-level = 3
+[profile.release.package.harfrust]
+opt-level = 3
+[profile.release.package.swash]
+opt-level = 3
+[profile.release.package.skrifa]
+opt-level = 3
+[profile.release.package.read-fonts]
+opt-level = 3
+[profile.release.package.fontdb]
+opt-level = 3
 
 [target.'cfg(target_os = "android")'.dependencies]
 # The OAuth module needs a real Android Intent launcher when the shared data

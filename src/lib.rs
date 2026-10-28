@@ -1,6 +1,6 @@
-//! TimeTracker: a count-up timer that stays out of the way.
+//! TimeTracker: a calendar with alarms that stays out of the way.
 //!
-//! The library backs two thin binaries so the interface and the clock engine can
+//! The library backs two thin binaries so the interface can
 //! be exercised by tests without a compositor:
 //!
 //! * `timetracker` — the main window (this crate's [`app`]).
@@ -16,7 +16,6 @@ pub mod calendar;
 pub mod config;
 pub mod config_sync;
 pub mod dock;
-pub mod engine;
 pub mod hex;
 pub mod inbox;
 pub mod integrations;
@@ -26,7 +25,6 @@ pub mod panel;
 pub mod projects;
 pub mod theme;
 pub mod todos;
-pub mod tracks;
 pub mod travel;
 pub mod ui;
 

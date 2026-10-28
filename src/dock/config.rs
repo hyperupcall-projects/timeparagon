@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::config::ViewSettings;
 use crate::panel::Side;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -14,12 +15,15 @@ use crate::panel::Side;
 pub struct DockConfig {
     /// Screen edge the strip hugs.
     pub side: Side,
-    /// Width of the strip itself, in logical pixels.
+    /// Width of the strip itself, in logical pixels. Not read from `dock.toml`:
+    /// it is the "Dock width" in the app's settings.
+    #[serde(skip)]
     pub width: u32,
-    /// Space left above the strip, in logical pixels.
-    pub margin_top: u32,
-    /// Space left below the strip, in logical pixels.
-    pub margin_bottom: u32,
+    /// Space left above and below the strip, in logical pixels. Not read from
+    /// `dock.toml`: it is the "Screen margin" in the app's settings, shared
+    /// with the side panel.
+    #[serde(skip)]
+    pub margin: u32,
     /// Width of the hover card, in logical pixels.
     pub popup_width: u32,
     /// Space between the strip and the hover card, in logical pixels.
@@ -31,8 +35,7 @@ impl Default for DockConfig {
         Self {
             side: Side::Left,
             width: 10,
-            margin_top: 12,
-            margin_bottom: 12,
+            margin: 8,
             popup_width: 300,
             popup_gap: 6,
         }
@@ -41,8 +44,16 @@ impl Default for DockConfig {
 
 impl DockConfig {
     /// Loads the config, falling back to defaults on any error, and clamps
-    /// values that would make the surface unusable.
-    pub fn load() -> Self {
+    /// values that would make the surface unusable. The size and margin come
+    /// from the app's own view settings.
+    pub fn load(views: &ViewSettings) -> Self {
+        let mut config = Self::from_file();
+        config.width = views.dock_width().round() as u32;
+        config.margin = views.margin().round() as u32;
+        config.sanitized()
+    }
+
+    fn from_file() -> Self {
         let Some(path) = path() else {
             return Self::default();
         };
@@ -51,7 +62,7 @@ impl DockConfig {
         };
 
         match toml::from_str::<Self>(&text) {
-            Ok(config) => config.sanitized(),
+            Ok(config) => config,
             Err(error) => {
                 log::warn!(
                     "ignoring invalid dock config at {}: {error}",
@@ -100,16 +111,37 @@ mod tests {
 
     #[test]
     fn a_partial_config_keeps_the_other_defaults() {
-        let config: DockConfig = toml::from_str("width = 14\nside = \"right\"").unwrap();
+        let config: DockConfig = toml::from_str("side = \"right\"").unwrap();
+
+        assert_eq!(config.side, Side::Right);
+        assert_eq!(config.popup_width, 300);
+    }
+
+    #[test]
+    fn the_strip_size_and_margin_come_from_the_view_settings() {
+        let views = ViewSettings {
+            dock_width: 14.0,
+            margin: 20.0,
+            ..ViewSettings::default()
+        };
+        let config = DockConfig::load(&views);
 
         assert_eq!(config.width, 14);
-        assert_eq!(config.side, Side::Right);
-        assert_eq!(config.margin_top, 12);
+        assert_eq!(config.margin, 20);
+    }
+
+    #[test]
+    fn width_and_margin_in_dock_toml_are_ignored() {
+        let config: DockConfig = toml::from_str("width = 99\nmargin = 99").unwrap();
+
+        assert_eq!(config.width, DockConfig::default().width);
+        assert_eq!(config.margin, DockConfig::default().margin);
     }
 
     #[test]
     fn absurd_widths_are_clamped() {
-        let config: DockConfig = toml::from_str("width = 0\npopup_width = 5").unwrap();
+        let mut config: DockConfig = toml::from_str("popup_width = 5").unwrap();
+        config.width = 0;
         let config = config.sanitized();
 
         assert_eq!(config.width, 2);

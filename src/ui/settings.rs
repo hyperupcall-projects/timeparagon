@@ -6,7 +6,6 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Length};
 
 use crate::app::{LayoutField, Message, State};
-use crate::audio::Tone;
 use crate::calendar;
 use crate::config;
 use crate::integrations::accounts;
@@ -67,28 +66,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .width(Fill)
     .height(Fill)
     .into()
-}
-
-/// What happens when the clock reaches zero.
-///
-/// These settings change the timer rather than the calendar, so they are kept
-/// off the main settings page. Nothing on the calendar opens the clock any
-/// more, so this page is only reached by selecting its screen directly.
-pub fn timer_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let content = column![
-        heading("When time is up", metrics),
-        notification(state, metrics),
-        sound(state, metrics),
-        flash(state, metrics),
-    ]
-    .spacing(metrics.spacing * 1.5)
-    .padding(iced::Padding {
-        right: SCROLLBAR_GUTTER,
-        ..iced::Padding::ZERO
-    })
-    .width(Fill);
-
-    super::page("Alarm", content.into(), metrics)
 }
 
 fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
@@ -207,7 +184,8 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         layout_number("Details width (px)", LayoutField::DetailWidth, state, metrics),
         layout_number("Screen margin (px, 0–30)", LayoutField::ScreenMargin, state, metrics),
         layout_number("Border radius (px, 0–30)", LayoutField::BorderRadius, state, metrics),
-        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel from its screen edge, top and bottom.")
+        layout_number("Dock width (px, 2–40)", LayoutField::DockWidth, state, metrics),
+        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel and the dock strip from their screen edge, top and bottom. The dock width is the thickness of the strip; it applies the next time the dock opens.")
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).into()
 }
@@ -221,7 +199,7 @@ fn layout_number<'a>(
     let value = kind.value(state);
     let step = match kind {
         LayoutField::CalendarWidth | LayoutField::TimeBlockWidth | LayoutField::DetailWidth => 10.0,
-        LayoutField::ScreenMargin | LayoutField::BorderRadius => 1.0,
+        LayoutField::ScreenMargin | LayoutField::BorderRadius | LayoutField::DockWidth => 1.0,
     };
     let (min, max) = kind.bounds();
     let shown = state
@@ -729,208 +707,11 @@ fn day_end_label(hour: u32) -> String {
     }
 }
 
-fn notification<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let settings = &state.config.alarm.notification;
-
-    let mut section = column![switch(
-        "Show a notification",
-        settings.enabled,
-        Message::NotificationToggled,
-        metrics,
-    )]
-    .spacing(metrics.spacing);
-
-    if settings.enabled {
-        section = section.push(field(
-            "Text",
-            text_input("Time's up", &settings.summary)
-                .on_input(Message::NotificationSummaryChanged)
-                .size(metrics.label())
-                .into(),
-            metrics,
-        ));
-
-        section = section.push(choice(
-            "Urgency",
-            config::Urgency::ALL.to_vec(),
-            Some(settings.urgency),
-            Message::NotificationUrgencySelected,
-            metrics,
-        ));
-
-        section = section.push(switch(
-            "Bring the window forward",
-            state.config.alarm.raise_window,
-            Message::RaiseWindowToggled,
-            metrics,
-        ));
-    }
-
-    indent(section.into(), metrics)
-}
-
-fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let settings = &state.config.alarm.sound;
-
-    let mut section = column![switch(
-        "Play a sound",
-        settings.enabled,
-        Message::SoundToggled,
-        metrics,
-    )]
-    .spacing(metrics.spacing);
-
-    if let Some(error) = &state.audio_error {
-        // The sound section stays switched on: the setting is still valid,
-        // it just cannot be honored on this machine right now.
-        section = section.push(
-            text(format!("Sound unavailable - {error}"))
-                .size(metrics.label())
-                .style(text::danger),
-        );
-    }
-
-    if settings.enabled {
-        let selected = match &settings.choice {
-            config::SoundChoice::Builtin(tone) => Some(*tone),
-            config::SoundChoice::Custom { .. } => None,
-        };
-
-        section = section.push(choice(
-            "Sound",
-            Tone::ALL.to_vec(),
-            selected,
-            Message::ToneSelected,
-            metrics,
-        ));
-
-        if let config::SoundChoice::Custom { .. } = &settings.choice {
-            section = section.push(
-                text(format!("Using {}", settings.choice))
-                    .size(metrics.label())
-                    .width(Fill),
-            );
-        }
-
-        let preview = button(text("Preview").size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .style(button::secondary);
-
-        // No point offering a preview we already know cannot be played.
-        let preview = if state.audio.status().is_unavailable() {
-            preview
-        } else {
-            preview.on_press(Message::PreviewRequested)
-        };
-
-        section = section.push(
-            row![
-                button(
-                    text("Choose file...")
-                        .size(metrics.label())
-                        .center()
-                        .width(Fill)
-                )
-                .width(Fill)
-                .on_press(Message::SoundFileRequested)
-                .style(button::secondary),
-                preview,
-            ]
-            .spacing(metrics.spacing),
-        );
-
-        section = section.push(field(
-            format!("Volume {}%", settings.volume),
-            slider(0..=100_u8, settings.volume, Message::VolumeChanged).into(),
-            metrics,
-        ));
-
-        section = section.push(field(
-            repeat_label(settings.repeats),
-            slider(0..=9_u8, settings.repeats, Message::RepeatsChanged).into(),
-            metrics,
-        ));
-    }
-
-    indent(section.into(), metrics)
-}
-
 pub(super) fn repeat_label(repeats: u8) -> String {
     match repeats {
         0 => "Repeat until dismissed".to_owned(),
         1 => "Play once".to_owned(),
         count => format!("Play {count} times"),
-    }
-}
-
-fn flash<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let settings = &state.config.alarm.flash;
-
-    let mut section = column![switch(
-        "Flash the screen",
-        settings.enabled,
-        Message::FlashToggled,
-        metrics,
-    )]
-    .spacing(metrics.spacing);
-
-    if settings.enabled {
-        section = section.push(field(
-            format!("Strength {}%", (settings.peak() * 100.0).round()),
-            slider(
-                0.05..=0.8_f32,
-                settings.peak(),
-                Message::FlashOpacityChanged,
-            )
-            .step(0.05_f32)
-            .into(),
-            metrics,
-        ));
-
-        section = section.push(field(
-            format!("Pulses {}", settings.pulses.max(1)),
-            slider(
-                1..=5_u8,
-                settings.pulses.max(1),
-                Message::FlashPulsesChanged,
-            )
-            .into(),
-            metrics,
-        ));
-
-        section = section.push(switch(
-            "Let clicks pass through",
-            settings.passthrough,
-            Message::FlashPassthroughToggled,
-            metrics,
-        ));
-
-        section = section.push(field(
-            countdown_label(settings.final_countdown_secs),
-            slider(
-                0..=10_u8,
-                settings.final_countdown_secs,
-                Message::FinalCountdownChanged,
-            )
-            .into(),
-            metrics,
-        ));
-
-        section = section.push(
-            text("The flash rate is capped at 3 per second.")
-                .size(metrics.label() - 1.0)
-                .style(text::secondary),
-        );
-    }
-
-    indent(section.into(), metrics)
-}
-
-fn countdown_label(seconds: u8) -> String {
-    if seconds == 0 {
-        "No countdown warning".to_owned()
-    } else {
-        format!("Pulse the window for the last {seconds}s")
     }
 }
 
@@ -978,6 +759,7 @@ mod tests {
             (LayoutField::TimeBlockWidth, 10.0),
             (LayoutField::DetailWidth, 10.0),
             (LayoutField::ScreenMargin, 1.0),
+            (LayoutField::DockWidth, 1.0),
         ] {
             for width in [180.0, 420.0] {
                 let size = iced::Size::new(width, 100.0);
@@ -1049,12 +831,6 @@ mod tests {
         assert_eq!(repeat_label(0), "Repeat until dismissed");
         assert_eq!(repeat_label(1), "Play once");
         assert_eq!(repeat_label(3), "Play 3 times");
-    }
-
-    #[test]
-    fn the_countdown_label_explains_being_switched_off() {
-        assert_eq!(countdown_label(0), "No countdown warning");
-        assert_eq!(countdown_label(5), "Pulse the window for the last 5s");
     }
 
     #[test]

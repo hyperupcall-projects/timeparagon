@@ -1,17 +1,17 @@
-//! Settings for the side-panel companion, from
-//! `$XDG_CONFIG_HOME/timetracker/panel.toml`.
+//! Settings for the side-panel companion: the `[panel]` table of the main
+//! `config.toml`.
 //!
-//! Separate from the main [`crate::config`] file: the panel is its own process
-//! and its own concern, and keeping it apart means a broken panel config can
-//! never stop the clock from starting. Every field is optional; a missing file
-//! or field falls back to the defaults below, so the panel runs out of the box.
+//! Every field is optional; a missing table or field falls back to the
+//! defaults below, so the panel runs out of the box. Older installs kept these
+//! in a `panel.toml` beside `config.toml`; [`legacy_path`] still finds it so
+//! [`crate::config::Config::load`] can carry its values over.
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Which screen edge the strip is anchored to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     #[default]
@@ -19,7 +19,7 @@ pub enum Side {
     Right,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PanelConfig {
     /// Screen edge to anchor the strip to. The README ships `left`.
@@ -41,31 +41,31 @@ impl Default for PanelConfig {
 }
 
 impl PanelConfig {
-    /// Loads the config, falling back to defaults on any error.
+    /// The `[panel]` table of the main config, falling back to defaults.
     pub fn load() -> Self {
-        let Some(path) = path() else {
-            return Self::default();
-        };
+        crate::config::Config::load().panel
+    }
 
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
+    /// The old standalone `panel.toml`, if it exists and parses.
+    pub(crate) fn load_legacy() -> Option<Self> {
+        let path = legacy_path()?;
+        let text = std::fs::read_to_string(&path).ok()?;
 
         match toml::from_str(&text) {
-            Ok(config) => config,
+            Ok(config) => Some(config),
             Err(error) => {
                 log::warn!(
                     "ignoring invalid panel config at {}: {error}",
                     path.display()
                 );
-                Self::default()
+                None
             }
         }
     }
 }
 
-/// `panel.toml`, beside the main `config.toml`.
-pub fn path() -> Option<PathBuf> {
+/// The old `panel.toml`, beside the main `config.toml`.
+pub fn legacy_path() -> Option<PathBuf> {
     Some(
         crate::config::project_dirs()?
             .config_dir()
@@ -112,8 +112,8 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_config_lives_beside_the_main_one() {
-        let panel = path().expect("a config directory");
+    fn the_legacy_panel_config_lives_beside_the_main_one() {
+        let panel = legacy_path().expect("a config directory");
         let main = crate::config::config_path().expect("a config directory");
 
         assert_eq!(panel.parent(), main.parent());

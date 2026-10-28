@@ -14,12 +14,11 @@ use iced::{Element, Point, Size, Subscription, Task, Theme, window};
 
 use chrono::{DateTime, Local};
 
-use crate::audio::{self, Audio, Pcm, Tone};
+use crate::audio::{self, Audio, Pcm};
 use crate::calendar::{self, Connection, SyncState};
 use crate::config::{self, Config};
-use crate::engine::{TIMER_TICK, Timer};
 use crate::theme::Catalog;
-use crate::{alarm, alarms, blocking, notify, panel, theme, timeblocking, tracks, ui};
+use crate::{alarm, alarms, blocking, notify, panel, theme, timeblocking, ui};
 
 /// The smallest window we are willing to be asked to draw.
 ///
@@ -54,12 +53,6 @@ pub enum Screen {
     Notepad,
     KeepNotes,
     Settings,
-    /// The pane for choosing the target time.
-    SetTime,
-    /// What happens when the clock reaches zero. Kept off the main settings
-    /// page because it changes the timer rather than the calendar, and reached
-    /// from the clock itself.
-    TimerSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +62,7 @@ pub enum LayoutField {
     DetailWidth,
     ScreenMargin,
     BorderRadius,
+    DockWidth,
 }
 
 impl LayoutField {
@@ -79,6 +73,7 @@ impl LayoutField {
             Self::DetailWidth => state.config.views.detail_width(),
             Self::ScreenMargin => state.config.views.margin(),
             Self::BorderRadius => state.config.views.border_radius(),
+            Self::DockWidth => state.config.views.dock_width(),
         }
     }
 
@@ -86,6 +81,10 @@ impl LayoutField {
         match self {
             Self::ScreenMargin => (0.0, config::ViewSettings::MAX_MARGIN),
             Self::BorderRadius => (0.0, config::ViewSettings::MAX_BORDER_RADIUS),
+            Self::DockWidth => (
+                config::ViewSettings::MIN_DOCK_WIDTH,
+                config::ViewSettings::MAX_DOCK_WIDTH,
+            ),
             _ => (
                 config::ViewSettings::MIN_WIDTH,
                 config::ViewSettings::MAX_WIDTH,
@@ -100,6 +99,7 @@ impl LayoutField {
             Self::DetailWidth => Message::DetailWidthChanged(value),
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
             Self::BorderRadius => Message::BorderRadiusChanged(value),
+            Self::DockWidth => Message::DockWidthChanged(value),
         }
     }
 }
@@ -151,7 +151,6 @@ pub struct State {
     pub config: Config,
     pub catalog: Catalog,
 
-    pub timer: Timer,
     /// The clock reading used for this frame, so every widget agrees.
     pub now: Instant,
 
@@ -162,8 +161,6 @@ pub struct State {
 
     /// The alarms set on the calendar, and the state of setting them.
     pub alarms: alarms::Alarms,
-    /// Every stretch of time the timer has been running, kept on disk.
-    pub recorder: tracks::Recorder,
 
     pub screen: Screen,
     pub weekly: bool,
@@ -232,16 +229,7 @@ pub enum Message {
     TimeBlocking(crate::timeblocking::Action),
     Inbox(crate::inbox::Action),
     Accounts(crate::integrations::accounts::Action),
-    Tick(Instant),
     FlashFrame(Instant),
-
-    StartPause,
-    Reset,
-    PresetSelected(Duration),
-    /// Adjust the target time by a number of seconds, positive or negative.
-    DurationAdjusted(i64),
-    /// Clear the target so the clock counts up without an alarm.
-    TargetCleared,
 
     /// The notepad was edited.
     NotepadEdited(text_editor::Action),
@@ -274,6 +262,7 @@ pub enum Message {
     TimeBlockWidthChanged(f32),
     DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
+    DockWidthChanged(f32),
     BorderRadiusChanged(f32),
     ViewLayoutInputChanged(LayoutField, String),
     ViewLayoutInputSubmitted(LayoutField),
@@ -281,35 +270,12 @@ pub enum Message {
     PanelShortcutApply,
     PanelShortcutApplied(Result<String, String>),
 
-    NotificationToggled(bool),
-    NotificationSummaryChanged(String),
-    NotificationUrgencySelected(config::Urgency),
-    RaiseWindowToggled(bool),
-
-    SoundToggled(bool),
-    ToneSelected(Tone),
-    VolumeChanged(u8),
-    RepeatsChanged(u8),
-    SoundFileRequested,
-    SoundFileSelected(Option<PathBuf>),
-    PreviewRequested,
-
-    FlashToggled(bool),
-    FlashOpacityChanged(f32),
-    FlashPulsesChanged(u8),
-    FlashPassthroughToggled(bool),
-    FinalCountdownChanged(u8),
-
     /// A sound finished rendering and is ready to hand to PipeWire.
     SoundRendered(Result<Pcm, String>, PlaySpec),
     NotificationPosted(Result<(), String>),
     ConfigSaved(Result<(), String>),
     SaveRequested,
     ConfigReloaded(Config),
-    TracksSaved(Result<(), String>),
-    /// Rewrite the track the running timer has open, so a crash cannot lose
-    /// more than the time since the last write.
-    TracksFlushRequested,
     AudioStatusPolled,
 
     WindowOpened(window::Id),
@@ -487,11 +453,9 @@ impl State {
         let notepad = text_editor::Content::with_text(&config.notepad.text);
 
         Self {
-            timer: Timer::new(config.timer.last_duration()),
             now: Instant::now(),
             sidebar: None,
             alarms: alarms::Alarms::default(),
-            recorder: tracks::Recorder::default(),
             screen: Screen::Calendar,
             weekly: false,
             week_anchor: calendar::day_at(Local::now(), day_end_hour),
@@ -646,7 +610,7 @@ pub fn boot() -> (State, Task<Message>) {
 /// Opens the clock as the side panel: a separate, narrow instance pinned to one
 /// screen edge and kept above other windows.
 ///
-/// The width and edge come from `panel.toml`, and the width is also fixed by
+/// The width and edge come from the `[panel]` table of `config.toml`, and the width is also fixed by
 /// the window's minimum and maximum so the compositor cannot stretch it. The
 /// height is filled in once the monitor size is known, in [`Message::MonitorSized`].
 ///
@@ -746,9 +710,6 @@ fn boot_state() -> State {
     state.keep.cache_in(config::cache_keep_path());
     state.travel.cache_in(config::cache_travel_path());
 
-    // The same goes for the time tracks: the file is the user's own, so only
-    // a real boot is allowed to pick it up.
-    state.recorder.keep_in(tracks::path());
     state.alarms.keep_in(alarms::path());
 
     state
@@ -786,8 +747,9 @@ fn window_icon() -> Option<window::Icon> {
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
-    // The clock ticks many times a second and changes nothing travel reads.
-    let ticking = matches!(message, Message::Tick(_) | Message::FlashFrame(_));
+    // The flash animation redraws many times a second and changes nothing
+    // travel reads.
+    let ticking = matches!(message, Message::FlashFrame(_));
     let task = dispatch(state, message);
     let travel = if ticking {
         Task::none()
@@ -855,16 +817,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::Inbox(action) => crate::inbox::update(state, action),
         Message::Accounts(action) => crate::integrations::accounts::update(state, action),
-        Message::Tick(now) => {
-            state.now = now;
-
-            if state.timer.poll(now) {
-                return fire_alarm(state);
-            }
-
-            Task::none()
-        }
-
         Message::FlashFrame(now) => {
             state.now = now;
 
@@ -872,53 +824,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 Some(flash) if flash.alpha(now).is_none() => Task::done(Message::FlashFinished),
                 _ => Task::none(),
             }
-        }
-
-        Message::StartPause => {
-            state.now = Instant::now();
-
-            if state.alarm_active {
-                return dismiss(state);
-            }
-
-            state.timer.toggle(state.now);
-            sync_tracks(state)
-        }
-
-        Message::Reset => {
-            state.timer.reset();
-            let tracks = sync_tracks(state);
-
-            if state.alarm_active {
-                return Task::batch([tracks, dismiss(state)]);
-            }
-
-            tracks
-        }
-
-        Message::PresetSelected(duration) => {
-            state.timer.set_target(Some(duration));
-            state.config.timer.last_duration_secs = duration.as_secs();
-            Task::batch([queue_save(state), sync_tracks(state)])
-        }
-
-        Message::DurationAdjusted(delta) => {
-            let current = state.timer.target().map_or(0, |target| target.as_secs()) as i64;
-            let adjusted = (current + delta).clamp(0, 24 * 60 * 60) as u64;
-
-            state.timer.set_target(if adjusted == 0 {
-                None
-            } else {
-                Some(Duration::from_secs(adjusted))
-            });
-            state.config.timer.last_duration_secs = adjusted;
-            Task::batch([queue_save(state), sync_tracks(state)])
-        }
-
-        Message::TargetCleared => {
-            state.timer.set_target(None);
-            state.config.timer.last_duration_secs = 0;
-            Task::batch([queue_save(state), sync_tracks(state)])
         }
 
         Message::NotepadEdited(action) => {
@@ -1216,6 +1121,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([resize, queue_save(state)])
         }
 
+        Message::DockWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.dock_width = width.clamp(
+                config::ViewSettings::MIN_DOCK_WIDTH,
+                config::ViewSettings::MAX_DOCK_WIDTH,
+            );
+            queue_save(state)
+        }
+
         Message::BorderRadiusChanged(radius) => {
             state.view_layout_input = None;
             if !radius.is_finite() {
@@ -1246,97 +1163,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 .unwrap_or(Task::none());
 
             Task::batch([apply, queue_save(state)])
-        }
-
-        Message::NotificationToggled(enabled) => {
-            state.config.alarm.notification.enabled = enabled;
-            queue_save(state)
-        }
-
-        Message::NotificationSummaryChanged(summary) => {
-            state.config.alarm.notification.summary = summary;
-            queue_save(state)
-        }
-
-        Message::NotificationUrgencySelected(urgency) => {
-            state.config.alarm.notification.urgency = urgency;
-            queue_save(state)
-        }
-
-        Message::RaiseWindowToggled(raise) => {
-            state.config.alarm.raise_window = raise;
-            queue_save(state)
-        }
-
-        Message::SoundToggled(enabled) => {
-            state.config.alarm.sound.enabled = enabled;
-            queue_save(state)
-        }
-
-        Message::ToneSelected(tone) => {
-            state.config.alarm.sound.choice = config::SoundChoice::Builtin(tone);
-            state.audio_error = None;
-            queue_save(state)
-        }
-
-        Message::VolumeChanged(volume) => {
-            state.config.alarm.sound.volume = volume;
-            // Applied immediately so a preview that is already playing
-            // follows the slider.
-            state.audio.set_gain(state.config.alarm.sound.gain());
-            queue_save(state)
-        }
-
-        Message::RepeatsChanged(repeats) => {
-            state.config.alarm.sound.repeats = repeats;
-            queue_save(state)
-        }
-
-        Message::SoundFileRequested => blocking::run(|| {
-            rfd::FileDialog::new()
-                .set_title("Choose an alarm sound")
-                .add_filter("Audio", &["wav", "ogg", "oga", "flac", "mp3", "m4a", "aac"])
-                .pick_file()
-        })
-        .map(Message::SoundFileSelected),
-
-        Message::SoundFileSelected(Some(path)) => {
-            state.config.alarm.sound.choice = config::SoundChoice::Custom { file: path };
-            state.audio_error = None;
-
-            Task::batch([queue_save(state), Task::done(Message::PreviewRequested)])
-        }
-
-        Message::SoundFileSelected(None) => Task::none(),
-
-        Message::PreviewRequested => {
-            let actions = alarm::preview(&state.config.alarm.sound);
-            perform(state, actions, state.timer.target().unwrap_or_default())
-        }
-
-        Message::FlashToggled(enabled) => {
-            state.config.alarm.flash.enabled = enabled;
-            queue_save(state)
-        }
-
-        Message::FlashOpacityChanged(opacity) => {
-            state.config.alarm.flash.peak_opacity = opacity;
-            queue_save(state)
-        }
-
-        Message::FlashPulsesChanged(pulses) => {
-            state.config.alarm.flash.pulses = pulses;
-            queue_save(state)
-        }
-
-        Message::FlashPassthroughToggled(passthrough) => {
-            state.config.alarm.flash.passthrough = passthrough;
-            queue_save(state)
-        }
-
-        Message::FinalCountdownChanged(seconds) => {
-            state.config.alarm.flash.final_countdown_secs = seconds;
-            queue_save(state)
         }
 
         Message::SoundRendered(Ok(pcm), spec) => {
@@ -1388,9 +1214,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.save_queued = false;
             if previous.notepad.text != state.config.notepad.text {
                 state.notepad = text_editor::Content::with_text(&state.config.notepad.text);
-            }
-            if previous.timer.last_duration_secs != state.config.timer.last_duration_secs {
-                state.timer.set_target(state.config.timer.last_duration());
             }
             state.audio.set_gain(state.config.alarm.sound.gain());
             state.calendar.apply_task_colors(&state.config.calendar);
@@ -1466,22 +1289,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
             blocking::run(move || config.save().map_err(|error| error.to_string()))
                 .map(Message::ConfigSaved)
-        }
-
-        Message::TracksFlushRequested => {
-            if state.recorder.flush(Local::now()) {
-                save_tracks(state)
-            } else {
-                Task::none()
-            }
-        }
-
-        Message::TracksSaved(result) => {
-            if let Err(error) = result {
-                log::warn!("could not save the time tracks: {error}");
-            }
-
-            Task::none()
         }
 
         Message::AudioStatusPolled => {
@@ -2710,14 +2517,6 @@ pub fn title(state: &State, window: window::Id) -> String {
         return "TimeTracker Sidebar".to_owned();
     }
 
-    if state.timer.has_fired() {
-        return "Time's up - TimeTracker".to_owned();
-    }
-
-    if state.timer.is_running() {
-        return format!("{} - TimeTracker", ui::readout(state));
-    }
-
     "TimeTracker".to_owned()
 }
 
@@ -2744,16 +2543,6 @@ pub fn subscription(state: &State) -> Subscription<Message> {
             }
         }),
     ];
-
-    // The clock only ticks when it is actually running, which is what keeps
-    // an idle TimeTracker at zero CPU. The open track is rewritten on the
-    // same cadence as the clock's own running, so a crash costs at most one
-    // flush even if the timer never pauses.
-    if state.timer.is_running() {
-        subscriptions.push(iced::time::every(TIMER_TICK).map(Message::Tick));
-        subscriptions
-            .push(iced::time::every(tracks::FLUSH_EVERY).map(|_| Message::TracksFlushRequested));
-    }
 
     // The needle has to move even when the clock is idle, but only while
     // the day view is actually on screen.
@@ -2793,7 +2582,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(iced::time::every(FLASH_FRAME).map(Message::FlashFrame));
     }
 
-    if matches!(state.screen, Screen::Settings | Screen::TimerSettings) {
+    if matches!(state.screen, Screen::Settings) {
         subscriptions.push(iced::time::every(STATUS_POLL).map(|_| Message::AudioStatusPolled));
     }
 
@@ -2928,35 +2717,24 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     }
 }
 
-/// Runs the whole alarm: sound, notification, flash and raising the window.
-fn fire_alarm(state: &mut State) -> Task<Message> {
-    let profile = state.config.alarm.clone();
-    let target = state.timer.target().unwrap_or_default();
-
-    fire(state, &profile, target)
-}
-
-/// Runs one alarm profile, whether it belongs to the timer or to an alarm set
-/// on the calendar.
+/// Runs one alarm profile, for an alarm set on the calendar.
 ///
 /// An alarm already ringing stays dismissable if a quieter one goes off on
 /// top of it.
 pub(crate) fn fire(
     state: &mut State,
     profile: &config::AlarmProfile,
-    duration: Duration,
 ) -> Task<Message> {
     let actions = alarm::on_finished(profile);
 
     state.alarm_active = state.alarm_active || actions.is_dismissable();
 
-    perform(state, actions, duration)
+    perform(state, actions)
 }
 
 pub(crate) fn perform(
     state: &mut State,
     actions: alarm::Actions,
-    duration: Duration,
 ) -> Task<Message> {
     let mut tasks = Vec::new();
 
@@ -2978,7 +2756,7 @@ pub(crate) fn perform(
 
     if let Some(notification) = actions.notification {
         tasks.push(
-            blocking::run(move || notify::show(&notification, duration))
+            blocking::run(move || notify::show(&notification))
                 .map(Message::NotificationPosted),
         );
     }
@@ -3055,30 +2833,6 @@ pub(crate) fn queue_save(state: &mut State) -> Task<Message> {
     state.save_queued = true;
 
     Task::none()
-}
-
-/// Brings the recorded tracks in line with the timer, writing the file when
-/// a stretch has just opened or closed.
-fn sync_tracks(state: &mut State) -> Task<Message> {
-    if state
-        .recorder
-        .follow(state.timer.is_running(), Local::now())
-    {
-        save_tracks(state)
-    } else {
-        Task::none()
-    }
-}
-
-/// Writes the tracks out on a worker thread, the way the config is saved.
-fn save_tracks(state: &State) -> Task<Message> {
-    if !state.recorder.is_kept() {
-        return Task::none();
-    }
-
-    let recorder = state.recorder.clone();
-    blocking::run(move || recorder.save().map_err(|error| error.to_string()))
-        .map(Message::TracksSaved)
 }
 
 /// Re-syncs when the day in view has rolled over at the configured boundary.
@@ -3304,12 +3058,10 @@ mod tests {
         let mut external = state.config.clone();
         external.notepad.text = "edited outside the app".into();
         external.appearance.theme = "Ocean".into();
-        external.timer.last_duration_secs = 900;
         external.calendar.day_end_hour = 3;
         let _ = update(&mut state, Message::ConfigReloaded(external.clone()));
         assert_eq!(state.config, external);
         assert_eq!(state.notepad.text(), "edited outside the app");
-        assert_eq!(state.timer.target(), Some(Duration::from_secs(900)));
         assert!(!state.save_queued);
     }
 
@@ -4120,31 +3872,6 @@ mod tests {
             "a resync should forget days that were only cached"
         );
         assert_eq!(state.calendar.sync, SyncState::Idle);
-    }
-
-    #[test]
-    fn starting_the_timer_records_a_track_that_pausing_closes() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let _ = update(&mut state, Message::StartPause);
-
-        assert!(state.timer.is_running());
-        assert!(state.recorder.is_recording());
-        assert_eq!(state.recorder.tracks().len(), 1);
-
-        let _ = update(&mut state, Message::StartPause);
-
-        assert!(!state.timer.is_running());
-        assert!(!state.recorder.is_recording());
-        assert_eq!(state.recorder.tracks().len(), 1);
-
-        let _ = update(&mut state, Message::StartPause);
-
-        assert_eq!(
-            state.recorder.tracks().len(),
-            2,
-            "resuming opens a second track"
-        );
     }
 
     fn at_in(minutes: i64) -> DateTime<Local> {

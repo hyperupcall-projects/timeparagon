@@ -6,7 +6,6 @@
 //! no golden images are involved, which is what makes them worth running on
 //! every change.
 
-use std::time::Duration;
 
 use chrono::Local;
 use iced::{Element, Point, Size};
@@ -200,32 +199,6 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
     }
 }
 
-/// The alarm settings are their own page, reached from the clock, and have to
-/// stay usable at 200px just like the main settings pane.
-#[test]
-fn the_alarm_settings_pane_is_usable_at_two_hundred_pixels() {
-    let mut state = state();
-    state.screen = Screen::TimerSettings;
-
-    let mut ui = render(&state, Size::new(200.0, 400.0));
-
-    for label in [
-        "Alarm",
-        "Done",
-        // Notification.
-        "Urgency",
-        // Sound.
-        "Volume 70%",
-        "Play 2 times",
-        "Preview",
-        // Flash.
-        "Strength 35%",
-        "Pulses 2",
-    ] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
-    }
-}
-
 /// The compact theme picker is a button that cycles, because a dropdown
 /// overlay has nowhere to go at this width.
 #[test]
@@ -247,20 +220,6 @@ fn the_compact_theme_picker_cycles_on_press() -> Result<(), Error> {
     );
 
     Ok(())
-}
-
-/// The set-time pane has to offer presets, a way to nudge the target, and a
-/// way to turn the target off, however narrow the window is.
-#[test]
-fn the_set_time_screen_is_usable_at_two_hundred_pixels() {
-    let mut state = state();
-    state.screen = Screen::SetTime;
-
-    let mut ui = render(&state, Size::new(200.0, 400.0));
-
-    for label in ["Set Time", "Done", "5m", "No target", "-1m", "+1m"] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
-    }
 }
 
 /// A fired alarm has to be silenceable from the foot of the calendar, and the
@@ -809,20 +768,6 @@ fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
     );
 
     Ok(())
-}
-
-/// The calendar no longer reports the clock: nothing is timed from there, so
-/// the elapsed time and the target stay off the day view.
-#[test]
-fn the_calendar_view_no_longer_shows_the_clock_status() {
-    let mut state = state();
-    state.screen = Screen::Calendar;
-    state.timer.set_target(Some(Duration::from_secs(300)));
-
-    let mut ui = render(&state, Size::new(320.0, 600.0));
-
-    assert!(ui.find("0:00").is_err(), "the elapsed time is still there");
-    assert!(ui.find("of 5:00").is_err(), "the target is still there");
 }
 
 /// The day view counts tasks without a time or time block. Tasks on the grid

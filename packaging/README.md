@@ -94,7 +94,7 @@ margin = 8.0
 ```
 
 Widths are in logical pixels. If `calendar_width` is omitted, the main window
-keeps its saved width and the side panel uses `panel.toml`. The margin defaults
+keeps its saved width and the side panel uses the `[panel]` width. The margin defaults
 to 8 and leaves transparent space along the panel's screen edge, top and bottom
 (mirrored for a right-side panel). It also applies while the time block pane is
 open. The regular desktop window keeps its normal window placement.
@@ -127,9 +127,12 @@ systemctl --user restart timetracker-panel.service
 journalctl --user -u timetracker-panel.service -f
 ```
 
-Its settings live in `~/.config/timetracker/panel.toml`:
+Its settings live in the `[panel]` table of `~/.config/timetracker/config.toml`
+(an older standalone `panel.toml` is still read until `config.toml` has a
+`[panel]` table, and the next save carries its values over):
 
 ```toml
+[panel]
 # Which edge to anchor the panel to: "left" or "right".
 side = "left"
 
@@ -216,9 +219,6 @@ optional:
 
 ```toml
 side = "left"        # or "right"
-width = 10           # strip width, logical px
-margin_top = 12      # gap above the strip
-margin_bottom = 12   # gap below the strip
 popup_width = 300    # hover card width
 popup_gap = 6        # space between strip and card
 ```

@@ -1,4 +1,4 @@
-//! What happens when the timer reaches zero.
+//! What happens when an alarm goes off.
 //!
 //! This module decides; the app layer carries it out. Keeping the decision
 //! separate from the iced plumbing is what makes the behavior testable
@@ -48,7 +48,7 @@ impl Actions {
     }
 }
 
-/// Builds the action list for a timer that just finished.
+/// Builds the action list for an alarm that just went off.
 pub fn on_finished(profile: &AlarmProfile) -> Actions {
     Actions {
         sound: profile.sound.enabled.then(|| Sound {
@@ -80,26 +80,6 @@ pub fn preview(sound: &config::Sound) -> Actions {
         }),
         ..Actions::none()
     }
-}
-
-/// Whether the app window should be pulsing right now.
-///
-/// This is the opt-in "final countdown" cue. It deliberately tints the app
-/// window rather than the whole screen: a full-screen strobe for the last
-/// few seconds of every timer would be unusable.
-pub fn countdown_pulse(flash: &config::Flash, remaining: Duration) -> Option<f32> {
-    let window = flash.final_countdown()?;
-
-    if remaining > window || remaining.is_zero() {
-        return None;
-    }
-
-    // One pulse per second, peaking mid-second, so it reads as a heartbeat
-    // rather than a flicker.
-    let phase = remaining.subsec_nanos() as f32 / 1_000_000_000.0;
-    let envelope = (phase * std::f32::consts::PI).sin().abs();
-
-    Some(envelope * flash.peak())
 }
 
 #[cfg(test)]
@@ -161,38 +141,5 @@ mod tests {
         assert_eq!(actions.sound.as_ref().unwrap().repeats, 1);
         assert!(actions.notification.is_none());
         assert!(actions.flash.is_none());
-    }
-
-    #[test]
-    fn the_countdown_pulse_is_off_unless_it_is_configured() {
-        let flash = config::Flash::default();
-
-        assert!(countdown_pulse(&flash, Duration::from_secs(2)).is_none());
-    }
-
-    #[test]
-    fn the_countdown_pulse_only_runs_inside_its_window() {
-        let flash = config::Flash {
-            final_countdown_secs: 5,
-            ..config::Flash::default()
-        };
-
-        assert!(countdown_pulse(&flash, Duration::from_secs(9)).is_none());
-        assert!(countdown_pulse(&flash, Duration::from_millis(3_500)).is_some());
-    }
-
-    #[test]
-    fn the_countdown_pulse_never_exceeds_the_configured_peak() {
-        let flash = config::Flash {
-            final_countdown_secs: 5,
-            peak_opacity: 0.4,
-            ..config::Flash::default()
-        };
-
-        for millis in (0..5_000).step_by(37) {
-            if let Some(alpha) = countdown_pulse(&flash, Duration::from_millis(millis)) {
-                assert!((0.0..=0.4).contains(&alpha), "alpha {alpha} out of range");
-            }
-        }
     }
 }

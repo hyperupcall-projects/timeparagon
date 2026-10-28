@@ -1,4 +1,4 @@
-//! TimeTracker: a count-up timer that stays out of the way.
+//! TimeTracker: a calendar with alarms that stays out of the way.
 
 use timetracker::app;
 

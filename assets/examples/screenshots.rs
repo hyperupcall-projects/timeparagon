@@ -67,10 +67,6 @@ fn main() {
                 state.screen = Screen::Settings;
             });
 
-            count += shoot(directory, theme, size, "set-time", |state| {
-                state.screen = Screen::SetTime;
-            });
-
             count += shoot(
                 directory,
                 theme,

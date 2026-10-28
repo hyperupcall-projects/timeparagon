@@ -3,7 +3,7 @@
 #
 # This builds the debug binary, drops it on your PATH, registers a desktop
 # entry and icon so it shows up in the application menu, and installs a
-# systemd *user* service so the timer daemon starts with your graphical
+# systemd *user* service so the daemon starts with your graphical
 # session.
 #
 # Everything lands under your home directory by default; nothing needs root.

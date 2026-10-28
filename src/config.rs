@@ -27,7 +27,8 @@ pub struct Config {
     pub appearance: Appearance,
     pub window: Window,
     pub views: ViewSettings,
-    pub timer: TimerSettings,
+    /// The side panel: its edge, width and global shortcut.
+    pub panel: crate::panel::PanelConfig,
     pub alarm: AlarmProfile,
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
@@ -53,7 +54,7 @@ impl Default for Config {
             appearance: Appearance::default(),
             window: Window::default(),
             views: ViewSettings::default(),
-            timer: TimerSettings::default(),
+            panel: crate::panel::PanelConfig::default(),
             alarm: AlarmProfile::default(),
             calendar: CalendarSettings::default(),
             projects: ProjectsSettings::default(),
@@ -168,7 +169,7 @@ impl Default for Window {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ViewSettings {
-    /// None preserves the saved main-window width and the panel.toml width.
+    /// None preserves the saved main-window width and the `[panel]` width.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calendar_width: Option<f32>,
     /// Width added alongside the calendar when editing a time block.
@@ -179,6 +180,8 @@ pub struct ViewSettings {
     pub margin: f32,
     /// Radius of the application's visible outer corners, in logical pixels.
     pub border_radius: f32,
+    /// Width of the dock strip, in logical pixels.
+    pub dock_width: f32,
 }
 
 impl Default for ViewSettings {
@@ -189,6 +192,7 @@ impl Default for ViewSettings {
             detail_width: 360.0,
             margin: 8.0,
             border_radius: 4.0,
+            dock_width: 10.0,
         }
     }
 }
@@ -198,6 +202,8 @@ impl ViewSettings {
     pub const MAX_WIDTH: f32 = 3840.0;
     pub const MAX_MARGIN: f32 = 30.0;
     pub const MAX_BORDER_RADIUS: f32 = 30.0;
+    pub const MIN_DOCK_WIDTH: f32 = 2.0;
+    pub const MAX_DOCK_WIDTH: f32 = 40.0;
 
     pub fn calendar_width(&self, fallback: f32) -> f32 {
         Self::width(self.calendar_width.unwrap_or(fallback), fallback)
@@ -227,42 +233,21 @@ impl ViewSettings {
         }
     }
 
+    pub fn dock_width(&self) -> f32 {
+        if self.dock_width.is_finite() {
+            self.dock_width
+                .clamp(Self::MIN_DOCK_WIDTH, Self::MAX_DOCK_WIDTH)
+        } else {
+            Self::default().dock_width
+        }
+    }
+
     fn width(value: f32, fallback: f32) -> f32 {
         if value.is_finite() {
             value.clamp(Self::MIN_WIDTH, Self::MAX_WIDTH)
         } else {
             fallback.clamp(Self::MIN_WIDTH, Self::MAX_WIDTH)
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TimerSettings {
-    /// The target time the timer is armed with on startup, in seconds.
-    /// 0 means no target, i.e. a plain count-up.
-    pub last_duration_secs: u64,
-    /// Preset chips, in seconds.
-    pub presets_secs: Vec<u64>,
-}
-
-impl Default for TimerSettings {
-    fn default() -> Self {
-        Self {
-            last_duration_secs: 300,
-            presets_secs: vec![60, 300, 600, 1500, 3000],
-        }
-    }
-}
-
-impl TimerSettings {
-    /// The armed target, or `None` when 0 means a plain count-up.
-    pub fn last_duration(&self) -> Option<Duration> {
-        (self.last_duration_secs > 0).then(|| Duration::from_secs(self.last_duration_secs))
-    }
-
-    pub fn presets(&self) -> impl Iterator<Item = Duration> + '_ {
-        self.presets_secs.iter().copied().map(Duration::from_secs)
     }
 }
 
@@ -747,14 +732,14 @@ impl CalendarSettings {
     }
 }
 
-/// Everything that happens when the timer reaches zero.
+/// Everything that happens when an alarm goes off.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AlarmProfile {
     pub notification: Notification,
     pub sound: Sound,
     pub flash: Flash,
-    /// Bring the window to the front when the timer fires.
+    /// Bring the window to the front when the alarm fires.
     pub raise_window: bool,
 }
 
@@ -888,8 +873,6 @@ pub struct Flash {
     pub pulse_ms: u64,
     /// Let clicks through to whatever is underneath the flash.
     pub passthrough: bool,
-    /// Pulse the app window during the final seconds. 0 disables it.
-    pub final_countdown_secs: u8,
 }
 
 impl Default for Flash {
@@ -901,7 +884,6 @@ impl Default for Flash {
             pulses: 2,
             pulse_ms: 700,
             passthrough: false,
-            final_countdown_secs: 0,
         }
     }
 }
@@ -926,11 +908,12 @@ impl Flash {
     pub fn peak(&self) -> f32 {
         self.peak_opacity.clamp(0.0, 1.0)
     }
+}
 
-    pub fn final_countdown(&self) -> Option<Duration> {
-        (self.final_countdown_secs > 0)
-            .then(|| Duration::from_secs(u64::from(self.final_countdown_secs)))
-    }
+fn has_panel_table(contents: &str) -> bool {
+    contents
+        .parse::<toml::Table>()
+        .is_ok_and(|table| table.contains_key("panel"))
 }
 
 /// Where the config and user themes live.
@@ -979,7 +962,7 @@ impl Config {
 
         match fs::read_to_string(&path) {
             Ok(contents) => match Self::parse(&contents) {
-                Ok(config) => config,
+                Ok(config) => config.with_legacy_panel(has_panel_table(&contents)),
                 Err(error) => {
                     log::warn!(
                         "{} could not be parsed, using defaults instead: {error}",
@@ -988,12 +971,24 @@ impl Config {
                     Self::default()
                 }
             },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Self::default().with_legacy_panel(false)
+            }
             Err(error) => {
                 log::warn!("{} could not be read: {error}", path.display());
                 Self::default()
             }
         }
+    }
+
+    /// Until a config has its own `[panel]` table, the panel settings are
+    /// whatever the old `panel.toml` said. The next save writes them into
+    /// `config.toml`, after which `panel.toml` is no longer read.
+    fn with_legacy_panel(mut self, has_panel_table: bool) -> Self {
+        if !has_panel_table && let Some(panel) = crate::panel::PanelConfig::load_legacy() {
+            self.panel = panel;
+        }
+        self
     }
 
     /// Accept fields written by other app versions, reporting their paths.
@@ -1169,6 +1164,39 @@ mod tests {
         assert_eq!(views.time_block_width(), ViewSettings::MIN_WIDTH);
         assert_eq!(views.detail_width(), 360.0);
         assert_eq!(views.margin(), 8.0);
+    }
+
+    #[test]
+    fn the_panel_settings_live_in_the_main_config() {
+        let config: Config = toml::from_str("[panel]\nside = \"right\"\nwidth = 240").unwrap();
+        assert_eq!(config.panel.side, crate::panel::Side::Right);
+        assert_eq!(config.panel.width, 240);
+        assert_eq!(config.panel.shortcut, "Meta+U");
+
+        let restored: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored.panel, config.panel);
+
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.panel, crate::panel::PanelConfig::default());
+    }
+
+    #[test]
+    fn a_panel_table_is_recognised_so_the_legacy_file_is_skipped() {
+        assert!(has_panel_table("[panel]\nwidth = 240"));
+        assert!(!has_panel_table("[views]\nmargin = 4.0"));
+        assert!(!has_panel_table("not toml ["));
+    }
+
+    #[test]
+    fn the_dock_width_defaults_and_stays_within_bounds() {
+        let views: ViewSettings = toml::from_str("").unwrap();
+        assert_eq!(views.dock_width(), 10.0);
+
+        let views: ViewSettings = toml::from_str("dock_width = 400.0").unwrap();
+        assert_eq!(views.dock_width(), ViewSettings::MAX_DOCK_WIDTH);
+
+        let views: ViewSettings = toml::from_str("dock_width = nan").unwrap();
+        assert_eq!(views.dock_width(), 10.0);
     }
 
     #[test]

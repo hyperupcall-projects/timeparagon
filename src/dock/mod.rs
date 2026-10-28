@@ -45,7 +45,7 @@ use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
-use smithay_client_toolkit::shm::slot::SlotPool;
+use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
@@ -57,7 +57,8 @@ use crate::config::Config;
 use crate::panel::Side;
 use crate::theme::Catalog;
 
-use render::{Layout, Palette, Renderer, Scene};
+use render::{Layout, Palette, PixelRect, Renderer, Scene};
+use tiny_skia::Pixmap;
 
 /// Linux evdev code of the left mouse button, which is what Wayland reports.
 const BTN_LEFT: u32 = 0x110;
@@ -71,8 +72,8 @@ pub fn run() -> Result<()> {
         .init();
 
     let origin = launch::Origin::from_args(std::env::args().skip(1));
-    let dock_config = config::DockConfig::load();
     let app_config = Config::load();
+    let dock_config = config::DockConfig::load(&app_config.views);
     log::info!(
         "timetracker-dock starting (side={:?}, width={}px)",
         dock_config.side,
@@ -94,15 +95,15 @@ pub fn run() -> Result<()> {
     let (anchor, margin) = match dock_config.side {
         Side::Left => (
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
-            (dock_config.margin_top, dock_config.margin_bottom),
+            dock_config.margin,
         ),
         Side::Right => (
             Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
-            (dock_config.margin_top, dock_config.margin_bottom),
+            dock_config.margin,
         ),
     };
     layer.set_anchor(anchor);
-    layer.set_margin(margin.0 as i32, 0, margin.1 as i32, 0);
+    layer.set_margin(margin as i32, 0, margin as i32, 0);
     layer.set_exclusive_zone(0);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     // A height of zero asks the compositor to stretch between the anchors.
@@ -151,7 +152,10 @@ pub fn run() -> Result<()> {
         pointer_position: None,
         size: None,
         scale: 1,
-        renderer: Renderer::default(),
+        renderer: Renderer::with_warmup(render::warm_up_text()),
+        pixmap: None,
+        frames: Vec::new(),
+        regions_for: None,
         wake,
         exit: false,
     };
@@ -219,6 +223,15 @@ fn spawn_sync(
     wake
 }
 
+/// A shared-memory buffer, and the parts of the pixmap it has yet to be given.
+struct Frame {
+    buffer: Buffer,
+    stale: Vec<PixelRect>,
+}
+
+/// How many pending patches a frame keeps before it just takes everything.
+const MAX_STALE_PATCHES: usize = 16;
+
 struct Dock {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -245,6 +258,13 @@ struct Dock {
     size: Option<(u32, u32)>,
     scale: i32,
     renderer: Renderer,
+    /// Kept between frames, so each one only repaints what changed.
+    pixmap: Option<Pixmap>,
+    /// Shared-memory buffers the pixmap is copied into. The compositor holds
+    /// one while the next is filled, so there are normally two.
+    frames: Vec<Frame>,
+    /// The layout the input and opaque regions were last set for.
+    regions_for: Option<Layout>,
     wake: Option<mpsc::Sender<()>>,
     exit: bool,
 }
@@ -304,7 +324,12 @@ impl Dock {
         };
 
         let (width, height) = layout.pixel_size();
-        let Some(mut pixmap) = tiny_skia::Pixmap::new(width, height) else {
+        let resized =
+            !matches!(&self.pixmap, Some(p) if p.width() == width && p.height() == height);
+        if resized {
+            self.pixmap = Pixmap::new(width, height);
+        }
+        let Some(pixmap) = self.pixmap.as_mut() else {
             return;
         };
 
@@ -318,39 +343,76 @@ impl Dock {
             side: self.config.side,
             palette: self.palette,
         };
-        self.renderer.paint(&layout, &scene, &mut pixmap);
+        let damage = self.renderer.paint(&layout, &scene, pixmap);
 
-        let stride = width as i32 * 4;
-        let Ok((buffer, canvas)) = self.pool.create_buffer(
-            width as i32,
-            height as i32,
-            stride,
-            wl_shm::Format::Argb8888,
-        ) else {
-            log::warn!("could not allocate a frame");
-            return;
+        let whole = PixelRect {
+            x: 0,
+            y: 0,
+            width: width as i32,
+            height: height as i32,
+        };
+        if resized {
+            self.frames.clear();
+        }
+        for frame in &mut self.frames {
+            frame.stale.extend_from_slice(&damage);
+            if frame.stale.len() > MAX_STALE_PATCHES {
+                frame.stale = vec![whole];
+            }
+        }
+
+        let free = self
+            .frames
+            .iter()
+            .position(|frame| frame.buffer.canvas(&mut self.pool).is_some());
+        let index = match free {
+            Some(index) => index,
+            None => {
+                let Ok((buffer, _)) = self.pool.create_buffer(
+                    width as i32,
+                    height as i32,
+                    width as i32 * 4,
+                    wl_shm::Format::Argb8888,
+                ) else {
+                    log::warn!("could not allocate a frame");
+                    return;
+                };
+                self.frames.push(Frame {
+                    buffer,
+                    stale: vec![whole],
+                });
+                self.frames.len() - 1
+            }
         };
 
-        // tiny-skia is premultiplied RGBA; wl_shm's ARGB8888 is premultiplied
-        // BGRA when read a byte at a time on little-endian machines.
-        for (target, source) in canvas
-            .chunks_exact_mut(4)
-            .zip(pixmap.data().chunks_exact(4))
-        {
-            target.copy_from_slice(&[source[2], source[1], source[0], source[3]]);
+        let frame = &mut self.frames[index];
+        let Some(canvas) = frame.buffer.canvas(&mut self.pool) else {
+            return;
+        };
+        for patch in frame.stale.drain(..) {
+            render::copy_patch(pixmap, canvas, patch);
         }
+        let buffer = &frame.buffer;
 
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.scale);
-        surface.damage_buffer(0, 0, width as i32, height as i32);
+        if resized {
+            surface.damage_buffer(0, 0, whole.width, whole.height);
+        } else {
+            for patch in &damage {
+                surface.damage_buffer(patch.x, patch.y, patch.width, patch.height);
+            }
+        }
 
         // The strip alone is opaque and clickable.
-        let (x, y, w, h) = layout.strip_rect();
-        let region = Region::new(&self.compositor).ok();
-        if let Some(region) = &region {
-            region.add(x as i32, y as i32, w as i32, h as i32);
-            self.layer.set_input_region(Some(region.wl_region()));
-            self.layer.set_opaque_region(Some(region.wl_region()));
+        if self.regions_for != Some(layout) {
+            let (x, y, w, h) = layout.strip_rect();
+            if let Ok(region) = Region::new(&self.compositor) {
+                region.add(x as i32, y as i32, w as i32, h as i32);
+                self.layer.set_input_region(Some(region.wl_region()));
+                self.layer.set_opaque_region(Some(region.wl_region()));
+                self.regions_for = Some(layout);
+            }
         }
 
         if buffer.attach_to(surface).is_err() {
@@ -359,7 +421,8 @@ impl Dock {
         self.layer.commit();
     }
 
-    fn pointer_moved(&mut self, position: Option<(f64, f64)>) {
+    /// Follows the pointer, and says whether that changed what is drawn.
+    fn pointer_moved(&mut self, position: Option<(f64, f64)>) -> bool {
         self.pointer_position = position;
         let (hovered, button_hovered) = match (self.layout(), position) {
             (Some(layout), Some((x, y))) => {
@@ -367,11 +430,10 @@ impl Dock {
             }
             _ => (None, false),
         };
-        if hovered != self.hovered || button_hovered != self.button_hovered {
-            self.hovered = hovered;
-            self.button_hovered = button_hovered;
-            self.draw();
-        }
+        let changed = hovered != self.hovered || button_hovered != self.button_hovered;
+        self.hovered = hovered;
+        self.button_hovered = button_hovered;
+        changed
     }
 }
 
@@ -507,15 +569,17 @@ impl PointerHandler for Dock {
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        // Motion arrives in bursts; draw once for the whole burst.
+        let mut changed = false;
         for event in events {
             if &event.surface != self.layer.wl_surface() {
                 continue;
             }
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.pointer_moved(Some(event.position));
+                    changed |= self.pointer_moved(Some(event.position));
                 }
-                PointerEventKind::Leave { .. } => self.pointer_moved(None),
+                PointerEventKind::Leave { .. } => changed |= self.pointer_moved(None),
                 PointerEventKind::Press { button, .. }
                     if button == BTN_LEFT && self.button_hovered =>
                 {
@@ -523,6 +587,9 @@ impl PointerHandler for Dock {
                 }
                 _ => {}
             }
+        }
+        if changed {
+            self.draw();
         }
     }
 }
