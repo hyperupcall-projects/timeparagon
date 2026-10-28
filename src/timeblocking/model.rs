@@ -22,14 +22,44 @@ pub struct Metadata {
     pub ignored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<calendar::scheduled::Link>,
-    /// The project this task is filed under, by `config::Project::id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<u64>,
+    /// The projects this task is filed under, by `config::Project::id`.
+    ///
+    /// Older task databases stored a single `project` value, so that shape is
+    /// still accepted when reading.
+    #[serde(
+        default,
+        alias = "project",
+        deserialize_with = "deserialize_ids",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub projects: Vec<u64>,
+    /// Free-form labels, such as "urgent" or "deep work".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
     /// Where the task happens, by `config::Place::id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<u64>,
+}
+
+/// Reads either a single id (the old `project` field) or a list of ids.
+fn deserialize_ids<'de, D>(deserializer: D) -> Result<Vec<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(u64),
+        Many(Vec<u64>),
+    }
+
+    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+        Some(OneOrMany::One(id)) => vec![id],
+        Some(OneOrMany::Many(ids)) => ids,
+        None => Vec::new(),
+    })
 }
 
 /// How urgent a task is. P1 is the most urgent; a task with neither has no
@@ -191,4 +221,33 @@ pub fn overdue(event: &Event) -> bool {
             .ok()
             .flatten()
             .is_some_and(|deadline| deadline.is_past(Local::now().naive_local()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_legacy_single_project_still_loads_and_is_saved_as_a_list() {
+        let old: Metadata =
+            serde_json::from_str(r#"{"minutes":30,"project":7}"#).expect("legacy metadata");
+        assert_eq!(old.projects, vec![7]);
+        assert!(old.labels.is_empty());
+
+        let mut metadata = old;
+        metadata.projects = vec![3, 7];
+        metadata.labels = vec!["deep work".into()];
+        let json = serde_json::to_string(&metadata).unwrap();
+        let read: Metadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(read.projects, vec![3, 7]);
+        assert_eq!(read.labels, ["deep work"]);
+        assert!(!json.contains("\"project\":"));
+    }
+
+    #[test]
+    fn metadata_without_projects_or_labels_omits_them() {
+        let json = serde_json::to_string(&Metadata::default()).unwrap();
+        assert!(!json.contains("project"));
+        assert!(!json.contains("labels"));
+    }
 }

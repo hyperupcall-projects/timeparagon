@@ -57,6 +57,13 @@ pub struct Workspace {
     pub backlog_query: String,
     /// When set, the backlog shows only tasks from this Google Tasks list.
     pub backlog_list: Option<String>,
+    /// Text that narrows the project picker in the task editor.
+    pub project_query: String,
+    /// The task whose project picker is open.
+    pub project_picker: Option<String>,
+    /// The label being typed for the open task, before it is added.
+    pub label_draft: String,
+    pub label_error: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -102,8 +109,20 @@ pub enum Action {
     Title(String),
     /// Save the edited name of this task.
     SaveTitle(String),
-    /// File this task under a project, or under none.
-    Project(String, Option<u64>),
+    /// Add a project to this task.
+    ProjectAdd(String, u64),
+    /// Remove a project from this task.
+    ProjectRemove(String, u64),
+    /// The project search box changed.
+    ProjectQuery(String),
+    /// Open or close the project picker for this task.
+    ProjectPicker(String, bool),
+    /// The label being typed for this task changed.
+    LabelDraft(String),
+    /// Add this label to the task.
+    AddLabel(String, String),
+    /// Remove a label from this task.
+    RemoveLabel(String, String),
     /// Give this task a priority, or clear it.
     Priority(String, Option<Priority>),
     /// Set where this task happens, by `config::Place::id`, or clear it.
@@ -675,14 +694,87 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.title_error = None;
             (id, Change::Title(title))
         }
-        Action::Project(id, project) => {
+        Action::ProjectAdd(id, project) => {
+            if state.config.projects.get(project).is_none() {
+                return Task::none();
+            }
             let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
-            if metadata(task).project == project {
+            let mut projects = metadata(task).projects;
+            if projects.contains(&project) {
                 return Task::none();
             }
-            (id, Change::Project(project))
+            projects.push(project);
+            projects.sort_unstable();
+            (id, Change::Projects(projects))
+        }
+        Action::ProjectRemove(id, project) => {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            let mut projects = metadata(task).projects;
+            if !projects.contains(&project) {
+                return Task::none();
+            }
+            projects.retain(|id| *id != project);
+            (id, Change::Projects(projects))
+        }
+        Action::ProjectQuery(value) => {
+            state.timeblocking.project_query = value;
+            return Task::none();
+        }
+        Action::ProjectPicker(id, open) => {
+            if open {
+                state.timeblocking.project_picker = Some(id);
+            } else if state.timeblocking.project_picker.as_deref() == Some(id.as_str()) {
+                state.timeblocking.project_picker = None;
+            }
+            return Task::none();
+        }
+        Action::LabelDraft(value) => {
+            state.timeblocking.label_draft = value;
+            state.timeblocking.label_error = None;
+            return Task::none();
+        }
+        Action::AddLabel(id, label) => {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            let label = match clean_label(&label) {
+                Ok(label) => label,
+                Err(error) => {
+                    state.timeblocking.label_error = Some(error.to_owned());
+                    return Task::none();
+                }
+            };
+            let mut labels = metadata(task).labels;
+            if labels
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&label))
+            {
+                state.timeblocking.label_draft.clear();
+                state.timeblocking.label_error = None;
+                return Task::none();
+            }
+            labels.push(label);
+            state.timeblocking.label_draft.clear();
+            state.timeblocking.label_error = None;
+            (id, Change::Labels(labels))
+        }
+        Action::RemoveLabel(id, label) => {
+            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+                return Task::none();
+            };
+            let mut labels = metadata(task).labels;
+            if !labels
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&label))
+            {
+                return Task::none();
+            }
+            labels.retain(|existing| !existing.eq_ignore_ascii_case(&label));
+            (id, Change::Labels(labels))
         }
         Action::Priority(id, priority) => {
             let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
@@ -745,7 +837,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     }
     if matches!(
         change,
-        Change::Project(_) | Change::Priority(_) | Change::Location(_)
+        Change::Projects(_) | Change::Labels(_) | Change::Priority(_) | Change::Location(_)
     ) {
         state.timeblocking.keep_open = Some(id.clone());
     }
@@ -889,10 +981,24 @@ fn new_todo_event(
     }
 }
 
+/// Trims a typed label and collapses runs of whitespace. Labels are short
+/// enough to fit on a task card, so very long ones are rejected.
+fn clean_label(input: &str) -> Result<String, &'static str> {
+    let label = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if label.is_empty() {
+        Err("A label needs a name")
+    } else if label.chars().count() > 40 {
+        Err("A label can be at most 40 characters")
+    } else {
+        Ok(label)
+    }
+}
+
 enum Change {
     Title(String),
     Estimate(u32),
-    Project(Option<u64>),
+    Projects(Vec<u64>),
+    Labels(Vec<String>),
     Priority(Option<Priority>),
     Location(Option<u64>),
     Deadline(Option<calendar::deadline::Deadline>),
@@ -1048,8 +1154,12 @@ fn save(
             data.metadata.minutes = minutes;
             database.save(&task, &data)?;
         }
-        Change::Project(project) => {
-            data.metadata.project = project;
+        Change::Projects(projects) => {
+            data.metadata.projects = projects;
+            database.save(&task, &data)?;
+        }
+        Change::Labels(labels) => {
+            data.metadata.labels = labels;
             database.save(&task, &data)?;
         }
         Change::Priority(priority) => {

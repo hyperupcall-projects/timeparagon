@@ -1315,7 +1315,9 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
     let size = Size::new(560.0, 1000.0);
 
     let mut ui = render(&state, size);
-    for label in ["Project", "Priority", "None", "P1", "P2", "Location"] {
+    for label in [
+        "Projects", "Labels", "Priority", "None", "P1", "P2", "Location",
+    ] {
         assert!(
             ui.find(label).is_ok(),
             "{label:?} is missing from the editor"
@@ -1324,6 +1326,26 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
     let _ = ui.click("P1")?;
     assert!(ui.into_messages().any(|message| matches!(message,
         Message::TimeBlocking(Action::Priority(id, Some(Priority::P1))) if id == "task:backlog")));
+
+    // Projects are added through a picker with its own search box.
+    let mut ui = render(&state, size);
+    let _ = ui.click("+ Add project")?;
+    assert!(ui.into_messages().any(|message| matches!(message,
+        Message::TimeBlocking(Action::ProjectPicker(id, true)) if id == "task:backlog")));
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::ProjectPicker("task:backlog".into(), true)),
+    );
+    let mut ui = render(&state, size);
+    assert!(ui.find("Search projects…").is_ok());
+    drop(ui);
+    state.timeblocking.project_query = "calc".into();
+    let mut ui = render(&state, size);
+    assert!(ui.find("School/Calculus").is_ok());
+    assert!(ui.find("School/Homework").is_err());
+    let _ = ui.click("School/Calculus")?;
+    assert!(ui.into_messages().any(|message| matches!(message,
+        Message::TimeBlocking(Action::ProjectAdd(id, 3)) if id == "task:backlog")));
 
     // The location button opens the place search for this task.
     let mut ui = render(&state, size);
@@ -1334,7 +1356,7 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
     // The saved choice comes back on the task, and the details stay open.
     let _ = app::update(
         &mut state,
-        Message::TimeBlocking(Action::Project("task:backlog".into(), Some(2))),
+        Message::TimeBlocking(Action::ProjectAdd("task:backlog".into(), 2)),
     );
     let mut saved = state.calendar.event("task:backlog").unwrap().clone();
     let mut data = saved
@@ -1346,7 +1368,7 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
             metadata: Default::default(),
             legacy_key: None,
         });
-    data.metadata.project = Some(2);
+    data.metadata.projects = vec![2];
     data.metadata.priority = Some(Priority::P2);
     saved.details.task_data = Some(data);
     let _ = app::update(
@@ -1358,9 +1380,28 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
     let task = state.calendar.event("task:backlog").unwrap();
     let metadata = time_slay::timeblocking::metadata(task);
     assert_eq!(
-        (metadata.project, metadata.priority),
-        (Some(2), Some(Priority::P2))
+        (metadata.projects, metadata.priority),
+        (vec![2], Some(Priority::P2))
     );
+    Ok(())
+}
+
+/// Labels are typed into the task editor and added to the task.
+#[test]
+fn the_task_editor_adds_custom_labels() -> Result<(), Error> {
+    use time_slay::timeblocking::Action;
+
+    let mut state = timeblocking_state();
+    let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+    state.timeblocking.label_draft = "deep work".into();
+
+    let mut ui = render(&state, Size::new(560.0, 1000.0));
+    assert!(ui.find("Labels").is_ok());
+    assert!(ui.find("Add a label…").is_err()); // the typed text replaces the hint
+    let _ = ui.click("Add")?;
+    assert!(ui.into_messages().any(|message| matches!(message,
+        Message::TimeBlocking(Action::AddLabel(id, label))
+            if id == "task:backlog" && label == "deep work")));
     Ok(())
 }
 

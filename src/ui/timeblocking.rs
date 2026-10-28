@@ -5,8 +5,8 @@ use crate::{
     timeblocking::{self as tb, Action},
 };
 use iced::widget::{
-    button, column, container, mouse_area, pick_list, rich_text, row, scrollable, span, text,
-    text_input, toggler,
+    button, column, container, mouse_area, rich_text, row, scrollable, span, text, text_input,
+    toggler,
 };
 use iced::{Color, Element, Fill, Length};
 fn msg(a: Action) -> Message {
@@ -84,6 +84,19 @@ pub fn task_row<'a>(
         );
     }
     let mut content = column![line].spacing(3);
+    if !m.labels.is_empty() {
+        content = content.push(
+            text(
+                m.labels
+                    .iter()
+                    .map(|label| format!("#{label}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+            .size(metrics.label() - 2.0)
+            .style(text::secondary),
+        );
+    }
     if backlog {
         content = content.push(
             text(tb::task_list_name(state, &task.calendar_id))
@@ -208,6 +221,7 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     }
     body = body.push(estimate_button(state, task, metrics.label()));
     body = body.push(project_field(state, task, metrics));
+    body = body.push(labels_field(state, task, metrics));
     body = body.push(priority_field(state, task, metrics));
     body = body.push(location_field(state, task, metrics));
     body = body.push(
@@ -256,19 +270,6 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     body.into()
 }
 
-/// A project offered in the task editor, or the choice of none.
-#[derive(Clone, PartialEq)]
-struct ProjectChoice {
-    id: Option<u64>,
-    name: String,
-}
-
-impl std::fmt::Display for ProjectChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.name)
-    }
-}
-
 fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
     text(label)
         .size(metrics.label())
@@ -276,54 +277,190 @@ fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
         .into()
 }
 
-/// Which project the task is filed under, picked from the Projects tab's list.
+/// The task's projects, plus a searchable picker for adding more.
 fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
-    let none = ProjectChoice {
-        id: None,
-        name: "No project".to_owned(),
-    };
-    let mut options = vec![none.clone()];
-    options.extend(
-        state
+    let projects = tb::metadata(task).projects;
+    let busy = state.timeblocking.busy.contains(&task.id);
+
+    let mut selected = column![].spacing(4).width(Fill);
+    // A project that has since been removed is simply left out.
+    for project in projects
+        .iter()
+        .filter_map(|id| state.config.projects.get(*id))
+    {
+        let mut remove = button(text("×").size(metrics.label()))
+            .padding([0, 4])
+            .style(button::text);
+        if !busy {
+            remove = remove.on_press(msg(Action::ProjectRemove(task.id.clone(), project.id)));
+        }
+        selected = selected.push(
+            row![
+                super::calendar::color_circle(
+                    project
+                        .color()
+                        .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e))
+                ),
+                text(&project.name).size(metrics.label()).width(Fill),
+                remove,
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+        );
+    }
+    if projects.is_empty() {
+        selected = selected.push(
+            text("No projects")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+
+    let open = state.timeblocking.project_picker.as_deref() == Some(task.id.as_str());
+    let mut toggle = button(
+        text(if open { "Done" } else { "+ Add project" })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .style(button::secondary);
+    if !busy {
+        toggle = toggle.on_press(msg(Action::ProjectPicker(task.id.clone(), !open)));
+    }
+
+    let mut content = column![field_label("Projects", metrics), selected, toggle].spacing(6);
+
+    if open {
+        content = content.push(
+            text_input("Search projects…", &state.timeblocking.project_query)
+                .on_input(|query| msg(Action::ProjectQuery(query)))
+                .size(metrics.label())
+                .width(Fill),
+        );
+
+        let query = state.timeblocking.project_query.trim().to_lowercase();
+        let available: Vec<_> = state
             .config
             .projects
             .sorted()
             .into_iter()
-            .map(|project| ProjectChoice {
-                id: Some(project.id),
-                name: project.name.clone(),
-            }),
-    );
+            .filter(|project| !projects.contains(&project.id))
+            .filter(|project| query.is_empty() || project.name.to_lowercase().contains(&query))
+            .collect();
 
-    // A project that has since been removed reads as no project.
-    let current = tb::metadata(task)
-        .project
-        .and_then(|id| state.config.projects.get(id));
-    let selected = current
-        .and_then(|project| options.iter().find(|choice| choice.id == Some(project.id)))
-        .cloned()
-        .unwrap_or(none);
-
-    let busy = state.timeblocking.busy.contains(&task.id);
-    let id = task.id.clone();
-    let picker = pick_list(options, Some(selected), move |choice: ProjectChoice| {
-        if busy {
-            Message::Ignored
-        } else {
-            msg(Action::Project(id.clone(), choice.id))
+        if available.is_empty() {
+            content = content.push(
+                text(if query.is_empty() {
+                    "Every project is already added"
+                } else {
+                    "No matching projects"
+                })
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+            );
         }
-    })
-    .text_size(metrics.label())
-    .width(Fill);
 
-    let mut line = row![].spacing(8).align_y(iced::Center);
-    if let Some(color) = current.and_then(|project| project.color()) {
-        line = line.push(super::calendar::color_circle(color));
+        for project in available {
+            let mut add = button(text(&project.name).size(metrics.label()).width(Fill))
+                .width(Fill)
+                .style(button::text);
+            if !busy {
+                add = add.on_press(msg(Action::ProjectAdd(task.id.clone(), project.id)));
+            }
+            content = content.push(
+                row![
+                    super::calendar::color_circle(
+                        project
+                            .color()
+                            .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e))
+                    ),
+                    add,
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
+            );
+        }
     }
 
-    column![field_label("Project", metrics), line.push(picker)]
+    content.into()
+}
+
+/// Free-form labels for the task: the ones it has, a field to add another, and
+/// matching labels already used elsewhere as suggestions.
+fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let labels = tb::metadata(task).labels;
+    let busy = state.timeblocking.busy.contains(&task.id);
+
+    let mut content = column![field_label("Labels", metrics)]
         .spacing(4)
-        .into()
+        .width(Fill);
+
+    for label in &labels {
+        let mut remove = button(text("×").size(metrics.label()))
+            .padding([0, 4])
+            .style(button::text);
+        if !busy {
+            remove = remove.on_press(msg(Action::RemoveLabel(task.id.clone(), label.clone())));
+        }
+        content = content.push(
+            row![
+                text(label.clone()).size(metrics.label()).width(Fill),
+                remove,
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+        );
+    }
+
+    let mut input = text_input("Add a label…", &state.timeblocking.label_draft)
+        .size(metrics.label())
+        .width(Fill);
+    let mut add = button(text("Add").size(metrics.label())).style(button::primary);
+    if !busy {
+        let typed = state.timeblocking.label_draft.clone();
+        input = input
+            .on_input(|value| msg(Action::LabelDraft(value)))
+            .on_submit(msg(Action::AddLabel(task.id.clone(), typed.clone())));
+        add = add.on_press(msg(Action::AddLabel(task.id.clone(), typed)));
+    }
+    content = content.push(row![input, add].spacing(6).align_y(iced::Center));
+
+    if let Some(error) = &state.timeblocking.label_error {
+        content = content.push(text(error).size(metrics.label()).style(text::danger));
+    }
+
+    // Labels already used on other tasks make spelling them again unnecessary.
+    let query = state.timeblocking.label_draft.trim().to_lowercase();
+    if !query.is_empty() {
+        let mut seen: Vec<String> = Vec::new();
+        for other in state.calendar.events.iter().filter(|event| event.is_task()) {
+            for label in tb::metadata(other).labels {
+                if labels
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(&label))
+                    || !label.to_lowercase().contains(&query)
+                    || seen
+                        .iter()
+                        .any(|existing: &String| existing.eq_ignore_ascii_case(&label))
+                {
+                    continue;
+                }
+                seen.push(label);
+            }
+        }
+        seen.truncate(5);
+        for label in seen {
+            content = content.push(
+                button(text(format!("+ {label}")).size(metrics.label() - 1.0))
+                    .width(Fill)
+                    .style(button::text)
+                    .on_press(msg(Action::AddLabel(task.id.clone(), label))),
+            );
+        }
+    }
+
+    content.into()
 }
 
 /// The task's priority: none, P1 or P2.

@@ -1837,6 +1837,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     } else {
                         calendar::clock_label(event.end)
                     };
+                    state.timeblocking.project_query.clear();
+                    state.timeblocking.project_picker = None;
+                    state.timeblocking.label_draft.clear();
+                    state.timeblocking.label_error = None;
                 }
             }
             state.calendar.open_event = Some(id);
