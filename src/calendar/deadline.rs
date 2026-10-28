@@ -7,22 +7,19 @@
 //! ```text
 //! DEADLINE: 2026-10-30 17:00   the deadline, day and time
 //! DUE: 2026-10-30              the deadline, day only (DEADLINE wins if both)
-//! DUE_TIME: 09:30              clock time to show the task at on its due day
 //! ```
+//!
+//! A task's place on the grid comes from its Calendar-backed schedule, not
+//! from the notes. Google Tasks itself has no clock time, so the app does not
+//! try to infer one.
 use std::fmt;
 
-use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 
 use super::notes::{Notes, line_value};
-use super::Event;
 
 const DEADLINE: &str = "DEADLINE:";
 const DUE: &str = "DUE:";
-const DUE_TIME: &str = "DUE_TIME:";
-
-/// How long a task occupies the grid when its notes give a start time but the
-/// task has no estimate.
-const DEFAULT_MINUTES: u32 = 30;
 
 const DATE_ERROR: &str = "Enter a deadline as YYYY-MM-DD";
 const DATE_TIME_ERROR: &str = "Enter a deadline as YYYY-MM-DD HH:MM";
@@ -119,21 +116,9 @@ pub fn read_deadline(notes: &str) -> Result<Option<Deadline>, String> {
     Ok(timed.or(dated))
 }
 
-/// The clock time the task should be shown at on its due day.
-pub fn read_due_time(notes: &str) -> Result<Option<NaiveTime>, String> {
-    let mut time = None;
-    for line in Notes::new(notes).lines() {
-        if let Some(text) = line_value(line, DUE_TIME) {
-            time.get_or_insert(parse_time(text)?);
-        }
-    }
-    Ok(time)
-}
-
 /// Whether every reserved line parses, so a typo can be reported.
 pub fn check(notes: &str) -> Result<(), String> {
     read_deadline(notes)?;
-    read_due_time(notes)?;
     Ok(())
 }
 
@@ -159,30 +144,6 @@ pub fn write(notes: &str, deadline: Option<Deadline>) -> String {
         Some(deadline) => format!("{deadline}\n{body}"),
         None => body,
     }
-}
-
-/// Moves a task that is only dated onto the grid at its `DUE_TIME:`. The block
-/// lasts as long as the task's estimate. Tasks with a time of their own, such
-/// as ones backed by a Calendar event, are left alone, as are undated tasks.
-pub fn place(event: &mut Event, minutes: u32) {
-    if !event.all_day {
-        return;
-    }
-    let day = event.start.date_naive();
-    if day == crate::timeblocking::UNDATED {
-        return;
-    }
-    let Ok(Some(time)) = read_due_time(&event.details.description) else {
-        return;
-    };
-    let minutes = if minutes == 0 {
-        DEFAULT_MINUTES
-    } else {
-        minutes
-    };
-    event.start = super::at_clock(day, time.hour(), time.minute());
-    event.end = event.start + Duration::minutes(i64::from(minutes));
-    event.all_day = false;
 }
 
 #[cfg(test)]
@@ -230,27 +191,19 @@ mod tests {
     }
 
     #[test]
-    fn due_time_is_read_and_survives_deadline_edits() {
+    fn a_former_due_time_line_is_ordinary_prose_now() {
         let notes = "DUE_TIME: 09:30\nDEADLINE: 2026-10-30 17:00\nNotes";
-        assert_eq!(
-            read_due_time(notes).unwrap(),
-            Some(parse_time("09:30").unwrap())
-        );
         let edited = write(notes, Some(at("2026-11-02")));
         assert_eq!(edited, "DUE: 2026-11-02\nDUE_TIME: 09:30\nNotes");
         assert_eq!(write(&edited, None), "DUE_TIME: 09:30\nNotes");
         assert_eq!(read_deadline("DUE_TIME: 09:30").unwrap(), None);
-        assert_eq!(read_due_time("DUE: 2026-10-30").unwrap(), None);
+        assert!(check("DUE_TIME: 09:30").is_ok());
     }
 
     #[test]
     fn reserved_lines_are_found_on_any_line() {
         let notes = "Prose first\nDEADLINE: 2026-10-30 17:00\nMore prose\nDUE_TIME: 09:30";
         assert_eq!(read_deadline(notes).unwrap(), Some(at("2026-10-30 17:00")));
-        assert_eq!(
-            read_due_time(notes).unwrap(),
-            Some(parse_time("09:30").unwrap())
-        );
         assert!(check("DUE: tomorrow").is_err());
         assert!(check("Prose first\nDUE: tomorrow").is_err());
         let edited = write(notes, Some(at("2026-11-02")));
@@ -284,11 +237,6 @@ mod tests {
             assert!(read_deadline(&notes).is_err(), "{value}");
             assert_eq!(write(&notes, None), "Keep my notes");
         }
-        for value in ["9:30", "24:00", "noon", ""] {
-            let notes = format!("DUE_TIME: {value}\nKeep my notes");
-            assert!(read_due_time(&notes).is_err(), "{value}");
-            assert!(check(&notes).is_err());
-        }
     }
 
     #[test]
@@ -312,49 +260,5 @@ mod tests {
         assert!(!at("2026-10-30 18:00").is_past(now));
         assert!(!at("2026-10-30").is_past(now));
         assert!(at("2026-10-29").is_past(now));
-    }
-
-    fn all_day_task(notes: &str, day: &str) -> Event {
-        let mut task = super::super::sample_snapshot().events.remove(0);
-        task.id = "task:timed".into();
-        task.calendar_id = "tasks:list".into();
-        task.all_day = true;
-        task.start = super::super::at_clock(date(day), 0, 0);
-        task.end = super::super::at_clock(date(day).succ_opt().unwrap(), 0, 0);
-        task.details.description = notes.into();
-        task
-    }
-
-    #[test]
-    fn a_due_time_puts_the_task_on_the_grid_for_its_estimate() {
-        let mut task = all_day_task("DUE_TIME: 09:30\nNotes", "2026-10-30");
-        place(&mut task, 45);
-        assert!(!task.all_day);
-        assert_eq!(
-            task.start,
-            super::super::at_clock(date("2026-10-30"), 9, 30)
-        );
-        assert_eq!(task.end, task.start + Duration::minutes(45));
-
-        let mut unestimated = all_day_task("DUE_TIME: 23:45", "2026-10-30");
-        place(&mut unestimated, 0);
-        assert_eq!(
-            unestimated.end,
-            unestimated.start + Duration::minutes(i64::from(DEFAULT_MINUTES))
-        );
-    }
-
-    #[test]
-    fn tasks_without_a_usable_due_time_stay_all_day() {
-        for notes in ["Notes", "DUE_TIME: late", "DEADLINE: 2026-10-30 17:00"] {
-            let mut task = all_day_task(notes, "2026-10-30");
-            let before = task.clone();
-            place(&mut task, 0);
-            assert_eq!(task, before, "{notes}");
-        }
-        let mut undated = all_day_task("DUE_TIME: 09:30", "1970-01-01");
-        let before = undated.clone();
-        place(&mut undated, 0);
-        assert_eq!(undated, before);
     }
 }

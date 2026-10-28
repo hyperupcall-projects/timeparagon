@@ -1,0 +1,489 @@
+//! The Habits tab: the recurring events on the TimeSlay calendar.
+//!
+//! A habit is a Calendar event like any other, so the list shows what Google
+//! holds. The editor edits the master event, including the raw RFC 5545
+//! recurrence array (`RRULE`, `RDATE` and `EXDATE`), so a rule is never
+//! limited to the handful of shortcuts offered above it.
+
+use iced::widget::{
+    Space, button, column, container, mouse_area, row, scrollable, stack, text, text_input,
+};
+use iced::{Alignment, Color, Element, Fill, Length, Theme};
+
+use crate::app::{Message, State};
+use crate::calendar::colors;
+use crate::habits::{self, Action, Draft, Habit, Preset};
+
+use super::layout::Metrics;
+
+/// Room left for the scrollbar, which is drawn over the content.
+const SCROLLBAR_GUTTER: f32 = 14.0;
+
+/// The shortcuts offered above the rule editor. Choosing one only fills the
+/// editor; the rule stays editable afterwards.
+const PRESETS: [Preset; 6] = [
+    Preset::Daily,
+    Preset::Weekdays,
+    Preset::Weekly,
+    Preset::Monthly,
+    Preset::Yearly,
+    Preset::None,
+];
+
+fn msg(action: Action) -> Message {
+    Message::Habits(action)
+}
+
+pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let mut new = button(text("New habit").size(metrics.label()));
+    if !state.habits.busy {
+        new = new.on_press(msg(Action::New));
+    }
+
+    let mut body = column![
+        row![
+            text("Habits").size(metrics.label() + 3.0).width(Fill),
+            new,
+        ]
+        .spacing(metrics.spacing)
+        .align_y(Alignment::Center),
+        text("Recurring events on the TimeSlay calendar. Open one to edit its name, time or full RFC 5545 recurrence rule.")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    if let Some(error) = &state.habits.error {
+        body = body.push(text(error).size(metrics.label()).style(text::danger));
+    }
+
+    if state.habits.habits.is_empty() {
+        body = body.push(
+            text(if state.habits.loaded {
+                "No habits yet. Add one to put a recurring event on the calendar."
+            } else if state.habits.busy {
+                "Loading habits…"
+            } else {
+                "Open the tab again to load habits from Google Calendar."
+            })
+            .size(metrics.label())
+            .style(text::secondary),
+        );
+    }
+
+    for habit in &state.habits.habits {
+        body = body.push(card(state, habit, metrics));
+    }
+
+    container(
+        scrollable(container(body).padding(iced::Padding {
+            right: SCROLLBAR_GUTTER,
+            ..iced::Padding::ZERO
+        }))
+        .width(Fill)
+        .height(Fill),
+    )
+    .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+fn card_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        border: iced::Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+/// One habit: its color, name, rule and time, with the actions it offers.
+fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a, Message> {
+    let color = habit.color(&state.config.calendar);
+    let mut edit = button(text("Edit").size(metrics.label())).padding([2, 6]);
+    let mut delete = button(text("Delete").size(metrics.label()))
+        .padding([2, 6])
+        .style(button::secondary);
+    if !state.habits.busy {
+        edit = edit.on_press(msg(Action::Edit(habit.id.clone())));
+        delete = delete.on_press(msg(Action::DeleteRequested(habit.id.clone())));
+    }
+
+    let actions = row![edit, delete].spacing(6).align_y(Alignment::Center);
+
+    let header = row![
+        super::calendar::color_circle(color),
+        text(&habit.title).size(metrics.label() + 1.0).width(Fill),
+        actions,
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+
+    let mut details = column![header].spacing(2).width(Fill);
+    details = details.push(
+        text(habit.recurrence_label())
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    );
+    if !habit.notes.is_empty() {
+        details = details.push(
+            text(&habit.notes)
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+    details = details.push(
+        text(habit.time_label())
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    );
+
+    container(details)
+        .padding([6, 8])
+        .width(Fill)
+        .style(card_style)
+        .into()
+}
+
+/// The add/edit popup, drawn over everything including the tabs.
+pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(draft) = &state.habits.draft else {
+        return Space::new().into();
+    };
+    let card = container(scrollable(form(draft, state.habits.busy, metrics)))
+        .padding(16)
+        .width(Fill)
+        .max_width(480)
+        .max_height((metrics.size.height - 32.0).max(80.0))
+        .style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(palette.background.base.text),
+                border: iced::Border {
+                    radius: 10.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        });
+    overlay(card.into(), msg(Action::CancelEdit))
+}
+
+/// The "are you sure" prompt for deleting a habit and its whole series.
+pub fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(id) = state.habits.confirm_delete.as_deref() else {
+        return Space::new().into();
+    };
+    let Some(habit) = state.habits.habits.iter().find(|habit| habit.id == id) else {
+        return Space::new().into();
+    };
+
+    let mut delete = button(
+        text("Delete series")
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .style(button::secondary);
+    if !state.habits.busy {
+        delete = delete.on_press(msg(Action::DeleteConfirmed(id.to_owned())));
+    }
+    let buttons = row![
+        button(text("Cancel").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .on_press(msg(Action::DeleteCancelled))
+            .style(button::secondary),
+        delete,
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let card = container(
+        column![
+            text("Delete this habit?").size(metrics.label() + 1.0),
+            text(&habit.title)
+                .size(metrics.label())
+                .style(text::secondary),
+            text("Every occurrence in the series is removed from Google Calendar.")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+            buttons,
+        ]
+        .spacing(metrics.spacing)
+        .width(Fill),
+    )
+    .padding(16)
+    .width(Fill)
+    .max_width(360)
+    .style(|theme: &iced::Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: Some(palette.background.base.text),
+            border: iced::Border {
+                radius: 10.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    });
+
+    overlay(card.into(), msg(Action::DeleteCancelled))
+}
+
+/// A dimmed backdrop that dismisses on a click, with `card` centred over it.
+fn overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
+    let backdrop =
+        mouse_area(
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|_| container::Style {
+                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    ..Default::default()
+                }),
+        )
+        .on_press(dismiss)
+        .on_scroll(|_| Message::Ignored);
+    let foreground = container(
+        mouse_area(card)
+            .on_press(Message::Ignored)
+            .on_scroll(|_| Message::Ignored),
+    )
+    .padding(16)
+    .center_x(Fill)
+    .center_y(Fill);
+    stack![backdrop, foreground].into()
+}
+
+fn form<'a>(draft: &'a Draft, busy: bool, metrics: &Metrics) -> Element<'a, Message> {
+    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
+
+    let mut title = text_input("Habit name", &draft.title)
+        .id(iced::widget::Id::new(habits::TITLE_FIELD))
+        .size(metrics.label())
+        .width(Fill);
+    title = title
+        .on_input(|value| msg(Action::Title(value)))
+        .on_submit(msg(Action::Save));
+
+    let mut body = column![
+        text(if draft.id.is_some() {
+            "Edit habit"
+        } else {
+            "New habit"
+        })
+        .size(18),
+        label("Name"),
+        title,
+        label("Notes (optional)"),
+        text_input("Notes", &draft.notes)
+            .on_input(|value| msg(Action::Notes(value)))
+            .size(metrics.label())
+            .width(Fill),
+    ]
+    .spacing(6);
+
+    // Date and times: one column when narrow, one row when there is room.
+    let date = text_input("YYYY-MM-DD", &draft.date)
+        .on_input(|value| msg(Action::Date(value)))
+        .size(metrics.label());
+    let start = text_input("HH:MM", &draft.start)
+        .on_input(|value| msg(Action::Start(value)))
+        .size(metrics.label());
+    let end = text_input("HH:MM", &draft.end)
+        .on_input(|value| msg(Action::End(value)))
+        .size(metrics.label());
+    let when: Element<'a, Message> = if metrics.breakpoint.is_compact() {
+        column![
+            date,
+            row![label("From"), start].spacing(6),
+            row![label("To"), end].spacing(6)
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        row![date.width(Length::FillPortion(2)), start, end]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+    };
+    body = body.push(label("Day and time")).push(when);
+
+    // Shortcuts only seed the editor; the rule below stays the source of
+    // truth and can be changed in any way RFC 5545 allows.
+    let mut presets = column![].spacing(4);
+    for chunk in PRESETS.chunks(3) {
+        let mut line = row![].spacing(4);
+        for preset in chunk {
+            line = line.push(
+                button(text(preset.label()).size(metrics.label()).center())
+                    .padding([2, 6])
+                    .style(button::secondary)
+                    .on_press(msg(Action::Preset(*preset))),
+            );
+        }
+        presets = presets.push(line);
+    }
+    body = body.push(label("Repeat")).push(presets);
+
+    body = body
+        .push(label("RRULE (without the RRULE: prefix)"))
+        .push(
+            text_input("FREQ=WEEKLY;BYDAY=MO,WE", &draft.rrule)
+                .on_input(|value| msg(Action::Rule(value)))
+                .size(metrics.label())
+                .width(Fill),
+        )
+        .push(label("RDATE (one per line or semicolon)"))
+        .push(
+            text_input("RDATE;VALUE=DATE:20261102,20261109", &draft.rdates)
+                .on_input(|value| msg(Action::Rdates(value)))
+                .size(metrics.label())
+                .width(Fill),
+        )
+        .push(label("EXDATE (one per line or semicolon)"))
+        .push(
+            text_input("EXDATE;TZID=Europe/London:20261111T090000", &draft.exdates)
+                .on_input(|value| msg(Action::Exdates(value)))
+                .size(metrics.label())
+                .width(Fill),
+        );
+
+    body = body.push(label("Color")).push(color_picker(draft, metrics));
+
+    if let Some(error) = &draft.error {
+        body = body.push(text(error).size(metrics.label()).style(text::danger));
+    }
+
+    let mut save = button(
+        text(if busy { "Saving…" } else { "Save" })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill);
+    if !busy {
+        save = save.on_press(msg(Action::Save));
+    }
+    let cancel = button(text("Cancel").size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .on_press(msg(Action::CancelEdit))
+        .style(button::secondary);
+
+    body.push(row![save, cancel].spacing(8).width(Fill)).into()
+}
+
+/// The habit's own Google color. "Default" clears it, so the habit follows
+/// the color picked in Settings.
+fn color_picker<'a>(draft: &Draft, _metrics: &Metrics) -> Element<'a, Message> {
+    let selected = draft.color_id.as_deref().and_then(colors::event);
+    let mut swatches = row![].spacing(4);
+    for color in colors::palette() {
+        swatches = swatches.push(super::calendar::swatch_button(
+            color,
+            selected == Some(color),
+            msg(Action::Color(Some(color))),
+        ));
+    }
+    swatches = swatches.push(
+        button(text("Default").size(11.0))
+            .padding([1, 4])
+            .style(button::text)
+            .on_press(msg(Action::Color(None))),
+    );
+    swatches.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Screen;
+
+    fn state() -> State {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.screen = Screen::Habits;
+        state.habits.loaded = true;
+        state
+    }
+
+    fn habit(id: &str, rule: &str) -> Habit {
+        Habit {
+            id: id.into(),
+            calendar_id: "time-slay".into(),
+            title: "Stretch".into(),
+            notes: String::new(),
+            start: crate::calendar::at_clock(
+                chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+                9,
+                0,
+            ),
+            end: crate::calendar::at_clock(
+                chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+                9,
+                30,
+            ),
+            recurrence: habits::Recurrence::from_lines(&[rule.to_owned()]),
+            color_id: None,
+        }
+    }
+
+    #[test]
+    fn an_empty_habits_tab_offers_the_new_button() {
+        let state = state();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            iced::Size::new(800.0, 600.0),
+            crate::ui::view(&state),
+        );
+        assert!(ui.find("Habits").is_ok());
+        assert!(ui.find("New habit").is_ok());
+        assert!(
+            ui.find("No habits yet. Add one to put a recurring event on the calendar.")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_habit_shows_its_rule() {
+        let mut state = state();
+        state.habits.habits = vec![habit("one", "RRULE:FREQ=WEEKLY;BYDAY=MO")];
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            iced::Size::new(800.0, 600.0),
+            crate::ui::view(&state),
+        );
+        assert!(ui.find("Stretch").is_ok());
+        assert!(ui.find("RRULE:FREQ=WEEKLY;BYDAY=MO").is_ok());
+        assert!(ui.find("Edit").is_ok());
+    }
+
+    #[test]
+    fn the_editor_offers_the_whole_recurrence_array() {
+        let mut state = state();
+        state.habits.draft = Some(Draft::new(
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+            None,
+        ));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            iced::Size::new(800.0, 700.0),
+            crate::ui::view(&state),
+        );
+        assert!(ui.find("RRULE (without the RRULE: prefix)").is_ok());
+        assert!(ui.find("RDATE (one per line or semicolon)").is_ok());
+        assert!(ui.find("EXDATE (one per line or semicolon)").is_ok());
+        assert!(ui.find("New habit").is_ok());
+    }
+}

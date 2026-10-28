@@ -87,6 +87,15 @@ pub fn event_id(color: Color) -> Option<&'static str> {
         .map(|(id, _)| *id)
 }
 
+/// The default color of a habit event on the app's TimeSlay calendar. Grape,
+/// so recurring habits read apart from banana time blocks and blue tasks.
+pub const HABIT: Color = Color {
+    r: 0xDB as f32 / 255.0,
+    g: 0xAD as f32 / 255.0,
+    b: 0xFF as f32 / 255.0,
+    a: 1.0,
+};
+
 /// Fallback when a calendar has no color of its own.
 pub const DEFAULT_EVENT: Color = Color {
     r: 0x03 as f32 / 255.0,

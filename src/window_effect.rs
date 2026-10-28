@@ -124,7 +124,10 @@ impl Effect {
         });
         for (path, contents) in [
             (effect.directory.join("metadata.json"), metadata.to_string()),
-            (code.join("main.js"), SCRIPT.replace("__PID__", &pid.to_string())),
+            (
+                code.join("main.js"),
+                SCRIPT.replace("__PID__", &pid.to_string()),
+            ),
         ] {
             std::fs::OpenOptions::new()
                 .create_new(true)

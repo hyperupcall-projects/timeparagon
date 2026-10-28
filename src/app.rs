@@ -48,6 +48,8 @@ pub enum Screen {
     Projects,
     /// The places events happen at, and the trips between them.
     Travel,
+    /// Recurring events on the TimeSlay calendar: habits and their rules.
+    Habits,
     /// The notepad: a page of free text kept between sessions.
     Notepad,
     KeepNotes,
@@ -234,6 +236,8 @@ pub struct State {
 
     pub calendar: calendar::Store,
     pub timeblocking: crate::timeblocking::Workspace,
+    /// The Habits tab: the habit masters and the rule editor.
+    pub habits: crate::habits::Store,
     pub keep: crate::keep::Store,
     pub inbox: crate::inbox::Inbox,
     /// Google accounts connected for the Gmail integration.
@@ -261,6 +265,7 @@ pub enum Message {
     WeekScrolled(f32),
     Projects(crate::projects::Action),
     Travel(crate::travel::Action),
+    Habits(crate::habits::Action),
     KeepRefresh,
     KeepSignin,
     KeepLoaded(Result<crate::keep::Snapshot, String>),
@@ -375,6 +380,8 @@ pub enum Message {
     TimeBlockColorPicked(Option<iced::Color>),
     /// Color scheduled task events on the TimeSlay calendar; `None` resets it.
     TaskEventColorPicked(Option<iced::Color>),
+    /// Color habit events on the TimeSlay calendar; `None` resets it.
+    HabitColorPicked(Option<iced::Color>),
     /// Delete a single Google Task instance (one occurrence of a recurring task).
     TaskDeleteRequested(String),
     /// The user confirmed the task deletion prompt.
@@ -519,6 +526,7 @@ impl State {
             keep: crate::keep::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
             timeblocking: crate::timeblocking::Workspace::default(),
+            habits: crate::habits::Store::default(),
             inbox: crate::inbox::Inbox::default(),
             accounts: crate::integrations::accounts::Accounts::load(),
         }
@@ -908,6 +916,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 state.calendar.open_event = None;
                 state.inbox.picker = None;
             }
+            if screen == Screen::Habits {
+                state.calendar.open_event = None;
+                state.habits.confirm_delete = None;
+            }
             state.screen = screen;
             let close = crate::timeblocking::close(state);
             let close = resize_for_week_transition(state, was_weekly, close);
@@ -915,6 +927,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 Task::batch([close, sync_calendar(state)])
             } else if screen == Screen::KeepNotes {
                 Task::batch([close, refresh_keep(state)])
+            } else if screen == Screen::Habits {
+                Task::batch([
+                    close,
+                    Task::done(Message::Habits(crate::habits::Action::Refresh)),
+                ])
             } else {
                 close
             }
@@ -991,6 +1008,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::Projects(action) => crate::projects::update(state, action),
         Message::Travel(action) => crate::travel::update(state, action),
+        Message::Habits(action) => crate::habits::update(state, action),
 
         Message::KeepRefresh => refresh_keep(state),
         Message::KeepSignin => {
@@ -2204,6 +2222,12 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
+        Message::HabitColorPicked(color) => {
+            state.config.calendar.set_habit_color(color);
+            state.calendar.apply_task_colors(&state.config.calendar);
+            queue_save(state)
+        }
+
         Message::GoogleClientIdChanged(id) => {
             state.config.calendar.client_id = id;
             queue_save(state)
@@ -2440,9 +2464,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventDraftKindSelected(kind) => {
             let app_calendar = state.config.calendar.app_calendar.clone();
-            let default_calendar = state
-                .calendar
-                .default_calendar_id(&state.config.calendar);
+            let default_calendar = state.calendar.default_calendar_id(&state.config.calendar);
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.kind = kind;
                 // A time block always lives on the app's TimeSlay calendar;
@@ -2625,8 +2647,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            let is_block = state.config.calendar.app_calendar.as_deref()
-                == Some(draft.calendar_id.as_str());
+            let is_block =
+                state.config.calendar.app_calendar.as_deref() == Some(draft.calendar_id.as_str());
             let description = if is_block {
                 calendar::event_description(&draft.description, "Time Block", &[])
             } else {
@@ -2862,6 +2884,21 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     if state.travel.open.is_some() {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::Travel(crate::travel::Action::CloseLeg)),
+            _ => None,
+        };
+    }
+    if state.habits.draft.is_some() {
+        // Typing into the habit editor must not reach the clock shortcuts.
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Habits(crate::habits::Action::CancelEdit)),
+            _ => None,
+        };
+    }
+    if state.habits.confirm_delete.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => {
+                Some(Message::Habits(crate::habits::Action::DeleteCancelled))
+            }
             _ => None,
         };
     }

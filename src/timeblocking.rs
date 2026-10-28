@@ -1299,7 +1299,6 @@ fn unschedule_with(
         .earliest()
         .ok_or("Invalid local date")?;
     task.end = task.start + chrono::Duration::days(1);
-    calendar::deadline::place(task, data.metadata.minutes);
     // If moving lists fails, sync still sees the successfully cleared schedule.
     database.save(task, data)?;
     if let Some(destination) = destination.filter(|destination| *destination != link.list_id) {
@@ -1401,8 +1400,7 @@ fn schedule_with(
     // this reservation even if a later API call fails.
     link.calendar_id = destination_calendar;
     // Keep Google's event color in step with the chosen task color.
-    link.color_id =
-        calendar::colors::event_id(settings.task_event_color()).map(str::to_owned);
+    link.color_id = calendar::colors::event_id(settings.task_event_color()).map(str::to_owned);
     link.pending = true;
     link.block = data.metadata.block.clone();
     link.order = data.metadata.order;
@@ -1677,7 +1675,7 @@ mod tests {
             task.id = "task:original-task".into();
             task.calendar_id = "tasks:has-time".into();
             task.details.description =
-                "DEADLINE: 2026-12-31\nDUE_TIME: 09:00\nKeep these notes.".into();
+                "DEADLINE: 2026-12-31\nSome other note.\nKeep these notes.".into();
             task.details.task_data = None;
             let original = task.clone();
             let mut database =

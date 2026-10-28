@@ -457,14 +457,15 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
     }
 }
 
-/// The tab label at `index` (Calendar, Inbox, Projects, Backlog, Travel, Keep,
-/// Notepad, Settings) for a window of `width`.
+/// The tab label at `index` (Calendar, Inbox, Projects, Backlog, Travel,
+/// Habits, Keep, Notepad, Settings) for a window of `width`.
 fn tab_label(width: f32, index: usize) -> &'static str {
     time_slay::ui::tab_labels(width)[index]
 }
 
 /// Navigation is one row in three groups at every width, never overflowing:
-/// Calendar, then Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
+/// Calendar, then Inbox/Projects/Backlog/Travel/Habits, then
+/// Keep/Notepad/Settings.
 #[test]
 fn the_tabs_are_one_row_in_three_groups() {
     let state = state();
@@ -480,7 +481,8 @@ fn the_tabs_are_one_row_in_three_groups() {
             );
             bounds.push(found);
         }
-        // Order: Calendar, Inbox, Projects, Backlog, Travel, Keep, Notepad, Settings.
+        // Order: Calendar, Inbox, Projects, Backlog, Travel, Habits, Keep,
+        // Notepad, Settings.
         for pair in bounds.windows(2) {
             assert!(pair[0].x + pair[0].width <= pair[1].x, "order at {width}px");
             assert!(
@@ -490,7 +492,7 @@ fn the_tabs_are_one_row_in_three_groups() {
         }
         // Space separates the groups more than it separates tabs within one.
         let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
-        assert!(gap(0, 1) > gap(1, 2) && gap(4, 5) > gap(5, 6));
+        assert!(gap(0, 1) > gap(1, 2) && gap(5, 6) > gap(4, 5));
     }
 }
 
@@ -546,7 +548,7 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(420.0, 600.0));
 
-    let _ = ui.click(tab_label(420.0, 7))?;
+    let _ = ui.click(tab_label(420.0, 8))?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -632,6 +634,7 @@ fn opening_an_event_shows_its_google_details() {
         meeting: "https://meet.google.com/abc-defg-hij".into(),
         organizer: "Ada".into(),
         attendees: vec!["Grace (accepted)".into()],
+        ..time_slay::calendar::Details::default()
     };
     state.calendar.open_event = Some("standup".into());
 
@@ -765,8 +768,8 @@ fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
     Ok(())
 }
 
-/// The day view counts tasks without a time or time block. Tasks on the grid
-/// via DUE_TIME, undated tasks, and tasks on other days stay out of the count.
+/// The day view counts tasks without a time or time block. Timed tasks,
+/// undated tasks, and tasks on other days stay out of the count.
 #[test]
 fn the_calendar_shows_how_many_tasks_are_not_planned() -> Result<(), Error> {
     let mut state = timeblocking_state();
@@ -783,19 +786,24 @@ fn the_calendar_shows_how_many_tasks_are_not_planned() -> Result<(), Error> {
     task.end = task.start + chrono::Duration::days(1);
     state.calendar.add_event(task.clone());
 
-    task.id = "task:due-time".into();
+    task.id = "task:timed".into();
     task.title = "Already on the calendar".into();
-    task.details.description = "DUE_TIME: 09:30".into();
-    time_slay::calendar::deadline::place(&mut task, 30);
-    assert!(!task.all_day);
-    // A due time places the task on the grid without a time-block assignment.
+    task.all_day = false;
+    task.start = day
+        .and_hms_opt(9, 30, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
+    task.end = task.start + chrono::Duration::minutes(30);
+    // A Calendar-backed time puts the task on the grid without a time-block
+    // assignment.
     assert!(time_slay::timeblocking::in_backlog(&task));
     state.calendar.add_event(task);
     assert!(
         state
             .calendar
             .timed_events(&state.config.calendar)
-            .any(|event| event.id == "task:due-time")
+            .any(|event| event.id == "task:timed")
     );
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
@@ -897,7 +905,7 @@ fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
 
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
-        let notepad = tab_label(width, 6);
+        let notepad = tab_label(width, 7);
         assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
 
         let calendar = tab_label(width, 0);
@@ -908,13 +916,33 @@ fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
     }
 }
 
+/// The habits tab sits beside Travel and opens the Habits screen.
+#[test]
+fn the_habits_tab_opens_the_habits() -> Result<(), Error> {
+    let state = state();
+    let mut ui = render(&state, Size::new(420.0, 600.0));
+
+    let _ = ui.click(tab_label(420.0, 5))?;
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::ScreenSelected(Screen::Habits))),
+        "clicking the tab produced {messages:?}"
+    );
+
+    Ok(())
+}
+
 /// The notepad tab opens the notepad.
 #[test]
 fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(420.0, 600.0));
 
-    let _ = ui.click(tab_label(420.0, 6))?;
+    let _ = ui.click(tab_label(420.0, 7))?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -937,7 +965,7 @@ fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 600.0));
 
-    for label in [tab_label(200.0, 6), tab_label(200.0, 0), "A-", "A+", "100%"] {
+    for label in [tab_label(200.0, 7), tab_label(200.0, 0), "A-", "A+", "100%"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -1595,30 +1623,35 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
 }
 
 #[test]
-fn available_tasks_hide_due_times_until_show_planned_is_enabled() -> Result<(), Error> {
+fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<(), Error> {
     use time_slay::timeblocking::Action;
     let mut state = timeblocking_state();
     let mut task = state.calendar.event("task:backlog").unwrap().clone();
-    task.id = "task:due-time".into();
+    task.id = "task:timed".into();
     task.title = "Scheduled call".into();
+    task.all_day = false;
     task.start = state
         .calendar
         .day
-        .and_hms_opt(0, 0, 0)
+        .and_hms_opt(9, 30, 0)
         .unwrap()
         .and_local_timezone(Local)
         .unwrap();
-    task.end = task.start + chrono::Duration::days(1);
-    task.details.description = "DUE_TIME: 09:30".into();
-    time_slay::calendar::deadline::place(&mut task, 30);
-    assert!(!task.all_day);
+    task.end = task.start + chrono::Duration::minutes(30);
     state.calendar.add_event(task);
 
     // Check the field itself, including when the task has no due day yet.
+    // The clock time is Calendar-backed, but the date is still undated.
     let mut task = state.calendar.event("task:backlog").unwrap().clone();
-    task.id = "task:undated-due-time".into();
+    task.id = "task:undated-timed".into();
     task.title = "Undated call".into();
-    task.details.description = "DUE_TIME: 10:00".into();
+    task.all_day = false;
+    task.start = time_slay::timeblocking::UNDATED
+        .and_hms_opt(10, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .unwrap();
+    task.end = task.start + chrono::Duration::minutes(30);
     state.calendar.add_event(task);
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
     let _ = app::update(
@@ -2219,7 +2252,7 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
     for width in WIDTHS {
         let mut state = state();
         let mut ui = render(&state, Size::new(width, HEIGHT));
-        ui.click(tab_label(width, 5))?;
+        ui.click(tab_label(width, 6))?;
         assert!(
             ui.into_messages()
                 .any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes)))

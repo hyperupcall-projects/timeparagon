@@ -658,13 +658,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .iter()
         .filter(|event| event.is_task() && !event.completed && tb::metadata(event).block.is_none())
         .filter(|event| {
-            state.timeblocking.available_planned
-                || (event.all_day
-                    && tb::in_backlog(event)
-                    && !matches!(
-                        crate::calendar::deadline::read_due_time(&event.details.description),
-                        Ok(Some(_))
-                    ))
+            state.timeblocking.available_planned || (event.all_day && tb::in_backlog(event))
         })
         .filter(|event| query.is_empty() || event.title.to_lowercase().contains(&query))
         .filter(|event| all_tasks || tb::on_today(event))

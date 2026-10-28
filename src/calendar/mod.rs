@@ -303,6 +303,18 @@ pub struct Details {
     pub meeting: String,
     pub organizer: String,
     pub attendees: Vec<String>,
+    /// This is a habit event on the app's TimeSlay calendar.
+    pub habit: bool,
+    /// The recurring event master, for an expanded habit or other recurrence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recurring_event_id: Option<String>,
+    /// The raw RFC 5545 recurrence lines from Google (`RRULE:`, `RDATE:`,
+    /// `EXDATE:`). Empty for a one-off event.
+    pub recurrence: Vec<String>,
+    /// Google's event `colorId`, or `None` when the event uses its calendar's
+    /// color.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -398,8 +410,12 @@ fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
     } else if event.details.scheduled.is_some() {
         // A task's calendar block, on the TimeSlay calendar.
         event.color = settings.task_event_color();
-    } else if !event.all_day
-        && settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
+    } else if event.details.habit {
+        // A habit's own Google color wins; otherwise use the habit color.
+        if event.details.color_id.is_none() {
+            event.color = settings.habit_color();
+        }
+    } else if !event.all_day && settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
     {
         // A plain timed event on the TimeSlay calendar is a time block.
         event.color = settings.time_block_color();
@@ -1360,6 +1376,82 @@ pub fn week_dates(anchor: NaiveDate, days: u32) -> Vec<NaiveDate> {
         .collect()
 }
 
+/// Pulls every habit master from the app's TimeSlay calendar.
+pub fn sync_habits(
+    client_id: &str,
+    client_secret: &str,
+    app_calendar: Option<&str>,
+) -> Result<Vec<api::HabitEvent>, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::fetch_habits(&tokens.access_token, app_calendar)
+}
+
+/// The fields a habit is written with. `id` is `None` for a new habit.
+pub struct HabitWrite<'a> {
+    pub id: Option<&'a str>,
+    pub calendar_id: Option<&'a str>,
+    pub title: &'a str,
+    pub notes: &'a str,
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
+    pub recurrence: &'a [String],
+    pub color_id: Option<&'a str>,
+}
+
+/// Creates or updates a habit master on the TimeSlay calendar. Returns the
+/// habit as it is now stored, including the calendar id when one was created.
+pub fn write_habit(
+    client_id: &str,
+    client_secret: &str,
+    write: HabitWrite<'_>,
+) -> Result<api::HabitEvent, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let body = api::habit_body(
+        write.title,
+        write.notes,
+        write.start,
+        write.end,
+        write.recurrence,
+        write.color_id,
+    );
+    match write.id {
+        Some(id) => {
+            let calendar_id = write
+                .calendar_id
+                .ok_or_else(|| "The habit has no calendar".to_owned())?;
+            api::patch_habit(&tokens.access_token, calendar_id, id, &body)?;
+            Ok(api::HabitEvent {
+                id: id.to_owned(),
+                calendar_id: calendar_id.to_owned(),
+                title: write.title.to_owned(),
+                notes: write.notes.to_owned(),
+                start: write.start,
+                end: write.end,
+                recurrence: write.recurrence.to_vec(),
+                color_id: write.color_id.map(str::to_owned),
+            })
+        }
+        None => api::insert_habit(&tokens.access_token, write.calendar_id, &body),
+    }
+}
+
+/// Deletes a habit master and every occurrence in its series.
+pub fn delete_habit(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::delete_habit(&tokens.access_token, calendar_id, event_id)
+}
+
 pub fn disconnect() {
     oauth::clear_tokens();
 }
@@ -2217,7 +2309,10 @@ mod tests {
         );
 
         settings.default_calendar = Some("tasks".into());
-        assert_eq!(store.default_calendar_id(&settings).as_deref(), Some("tasks"));
+        assert_eq!(
+            store.default_calendar_id(&settings).as_deref(),
+            Some("tasks")
+        );
     }
 
     #[test]
@@ -2631,11 +2726,7 @@ mod tests {
             .unwrap()
             .and_local_timezone(Local)
             .unwrap();
-        let draft = Draft::new(
-            "personal".into(),
-            start,
-            start + chrono::Duration::hours(1),
-        );
+        let draft = Draft::new("personal".into(), start, start + chrono::Duration::hours(1));
         assert_eq!(draft.kind, DraftKind::Event);
     }
 

@@ -36,7 +36,11 @@ fn main() {
             if !report.deleted.is_empty() {
                 println!(
                     "  {}: {}",
-                    if report.dry_run { "would remove" } else { "removed" },
+                    if report.dry_run {
+                        "would remove"
+                    } else {
+                        "removed"
+                    },
                     report.deleted.join(", ")
                 );
             }

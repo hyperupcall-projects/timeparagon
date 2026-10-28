@@ -109,7 +109,7 @@ fn toggling_travel_turns_the_day_view_trips_on_and_off() {
     assert!(!state.travel.show);
 }
 
-/// Travel sits to the left of Keep, in the group with Inbox, Projects and
+/// Travel sits to the left of Habits, in the group with Inbox, Projects and
 /// Backlog, and opens the Travel screen.
 #[test]
 fn the_travel_tab_is_left_of_keep() -> Result<(), Error> {
@@ -118,9 +118,9 @@ fn the_travel_tab_is_left_of_keep() -> Result<(), Error> {
         let mut ui = render(&state, Size::new(width, 400.0));
 
         let travel = ui.find(tab_label(width, 4)).expect("Travel tab").bounds();
-        let keep = ui.find(tab_label(width, 5)).expect("Keep tab").bounds();
-        assert!(travel.x + travel.width <= keep.x, "order at {width}px");
-        assert!((travel.y - keep.y).abs() < 1.0, "one row at {width}px");
+        let habits = ui.find(tab_label(width, 5)).expect("Habits tab").bounds();
+        assert!(travel.x + travel.width <= habits.x, "order at {width}px");
+        assert!((travel.y - habits.y).abs() < 1.0, "one row at {width}px");
 
         let _ = ui.click(tab_label(width, 4))?;
         assert!(
@@ -234,15 +234,7 @@ fn the_trip_card_offers_every_method() -> Result<(), Error> {
         );
 
         let mut ui = render(&state, Size::new(width, 900.0));
-        for label in [
-            "Travel",
-            "Home",
-            "Office",
-            "Walk",
-            "Bike",
-            "Car",
-            "Close",
-        ] {
+        for label in ["Travel", "Home", "Office", "Walk", "Bike", "Car", "Close"] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
 

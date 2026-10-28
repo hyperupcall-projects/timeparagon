@@ -7,7 +7,6 @@
 //! ```text
 //! Prepare the report.
 //! DEADLINE: 2026-10-30 17:00
-//! DUE_TIME: 09:30
 //! ```
 //!
 //! This module is the one place that splits notes into lines. The deadline,

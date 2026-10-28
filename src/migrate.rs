@@ -64,9 +64,9 @@ pub fn run(apply: bool) -> Result<Report, String> {
     // The target is the canonical calendar, else a former name (renamed), else
     // a new calendar. Without `apply` there is nothing to create, so the plan
     // just names what would be.
-    let canonical = calendars.iter().find(|calendar| {
-        calendar_name(calendar) == CalendarSettings::APP_CALENDAR_NAME
-    });
+    let canonical = calendars
+        .iter()
+        .find(|calendar| calendar_name(calendar) == CalendarSettings::APP_CALENDAR_NAME);
     let alias = calendars
         .iter()
         .find(|calendar| CalendarSettings::is_app_calendar_name(calendar_name(calendar)));
@@ -79,7 +79,10 @@ pub fn run(apply: bool) -> Result<Report, String> {
             }
             Some(id)
         }
-        (None, None) if apply => Some(create_calendar(&token, CalendarSettings::APP_CALENDAR_NAME)?),
+        (None, None) if apply => Some(create_calendar(
+            &token,
+            CalendarSettings::APP_CALENDAR_NAME,
+        )?),
         (None, None) => None,
     };
 
@@ -163,13 +166,9 @@ fn list_calendars(token: &str) -> Result<Vec<Value>, String> {
                 .map(|p| format!("&pageToken={}", urlencoding::encode(p)))
                 .unwrap_or_default()
         );
-        let response = scheduled::request("GET", &url, token, None).map_err(|error| error.message)?;
-        items.extend(
-            response["items"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
-        );
+        let response =
+            scheduled::request("GET", &url, token, None).map_err(|error| error.message)?;
+        items.extend(response["items"].as_array().cloned().unwrap_or_default());
         page = response["nextPageToken"].as_str().map(str::to_owned);
         if page.is_none() {
             return Ok(items);
@@ -189,7 +188,8 @@ fn list_events(token: &str, calendar_id: &str) -> Result<Vec<Value>, String> {
                 .map(|p| format!("&pageToken={}", urlencoding::encode(p)))
                 .unwrap_or_default()
         );
-        let response = scheduled::request("GET", &url, token, None).map_err(|error| error.message)?;
+        let response =
+            scheduled::request("GET", &url, token, None).map_err(|error| error.message)?;
         items.extend(response["items"].as_array().cloned().unwrap_or_default());
         page = response["nextPageToken"].as_str().map(str::to_owned);
         if page.is_none() {
@@ -200,12 +200,7 @@ fn list_events(token: &str, calendar_id: &str) -> Result<Vec<Value>, String> {
 
 /// Moves one event onto the target calendar. Calendar's own move keeps every
 /// field — title, notes, times and the app's extended properties — intact.
-fn move_event(
-    token: &str,
-    source: &str,
-    event_id: &str,
-    target: &str,
-) -> Result<(), String> {
+fn move_event(token: &str, source: &str, event_id: &str, target: &str) -> Result<(), String> {
     let url = format!(
         "{}/{}/events/{}/move?destination={}",
         api::EVENTS,
@@ -213,7 +208,9 @@ fn move_event(
         urlencoding::encode(event_id),
         urlencoding::encode(target),
     );
-    scheduled::request("POST", &url, token, None).map(|_| ()).map_err(|error| error.message)
+    scheduled::request("POST", &url, token, None)
+        .map(|_| ())
+        .map_err(|error| error.message)
 }
 
 fn create_calendar(token: &str, name: &str) -> Result<String, String> {
@@ -245,7 +242,13 @@ mod tests {
 
     #[test]
     fn legacy_and_alias_names_are_migrated_but_a_normal_calendar_is_not() {
-        for name in ["Time Blocks", "TimeTracker Tasks", "Timem Blocks", "TimeSlay", "TimeSlayer"] {
+        for name in [
+            "Time Blocks",
+            "TimeTracker Tasks",
+            "Timem Blocks",
+            "TimeSlay",
+            "TimeSlayer",
+        ] {
             assert!(is_source(name), "{name} should be a migration source");
         }
         for name in ["Personal", "Work", "Tasks", "Birthdays"] {

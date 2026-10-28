@@ -20,6 +20,7 @@ pub mod cli;
 pub mod config;
 pub mod config_sync;
 pub mod dock;
+pub mod habits;
 pub mod hex;
 pub mod inbox;
 pub mod integrations;

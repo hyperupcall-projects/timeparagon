@@ -110,7 +110,10 @@ pub fn relaunch() -> Result<()> {
 
     // Linux marks the path of a replaced executable as deleted.
     let exe = std::env::current_exe().context("could not find the running binary")?;
-    let exe = match exe.to_str().and_then(|path| path.strip_suffix(" (deleted)")) {
+    let exe = match exe
+        .to_str()
+        .and_then(|path| path.strip_suffix(" (deleted)"))
+    {
         Some(path) => PathBuf::from(path),
         None => exe,
     };

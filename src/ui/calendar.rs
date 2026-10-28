@@ -531,8 +531,8 @@ fn header_offset(metrics: &Metrics) -> f32 {
 
 /// Tasks on the day in view that have neither a time nor a time block.
 ///
-/// Timed tasks (including those placed by DUE_TIME), undated backlog tasks,
-/// and tasks filed on another day stay out of the count.
+/// Timed tasks, undated backlog tasks, and tasks filed on another day stay out
+/// of the count.
 fn unplanned_task_count(state: &State) -> usize {
     let day = state.calendar.day;
     state
@@ -4172,8 +4172,10 @@ mod tests {
         );
         let mut standalone = task.clone();
         standalone.id = "task:standalone".into();
-        standalone.details.description = "DUE_TIME: 03:00".into();
-        calendar::deadline::place(&mut standalone, 30);
+        standalone.all_day = false;
+        standalone.start = block.start.with_hour(3).unwrap().with_minute(0).unwrap();
+        standalone.end = standalone.start + chrono::Duration::minutes(30);
+        standalone.details.description.clear();
         snapshot.events = vec![block, task, standalone];
         state.calendar = calendar::Store::with_snapshot(snapshot);
         let size = Size::new(600.0, 1440.0);

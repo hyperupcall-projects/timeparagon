@@ -7,6 +7,7 @@
 pub mod alarms;
 pub mod calendar;
 pub mod flash;
+pub mod habits;
 pub mod inbox;
 pub mod keep;
 pub mod layout;
@@ -55,6 +56,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects::view(state, &metrics),
             (Screen::Travel, _) => travel::view(state, &main_metrics),
+            (Screen::Habits, _) => habits::view(state, &main_metrics),
             (Screen::Calendar, _) => {
                 if state.weekly {
                     calendar::weekly_view(state, &main_metrics)
@@ -126,6 +128,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.travel.open.is_some() {
             layers.push(travel::leg_overlay(state, &metrics));
         }
+        if state.habits.draft.is_some() {
+            layers.push(habits::editor_overlay(state, &metrics));
+        }
+        if state.habits.confirm_delete.is_some() {
+            layers.push(habits::delete_confirmation(state, &metrics));
+        }
         if state.inbox.draft.is_some() {
             layers.push(inbox::new_task_overlay(state, &metrics));
         }
@@ -175,17 +183,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 /// How many tabs there are.
-const TAB_COUNT: usize = 8;
+const TAB_COUNT: usize = 9;
 
 /// Full tab names, excluding the separately rendered Weekly tab.
-/// Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
+/// Inbox/Projects/Backlog/Travel/Habits, then Keep/Notepad/Settings.
 const TAB_LABELS: [&str; TAB_COUNT] = [
-    "Daily", "Inbox", "Projects", "Backlog", "Travel", "Keep", "Notepad", "Settings",
+    "Daily", "Inbox", "Projects", "Backlog", "Travel", "Habits", "Keep", "Notepad", "Settings",
 ];
 
 /// Short names for windows too narrow to fit the full ones legibly.
 const TAB_SHORT_LABELS: [&str; TAB_COUNT] = [
-    "Daily", "Inbox", "Proj", "Back", "Trav", "Keep", "Note", "Set",
+    "Daily", "Inbox", "Proj", "Back", "Trav", "Habit", "Keep", "Note", "Set",
 ];
 
 /// Average glyph width as a fraction of the font size, with some slack.
@@ -250,8 +258,9 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Daily/Weekly, then Inbox/Projects/Backlog/Travel, then Keep/Notepad/Settings.
-/// Labels shrink (and shorten, when very narrow) rather than wrapping.
+/// Daily/Weekly, then Inbox/Projects/Backlog/Travel/Habits, then
+/// Keep/Notepad/Settings. Labels shrink (and shorten, when very narrow)
+/// rather than wrapping.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
     let labels = if fit.short {
@@ -266,6 +275,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         Screen::Projects,
         Screen::Backlog,
         Screen::Travel,
+        Screen::Habits,
         Screen::KeepNotes,
         Screen::Notepad,
         Screen::Settings,
@@ -284,7 +294,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             tab(label, active, screen, metrics, fit)
         })
         .collect();
-    let right: Vec<_> = tabs.drain(5..).collect();
+    let right: Vec<_> = tabs.drain(6..).collect();
     let middle: Vec<_> = tabs.drain(1..).collect();
     let calendar = tabs.remove(0);
     let weekly = button(

@@ -96,6 +96,10 @@ struct EventEntry {
     conference: Option<Conference>,
     #[serde(default, rename = "extendedProperties")]
     extended_properties: serde_json::Value,
+    #[serde(default)]
+    recurrence: Vec<String>,
+    #[serde(default, rename = "recurringEventId")]
+    recurring_event_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -283,10 +287,9 @@ fn resolve_app_calendar(
     {
         return Some(id.to_owned());
     }
-    if let Some(calendar) = calendars
-        .iter()
-        .find(|calendar| !calendar.is_task_list() && CalendarSettings::is_app_calendar_name(&calendar.name))
-    {
+    if let Some(calendar) = calendars.iter().find(|calendar| {
+        !calendar.is_task_list() && CalendarSettings::is_app_calendar_name(&calendar.name)
+    }) {
         return Some(calendar.id.clone());
     }
     match super::scheduled::app_calendar(access_token) {
@@ -514,6 +517,192 @@ fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec
     Ok(events)
 }
 
+/// A habit event as Google Calendar stores it: the master of a recurring
+/// series on the app's TimeSlay calendar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HabitEvent {
+    pub id: String,
+    pub calendar_id: String,
+    pub title: String,
+    pub notes: String,
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
+    pub recurrence: Vec<String>,
+    pub color_id: Option<String>,
+}
+
+/// Every habit master on the app's TimeSlay calendar.
+///
+/// Habits are ordinary Calendar events tagged with `ttKind=habit`, so they
+/// keep Google's own recurrence model. `singleEvents=false` returns the master
+/// event rather than one expanded instance per occurrence, which is what the
+/// Habits tab edits.
+pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<HabitEvent>, String> {
+    let Some(calendar_id) = app_calendar_id(access_token, calendar)? else {
+        return Ok(Vec::new());
+    };
+    let mut page_token: Option<String> = None;
+    let mut habits = Vec::new();
+    loop {
+        let mut url = format!(
+            "{EVENTS}/{}/events?singleEvents=false&maxResults=250&privateExtendedProperty=ttKind%3Dhabit",
+            urlencoding::encode(&calendar_id)
+        );
+        if let Some(token) = &page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(token));
+        }
+        let page: EventList = get(&url, access_token)?;
+        for entry in page.items {
+            if entry.status.as_deref() != Some("cancelled")
+                && let Some(habit) = parse_habit(entry, &calendar_id)
+            {
+                habits.push(habit);
+            }
+        }
+        page_token = page.next_page_token;
+        if page_token.is_none() {
+            break;
+        }
+    }
+    habits.sort_by(|left, right| {
+        left.title
+            .to_lowercase()
+            .cmp(&right.title.to_lowercase())
+            .then(left.start.cmp(&right.start))
+    });
+    Ok(habits)
+}
+
+/// The TimeSlay calendar id, or `None` when the calendar does not exist yet.
+/// Merely listing habits does not create a calendar.
+fn app_calendar_id(access_token: &str, calendar: Option<&str>) -> Result<Option<String>, String> {
+    match calendar {
+        Some(id) => Ok(Some(id.to_owned())),
+        None => super::scheduled::find_app_calendar(access_token),
+    }
+}
+
+/// Creates a habit on the TimeSlay calendar, creating that calendar when this
+/// is the first one. Returns the master event Google assigned an id to.
+pub fn insert_habit(
+    access_token: &str,
+    calendar: Option<&str>,
+    body: &serde_json::Value,
+) -> Result<HabitEvent, String> {
+    let calendar_id = match calendar {
+        Some(id) => id.to_owned(),
+        None => super::scheduled::app_calendar(access_token)?,
+    };
+    let url = format!("{EVENTS}/{}/events", urlencoding::encode(&calendar_id));
+    let response = post(
+        &url,
+        access_token,
+        &body.to_string(),
+        "Google Calendar habit",
+    )?;
+    let created: EventEntry = serde_json::from_str(&response)
+        .map_err(|error| format!("Google Calendar habit response: {error}"))?;
+    parse_habit(created, &calendar_id)
+        .ok_or_else(|| "Google Calendar did not return the new habit".to_owned())
+}
+
+/// Updates a habit master. Its identity, recurrence and times all stay in the
+/// same Calendar event.
+pub fn patch_habit(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    body: &serde_json::Value,
+) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+    patch(
+        &url,
+        access_token,
+        &body.to_string(),
+        "Google Calendar habit",
+    )
+}
+
+/// Deletes a habit master and with it every occurrence in its series.
+pub fn delete_habit(access_token: &str, calendar_id: &str, event_id: &str) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+    delete(&url, access_token, "Google Calendar habit")
+}
+
+/// The JSON body Google Calendar expects for a habit. `recurrence` is the raw
+/// RFC 5545 array: `RRULE:`, `RDATE:` and `EXDATE:` lines.
+pub fn habit_body(
+    title: &str,
+    notes: &str,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+    recurrence: &[String],
+    color_id: Option<&str>,
+) -> serde_json::Value {
+    let zone = iana_time_zone::get_timezone().ok();
+    let time = |when: DateTime<Local>| {
+        let mut value = serde_json::json!({
+            "dateTime": when.with_timezone(&Local).to_rfc3339(),
+        });
+        if let Some(zone) = &zone {
+            value["timeZone"] = serde_json::Value::String(zone.clone());
+        }
+        value
+    };
+    let mut body = serde_json::json!({
+        "summary": title,
+        "description": super::event_description(notes, "Habit", &[]),
+        "start": time(start),
+        "end": time(end),
+        "extendedProperties": { "private": { "ttKind": "habit" } },
+    });
+    // Always send the array, even when it is empty: a PATCH that omits it
+    // would leave an existing recurrence in place.
+    body["recurrence"] = serde_json::Value::Array(
+        recurrence
+            .iter()
+            .map(|line| serde_json::Value::String(line.clone()))
+            .collect(),
+    );
+    // A missing `colorId` means "the calendar's color". Sending null on an
+    // update clears a per-habit color chosen earlier.
+    body["colorId"] = match color_id {
+        Some(color_id) => serde_json::Value::String(color_id.to_owned()),
+        None => serde_json::Value::Null,
+    };
+    body
+}
+
+fn parse_habit(entry: EventEntry, calendar_id: &str) -> Option<HabitEvent> {
+    let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
+    let end = parse_date_time(entry.end.as_ref()?.date_time.as_deref()?)?;
+    let notes = plain_text(&entry.description);
+    let notes = super::description_notes(&notes);
+    Some(HabitEvent {
+        id: entry.id,
+        calendar_id: calendar_id.to_owned(),
+        title: if entry.summary.is_empty() {
+            "(No title)".to_owned()
+        } else {
+            entry.summary
+        },
+        notes: notes.trim_end().to_owned(),
+        start,
+        end,
+        recurrence: entry.recurrence,
+        color_id: entry.color_id,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct TaskLists {
     #[serde(default)]
@@ -638,9 +827,6 @@ fn fetch_task_items(
                 )?;
             }
             event.details.description = cleaned;
-            // A DUE_TIME line gives a task that is only dated a place on the
-            // grid; a Calendar-backed schedule overrides it in `scheduled::merge`.
-            super::deadline::place(&mut event, data.metadata.minutes);
             event.details.task_data = Some(data);
             events.push(event);
         }
@@ -1191,6 +1377,10 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .map(|person| person_label(Some(person), true))
             .filter(|label| !label.is_empty())
             .collect(),
+        habit: entry.extended_properties["private"]["ttKind"].as_str() == Some("habit"),
+        recurring_event_id: entry.recurring_event_id.clone(),
+        recurrence: entry.recurrence.clone(),
+        color_id: entry.color_id.clone(),
     }
 }
 
@@ -1752,5 +1942,36 @@ mod tests {
 
         let found = live_list("low-priority", &lists, |_| Ok(TaskPresence::Gone)).unwrap();
         assert_eq!(found, None);
+    }
+
+    #[test]
+    fn a_habit_write_sends_its_whole_rule_and_can_clear_it() {
+        let start = Local
+            .with_ymd_and_hms(2026, 10, 28, 9, 0, 0)
+            .single()
+            .unwrap();
+        let end = start + chrono::Duration::minutes(30);
+
+        let body = habit_body(
+            "Stretch",
+            "After coffee",
+            start,
+            end,
+            &["RRULE:FREQ=DAILY".into(), "EXDATE:20261101T090000".into()],
+            Some("3"),
+        );
+        assert_eq!(body["summary"], "Stretch");
+        assert_eq!(body["extendedProperties"]["private"]["ttKind"], "habit");
+        assert_eq!(
+            body["recurrence"],
+            serde_json::json!(["RRULE:FREQ=DAILY", "EXDATE:20261101T090000"])
+        );
+        assert_eq!(body["colorId"], "3");
+
+        // A PATCH has to say the rule and color are gone; omitting them would
+        // leave Google's copy of the habit repeating.
+        let cleared = habit_body("Stretch", "After coffee", start, end, &[], None);
+        assert_eq!(cleared["recurrence"], serde_json::json!([]));
+        assert!(cleared["colorId"].is_null());
     }
 }

@@ -13,14 +13,14 @@ pub mod config;
 
 #[path = "../../src/calendar/mod.rs"]
 pub mod calendar;
-#[path = "../../src/timeblocking/model.rs"]
-pub mod timeblocking;
 #[path = "../../src/config_sync.rs"]
 pub mod config_sync;
 #[path = "../../src/hex.rs"]
 pub mod hex;
 #[path = "../../src/task_db.rs"]
 pub mod task_db;
+#[path = "../../src/timeblocking/model.rs"]
+pub mod timeblocking;
 
 /// The color type used by calendar events and settings.
 pub use iced::Color;

@@ -729,6 +729,10 @@ pub struct CalendarSettings {
     /// Google's task blue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_event_color: Option<HexColor>,
+    /// Color of habit events on the TimeSlay calendar. None uses the built-in
+    /// grape. A habit with its own Google `colorId` keeps that color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub habit_color: Option<HexColor>,
     /// The calendar new events are created on, by id. `None` means the primary
     /// calendar, falling back to the first writable one. Set from the calendar
     /// settings pane.
@@ -756,6 +760,7 @@ impl Default for CalendarSettings {
             task_colors: BTreeMap::new(),
             time_block_color: None,
             task_event_color: None,
+            habit_color: None,
             default_calendar: None,
         }
     }
@@ -847,12 +852,19 @@ impl CalendarSettings {
 
     /// The color time-block events are drawn in, or the built-in block color.
     pub fn time_block_color(&self) -> Color {
-        self.time_block_color.map_or(colors::TIME_BLOCK, |color| color.0)
+        self.time_block_color
+            .map_or(colors::TIME_BLOCK, |color| color.0)
     }
 
     /// The color scheduled task events are drawn in, or Google's task blue.
     pub fn task_event_color(&self) -> Color {
         self.task_event_color.map_or(colors::TASK, |color| color.0)
+    }
+
+    /// The color habit events are drawn in, unless the habit has a Google
+    /// color of its own.
+    pub fn habit_color(&self) -> Color {
+        self.habit_color.map_or(colors::HABIT, |color| color.0)
     }
 
     /// Sets the time-block color, or clears it back to the built-in default.
@@ -863,6 +875,11 @@ impl CalendarSettings {
     /// Sets the scheduled task color, or clears it back to Google's blue.
     pub fn set_task_event_color(&mut self, color: Option<Color>) {
         self.task_event_color = color.map(HexColor);
+    }
+
+    /// Sets the habit color, or clears it back to the built-in grape.
+    pub fn set_habit_color(&mut self, color: Option<Color>) {
+        self.habit_color = color.map(HexColor);
     }
 }
 

@@ -115,11 +115,7 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
     let mut state = state();
     let base = state.calendar.events[0].clone();
     for (id, list, notes) in [
-        (
-            "due-time",
-            "tasks:one",
-            "DUE_TIME: 09:30\nDEADLINE: 2026-10-30 17:00\nNotes",
-        ),
+        ("due-time", "tasks:one", "DEADLINE: 2026-10-30 17:00\nNotes"),
         ("day-only", "tasks:two", "DUE: 2026-10-30\nNotes"),
     ] {
         let mut task = Event {
@@ -129,9 +125,24 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
             ..base.clone()
         };
         task.details.description = notes.into();
-        deadline::place(&mut task, 45);
         state.calendar.events.push(task);
     }
+    // Give the first task a real Calendar-backed time; a task is on the grid
+    // only when its schedule says so, never because of its notes.
+    let day = state.calendar.day;
+    let first = state
+        .calendar
+        .events
+        .iter_mut()
+        .find(|event| event.id == "task:due-time")
+        .unwrap();
+    first.all_day = false;
+    first.start = day
+        .and_hms_opt(9, 30, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .unwrap();
+    first.end = first.start + chrono::Duration::minutes(45);
     // Old per-list visibility settings cannot leave part of the aggregate hidden.
     state.config.calendar.disabled.push("tasks:one".into());
     let tasks = |state: &State| {

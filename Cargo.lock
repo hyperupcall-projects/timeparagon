@@ -7022,6 +7022,7 @@ dependencies = [
  "directories",
  "env_logger",
  "getrandom 0.3.4",
+ "iana-time-zone",
  "iced",
  "iced_test",
  "jni 0.21.1",

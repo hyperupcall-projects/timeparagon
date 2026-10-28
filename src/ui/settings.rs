@@ -681,15 +681,28 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     section = section.push(heading("TimeSlay colors", metrics));
     section = section.push(field(
         "Time Blocks",
-        kind_color_picker(settings.time_block_color, Message::TimeBlockColorPicked, metrics),
+        kind_color_picker(
+            settings.time_block_color,
+            Message::TimeBlockColorPicked,
+            metrics,
+        ),
         metrics,
     ));
     section = section.push(field(
         "Tasks",
-        kind_color_picker(settings.task_event_color, Message::TaskEventColorPicked, metrics),
+        kind_color_picker(
+            settings.task_event_color,
+            Message::TaskEventColorPicked,
+            metrics,
+        ),
         metrics,
     ));
-    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks and scheduled tasks can each be given a color of their own; the color is also written to Google. The Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+    section = section.push(field(
+        "Habits",
+        kind_color_picker(settings.habit_color, Message::HabitColorPicked, metrics),
+        metrics,
+    ));
+    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks, scheduled tasks and habits can each be given a color of their own; the color is also written to Google. The Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM or DUE: YYYY-MM-DD for a day only. A task's clock time comes from its Calendar-backed schedule, never from its notes. Habits live on the TimeSlay calendar as recurring events and are edited, with their full RFC 5545 recurrence rules, from the Habits tab. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }

@@ -330,11 +330,19 @@ fn weekly_canvas_click_reports_the_clicked_day() -> Result<(), Error> {
     ui.point_at(point);
     ui.simulate(iced_test::simulator::click());
     let messages: Vec<_> = ui.into_messages().collect();
-    assert!(messages.iter().any(|message| matches!(
-        message,
-        Message::WeekDayAction(day, action)
-            if *day == date(14) && matches!(action.as_ref(), Message::EventOpened(id) if id == "standup")
-    )), "click produced {messages:?}");
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::WeekDayAction(day, action)
+                if *day == date(14)
+                    && matches!(
+                        action.as_ref(),
+                        Message::TimeBlocking(time_slay::timeblocking::Action::View(id))
+                            if id == "standup"
+                    )
+        )),
+        "click produced {messages:?}"
+    );
     Ok(())
 }
 
