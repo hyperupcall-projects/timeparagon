@@ -1651,19 +1651,20 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .into(),
         );
     }
-    if !details.link.is_empty() {
+    // Tasks are managed here now; only events get a link back to Google.
+    if !is_task(event) && !details.link.is_empty() {
         let link = details.link.clone();
-        let label = if is_task(event) {
-            "Open in Google Tasks"
-        } else {
-            "Open in Google Calendar"
-        };
         buttons.push(
-            button(text(label).size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::OpenEventLink(link))
-                .style(button::secondary)
-                .into(),
+            button(
+                text("Open in Google Calendar")
+                    .size(metrics.label())
+                    .center()
+                    .width(Fill),
+            )
+            .width(Fill)
+            .on_press(Message::OpenEventLink(link))
+            .style(button::secondary)
+            .into(),
         );
     }
     if !is_task(event) {

@@ -76,6 +76,18 @@ impl CalendarSettings {
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
 
+    /// The Google Tasks list time-blocked and scheduled tasks are kept on,
+    /// unless another is chosen in Settings.
+    pub const DEFAULT_TIME_BLOCK_LIST: &str = "Time Blocked";
+
+    /// The Google Tasks list tasks are moved to for the backlog, unless
+    /// another is chosen in Settings.
+    pub const DEFAULT_BACKLOG_LIST: &str = "Backlog";
+
+    /// The Google Tasks list triaged tasks are kept on, unless another is
+    /// chosen in Settings.
+    pub const DEFAULT_TRIAGED_LIST: &str = "Triaged";
+
     /// The name of the single calendar every event the app writes lives on.
     pub const APP_CALENDAR_NAME: &str = "TimeSlay";
 

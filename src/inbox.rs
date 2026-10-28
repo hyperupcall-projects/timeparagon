@@ -116,6 +116,36 @@ pub fn tasks(state: &State) -> Vec<&Event> {
     tasks
 }
 
+/// Whether `calendar_id` is the list that collects triaged tasks.
+pub fn is_triaged_list(state: &State, calendar_id: &str) -> bool {
+    if let Some(chosen) = &state.config.calendar.triaged_list {
+        return chosen.trim_start_matches("tasks:") == calendar_id.trim_start_matches("tasks:");
+    }
+    let default = crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST;
+    calendar_id
+        .trim_start_matches("tasks:")
+        .eq_ignore_ascii_case(default)
+        || state.calendar.calendars.iter().any(|calendar| {
+            calendar.id == calendar_id
+                && calendar.is_task_list()
+                && calendar.name.trim().eq_ignore_ascii_case(default)
+        })
+}
+
+/// Every task that has been triaged, in the order they were put in order.
+pub fn triaged_tasks(state: &State) -> Vec<&Event> {
+    let mut tasks: Vec<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| {
+            event.is_task() && !event.completed && is_triaged_list(state, &event.calendar_id)
+        })
+        .collect();
+    tasks.sort_by_cached_key(|event| (tb::metadata(event).order, event.title.to_lowercase()));
+    tasks
+}
+
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
         Action::NewTask => {
@@ -506,6 +536,33 @@ mod tests {
         blocked.details.task_data = Some(data);
         state.calendar.events = vec![blocked];
         assert!(tasks(&state).is_empty());
+    }
+
+    #[test]
+    fn triaged_tasks_are_the_ones_on_the_triaged_list() {
+        let mut state = state();
+        state.calendar.calendars.push(Calendar {
+            id: "tasks:triaged".into(),
+            name: "Triaged".into(),
+            color: calendar::colors::TASK,
+            primary: false,
+            selected_by_google: true,
+        });
+        let mut ready = task("ready", "triaged", UNDATED);
+        ready.title = "Research outline".into();
+        state.calendar.events = vec![task("fresh", "inbox", UNDATED), ready];
+        assert_eq!(
+            triaged_tasks(&state)
+                .iter()
+                .map(|task| task.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Research outline"]
+        );
+
+        // A chosen list replaces the one named Triaged.
+        state.config.calendar.triaged_list = Some("tasks:mine".into());
+        state.calendar.events.push(task("mine", "mine", UNDATED));
+        assert_eq!(triaged_tasks(&state).len(), 1);
     }
 
     #[test]

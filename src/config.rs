@@ -809,12 +809,19 @@ pub struct CalendarSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_calendar: Option<String>,
     pub time_block_list: Option<String>,
-    /// Google Tasks list for tasks moved to the backlog. None uses Triaged.
+    /// Google Tasks list for tasks moved to the backlog. None uses Backlog.
     pub backlog_list: Option<String>,
+    /// Google Tasks list that collects triaged tasks until they are scheduled.
+    /// None uses Triaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triaged_list: Option<String>,
     /// Google Tasks list that collects new tasks until they are triaged. None
     /// uses Inbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbox_list: Option<String>,
+    /// Which metadata a task needs before it can leave the Inbox.
+    #[serde(default)]
+    pub triage: TriageRequirements,
     /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
     /// to 3 and the day runs 3am to 3am, so the small hours stay with the
     /// evening they belong to. This only moves the view: an event keeps its
@@ -863,7 +870,9 @@ impl Default for CalendarSettings {
             app_calendar: None,
             time_block_list: None,
             backlog_list: None,
+            triaged_list: None,
             inbox_list: None,
+            triage: TriageRequirements::default(),
             day_end_hour: 0,
             weekly_days: 8,
             weekly_day_width: 150,
@@ -876,9 +885,42 @@ impl Default for CalendarSettings {
     }
 }
 
+/// Which metadata a task must have before it can be triaged out of the Inbox.
+/// Everything is required by default: the Inbox is where each task is given a
+/// project, a priority and an estimate before it goes anywhere else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TriageRequirements {
+    pub estimate: bool,
+    pub project: bool,
+    pub priority: bool,
+}
+
+impl Default for TriageRequirements {
+    fn default() -> Self {
+        Self {
+            estimate: true,
+            project: true,
+            priority: true,
+        }
+    }
+}
+
 impl CalendarSettings {
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
+
+    /// The Google Tasks list time-blocked and scheduled tasks are kept on,
+    /// unless another is chosen in Settings.
+    pub const DEFAULT_TIME_BLOCK_LIST: &str = "Time Blocked";
+
+    /// The Google Tasks list tasks are moved to for the backlog, unless
+    /// another is chosen in Settings.
+    pub const DEFAULT_BACKLOG_LIST: &str = "Backlog";
+
+    /// The Google Tasks list triaged tasks are kept on, unless another is
+    /// chosen in Settings.
+    pub const DEFAULT_TRIAGED_LIST: &str = "Triaged";
 
     /// The name of the single calendar every event the app writes lives on.
     /// Created on first use; not customizable from Settings.
@@ -1376,6 +1418,22 @@ fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_managed_task_lists_are_inbox_triaged_time_blocked_and_backlog() {
+        assert_eq!(crate::inbox::DEFAULT_LIST, "Inbox");
+        assert_eq!(CalendarSettings::DEFAULT_TRIAGED_LIST, "Triaged");
+        assert_eq!(CalendarSettings::DEFAULT_TIME_BLOCK_LIST, "Time Blocked");
+        assert_eq!(CalendarSettings::DEFAULT_BACKLOG_LIST, "Backlog");
+        assert_eq!(
+            TriageRequirements::default(),
+            TriageRequirements {
+                estimate: true,
+                project: true,
+                priority: true
+            }
+        );
+    }
 
     #[test]
     fn view_settings_keep_legacy_widths_and_round_trip_custom_sizes() {

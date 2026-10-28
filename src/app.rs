@@ -44,6 +44,8 @@ pub enum Screen {
     Calendar,
     /// Tasks that have not been triaged yet.
     Inbox,
+    /// Tasks that have been triaged but not yet scheduled.
+    Triaged,
     Backlog,
     Projects,
     /// The places events happen at, and the trips between them.
@@ -914,7 +916,10 @@ fn resize_for_week_transition(
 
 /// The screens that show the event details pane beside their content.
 pub(crate) fn shows_details(screen: Screen) -> bool {
-    matches!(screen, Screen::Calendar | Screen::Backlog | Screen::Inbox)
+    matches!(
+        screen,
+        Screen::Calendar | Screen::Backlog | Screen::Inbox | Screen::Triaged
+    )
 }
 
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
@@ -974,9 +979,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
             // Whatever was open belongs to the screen being left: the Inbox
-            // shows its details pane only for its own tasks.
-            if screen != state.screen && (screen == Screen::Inbox || state.screen == Screen::Inbox)
-            {
+            // and Triaged show their details pane only for their own tasks.
+            let tasks_screen = |screen| matches!(screen, Screen::Inbox | Screen::Triaged);
+            if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {
                 state.calendar.open_event = None;
                 state.inbox.picker = None;
             }
@@ -3258,12 +3263,13 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     // show: a space would otherwise silence an alarm halfway through a word.
     if matches!(
         state.screen,
-        Screen::Notepad | Screen::BrainDump | Screen::KeepNotes | Screen::Inbox
+        Screen::Notepad | Screen::BrainDump | Screen::KeepNotes | Screen::Inbox | Screen::Triaged
     ) {
         return match key.as_ref() {
             // A task's details come away first; a second press leaves.
             Key::Named(Named::Escape)
-                if state.screen == Screen::Inbox && state.calendar.open_event.is_some() =>
+                if matches!(state.screen, Screen::Inbox | Screen::Triaged)
+                    && state.calendar.open_event.is_some() =>
             {
                 Some(Message::EventClosed)
             }

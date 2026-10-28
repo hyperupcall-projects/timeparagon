@@ -18,14 +18,35 @@ fn msg(action: Action) -> Message {
     Message::Inbox(action)
 }
 
+/// Which Tasks list a card is drawn for, so the actions can differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum List {
+    Inbox,
+    Triaged,
+}
+
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let tasks = inbox::tasks(state);
+    list_view(state, metrics, List::Inbox)
+}
+
+/// The Triaged tab: tasks confirmed out of the Inbox but not yet scheduled.
+pub fn triaged<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    list_view(state, metrics, List::Triaged)
+}
+
+fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a, Message> {
+    let tasks = match list {
+        List::Inbox => inbox::tasks(state),
+        List::Triaged => inbox::triaged_tasks(state),
+    };
+    let (heading, subtitle) = match list {
+        List::Inbox => ("Inbox", "Tasks waiting to be triaged"),
+        List::Triaged => ("Triaged", "Tasks ready to be scheduled"),
+    };
 
     let title = column![
-        text("Inbox").size(25),
-        text("Tasks waiting to be triaged")
-            .size(metrics.label())
-            .style(text::secondary),
+        text(heading).size(25),
+        text(subtitle).size(metrics.label()).style(text::secondary),
     ];
     let new_task = button(text("New task").size(metrics.label()).center())
         .on_press(msg(Action::NewTask))
@@ -45,13 +66,16 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     if tasks.is_empty() {
         body = body.push(
-            text("Nothing to triage")
-                .size(metrics.label())
-                .style(text::secondary),
+            text(match list {
+                List::Inbox => "Nothing to triage",
+                List::Triaged => "Nothing triaged yet",
+            })
+            .size(metrics.label())
+            .style(text::secondary),
         );
     }
     for task in tasks {
-        body = body.push(task_card(state, task, metrics));
+        body = body.push(task_card(state, task, metrics, list));
     }
 
     container(scrollable(body.width(Fill)))
@@ -61,20 +85,23 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into()
 }
 
-/// One task, with the button that gives it a day.
-fn task_card<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+/// One task, showing the metadata the Inbox is meant to collect and the
+/// actions that take it out of the Inbox.
+fn task_card<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+    list: List,
+) -> Element<'a, Message> {
     let busy = state.timeblocking.busy.contains(&task.id);
-    let open = state.inbox.scheduling.as_deref() == Some(task.id.as_str());
+    let shown = state.calendar.open_event.as_deref() == Some(task.id.as_str());
 
-    let mut done = button(text("○").size(metrics.label() + 3.0)).style(button::text);
-    if state.timeblocking.busy.is_empty() {
-        done = done.on_press(Message::TaskToggled(task.id.clone()));
-    }
-    let mut heading = row![done].spacing(4).align_y(Center);
+    let mut heading = row![].spacing(4).align_y(Center);
     if let Some(source) = integrations::source_in(&task.details.description) {
         heading = heading.push(source_icon::link(&source, 16.0));
     }
-    // The title opens the task's details beside the list.
+    // The title opens the task's details beside the list, where its project,
+    // estimate, priority and the rest are edited.
     heading = heading.push(
         button(text(&task.title).size(metrics.label() + 1.0).width(Fill))
             .width(Fill)
@@ -82,45 +109,12 @@ fn task_card<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Elemen
             .style(button::text)
             .on_press(Message::EventOpened(task.id.clone())),
     );
-    let shown = state.calendar.open_event.as_deref() == Some(task.id.as_str());
 
-    let mut card = column![heading].spacing(6);
-    if let Ok(Some(deadline)) = crate::calendar::deadline::read_deadline(&task.details.description)
-    {
-        card = card.push(
-            text(format!("Deadline {}", deadline.value()))
-                .size(metrics.label() - 1.0)
-                .style(if tb::overdue(task) {
-                    text::danger
-                } else {
-                    text::secondary
-                }),
-        );
+    let mut card = column![heading].spacing(4);
+    for row in metadata_rows(state, task, metrics, list == List::Inbox) {
+        card = card.push(row);
     }
-
-    let mut schedule = button(
-        text(if busy {
-            "Saving…"
-        } else if open {
-            "Close"
-        } else {
-            "Schedule"
-        })
-        .size(metrics.label())
-        .center(),
-    )
-    .style(if open {
-        button::secondary
-    } else {
-        button::primary
-    });
-    if !busy {
-        schedule = schedule.on_press(msg(Action::ChooseDay(task.id.clone())));
-    }
-    card = card.push(schedule);
-    if open && !busy {
-        card = card.push(day_chooser(state, task, metrics));
-    }
+    card = card.push(actions(state, task, metrics, list, busy));
 
     container(card)
         .padding([6, 8])
@@ -144,35 +138,298 @@ fn task_card<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Elemen
         .into()
 }
 
-/// Quick days, and a field for any other day.
-fn day_chooser<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
-    let quick = inbox::quick_days(inbox::today()).map(|(label, day)| {
-        button(text(label).size(metrics.label()).center())
-            .style(button::secondary)
-            .on_press(msg(Action::ScheduleOn(task.id.clone(), day)))
-            .into()
+/// Every piece of metadata a task carries: the project, labels, priority,
+/// location, deadline, scheduled time and estimate duration. Required fields
+/// that are missing are called out while the task is still in the Inbox.
+fn metadata_rows<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+    strict: bool,
+) -> Vec<Element<'a, Message>> {
+    let m = tb::metadata(task);
+    let size = metrics.label() - 1.0;
+    let mut rows = Vec::new();
+
+    // Projects.
+    let projects: Vec<_> = m
+        .projects
+        .iter()
+        .filter_map(|id| state.config.projects.get(*id))
+        .collect();
+    let mut project_value = row![].spacing(4).align_y(Center);
+    if projects.is_empty() {
+        project_value = project_value.push(missing("No project", strict, size));
+    } else {
+        for project in projects {
+            project_value = project_value.push(super::calendar::color_circle(
+                project
+                    .color()
+                    .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e)),
+            ));
+            project_value = project_value.push(text(&project.name).size(size));
+        }
+    }
+    rows.push(field_line("Project", project_value.into(), metrics));
+
+    // Priority.
+    let priority = text(match m.priority {
+        Some(priority) => priority.label(),
+        None => {
+            if strict {
+                "No priority"
+            } else {
+                "None"
+            }
+        }
+    })
+    .size(size)
+    .style(if m.priority.is_none() && strict {
+        text::danger
+    } else {
+        text::default
     });
-    let typed = row![
-        text_input("YYYY-MM-DD", &state.inbox.date)
-            .on_input(|value| msg(Action::Date(value)))
-            .on_submit(msg(Action::ScheduleTyped(task.id.clone())))
-            .size(metrics.label())
-            .width(Fill),
-        button(text("Set").size(metrics.label()).center())
-            .on_press(msg(Action::ScheduleTyped(task.id.clone())))
-            .style(button::primary),
-    ]
-    .spacing(6)
-    .align_y(Center);
-    column![
-        text("Do it on")
-            .size(metrics.label())
+    rows.push(field_line("Priority", priority.into(), metrics));
+
+    // Estimate duration.
+    let estimate = text(if m.minutes == 0 {
+        if strict { "No estimate" } else { "None" }
+    } else {
+        ""
+    })
+    .size(size)
+    .style(if m.minutes == 0 && strict {
+        text::danger
+    } else {
+        text::default
+    });
+    let estimate: Element<'a, Message> = if m.minutes == 0 {
+        estimate.into()
+    } else {
+        text(format_duration(m.minutes)).size(size).into()
+    };
+    rows.push(field_line("Estimate", estimate, metrics));
+
+    // Labels.
+    if !m.labels.is_empty() {
+        rows.push(field_line(
+            "Labels",
+            text(
+                m.labels
+                    .iter()
+                    .map(|label| format!("#{label}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+            .size(size)
+            .style(text::secondary)
+            .into(),
+            metrics,
+        ));
+    }
+
+    // Location, with a pin when one is set.
+    if let Some(place) = m.location.and_then(|id| state.config.travel.place(id)) {
+        rows.push(field_line(
+            "Location",
+            row![location_pin(size + 2.0), text(&place.name).size(size)]
+                .spacing(4)
+                .align_y(Center)
+                .into(),
+            metrics,
+        ));
+    }
+
+    // The notes deadline.
+    if let Ok(Some(deadline)) = crate::calendar::deadline::read_deadline(&task.details.description)
+    {
+        rows.push(field_line(
+            "Deadline",
+            text(deadline.value())
+                .size(size)
+                .style(if tb::overdue(task) {
+                    text::danger
+                } else {
+                    text::default
+                })
+                .into(),
+            metrics,
+        ));
+    }
+
+    // The scheduled day or time, once it has one.
+    if let Some(scheduled) = scheduled_label(task) {
+        rows.push(field_line(
+            "Scheduled",
+            text(scheduled).size(size).into(),
+            metrics,
+        ));
+    }
+
+    rows
+}
+
+fn missing<'a>(label: &'a str, strict: bool, size: f32) -> Element<'a, Message> {
+    text(label)
+        .size(size)
+        .style(if strict {
+            text::danger
+        } else {
+            text::secondary
+        })
+        .into()
+}
+
+fn field_line<'a>(
+    label: &'static str,
+    value: Element<'a, Message>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    row![
+        text(label)
+            .size(metrics.label() - 1.0)
             .style(text::secondary),
-        row(quick).spacing(6).wrap().vertical_spacing(6),
-        typed,
+        value,
     ]
-    .spacing(6)
+    .spacing(5)
+    .align_y(Center)
     .into()
+}
+
+/// "1h 30m", "45m" or "2h", so a long estimate stays readable.
+fn format_duration(minutes: u32) -> String {
+    let hours = minutes / 60;
+    let minutes = minutes % 60;
+    match (hours, minutes) {
+        (0, minutes) => format!("{minutes}m"),
+        (hours, 0) => format!("{hours}h"),
+        (hours, minutes) => format!("{hours}h {minutes}m"),
+    }
+}
+
+/// The day or time a task has been scheduled for, if it has one.
+fn scheduled_label(task: &Event) -> Option<String> {
+    let date = task.start.date_naive();
+    if date == tb::UNDATED {
+        return None;
+    }
+    Some(if task.all_day {
+        format!("{}", date.format("%a, %b %-d"))
+    } else {
+        format!(
+            "{} at {}",
+            date.format("%a, %b %-d"),
+            task.start.format("%H:%M")
+        )
+    })
+}
+
+/// A small map pin, drawn rather than shipped as an icon font.
+fn location_pin(size: f32) -> Element<'static, Message> {
+    use iced::widget::canvas;
+    use iced::{Length, Point, Rectangle, Renderer, Theme, mouse};
+
+    struct Pin;
+    impl canvas::Program<Message> for Pin {
+        type State = ();
+        fn draw(
+            &self,
+            _state: &Self::State,
+            renderer: &Renderer,
+            theme: &Theme,
+            bounds: Rectangle,
+            _cursor: mouse::Cursor,
+        ) -> Vec<canvas::Geometry> {
+            let mut frame = canvas::Frame::new(renderer, bounds.size());
+            let color = theme.extended_palette().secondary.base.color;
+            let width = bounds.width;
+            let height = bounds.height;
+            let radius = (width / 2.0).min(height * 0.32);
+            let center = Point::new(width / 2.0, radius);
+            frame.fill(&canvas::Path::circle(center, radius), color);
+            let tip = canvas::Path::new(|builder| {
+                builder.move_to(Point::new(center.x - radius * 0.72, radius + radius * 0.35));
+                builder.line_to(Point::new(center.x, height));
+                builder.line_to(Point::new(center.x + radius * 0.72, radius + radius * 0.35));
+                builder.close();
+            });
+            frame.fill(&tip, color);
+            frame.fill(
+                &canvas::Path::circle(center, radius * 0.42),
+                theme.extended_palette().background.base.color,
+            );
+            vec![frame.into_geometry()]
+        }
+    }
+
+    canvas::Canvas::new(Pin)
+        .width(Length::Fixed(size * 0.75))
+        .height(Length::Fixed(size))
+        .into()
+}
+
+/// The Inbox actions, in their set order: Triage leads, then parking the task,
+/// then finishing or discarding it.
+fn actions<'a>(
+    _state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+    list: List,
+    busy: bool,
+) -> Element<'a, Message> {
+    let status = tb::task_status(task);
+    let mut entries: Vec<(&'static str, Message, bool)> = Vec::new();
+    if list == List::Inbox {
+        entries.push((
+            "Triage",
+            Message::TimeBlocking(tb::Action::Triage(task.id.clone())),
+            true,
+        ));
+    }
+    entries.push((
+        "Move to backlog",
+        Message::TimeBlocking(tb::Action::Backlog(task.id.clone())),
+        false,
+    ));
+    entries.push((
+        if status == tb::TaskStatus::Completed {
+            "Uncomplete task"
+        } else {
+            "Complete task"
+        },
+        Message::TaskToggled(task.id.clone()),
+        false,
+    ));
+    entries.push((
+        if status == tb::TaskStatus::Ignored {
+            "Unignore Task"
+        } else {
+            "Ignore Task"
+        },
+        Message::TaskIgnoreToggled(task.id.clone()),
+        false,
+    ));
+    entries.push((
+        "Delete Task",
+        Message::TaskDeleteRequested(task.id.clone()),
+        false,
+    ));
+
+    let mut actions = column![].spacing(4).width(Fill);
+    for (label, message, primary) in entries {
+        let mut action = button(text(label).size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(if primary {
+                button::primary
+            } else {
+                button::secondary
+            });
+        if !busy {
+            action = action.on_press(message);
+        }
+        actions = actions.push(action);
+    }
+    actions.into()
 }
 
 /// The "Schedule Day" button for a task's details pane, and under it, once
@@ -471,19 +728,30 @@ mod tests {
     }
 
     #[test]
-    fn each_untriaged_task_offers_a_schedule_button() {
-        for width in [200.0, 800.0] {
+    fn an_untriaged_task_shows_its_metadata_and_inbox_actions() {
+        for width in [320.0, 900.0] {
             let state = state_with_task("");
             let mut ui = simulator(&state, width);
             assert!(ui.find("Reply to Sam").is_ok());
             assert!(ui.find("New task").is_ok());
-            ui.click("Schedule").unwrap();
+            for label in [
+                "Project",
+                "Priority",
+                "Estimate",
+                "Triage",
+                "Move to backlog",
+                "Complete task",
+                "Ignore Task",
+                "Delete Task",
+            ] {
+                assert!(ui.find(label).is_ok(), "{label}");
+            }
+            ui.click("Triage").unwrap();
             let messages: Vec<_> = ui.into_messages().collect();
-            assert!(
-                messages.iter().any(
-                    |m| matches!(m, Message::Inbox(Action::ChooseDay(id)) if id == "task:one")
-                )
-            );
+            assert!(messages.iter().any(|m| matches!(
+                m,
+                Message::TimeBlocking(tb::Action::Triage(id)) if id == "task:one"
+            )));
         }
     }
 
@@ -539,19 +807,14 @@ mod tests {
     }
 
     #[test]
-    fn the_open_day_chooser_offers_quick_days() {
+    fn the_triaged_tab_lists_triaged_tasks_without_a_triage_button() {
         let mut state = state_with_task("");
-        state.inbox.scheduling = Some("task:one".into());
-        let mut ui = simulator(&state, 400.0);
-        for label in ["Today", "Tomorrow", "Next Monday", "Set"] {
-            assert!(ui.find(label).is_ok(), "{label}");
-        }
-        ui.click("Tomorrow").unwrap();
-        let messages: Vec<_> = ui.into_messages().collect();
-        assert!(messages.iter().any(|m| matches!(
-            m,
-            Message::Inbox(Action::ScheduleOn(id, _)) if id == "task:one"
-        )));
+        state.calendar.events[0].calendar_id = "tasks:triaged".into();
+        state.screen = crate::app::Screen::Triaged;
+        let mut ui = simulator(&state, 500.0);
+        assert!(ui.find("Reply to Sam").is_ok());
+        assert!(ui.find("Move to backlog").is_ok());
+        assert!(ui.find("Triage").is_err());
     }
 
     #[test]

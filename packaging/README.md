@@ -49,7 +49,7 @@ Google Tasks and Calendar sync use the public Google APIs and require no
 browser helper. Every event TimeSlay writes lives on a single **TimeSlay**
 calendar, created automatically on the first sync that needs it; in Settings,
 choose the Google Tasks list scheduled tasks go to, or let the first scheduling
-operation create/reuse **Has Time**. Reconnect Google once to authorize
+operation create/reuse. Reconnect Google once to authorize
 calendar creation. Google Tasks only stores a day for a task, so times and
 deadlines live in reserved lines anywhere in the task's notes:
 

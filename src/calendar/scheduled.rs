@@ -377,6 +377,7 @@ pub trait Remote {
     ) -> Result<(String, String), String>;
     fn move_task(&self, link: &Link, destination: &str) -> Result<Value, String>;
     fn backlog_list(&self, list: Option<&str>) -> Result<String, String>;
+    fn triaged_list(&self, list: Option<&str>) -> Result<String, String>;
     fn set_day(&self, link: &Link, day: Option<chrono::NaiveDate>) -> Result<(), String>;
     fn save_event(
         &self,
@@ -420,7 +421,19 @@ impl Remote for Google<'_> {
                 api::TASK_LISTS,
                 api::TASK_LISTS,
                 "title",
-                "Triaged",
+                crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST,
+            ),
+        }
+    }
+    fn triaged_list(&self, list: Option<&str>) -> Result<String, String> {
+        match list {
+            Some(id) => Ok(id.trim_start_matches("tasks:").to_owned()),
+            None => find_or_create(
+                self.token,
+                api::TASK_LISTS,
+                api::TASK_LISTS,
+                "title",
+                crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST,
             ),
         }
     }
@@ -531,7 +544,13 @@ pub fn destinations(
     };
     let list = match list {
         Some(id) => id.trim_start_matches("tasks:").to_owned(),
-        None => find_or_create(token, api::TASK_LISTS, api::TASK_LISTS, "title", "Has Time")?,
+        None => find_or_create(
+            token,
+            api::TASK_LISTS,
+            api::TASK_LISTS,
+            "title",
+            crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
+        )?,
     };
     Ok((calendar, list))
 }

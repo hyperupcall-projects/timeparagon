@@ -845,73 +845,60 @@ fn add_slot_container(theme: &iced::Theme, dragging: bool) -> container::Style {
         ..Default::default()
     }
 }
+/// The Backlog tab: only the Google Tasks on the chosen backlog list, so a
+/// task is here because it was deliberately parked, not merely because it is
+/// unscheduled.
 pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let list_id = state
+        .config
+        .calendar
+        .backlog_list
+        .clone()
+        .unwrap_or_else(|| {
+            format!(
+                "tasks:{}",
+                crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST
+            )
+        });
+    let list_name = tb::task_list_name(state, &list_id);
+
     let mut tasks: Vec<_> = state
         .calendar
         .events
         .iter()
-        .filter(|event| tb::in_backlog(event))
+        .filter(|event| {
+            event.is_task()
+                && !event.completed
+                && tb::metadata(event).block.is_none()
+                && tb::is_backlog_list(state, &event.calendar_id)
+        })
         .collect();
     tasks.sort_by_key(|event| tb::backlog_order(event));
-    let mut lists = vec![ListFilter {
-        id: None,
-        name: "All lists".into(),
-    }];
-    for task in &tasks {
-        if lists
-            .iter()
-            .any(|item| item.id.as_deref() == Some(task.calendar_id.as_str()))
-        {
-            continue;
-        }
-        lists.push(ListFilter {
-            id: Some(task.calendar_id.clone()),
-            name: tb::task_list_name(state, &task.calendar_id),
-        });
-    }
-    if let Some(id) = &state.timeblocking.backlog_list {
-        if !lists.iter().any(|item| item.id.as_deref() == Some(id)) {
-            lists.push(ListFilter {
-                id: Some(id.clone()),
-                name: tb::task_list_name(state, id),
-            });
-        }
-    }
+
     let query = state.timeblocking.backlog_query.trim().to_lowercase();
-    let list = state.timeblocking.backlog_list.as_deref();
     let shown: Vec<_> = tasks
         .iter()
         .copied()
-        .filter(|task| {
-            list.is_none_or(|id| task.calendar_id == id)
-                && (query.is_empty()
-                    || task.title.to_lowercase().contains(&query)
-                    || tb::task_list_name(state, &task.calendar_id)
-                        .to_lowercase()
-                        .contains(&query))
-        })
+        .filter(|task| query.is_empty() || task.title.to_lowercase().contains(&query))
         .collect();
+
     let mut body = column![
-        text("Backlog").size(25),
-        text("Unscheduled Google Tasks")
+        text(list_name.clone()).size(25),
+        text("Google Tasks parked on this list")
             .size(13)
             .style(text::secondary),
         text("Search").size(metrics.label()).style(text::secondary),
-        text_input("Search tasks or lists…", &state.timeblocking.backlog_query)
+        text_input("Search tasks…", &state.timeblocking.backlog_query)
             .on_input(|value| msg(Action::BacklogQuery(value)))
             .size(metrics.label())
             .width(Fill),
-        text("Task list")
-            .size(metrics.label())
-            .style(text::secondary),
-        list_filters(lists, state.timeblocking.backlog_list.as_deref(), metrics),
     ]
     .spacing(8);
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).style(text::danger));
     }
     if tasks.is_empty() {
-        body = body.push(text("No tasks in your backlog").style(text::secondary));
+        body = body.push(text(format!("No tasks on the {list_name} list")).style(text::secondary));
     } else if shown.is_empty() {
         body = body.push(text("No matching tasks").style(text::secondary));
     }
@@ -928,33 +915,6 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 
 pub use super::timeblocking_focus::session_editor;
 pub use super::timeblocking_focus::view as focus_overlay;
-
-fn list_filters<'a>(
-    lists: Vec<ListFilter>,
-    selected: Option<&str>,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
-    let mut filters = column![].spacing(4);
-    for item in lists {
-        let active = item.id.as_deref() == selected;
-        filters = filters.push(
-            button(text(item.name).size(metrics.label()))
-                .width(Fill)
-                .on_press(msg(Action::BacklogList(item.id)))
-                .style(if active {
-                    button::primary
-                } else {
-                    button::secondary
-                }),
-        );
-    }
-    filters.into()
-}
-
-struct ListFilter {
-    id: Option<String>,
-    name: String,
-}
 
 /// Every estimate entry point opens the same app-wide dialog.
 pub(super) fn estimate_button<'a>(

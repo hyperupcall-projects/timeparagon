@@ -24,17 +24,17 @@ Same for the week. Notice how yesterday can be included in this view.
 ## Features
 
 - Stays out of your way during work, but is easily accessible when needed.
-	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+Shift+J</kbd>)
-	- Toggle between hiding and showing the app (<kbd>Meta+J</kbd>)
+	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+Shift+J</kbd>).
+	- Toggle between hiding and showing the app (<kbd>Meta+J</kbd>).
 - Intuitive to use (WIP)
 - Manage events and tasks directly within the app
 - Projects (TODO)
 - Implement popular productivity concepts in the UI:
 	- Time blocks
 	- Habits
-	- Pomodoro Timers (TODO)
-	- SMART Goals (TODO)
-	- Eisenhower Matrix (TODO)
+	- Pomodoro timers (TODO)
+	- SMART goals (TODO)
+	- Eisenhower matrix (TODO)
 	- Brain dumping (TODO)
 	- Theme/project days (TODO)
 - Uses Google Calendar, Tasks, and Drive to store events, tasks, and app data.

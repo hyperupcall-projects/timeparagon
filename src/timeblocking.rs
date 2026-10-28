@@ -102,6 +102,15 @@ pub enum Action {
     RefreshBlock(String),
     List(String),
     BacklogDestination(Option<String>),
+    /// The Google Tasks list triaged tasks are moved to, or `None` for the
+    /// default.
+    TriagedDestination(Option<String>),
+    /// Require an estimate before a task can be triaged.
+    RequireEstimate(bool),
+    /// Require a project before a task can be triaged.
+    RequireProject(bool),
+    /// Require a priority before a task can be triaged.
+    RequirePriority(bool),
     Close,
     Details(String),
     CancelDrag,
@@ -111,6 +120,8 @@ pub enum Action {
     Date(String),
     SaveEstimate(String),
     Backlog(String),
+    /// Confirm a task out of the Inbox and onto the triaged list.
+    Triage(String),
     /// Remove a task from its block without deleting it or moving lists.
     Unassign(String),
     /// The backlog search box changed.
@@ -197,6 +208,22 @@ pub fn task_list_name(state: &State, calendar_id: &str) -> String {
                 .filter(|id| !id.is_empty())
                 .unwrap_or("Tasks")
                 .to_owned()
+        })
+}
+
+/// Whether `calendar_id` is the list that holds backlog tasks.
+pub fn is_backlog_list(state: &State, calendar_id: &str) -> bool {
+    if let Some(chosen) = &state.config.calendar.backlog_list {
+        return chosen.trim_start_matches("tasks:") == calendar_id.trim_start_matches("tasks:");
+    }
+    let default = CalendarSettings::DEFAULT_BACKLOG_LIST;
+    calendar_id
+        .trim_start_matches("tasks:")
+        .eq_ignore_ascii_case(default)
+        || state.calendar.calendars.iter().any(|calendar| {
+            calendar.id == calendar_id
+                && calendar.is_task_list()
+                && calendar.name.trim().eq_ignore_ascii_case(default)
         })
 }
 
@@ -317,6 +344,15 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
     Task::none()
 }
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
+    // Triaging is a review step: the task cannot leave the Inbox until every
+    // required field is filled in. Nothing is sent to Google when it is not.
+    if let Action::Triage(id) = &action
+        && let Some(error) = triage_error(state, id)
+    {
+        state.inbox.error = Some(error);
+        return Task::none();
+    }
+    state.inbox.error = None;
     let (id, change) = match action {
         Action::View(id) => {
             if !state
@@ -579,11 +615,28 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::RefreshBlock(id) => return refresh_block(state, &id),
         Action::List(id) => {
-            state.config.calendar.time_block_list = Some(id);
+            // An empty choice restores the default "Time Blocked" list.
+            state.config.calendar.time_block_list = (!id.is_empty()).then_some(id);
             return crate::app::queue_save(state);
         }
         Action::BacklogDestination(id) => {
             state.config.calendar.backlog_list = id;
+            return crate::app::queue_save(state);
+        }
+        Action::TriagedDestination(id) => {
+            state.config.calendar.triaged_list = id;
+            return crate::app::queue_save(state);
+        }
+        Action::RequireEstimate(required) => {
+            state.config.calendar.triage.estimate = required;
+            return crate::app::queue_save(state);
+        }
+        Action::RequireProject(required) => {
+            state.config.calendar.triage.project = required;
+            return crate::app::queue_save(state);
+        }
+        Action::RequirePriority(required) => {
+            state.config.calendar.triage.priority = required;
             return crate::app::queue_save(state);
         }
         Action::Close => return close(state),
@@ -798,6 +851,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Estimate(minutes))
         }
         Action::Backlog(id) => (id, Change::Backlog),
+        Action::Triage(id) => (id, Change::Triaged),
         Action::Unassign(id) => (id, Change::Unassign),
         Action::Reschedule(id) => {
             let Ok(day) = NaiveDate::parse_from_str(&state.timeblocking.date, "%Y-%m-%d") else {
@@ -1131,6 +1185,35 @@ fn new_todo_event(
     }
 }
 
+/// Why a task cannot be triaged yet, from the Inbox's required-field settings,
+/// or `None` when it is ready to leave the Inbox.
+fn triage_error(state: &State, id: &str) -> Option<String> {
+    let task = state.calendar.event(id).filter(|event| event.is_task())?;
+    let required = &state.config.calendar.triage;
+    let metadata = metadata(task);
+    let mut missing = Vec::new();
+    if required.estimate && metadata.minutes == 0 {
+        missing.push("an estimate");
+    }
+    if required.project && metadata.projects.is_empty() {
+        missing.push("a project");
+    }
+    if required.priority && metadata.priority.is_none() {
+        missing.push("a priority");
+    }
+    match missing.as_slice() {
+        [] => None,
+        [only] => Some(format!("This task needs {only} before it can be triaged.")),
+        [first, second] => Some(format!(
+            "This task needs {first} and {second} before it can be triaged."
+        )),
+        [first, second, third] => Some(format!(
+            "This task needs {first}, {second} and {third} before it can be triaged."
+        )),
+        _ => None,
+    }
+}
+
 /// Trims a typed label and collapses runs of whitespace. Labels are short
 /// enough to fit on a task card, so very long ones are rejected.
 fn clean_label(input: &str) -> Result<String, &'static str> {
@@ -1153,6 +1236,8 @@ enum Change {
     Location(Option<u64>),
     Deadline(Option<calendar::deadline::Deadline>),
     Backlog,
+    /// Confirm a fully filled-in task and move it to the triaged list.
+    Triaged,
     Unassign,
     Day(NaiveDate),
     Block(String, DateTime<Local>, DateTime<Local>),
@@ -1341,11 +1426,12 @@ fn save(
                 .map_err(|e| e.message)?;
             }
         }
-        Change::Backlog | Change::Unassign | Change::Day(_) => {
-            let day = match change {
-                Change::Day(day) => Some(day),
-                Change::Unassign => Some(task.start.date_naive()),
-                _ => None,
+        Change::Backlog | Change::Triaged | Change::Unassign | Change::Day(_) => {
+            let (day, destination) = match change {
+                Change::Day(day) => (Some(day), None),
+                Change::Unassign => (Some(task.start.date_naive()), None),
+                Change::Triaged => (None, Some(Destination::Triaged)),
+                _ => (None, Some(Destination::Backlog)),
             };
             let token = access(settings)?;
             unschedule_with(
@@ -1355,6 +1441,7 @@ fn save(
                 settings,
                 &calendar::scheduled::Google { token: &token },
                 day,
+                destination,
             )?;
         }
         Change::Block(key, start, _end) => {
@@ -1425,8 +1512,16 @@ fn save(
     Ok(task)
 }
 
-/// Remove the schedule, then move backlog tasks while retaining their local ID.
-/// Day-only rescheduling keeps the current Google Tasks list.
+/// The Google Tasks list a task leaves the schedule for: the backlog it was
+/// deliberately parked on, or the triaged list it was confirmed into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Destination {
+    Backlog,
+    Triaged,
+}
+
+/// Remove the schedule, then move backlog or triaged tasks while retaining
+/// their local ID. Day-only rescheduling keeps the current Google Tasks list.
 fn unschedule_with(
     task: &mut Event,
     data: &mut crate::task_db::TaskData,
@@ -1434,12 +1529,13 @@ fn unschedule_with(
     settings: &CalendarSettings,
     remote: &impl calendar::scheduled::Remote,
     day: Option<NaiveDate>,
+    destination: Option<Destination>,
 ) -> Result<(), String> {
     // Resolve/create the list before changing the task's existing schedule.
-    let destination = if day.is_none() {
-        Some(remote.backlog_list(settings.backlog_list.as_deref())?)
-    } else {
-        None
+    let destination = match destination {
+        Some(Destination::Backlog) => Some(remote.backlog_list(settings.backlog_list.as_deref())?),
+        Some(Destination::Triaged) => Some(remote.triaged_list(settings.triaged_list.as_deref())?),
+        None => None,
     };
     let mut link = match &data.metadata.schedule {
         Some(link) => link.clone(),
@@ -1644,6 +1740,9 @@ mod tests {
         fn backlog_list(&self, _list: Option<&str>) -> Result<String, String> {
             unreachable!("Scheduling does not use the backlog list")
         }
+        fn triaged_list(&self, _list: Option<&str>) -> Result<String, String> {
+            unreachable!("Scheduling does not use the triaged list")
+        }
         fn set_day(
             &self,
             link: &calendar::scheduled::Link,
@@ -1786,6 +1885,11 @@ mod tests {
             self.calls.borrow_mut().push(format!("list:{list}"));
             Ok(list.to_owned())
         }
+        fn triaged_list(&self, list: Option<&str>) -> Result<String, String> {
+            let list = list.unwrap_or("tasks:triaged").trim_start_matches("tasks:");
+            self.calls.borrow_mut().push(format!("list:{list}"));
+            Ok(list.to_owned())
+        }
         fn move_task(
             &self,
             link: &calendar::scheduled::Link,
@@ -1862,6 +1966,7 @@ mod tests {
                 &settings,
                 &remote,
                 None,
+                Some(Destination::Backlog),
             )
             .unwrap();
             task.details.task_data = Some(data.clone());
@@ -1899,6 +2004,7 @@ mod tests {
                 &settings,
                 &remote,
                 None,
+                Some(Destination::Backlog),
             )
             .unwrap();
             assert!(
@@ -1940,6 +2046,7 @@ mod tests {
                 &CalendarSettings::default(),
                 &remote,
                 Some(day),
+                None,
             )
             .unwrap();
             task.details.task_data = Some(data.clone());
@@ -1976,6 +2083,7 @@ mod tests {
             &CalendarSettings::default(),
             &remote,
             Some(day),
+            None,
         )
         .unwrap();
         assert_eq!(task.id, "task:original-task");
@@ -2011,7 +2119,8 @@ mod tests {
                 &mut database,
                 &settings,
                 &remote,
-                None
+                None,
+                Some(Destination::Backlog)
             )
             .is_err()
         );
@@ -2028,7 +2137,8 @@ mod tests {
                 &mut database,
                 &settings,
                 &remote,
-                None
+                None,
+                Some(Destination::Backlog)
             )
             .is_err()
         );
@@ -2045,6 +2155,7 @@ mod tests {
             &settings,
             &remote,
             None,
+            Some(Destination::Backlog),
         )
         .unwrap();
         assert_eq!(task.calendar_id, "tasks:not-time-blocked");
@@ -2070,6 +2181,57 @@ mod tests {
         );
         let _ = update(&mut state, Action::BacklogDestination(None));
         assert_eq!(state.config.calendar.backlog_list, None);
+    }
+
+    #[test]
+    fn the_triaged_list_and_required_fields_round_trip() {
+        let mut state = estimate_state();
+        let _ = update(
+            &mut state,
+            Action::TriagedDestination(Some("tasks:custom".into())),
+        );
+        let _ = update(&mut state, Action::RequireEstimate(false));
+        let _ = update(&mut state, Action::RequireProject(false));
+        let _ = update(&mut state, Action::RequirePriority(false));
+        let serialized = toml::to_string(&state.config).unwrap();
+        let restored: crate::config::Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            restored.calendar.triaged_list.as_deref(),
+            Some("tasks:custom")
+        );
+        assert!(!restored.calendar.triage.estimate);
+        assert!(!restored.calendar.triage.project);
+        assert!(!restored.calendar.triage.priority);
+    }
+
+    #[test]
+    fn triaging_lists_every_missing_required_field_and_keeps_the_task_in_the_inbox() {
+        let mut state = estimate_state();
+        // The fixture has an estimate but neither a project nor a priority.
+        let _ = update(&mut state, Action::Triage("task:deep".into()));
+        assert!(state.timeblocking.busy.is_empty());
+        let error = state.inbox.error.as_deref().unwrap();
+        assert!(error.contains("a project"), "{error}");
+        assert!(error.contains("a priority"), "{error}");
+        assert!(!error.contains("an estimate"), "{error}");
+
+        // Relaxing the requirements lets it through.
+        let _ = update(&mut state, Action::RequireProject(false));
+        let _ = update(&mut state, Action::RequirePriority(false));
+        let _ = update(&mut state, Action::RequireEstimate(false));
+        let _ = update(&mut state, Action::Triage("task:deep".into()));
+        assert!(state.inbox.error.is_none());
+        assert!(state.timeblocking.busy.contains("task:deep"));
+    }
+
+    #[test]
+    fn backlog_and_triaged_lists_match_their_default_names_or_a_chosen_list() {
+        let mut state = estimate_state();
+        assert!(is_backlog_list(&state, "tasks:Backlog"));
+        assert!(!is_backlog_list(&state, "tasks:Inbox"));
+        state.config.calendar.backlog_list = Some("tasks:park".into());
+        assert!(is_backlog_list(&state, "tasks:park"));
+        assert!(!is_backlog_list(&state, "tasks:Backlog"));
     }
 
     #[test]

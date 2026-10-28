@@ -756,22 +756,30 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     section = section.push(heading("Time Blocking", metrics));
     {
-        let options: Vec<CalendarOption> = state
-            .calendar
-            .calendars
-            .iter()
-            .filter(|c| c.is_task_list())
-            .map(|c| CalendarOption {
-                id: c.id.clone(),
-                name: c.name.clone(),
-            })
-            .collect();
+        let mut options = vec![CalendarOption {
+            id: String::new(),
+            name: format!(
+                "Default: {}",
+                crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST
+            ),
+        }];
+        options.extend(
+            state
+                .calendar
+                .calendars
+                .iter()
+                .filter(|c| c.is_task_list())
+                .map(|c| CalendarOption {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                }),
+        );
         let selected = options
             .iter()
-            .find(|o| Some(&o.id) == settings.time_block_list.as_ref())
+            .find(|o| settings.time_block_list.as_deref().unwrap_or("") == o.id)
             .cloned();
         section = section.push(field(
-            "Google Tasks list for scheduled tasks (default: Has Time)",
+            "Google Tasks list for time-blocked and scheduled tasks",
             pick_list(options, selected, |o: CalendarOption| {
                 Message::TimeBlocking(crate::timeblocking::Action::List(o.id))
             })
@@ -783,7 +791,10 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     let mut backlog_options = vec![CalendarOption {
         id: String::new(),
-        name: "Default: Triaged".to_owned(),
+        name: format!(
+            "Default: {}",
+            crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST
+        ),
     }];
     backlog_options.extend(
         state
@@ -804,6 +815,40 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         "Google Tasks list for backlog tasks",
         pick_list(backlog_options, selected, |option: CalendarOption| {
             Message::TimeBlocking(crate::timeblocking::Action::BacklogDestination(
+                (!option.id.is_empty()).then_some(option.id),
+            ))
+        })
+        .text_size(metrics.label())
+        .width(Fill)
+        .into(),
+        metrics,
+    ));
+    let mut triaged_options = vec![CalendarOption {
+        id: String::new(),
+        name: format!(
+            "Default: {}",
+            crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST
+        ),
+    }];
+    triaged_options.extend(
+        state
+            .calendar
+            .calendars
+            .iter()
+            .filter(|c| c.is_task_list())
+            .map(|c| CalendarOption {
+                id: c.id.clone(),
+                name: c.name.clone(),
+            }),
+    );
+    let selected = triaged_options
+        .iter()
+        .find(|option| settings.triaged_list.as_deref().unwrap_or("") == option.id)
+        .cloned();
+    section = section.push(field(
+        "Google Tasks list for triaged tasks",
+        pick_list(triaged_options, selected, |option: CalendarOption| {
+            Message::TimeBlocking(crate::timeblocking::Action::TriagedDestination(
                 (!option.id.is_empty()).then_some(option.id),
             ))
         })
@@ -843,6 +888,32 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
+    section = section.push(heading("Inbox triage", metrics));
+    section = section.push(
+        text(
+            "A task cannot leave the Inbox until every field switched on here has been filled in.",
+        )
+        .size(metrics.label())
+        .style(text::secondary),
+    );
+    section = section.push(switch(
+        "Require an estimated time",
+        settings.triage.estimate,
+        |required| Message::TimeBlocking(crate::timeblocking::Action::RequireEstimate(required)),
+        metrics,
+    ));
+    section = section.push(switch(
+        "Require a project",
+        settings.triage.project,
+        |required| Message::TimeBlocking(crate::timeblocking::Action::RequireProject(required)),
+        metrics,
+    ));
+    section = section.push(switch(
+        "Require a priority",
+        settings.triage.priority,
+        |required| Message::TimeBlocking(crate::timeblocking::Action::RequirePriority(required)),
+        metrics,
+    ));
     section = section.push(heading("TimeSlay colors", metrics));
     section = section.push(field(
         "Time Blocks",
@@ -867,7 +938,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         kind_color_picker(settings.habit_color, Message::HabitColorPicked, metrics),
         metrics,
     ));
-    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks, scheduled tasks and habits can each be given a color of their own; the color is also written to Google. The Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM or DUE: YYYY-MM-DD for a day only. A task's clock time comes from its Calendar-backed schedule, never from its notes. Events and time blocks repeat from the same plain-language controls in their New event and details panels. Habits live on the TimeSlay calendar as recurring events and are edited from the Habits tab with those same controls. A habit can also be started from the New event popup on the calendar. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks, scheduled tasks and habits can each be given a color of their own; the color is also written to Google. The Inbox, Triaged, Time Blocked and Backlog lists are created on first use if needed; they are the only task lists the app manages. New tasks added from the Inbox tab go to the Inbox list. Triaging a task checks the required fields and moves it to the Triaged list; time-blocking or scheduling it moves it to the Time Blocked list; moving it to the backlog parks it on the Backlog list. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM or DUE: YYYY-MM-DD for a day only. A task's clock time comes from its Calendar-backed schedule, never from its notes. Events and time blocks repeat from the same plain-language controls in their New event and details panels. Habits live on the TimeSlay calendar as recurring events and are edited from the Habits tab with those same controls. A habit can also be started from the New event popup on the calendar. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }

@@ -748,7 +748,7 @@ fn opening_an_event_shows_its_google_details() {
 }
 
 #[test]
-fn a_task_details_card_links_to_google_tasks_without_a_status() {
+fn a_task_details_card_has_no_google_tasks_link_or_status() {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.calendar =
@@ -768,7 +768,7 @@ fn a_task_details_card_links_to_google_tasks_without_a_status() {
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
-    assert!(ui.find("Open in Google Tasks").is_ok());
+    assert!(ui.find("Open in Google Tasks").is_err());
     assert!(ui.find("Complete task").is_ok());
     assert!(ui.find("Name").is_ok());
     assert!(ui.find("Rename").is_ok());
@@ -1137,6 +1137,8 @@ fn timeblocking_state() -> State {
     snapshot.day = Local::now().date_naive();
     state.config.calendar.app_calendar = Some("work".into());
     state.config.calendar.time_block_list = Some("tasks:list".into());
+    // The backlog fixture uses this list as its parked list.
+    state.config.calendar.backlog_list = Some("tasks:list".into());
     let block = snapshot
         .events
         .iter_mut()
@@ -1921,7 +1923,7 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 }
 
 #[test]
-fn backlog_shows_each_task_list_and_filters_by_search_and_list() -> Result<(), Error> {
+fn backlog_shows_only_the_parked_list_and_filters_by_search() -> Result<(), Error> {
     use time_slay::timeblocking::{Action, Metadata};
     let mut state = timeblocking_state();
     state.screen = Screen::Backlog;
@@ -1942,71 +1944,49 @@ fn backlog_shows_each_task_list_and_filters_by_search_and_list() -> Result<(), E
     set_task_metadata(&mut errand, "", Metadata::default());
     state.calendar.add_event(errand);
 
+    // Only the configured backlog list is shown, not every unscheduled task.
     let mut ui = render(&state, Size::new(420.0, 720.0));
-    for label in [
-        "All lists",
-        "Inbox",
-        "Errands",
-        "Research outline",
-        "Buy stamps",
-    ] {
+    for label in ["Inbox", "Research outline", "Send invoice"] {
         assert!(ui.find(label).is_ok(), "missing {label}");
     }
-    let search = ui.find("Search tasks or lists…")?;
+    assert!(
+        ui.find("Buy stamps").is_err(),
+        "a task on another list must not appear in the backlog"
+    );
+    let search = ui.find("Search tasks…")?;
     ui.point_at(search.bounds().center());
     ui.simulate(iced_test::simulator::click());
-    ui.typewrite("stamp");
+    ui.typewrite("outline");
     assert!(ui.into_messages().any(|message| matches!(
         message,
-        Message::TimeBlocking(Action::BacklogQuery(query)) if query == "stamp"
+        Message::TimeBlocking(Action::BacklogQuery(query)) if query == "outline"
     )));
 
     let _ = app::update(
         &mut state,
-        Message::TimeBlocking(Action::BacklogQuery("STAMP".into())),
+        Message::TimeBlocking(Action::BacklogQuery("INVOICE".into())),
     );
     let mut ui = render(&state, Size::new(420.0, 720.0));
-    assert!(ui.find("Buy stamps").is_ok());
-    assert!(ui.find("Research outline").is_err());
-    assert!(ui.find("Send invoice").is_err());
-    drop(ui);
-
-    let _ = app::update(
-        &mut state,
-        Message::TimeBlocking(Action::BacklogQuery("errands".into())),
-    );
-    let mut ui = render(&state, Size::new(420.0, 720.0));
-    assert!(ui.find("Buy stamps").is_ok());
+    assert!(ui.find("Send invoice").is_ok());
     assert!(ui.find("Research outline").is_err());
     drop(ui);
 
+    // Choosing a different list in Settings changes what the backlog shows.
+    state.config.calendar.backlog_list = Some("tasks:errands".into());
     let _ = app::update(
         &mut state,
         Message::TimeBlocking(Action::BacklogQuery(String::new())),
     );
     let mut ui = render(&state, Size::new(420.0, 720.0));
-    let _ = ui.click("Errands")?;
-    let list_message = ui.into_messages().find(|message| {
-        matches!(message, Message::TimeBlocking(Action::BacklogList(Some(id))) if id == "tasks:errands")
-    });
-    assert!(
-        list_message.is_some(),
-        "the Errands filter did not select that list"
-    );
-    let _ = app::update(&mut state, list_message.unwrap());
-    let mut ui = render(&state, Size::new(420.0, 720.0));
     assert!(ui.find("Buy stamps").is_ok());
+    assert!(ui.find("Errands").is_ok());
     assert!(ui.find("Research outline").is_err());
+    assert!(ui.find("Send invoice").is_err());
     drop(ui);
-    let _ = app::update(
-        &mut state,
-        Message::TimeBlocking(Action::BacklogList(Some("tasks:list".into()))),
-    );
+
+    // The list name and search stay inside a 180px window.
     let mut ui = render(&state, Size::new(180.0, 720.0));
-    assert!(ui.find("Research outline").is_ok());
-    assert!(ui.find("Send invoice").is_ok());
-    assert!(ui.find("Buy stamps").is_err());
-    for label in ["Search tasks or lists…", "Inbox", "Research outline"] {
+    for label in ["Search tasks…", "Buy stamps"] {
         let bounds = ui.find(label)?.bounds();
         assert!(
             bounds.x >= -1.0 && bounds.x + bounds.width <= 181.0,
@@ -2021,8 +2001,34 @@ fn backlog_shows_each_task_list_and_filters_by_search_and_list() -> Result<(), E
     );
     let mut ui = render(&state, Size::new(420.0, 720.0));
     assert!(ui.find("No matching tasks").is_ok());
-    assert!(ui.find("Research outline").is_err());
+    assert!(ui.find("Buy stamps").is_err());
     Ok(())
+}
+
+#[test]
+fn the_triaged_tab_lists_triaged_tasks_without_a_triage_button() {
+    let mut state = timeblocking_state();
+    state.screen = Screen::Triaged;
+    // Move the parked task onto the default triaged list.
+    state
+        .calendar
+        .event_mut("task:backlog")
+        .unwrap()
+        .calendar_id = "tasks:Triaged".into();
+
+    for width in [180.0, 420.0, 900.0] {
+        let mut ui = render(&state, Size::new(width, 720.0));
+        assert!(ui.find("Triaged").is_ok(), "missing heading at {width}px");
+        assert!(
+            ui.find("Research outline").is_ok(),
+            "missing task at {width}px"
+        );
+        assert!(ui.find("Move to backlog").is_ok());
+        assert!(
+            ui.find("Triage").is_err(),
+            "an already-triaged task offers no Triage button at {width}px"
+        );
+    }
 }
 
 #[test]

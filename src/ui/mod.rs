@@ -68,6 +68,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::BrainDump, _) => brain_dump::view(state, &metrics),
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
+            (Screen::Triaged, _) => inbox::triaged(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects::view(state, &metrics),
             (Screen::Travel, _) => travel::view(state, &main_metrics),
@@ -333,9 +334,9 @@ const TAB_LABELS: [&str; TAB_COUNT] = [
 /// Short names for windows too narrow to fit the full ones legibly.
 const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Week", "Tasks", "Proj", "Note", "More", "Set"];
 
-/// The two tabs that live inside Tasks, shown beneath the top menu while
-/// either of them is open.
-pub const TASKS_LABELS: [&str; 2] = ["Inbox", "Backlog"];
+/// The tabs that live inside Tasks, shown beneath the top menu while any of
+/// them is open.
+pub const TASKS_LABELS: [&str; 3] = ["Inbox", "Triaged", "Backlog"];
 
 /// The destinations kept inside the More menu.
 pub const MORE_LABELS: [&str; 4] = ["Travel", "Habits", "Keep", "Brain dump"];
@@ -419,7 +420,10 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     } else {
         TAB_LABELS
     };
-    let tasks_open = matches!(state.screen, Screen::Inbox | Screen::Backlog);
+    let tasks_open = matches!(
+        state.screen,
+        Screen::Inbox | Screen::Triaged | Screen::Backlog
+    );
     let more_active = state.more_menu_open
         || matches!(
             state.screen,
@@ -445,6 +449,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         tasks_open,
         match state.screen {
             // Within the section, Tasks keeps the tab that is open.
+            Screen::Triaged => Message::ScreenSelected(Screen::Triaged),
             Screen::Backlog => Message::ScreenSelected(Screen::Backlog),
             _ => Message::ScreenSelected(Screen::Inbox),
         },
@@ -504,22 +509,18 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         return bar.into();
     }
 
-    let subtabs = row![
-        tab(
-            TASKS_LABELS[0],
-            state.screen == Screen::Inbox,
-            Message::ScreenSelected(Screen::Inbox),
-            metrics,
-            fit,
-        ),
-        tab(
-            TASKS_LABELS[1],
-            state.screen == Screen::Backlog,
-            Message::ScreenSelected(Screen::Backlog),
-            metrics,
-            fit,
-        ),
-    ]
+    let subtabs = row(TASKS_LABELS
+        .iter()
+        .zip([Screen::Inbox, Screen::Triaged, Screen::Backlog])
+        .map(|(label, screen)| {
+            tab(
+                label,
+                state.screen == screen,
+                Message::ScreenSelected(screen),
+                metrics,
+                fit,
+            )
+        }))
     .spacing(fit.gap);
 
     column![
@@ -537,7 +538,10 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
 /// The height `tabs` takes: the menu, plus the Tasks row when it is showing.
 fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
-    let tasks_row = if matches!(state.screen, Screen::Inbox | Screen::Backlog) {
+    let tasks_row = if matches!(
+        state.screen,
+        Screen::Inbox | Screen::Triaged | Screen::Backlog
+    ) {
         TASKS_ROW_GAP + tab_height(metrics)
     } else {
         0.0
