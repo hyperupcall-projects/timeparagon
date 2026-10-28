@@ -1602,6 +1602,20 @@ pub fn delete_task(
     Ok(())
 }
 
+/// Deletes one task instance by list and ID. Used by the habits migration,
+/// which has no cached event to hand to [`delete_task`].
+pub fn delete_task_instance(
+    client_id: &str,
+    client_secret: &str,
+    list_id: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::delete_task(&tokens.access_token, list_id, task_id)
+}
+
 /// Sets where an event happens on Google. Only the location is sent, so
 /// nothing else about the event changes. Blocking: run it on a worker thread
 /// through [`crate::blocking::run`].

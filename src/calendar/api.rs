@@ -744,6 +744,75 @@ struct TaskEntry {
     web_view_link: String,
 }
 
+/// A task as the habits migration sees it, without the refresh cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskListItem {
+    pub id: String,
+    pub title: String,
+    pub notes: String,
+    pub completed: bool,
+    pub due: Option<NaiveDate>,
+}
+
+/// The name and ID of every Google Tasks list.
+pub fn fetch_task_lists(access_token: &str) -> Result<Vec<(String, String)>, String> {
+    let mut url = format!("{TASK_LISTS}?maxResults=100");
+    let mut lists = Vec::new();
+    loop {
+        let page: TaskLists = get(&url, access_token)?;
+        lists.extend(page.items.into_iter().map(|list| {
+            let name = if list.title.is_empty() {
+                "Tasks".to_owned()
+            } else {
+                list.title
+            };
+            (name, list.id)
+        }));
+        let Some(token) = page.next_page_token else {
+            break;
+        };
+        url = format!(
+            "{TASK_LISTS}?maxResults=100&pageToken={}",
+            urlencoding::encode(&token)
+        );
+    }
+    Ok(lists)
+}
+
+/// Every task in `list_id`, including completed and hidden ones. Deleted
+/// tombstones are left out because there is nothing to migrate or remove.
+pub fn fetch_task_list(access_token: &str, list_id: &str) -> Result<Vec<TaskListItem>, String> {
+    let mut url = format!(
+        "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100",
+        urlencoding::encode(list_id)
+    );
+    let mut items = Vec::new();
+    loop {
+        let page: TaskPage = get(&url, access_token)?;
+        items.extend(
+            page.items
+                .into_iter()
+                .filter(|task| !task.deleted && !task.id.is_empty())
+                .map(|task| TaskListItem {
+                    id: task.id,
+                    title: task.title,
+                    notes: task.notes,
+                    completed: task.status.as_deref() == Some("completed"),
+                    due: task.due.as_deref().and_then(task_due_date),
+                }),
+        );
+        let Some(token) = page.next_page_token else {
+            break;
+        };
+        url = format!(
+            "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100&pageToken={}",
+            urlencoding::encode(list_id),
+            urlencoding::encode(&token)
+        );
+    }
+    Ok(items)
+}
+
 /// Task lists become calendars you can toggle, and each task due on `day`
 /// becomes an all-day chip. Tasks are not calendar events, so the Calendar
 /// API never returns them.

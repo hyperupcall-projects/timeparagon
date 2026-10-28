@@ -39,6 +39,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         appearance(state, metrics),
         heading("View layout", metrics),
         view_layout(state, metrics),
+        heading("Dock", metrics),
+        dock(state, metrics),
         heading("Windowing", metrics),
         windowing(state, metrics),
         heading("Application", metrics),
@@ -188,10 +190,77 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         layout_number("Details width (px)", LayoutField::DetailWidth, state, metrics),
         layout_number("Screen margin (px, 0–30)", LayoutField::ScreenMargin, state, metrics),
         layout_number("Border radius (px, 0–30)", LayoutField::BorderRadius, state, metrics),
-        layout_number("Dock width (px, 2–40)", LayoutField::DockWidth, state, metrics),
-        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel and the dock strip from their screen edge, top and bottom. The dock width is the thickness of the strip; it applies the next time the dock opens.")
+        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel and the dock strip from their screen edge.")
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).into()
+}
+
+fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let views = &state.config.views;
+
+    column![
+        choice(
+            "Screen edge",
+            crate::config::DockSide::ALL.to_vec(),
+            Some(views.dock_side),
+            Message::DockSideSelected,
+            metrics,
+        ),
+        layout_number("Dock width (px, 2–40)", LayoutField::DockWidth, state, metrics),
+        layout_number(
+            "Outer border (first layer, px, 0–5)",
+            LayoutField::DockBorderOuterWidth,
+            state,
+            metrics,
+        ),
+        dock_color_input(
+            "Outer border colour",
+            0,
+            views.dock_border_outer_color,
+            state,
+            metrics,
+        ),
+        layout_number(
+            "Inner border (second layer, px, 0–5)",
+            LayoutField::DockBorderInnerWidth,
+            state,
+            metrics,
+        ),
+        dock_color_input(
+            "Inner border colour",
+            1,
+            views.dock_border_inner_color,
+            state,
+            metrics,
+        ),
+        text("The dock can sit on the left, right, top or bottom edge. Its two borders are drawn inside the strip, outermost first, so a dark inner border still shows on a white background and a light outer border still shows on a black one. A border width of 0 hides that layer. Changes apply the next time the dock opens.")
+            .size(metrics.label())
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing)
+    .into()
+}
+
+fn dock_color_input<'a>(
+    label: &str,
+    layer: usize,
+    current: crate::hex::HexColor,
+    state: &'a State,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let shown = state
+        .dock_border_input
+        .as_ref()
+        .filter(|(edited, _)| *edited == layer)
+        .map_or_else(|| current.to_string(), |(_, input)| input.clone());
+    let input = text_input("#RRGGBB", &shown)
+        .id(format!("dock-border-color-{layer}"))
+        .size(metrics.label())
+        .width(Fill)
+        .on_input(move |input| Message::DockBorderColorInput(layer, input))
+        .on_submit(Message::DockBorderColorSubmitted(layer));
+
+    field(label, input.into(), metrics)
 }
 
 fn restart<'a>(metrics: &Metrics) -> Element<'a, Message> {
@@ -254,7 +323,11 @@ fn layout_number<'a>(
     let value = kind.value(state);
     let step = match kind {
         LayoutField::CalendarWidth | LayoutField::TimeBlockWidth | LayoutField::DetailWidth => 10.0,
-        LayoutField::ScreenMargin | LayoutField::BorderRadius | LayoutField::DockWidth => 1.0,
+        LayoutField::ScreenMargin
+        | LayoutField::BorderRadius
+        | LayoutField::DockWidth
+        | LayoutField::DockBorderOuterWidth
+        | LayoutField::DockBorderInnerWidth => 1.0,
         LayoutField::FadeDuration => 10.0,
     };
     let (min, max) = kind.bounds();
@@ -875,6 +948,8 @@ mod tests {
             (LayoutField::DetailWidth, 10.0),
             (LayoutField::ScreenMargin, 1.0),
             (LayoutField::DockWidth, 1.0),
+            (LayoutField::DockBorderOuterWidth, 1.0),
+            (LayoutField::DockBorderInnerWidth, 1.0),
         ] {
             for width in [180.0, 420.0] {
                 let size = iced::Size::new(width, 100.0);

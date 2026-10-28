@@ -183,12 +183,57 @@ pub struct ViewSettings {
     pub border_radius: f32,
     /// Width of the dock strip, in logical pixels.
     pub dock_width: f32,
+    /// Which screen edge the dock hugs.
+    pub dock_side: DockSide,
+    /// Thickness of the dock's outer border, in logical pixels. Zero hides it.
+    pub dock_border_outer_width: f32,
+    /// Colour of the dock's outer border.
+    pub dock_border_outer_color: HexColor,
+    /// Thickness of the dock's inner border, in logical pixels. Zero hides it.
+    pub dock_border_inner_width: f32,
+    /// Colour of the dock's inner border.
+    pub dock_border_inner_color: HexColor,
     /// How the dock appears on screen.
     pub window_animation: WindowAnimation,
     /// Length of the fade-in, in milliseconds.
     pub fade_duration_ms: u32,
     /// Whether the dock draws a faint gray line at each hour on its strip.
     pub dock_hour_lines: bool,
+}
+
+/// Which screen edge the dock strip hugs.
+///
+/// This is separate from the side panel's [`crate::panel::Side`], which only
+/// has a left and a right edge: the dock can also run along the top or bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockSide {
+    #[default]
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl DockSide {
+    pub const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
+
+    /// Whether the strip runs up and down the screen, with the day laid out
+    /// from top to bottom.
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+}
+
+impl std::fmt::Display for DockSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+        })
+    }
 }
 
 /// How a window appears. Shared by the dock's layer surface.
@@ -237,6 +282,11 @@ impl Default for ViewSettings {
             margin: 8.0,
             border_radius: 4.0,
             dock_width: 10.0,
+            dock_side: DockSide::Left,
+            dock_border_outer_width: 1.0,
+            dock_border_outer_color: HexColor(Color::WHITE),
+            dock_border_inner_width: 1.0,
+            dock_border_inner_color: HexColor(Color::BLACK),
             window_animation: WindowAnimation::DesktopDefault,
             fade_duration_ms: 150,
             dock_hour_lines: true,
@@ -251,6 +301,7 @@ impl ViewSettings {
     pub const MAX_BORDER_RADIUS: f32 = 30.0;
     pub const MIN_DOCK_WIDTH: f32 = 2.0;
     pub const MAX_DOCK_WIDTH: f32 = 40.0;
+    pub const MAX_DOCK_BORDER_WIDTH: f32 = 5.0;
     pub const MAX_FADE_DURATION_MS: u32 = 5000;
 
     pub fn fade_duration_ms(&self) -> u32 {
@@ -291,6 +342,23 @@ impl ViewSettings {
                 .clamp(Self::MIN_DOCK_WIDTH, Self::MAX_DOCK_WIDTH)
         } else {
             Self::default().dock_width
+        }
+    }
+
+    /// A border thickness, clamped to the range the settings offer.
+    pub fn dock_border_outer_width(&self) -> f32 {
+        Self::border_width(self.dock_border_outer_width)
+    }
+
+    pub fn dock_border_inner_width(&self) -> f32 {
+        Self::border_width(self.dock_border_inner_width)
+    }
+
+    fn border_width(value: f32) -> f32 {
+        if value.is_finite() {
+            value.clamp(0.0, Self::MAX_DOCK_BORDER_WIDTH)
+        } else {
+            Self::default().dock_border_outer_width
         }
     }
 
@@ -1326,6 +1394,36 @@ mod tests {
         assert_eq!(views.fade_duration_ms(), ViewSettings::MAX_FADE_DURATION_MS);
         let back: ViewSettings = toml::from_str(&toml::to_string(&views).unwrap()).unwrap();
         assert_eq!(back, views);
+    }
+
+    #[test]
+    fn the_dock_edge_and_borders_round_trip() {
+        let views = ViewSettings::default();
+        assert_eq!(views.dock_side, DockSide::Left);
+        assert_eq!(views.dock_border_outer_width(), 1.0);
+        assert_eq!(views.dock_border_inner_width(), 1.0);
+
+        let views: ViewSettings = toml::from_str(
+            "dock_side = \"bottom\"\ndock_border_outer_width = 2.0\ndock_border_outer_color = \"#FFFFFF\"\ndock_border_inner_width = 4.0\ndock_border_inner_color = \"#000000\"",
+        )
+        .unwrap();
+        assert_eq!(views.dock_side, DockSide::Bottom);
+        assert_eq!(views.dock_border_outer_width(), 2.0);
+        assert_eq!(views.dock_border_inner_width(), 4.0);
+        assert_eq!(views.dock_border_outer_color.to_string(), "#FFFFFF");
+        assert_eq!(views.dock_border_inner_color.to_string(), "#000000");
+
+        let back: ViewSettings = toml::from_str(&toml::to_string(&views).unwrap()).unwrap();
+        assert_eq!(back, views);
+
+        let views: ViewSettings =
+            toml::from_str("dock_border_outer_width = 99.0\ndock_border_inner_width = nan")
+                .unwrap();
+        assert_eq!(
+            views.dock_border_outer_width(),
+            ViewSettings::MAX_DOCK_BORDER_WIDTH
+        );
+        assert_eq!(views.dock_border_inner_width(), 1.0);
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub mod integrations;
 pub mod ipc;
 pub mod keep;
 pub mod migrate;
+pub mod migrate_habits;
 pub mod notify;
 pub mod panel;
 pub mod projects;

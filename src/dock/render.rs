@@ -21,7 +21,7 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use super::config::DockConfig;
 use super::model::{Card, DAY_MINUTES, Segment};
-use crate::panel::Side;
+use crate::config::DockSide;
 
 /// Shortest a segment is ever drawn, so a five-minute task is still hoverable.
 const MIN_SEGMENT_HEIGHT: f32 = 3.0;
@@ -81,43 +81,131 @@ impl Palette {
 pub struct Layout {
     pub width: f32,
     pub height: f32,
+    pub side: DockSide,
+    /// The strip's outer rectangle, including its borders.
     pub strip_x: f32,
+    pub strip_y: f32,
     pub strip_width: f32,
-    pub card_x: f32,
-    pub card_width: f32,
+    pub strip_height: f32,
+    /// The part of the strip inside the borders, where events are drawn.
+    pub content_x: f32,
+    pub content_y: f32,
+    pub content_width: f32,
+    pub content_height: f32,
+    /// Thickness of the strip across its short axis.
+    pub thickness: f32,
+    /// Space between the strip and the hover card.
+    pub gap: f32,
+    /// Size of the hover card along its fixed axis: its width beside a
+    /// vertical edge, its height beside a horizontal one.
+    pub card_size: f32,
+    pub border_outer: f32,
+    pub border_inner: f32,
+    pub border_outer_color: Color,
+    pub border_inner_color: Color,
     pub scale: f32,
 }
 
 impl Layout {
     pub fn new(config: &DockConfig, width: u32, height: u32, scale: u32) -> Self {
         let width = width as f32;
-        let strip_width = config.width as f32;
-        let card_width = (width - strip_width - config.popup_gap as f32).max(0.0);
+        let height = height as f32;
+        let thickness = config.width as f32;
+        let gap = config.popup_gap as f32;
 
-        let (strip_x, card_x) = match config.side {
-            Side::Left => (0.0, strip_width + config.popup_gap as f32),
-            Side::Right => (width - strip_width, 0.0),
+        let (strip_x, strip_y, strip_width, strip_height) = match config.side {
+            DockSide::Left => (0.0, 0.0, thickness, height),
+            DockSide::Right => (width - thickness, 0.0, thickness, height),
+            DockSide::Top => (0.0, 0.0, width, thickness),
+            DockSide::Bottom => (0.0, height - thickness, width, thickness),
         };
+
+        // Keep at least one pixel of event area, however thick the borders
+        // are for the chosen strip width.
+        let inset = config.border_inset();
+        let border_outer = config.border_outer_width.min(inset);
+        let border_inner = config
+            .border_inner_width
+            .min((inset - border_outer).max(0.0));
+
+        let content_x = strip_x + inset;
+        let content_y = strip_y + inset;
+        let content_width = (strip_width - 2.0 * inset).max(0.0);
+        let content_height = (strip_height - 2.0 * inset).max(0.0);
 
         Self {
             width,
-            height: height as f32,
+            height,
+            side: config.side,
             strip_x,
+            strip_y,
             strip_width,
-            card_x,
-            card_width,
+            strip_height,
+            content_x,
+            content_y,
+            content_width,
+            content_height,
+            thickness,
+            gap,
+            card_size: config.popup_width as f32,
+            border_outer,
+            border_inner,
+            border_outer_color: config.border_outer_color.0,
+            border_inner_color: config.border_inner_color.0,
             scale: scale.max(1) as f32,
         }
     }
 
-    /// Height of the band at the top that holds the back button.
-    fn header(&self) -> f32 {
-        self.strip_width + BUTTON_GAP
+    fn vertical(&self) -> bool {
+        self.side.is_vertical()
     }
 
-    /// The back button: a square as wide as the strip, at the very top.
+    /// The square back button's side, which is the usable strip thickness.
+    fn button_size(&self) -> f32 {
+        if self.vertical() {
+            self.content_width
+        } else {
+            self.content_height
+        }
+    }
+
+    /// Length of the band at the start of the day that holds the back button.
+    fn header(&self) -> f32 {
+        self.button_size() + BUTTON_GAP
+    }
+
+    /// The length of the strip the day is laid out across.
+    fn day_length(&self) -> f32 {
+        if self.vertical() {
+            self.content_height
+        } else {
+            self.content_width
+        }
+    }
+
+    fn axis_start(&self) -> f32 {
+        if self.vertical() {
+            self.content_y
+        } else {
+            self.content_x
+        }
+    }
+
+    /// The distance along the strip at which a minute is drawn.
+    fn along_of(&self, minute: f32) -> f32 {
+        let start = self.axis_start();
+        let header = self.header();
+        start + header + minute / DAY_MINUTES as f32 * (self.day_length() - header).max(1.0)
+    }
+
+    /// The back button: a square at the start of the strip.
     pub fn button_rect(&self) -> (f32, f32, f32, f32) {
-        (self.strip_x, 0.0, self.strip_width, self.strip_width)
+        let size = self.button_size();
+        if self.vertical() {
+            (self.content_x, self.content_y, self.content_width, size)
+        } else {
+            (self.content_x, self.content_y, size, self.content_height)
+        }
     }
 
     pub fn hit_button(&self, x: f64, y: f64) -> bool {
@@ -126,35 +214,87 @@ impl Layout {
         x >= left && x < left + width && y >= top && y < top + height
     }
 
-    /// The day runs from the bottom of the header to the foot of the strip.
-    fn y_of(&self, minute: f32) -> f32 {
-        let header = self.header();
-        header + minute / DAY_MINUTES as f32 * (self.height - header).max(1.0)
-    }
-
     /// The logical rectangle (x, y, width, height) of a segment.
     pub fn segment_rect(&self, segment: &Segment) -> (f32, f32, f32, f32) {
-        let top = self.y_of(segment.start_min as f32);
-        let bottom = self.y_of(segment.end_min as f32);
-        let height = (bottom - top).max(MIN_SEGMENT_HEIGHT);
-        (self.strip_x, top, self.strip_width, height)
+        let start = self.along_of(segment.start_min as f32);
+        let end = self.along_of(segment.end_min as f32);
+        let length = (end - start).max(MIN_SEGMENT_HEIGHT);
+        if self.vertical() {
+            (self.content_x, start, self.content_width, length)
+        } else {
+            (start, self.content_y, length, self.content_height)
+        }
     }
 
     /// The logical strip rectangle, which is also the surface's input region.
     pub fn strip_rect(&self) -> (f32, f32, f32, f32) {
-        (self.strip_x, 0.0, self.strip_width, self.height)
+        (
+            self.strip_x,
+            self.strip_y,
+            self.strip_width,
+            self.strip_height,
+        )
+    }
+
+    /// Where the hover card sits when it describes something at `anchor`
+    /// along the strip. `height` is the card's wanted height; it is clamped to
+    /// the room the surface has for it.
+    pub fn card_rect(&self, anchor: f32, height: f32) -> (f32, f32, f32, f32) {
+        let width = self.card_size.min(self.width).max(0.0);
+        let height = height.min(self.card_room()).max(0.0);
+
+        if self.vertical() {
+            let x = match self.side {
+                DockSide::Left => self.strip_x + self.strip_width + self.gap,
+                _ => self.strip_x - self.gap - width,
+            };
+            let y = anchor.min(self.height - height).max(0.0);
+            (x, y, width, height)
+        } else {
+            let x = anchor.min(self.width - width).max(0.0);
+            let y = match self.side {
+                DockSide::Top => self.strip_y + self.strip_height + self.gap,
+                _ => self.strip_y - self.gap - height,
+            };
+            let y = y.min(self.height - height).max(0.0);
+            (x, y, width, height)
+        }
+    }
+
+    /// How tall a hover card may be on this surface.
+    fn card_room(&self) -> f32 {
+        if self.vertical() {
+            self.height
+        } else if self.side == DockSide::Top {
+            (self.height - self.strip_height - self.gap).max(0.0)
+        } else {
+            (self.strip_y - self.gap).max(0.0)
+        }
     }
 
     /// The segment under a pointer position, if any.
     pub fn hit(&self, segments: &[Segment], x: f64, y: f64) -> Option<usize> {
         let (x, y) = (x as f32, y as f32);
-        if x < self.strip_x || x >= self.strip_x + self.strip_width || y < self.header() {
+        if x < self.content_x
+            || x >= self.content_x + self.content_width
+            || y < self.content_y
+            || y >= self.content_y + self.content_height
+        {
+            return None;
+        }
+
+        let along = if self.vertical() {
+            y - self.content_y
+        } else {
+            x - self.content_x
+        };
+        if along < self.header() {
             return None;
         }
 
         segments.iter().position(|segment| {
-            let (_, top, _, height) = self.segment_rect(segment);
-            y >= top && y < top + height
+            let (left, top, width, height) = self.segment_rect(segment);
+            x >= left && x < left + width && y >= top && y < top + height
         })
     }
 
@@ -186,7 +326,7 @@ pub struct Scene<'a> {
     /// What the back button says when hovered.
     pub back_label: &'a str,
     /// Which way the back button's chevron points: toward the screen.
-    pub side: Side,
+    pub side: DockSide,
     pub palette: Palette,
 }
 
@@ -305,8 +445,35 @@ impl Renderer {
         }
 
         let palette = &scene.palette;
+        // The two borders sit inside the strip, outermost first. Filling the
+        // whole strip with one colour and then the inset rectangles with the
+        // next leaves each ring visible on its own.
         let (x, y, w, h) = layout.strip_rect();
-        fill_rect(pixmap, layout, (x, y, w, h), palette.background, 1.0);
+        if layout.border_outer > 0.0 {
+            fill_rect(pixmap, layout, (x, y, w, h), layout.border_outer_color, 1.0);
+        }
+        if layout.border_inner > 0.0 {
+            let inset = layout.border_outer;
+            fill_rect(
+                pixmap,
+                layout,
+                (x + inset, y + inset, w - 2.0 * inset, h - 2.0 * inset),
+                layout.border_inner_color,
+                1.0,
+            );
+        }
+        fill_rect(
+            pixmap,
+            layout,
+            (
+                layout.content_x,
+                layout.content_y,
+                layout.content_width,
+                layout.content_height,
+            ),
+            palette.background,
+            1.0,
+        );
 
         let now = scene.now_minute;
         for (index, segment) in scene.segments.iter().enumerate() {
@@ -320,8 +487,12 @@ impl Renderer {
             let (x, y, w, h) = layout.segment_rect(segment);
             // A hair of background between neighbours keeps back-to-back
             // events from fusing into one bar.
-            let inset = if h > 4.0 { 0.5 } else { 0.0 };
-            let rect = (x, y + inset, w, h - 2.0 * inset);
+            let inset = if w.max(h) > 4.0 { 0.5 } else { 0.0 };
+            let rect = if layout.side.is_vertical() {
+                (x, y + inset, w, h - 2.0 * inset)
+            } else {
+                (x + inset, y, w - 2.0 * inset, h)
+            };
             fill_rounded(pixmap, layout, rect, 2.0, segment.color, alpha);
 
             if hovered {
@@ -333,27 +504,42 @@ impl Renderer {
 
         if scene.hour_lines {
             for minute in (1..DAY_MINUTES).filter(|m| (scene.day_offset_min + m) % 60 == 0) {
-                let y = layout.y_of(minute as f32) - HOUR_LINE_HEIGHT / 2.0;
-                fill_rect(
-                    pixmap,
-                    layout,
-                    (layout.strip_x, y, layout.strip_width, HOUR_LINE_HEIGHT),
-                    HOUR_GRAY,
-                    1.0,
-                );
+                let along = layout.along_of(minute as f32) - HOUR_LINE_HEIGHT / 2.0;
+                let rect = if layout.side.is_vertical() {
+                    (
+                        layout.content_x,
+                        along,
+                        layout.content_width,
+                        HOUR_LINE_HEIGHT,
+                    )
+                } else {
+                    (
+                        along,
+                        layout.content_y,
+                        HOUR_LINE_HEIGHT,
+                        layout.content_height,
+                    )
+                };
+                fill_rect(pixmap, layout, rect, HOUR_GRAY, 1.0);
             }
         }
 
         if let Some(minute) = now {
-            let y = layout.y_of(minute) - NOW_HEIGHT / 2.0;
-            let y = y.clamp(layout.header(), layout.height - NOW_HEIGHT);
-            fill_rect(
-                pixmap,
-                layout,
-                (layout.strip_x, y, layout.strip_width, NOW_HEIGHT),
-                palette.now,
-                1.0,
-            );
+            let along = layout.along_of(minute) - NOW_HEIGHT / 2.0;
+            let rect = if layout.side.is_vertical() {
+                let along = along.clamp(
+                    layout.content_y + layout.header(),
+                    layout.content_y + layout.content_height - NOW_HEIGHT,
+                );
+                (layout.content_x, along, layout.content_width, NOW_HEIGHT)
+            } else {
+                let along = along.clamp(
+                    layout.content_x + layout.header(),
+                    layout.content_x + layout.content_width - NOW_HEIGHT,
+                );
+                (along, layout.content_y, NOW_HEIGHT, layout.content_height)
+            };
+            fill_rect(pixmap, layout, rect, palette.now, 1.0);
         }
 
         paint_button(pixmap, layout, scene);
@@ -364,7 +550,7 @@ impl Renderer {
                 when: "Click to switch".to_owned(),
                 lines: Vec::new(),
             };
-            Some(self.paint_card(layout, palette, &card, 0.0, pixmap))
+            Some(self.paint_card(layout, palette, &card, layout.axis_start(), pixmap))
         } else {
             // Hovering shows the short card, except over the pinned segment,
             // which keeps showing everything. With nothing hovered, the
@@ -377,9 +563,10 @@ impl Renderer {
             };
             shown.and_then(|(index, full)| {
                 let segment = scene.segments.get(index)?;
-                let (_, top, _, _) = layout.segment_rect(segment);
+                let (x, y, _, _) = layout.segment_rect(segment);
+                let anchor = if layout.side.is_vertical() { y } else { x };
                 let card = if full { &segment.full } else { &segment.card };
-                Some(self.paint_card(layout, palette, card, top, pixmap))
+                Some(self.paint_card(layout, palette, card, anchor, pixmap))
             })
         };
 
@@ -393,14 +580,14 @@ impl Renderer {
         damage
     }
 
-    /// Paints a card as close to `top` as the surface allows, and returns the
-    /// patch it covers.
+    /// Paints a card beside the strip, aligned with `anchor` along the strip,
+    /// and returns the patch it covers.
     fn paint_card(
         &mut self,
         layout: &Layout,
         palette: &Palette,
         card: &Card,
-        top: f32,
+        anchor: f32,
         pixmap: &mut Pixmap,
     ) -> PixelRect {
         let Self {
@@ -411,7 +598,7 @@ impl Renderer {
         } = self;
         let (font_system, swash) = text_system(text, warmup);
 
-        let inner = (layout.card_width - 2.0 * CARD_PADDING).max(10.0);
+        let inner = (layout.card_size.min(layout.width) - 2.0 * CARD_PADDING).max(10.0);
         let key = CardKey {
             card: card.clone(),
             width: inner,
@@ -433,18 +620,17 @@ impl Renderer {
 
         let content: f32 = blocks.iter().map(|block| block.height).sum::<f32>()
             + BLOCK_GAP * blocks.len().saturating_sub(1) as f32;
-        let height = (content + 2.0 * CARD_PADDING).min(layout.height);
+        let height = content + 2.0 * CARD_PADDING;
 
-        // Line the card up with what it describes, but keep it on the surface.
-        let y = top.min(layout.height - height).max(0.0);
-        let rect = (layout.card_x, y, layout.card_width, height);
+        let rect = layout.card_rect(anchor, height);
+        let (card_x, card_y, _card_width, height) = rect;
 
         fill_rounded(pixmap, layout, rect, CARD_RADIUS, palette.card, 1.0);
         stroke_rounded(pixmap, layout, rect, CARD_RADIUS, palette.border, 1.0);
 
-        let mut cursor = y + CARD_PADDING;
+        let mut cursor = card_y + CARD_PADDING;
         for block in blocks {
-            if cursor + block.height > y + height - CARD_PADDING + 0.5 {
+            if cursor + block.height > card_y + height - CARD_PADDING + 0.5 {
                 break;
             }
             draw_block(
@@ -453,7 +639,7 @@ impl Renderer {
                 font_system,
                 swash,
                 block,
-                layout.card_x + CARD_PADDING,
+                card_x + CARD_PADDING,
                 cursor,
             );
             cursor += block.height + BLOCK_GAP;
@@ -511,15 +697,33 @@ fn paint_button(pixmap: &mut Pixmap, layout: &Layout, scene: &Scene) {
     let (x, y, w, h) = rect;
     let reach = w.min(h) * 0.22;
     let (centre_x, centre_y) = (x + w / 2.0, y + h / 2.0);
-    let (tip, tail) = match scene.side {
-        Side::Left => (centre_x + reach, centre_x - reach),
-        Side::Right => (centre_x - reach, centre_x + reach),
+    let (tip, tail_a, tail_b) = match scene.side {
+        DockSide::Left => (
+            (centre_x + reach, centre_y),
+            (centre_x - reach, centre_y - reach * 1.6),
+            (centre_x - reach, centre_y + reach * 1.6),
+        ),
+        DockSide::Right => (
+            (centre_x - reach, centre_y),
+            (centre_x + reach, centre_y - reach * 1.6),
+            (centre_x + reach, centre_y + reach * 1.6),
+        ),
+        DockSide::Top => (
+            (centre_x, centre_y + reach),
+            (centre_x - reach * 1.6, centre_y - reach),
+            (centre_x + reach * 1.6, centre_y - reach),
+        ),
+        DockSide::Bottom => (
+            (centre_x, centre_y - reach),
+            (centre_x - reach * 1.6, centre_y + reach),
+            (centre_x + reach * 1.6, centre_y + reach),
+        ),
     };
     let s = layout.scale;
     let mut path = PathBuilder::new();
-    path.move_to(tail * s, (centre_y - reach * 1.6) * s);
-    path.line_to(tip * s, centre_y * s);
-    path.line_to(tail * s, (centre_y + reach * 1.6) * s);
+    path.move_to(tail_a.0 * s, tail_a.1 * s);
+    path.line_to(tip.0 * s, tip.1 * s);
+    path.line_to(tail_b.0 * s, tail_b.1 * s);
     if let Some(path) = path.finish() {
         let stroke = Stroke {
             width: (w / 8.0).max(1.0) * s,
@@ -794,11 +998,11 @@ mod tests {
             hour_lines,
             button_hovered: false,
             back_label: "",
-            side: Side::Left,
+            side: DockSide::Left,
             palette: palette(),
         };
         // One o'clock sits 60 minutes into the day.
-        let y = layout.y_of(60.0).floor() as u32;
+        let y = layout.along_of(60.0).floor() as u32;
 
         let mut off = Pixmap::new(width, height).unwrap();
         Renderer::default().paint(&layout, &scene(false), &mut off);
@@ -824,7 +1028,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             back_label: "",
-            side: Side::Left,
+            side: DockSide::Left,
             palette: palette(),
         };
         let mut renderer = Renderer::default();
@@ -850,11 +1054,84 @@ mod tests {
     fn the_strip_hugs_the_chosen_edge() {
         let mut config = DockConfig::default();
         let left = Layout::new(&config, 316, 1000, 1);
-        assert_eq!((left.strip_x, left.card_x), (0.0, 16.0));
+        assert_eq!((left.strip_x, left.card_rect(0.0, 100.0).0), (0.0, 16.0));
 
-        config.side = Side::Right;
+        config.side = DockSide::Right;
         let right = Layout::new(&config, 316, 1000, 1);
-        assert_eq!((right.strip_x, right.card_x), (306.0, 0.0));
+        assert_eq!((right.strip_x, right.card_rect(0.0, 100.0).0), (306.0, 0.0));
+
+        config.side = DockSide::Top;
+        let top = Layout::new(&config, 1000, 316, 1);
+        assert_eq!((top.strip_y, top.card_rect(0.0, 100.0).1), (0.0, 16.0));
+
+        config.side = DockSide::Bottom;
+        let bottom = Layout::new(&config, 1000, 316, 1);
+        assert_eq!(
+            (bottom.strip_y, bottom.card_rect(0.0, 100.0).1),
+            (306.0, 200.0)
+        );
+    }
+
+    #[test]
+    fn both_borders_sit_inside_the_strip() {
+        let config = DockConfig::default();
+        let layout = Layout::new(&config, 316, 1000, 1);
+
+        assert_eq!(layout.border_outer, 1.0);
+        assert_eq!(layout.border_inner, 1.0);
+        assert_eq!((layout.content_x, layout.content_y), (2.0, 2.0));
+        assert_eq!(layout.content_width, 6.0);
+    }
+
+    #[test]
+    fn the_two_borders_paint_outermost_first() {
+        let mut config = DockConfig::default();
+        config.border_outer_color = crate::hex::HexColor(Color::from_rgb(1.0, 0.0, 0.0));
+        config.border_inner_color = crate::hex::HexColor(Color::from_rgb(0.0, 1.0, 0.0));
+        let layout = Layout::new(&config, 316, 1000, 1);
+        let (width, height) = layout.pixel_size();
+        let mut pixmap = Pixmap::new(width, height).unwrap();
+        let scene = Scene {
+            segments: &[],
+            now_minute: None,
+            hovered: None,
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines: false,
+            button_hovered: false,
+            back_label: "",
+            side: DockSide::Left,
+            palette: palette(),
+        };
+
+        Renderer::default().paint(&layout, &scene, &mut pixmap);
+
+        // The left edge is the outer border, then the inner one, then the
+        // strip's own background.
+        let outer = pixmap.pixel(0, 300).unwrap();
+        assert_eq!((outer.blue(), outer.green()), (255, 0));
+        let inner = pixmap.pixel(1, 300).unwrap();
+        assert_eq!((inner.blue(), inner.green()), (0, 255));
+        let background = pixmap.pixel(2, 300).unwrap();
+        assert_eq!(background.alpha(), 255);
+        assert_ne!((background.blue(), background.green()), (255, 0));
+    }
+
+    #[test]
+    fn a_horizontal_strip_runs_left_to_right_and_its_card_hangs_below() {
+        let mut config = DockConfig::default();
+        config.side = DockSide::Top;
+        let layout = Layout::new(&config, 1000, 316, 1);
+        let segment = segment(600, 630);
+
+        let (x, y, w, h) = layout.segment_rect(&segment);
+        assert_eq!((y, h), (layout.content_y, layout.content_height));
+        assert!(x > layout.button_rect().0 + layout.button_rect().2);
+        assert!(w > 0.0);
+        assert_eq!(layout.hit(&[segment], f64::from(x) + 1.0, 5.0), Some(0));
+
+        // A top strip puts its card underneath the strip.
+        assert_eq!(layout.card_rect(x, 100.0).1, 16.0);
     }
 
     #[test]
@@ -868,11 +1145,11 @@ mod tests {
     }
 
     #[test]
-    fn the_back_button_sits_at_the_top_and_inside_the_strip_width() {
+    fn the_back_button_sits_at_the_start_and_inside_the_strip_width() {
         let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
         let (x, y, w, h) = layout.button_rect();
 
-        assert_eq!((x, y, w, h), (0.0, 0.0, 10.0, 10.0));
+        assert_eq!((x, y, w, h), (2.0, 2.0, 6.0, 6.0));
         assert!(layout.hit_button(5.0, 5.0));
         assert!(!layout.hit_button(5.0, 11.0));
         assert!(!layout.hit_button(50.0, 5.0));
@@ -903,14 +1180,14 @@ mod tests {
             hour_lines: false,
             button_hovered: true,
             back_label: "Open the full window",
-            side: Side::Left,
+            side: DockSide::Left,
             palette: palette(),
         };
 
         Renderer::default().paint(&layout, &scene, &mut pixmap);
 
         let accent = scene.palette.accent.into_rgba8();
-        let corner = pixmap.pixel(1, 5).unwrap();
+        let corner = pixmap.pixel(3, 5).unwrap();
         assert_eq!(corner.alpha(), 255);
         assert_eq!(corner.blue(), accent[0]);
         assert_eq!(pixmap.pixel(150, 20).unwrap().alpha(), 255);
@@ -940,7 +1217,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             back_label: "Open the full window",
-            side: Side::Left,
+            side: DockSide::Left,
             palette: palette(),
         };
 
@@ -959,7 +1236,8 @@ mod tests {
         assert_ne!(at(5, 90), gap);
         // The "now" line is the danger colour.
         let now = scene.palette.now.into_rgba8();
-        assert_eq!(at(5, 607).blue(), now[0]);
+        let now_y = layout.along_of(600.0).floor() as u32;
+        assert_eq!(at(5, now_y).blue(), now[0]);
         // Beyond the strip nothing is painted, so clicks and eyes pass through.
         assert_eq!(at(100, 300).alpha(), 0);
     }
@@ -979,7 +1257,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             back_label: "Open the full window",
-            side: Side::Left,
+            side: DockSide::Left,
             palette: palette(),
         };
 
@@ -1004,7 +1282,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             back_label: "Open the full window",
-            side: Side::Left,
+            side: DockSide::Left,
             palette: palette(),
         };
         let mut renderer = Renderer::default();
@@ -1047,7 +1325,7 @@ mod tests {
                 hour_lines: false,
                 button_hovered: false,
                 back_label: "Open the full window",
-                side: Side::Left,
+                side: DockSide::Left,
                 palette: palette(),
             };
             renderer.paint(&layout, &scene, &mut pixmap);

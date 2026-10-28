@@ -256,10 +256,12 @@ It reads `$XDG_CONFIG_HOME/time-slay/dock.toml` at start-up; every key is
 optional:
 
 ```toml
-side = "left"        # or "right"
 popup_width = 300    # hover card width
 popup_gap = 6        # space between strip and card
 ```
+
+The strip's edge, width, and its two borders (each 0–5px with its own colour)
+are set from **Settings → Dock** and apply the next time the dock opens.
 
 It shares the main app's config, theme, sign-in and day cache, and syncs today
 itself every `sync_minutes`.

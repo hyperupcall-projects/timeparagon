@@ -882,7 +882,7 @@ fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Erro
     state.screen = Screen::Settings;
     state.calendar.connection = time_slay::calendar::Connection::SignedIn;
 
-    let mut ui = render(&state, Size::new(420.0, 1800.0));
+    let mut ui = render(&state, Size::new(420.0, 2300.0));
 
     let _ = ui.click("Resync calendar and tasks data")?;
 

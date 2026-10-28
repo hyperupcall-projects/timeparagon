@@ -9,16 +9,34 @@ There's currently two implementations:
 
 ## Screenshots
 
+I love docked mode. Your day is always at a glance. You can still hover over, and edit, events and tasks from this mode.
+
 ![Dock view](./assets/timeslay-dock.png)
 
+A larger panel to plan and read the day.
+
 ![Day view](./assets/timeslay-day.png)
+
+Same for the week. Notice how yesterday can be included in this view.
 
 ![Week view](./assets/timeslay-week.png)
 
 ## Features
 
-- Zero-friction, always-on access to app.
-	- <kbd>Meta+J</kbd>
+- Stays out of your way during work, but is easily accessible when needed.
+	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+Shift+J</kbd>)
+	- Toggle between hiding and showing the app (<kbd>Meta+J</kbd>)
+- Uses Google Calendar, Tasks, and Drive so
+- View and manage events
+	- 
+
+## Design Constraints
+
+The design of this app is, in part, constrainted by the fact that:
+
+- Google Keep API cannot be used by non-workspace users
+- Google Task API does not allow for reading/writing the time of dday of a due date or deadline (only day)
+- Google Task API does not allow writing the deadline field (only due date) 
 
 ## Usage
 

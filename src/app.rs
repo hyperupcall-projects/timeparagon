@@ -64,6 +64,8 @@ pub enum LayoutField {
     ScreenMargin,
     BorderRadius,
     DockWidth,
+    DockBorderOuterWidth,
+    DockBorderInnerWidth,
     FadeDuration,
 }
 
@@ -76,6 +78,8 @@ impl LayoutField {
             Self::ScreenMargin => state.config.views.margin(),
             Self::BorderRadius => state.config.views.border_radius(),
             Self::DockWidth => state.config.views.dock_width(),
+            Self::DockBorderOuterWidth => state.config.views.dock_border_outer_width(),
+            Self::DockBorderInnerWidth => state.config.views.dock_border_inner_width(),
             Self::FadeDuration => state.config.views.fade_duration_ms() as f32,
         }
     }
@@ -88,6 +92,9 @@ impl LayoutField {
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
             ),
+            Self::DockBorderOuterWidth | Self::DockBorderInnerWidth => {
+                (0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH)
+            }
             Self::FadeDuration => (0.0, config::ViewSettings::MAX_FADE_DURATION_MS as f32),
             _ => (
                 config::ViewSettings::MIN_WIDTH,
@@ -104,6 +111,8 @@ impl LayoutField {
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
             Self::BorderRadius => Message::BorderRadiusChanged(value),
             Self::DockWidth => Message::DockWidthChanged(value),
+            Self::DockBorderOuterWidth => Message::DockBorderOuterWidthChanged(value),
+            Self::DockBorderInnerWidth => Message::DockBorderInnerWidthChanged(value),
             Self::FadeDuration => Message::FadeDurationChanged(value),
         }
     }
@@ -217,6 +226,9 @@ pub struct State {
     pub panel_visible: Arc<AtomicBool>,
     /// Keep empty or incomplete numbers editable until they are submitted.
     pub view_layout_input: Option<(LayoutField, String)>,
+    /// The dock border colour box being typed into: 0 for the outer border,
+    /// 1 for the inner one, and the text as it currently reads.
+    pub dock_border_input: Option<(usize, String)>,
     /// Whether the window has been widened for the event details pane. Kept so
     /// the pane can be opened and closed from anywhere without resizing twice.
     pub details_pane_open: bool,
@@ -284,6 +296,11 @@ pub enum Message {
     DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
     DockWidthChanged(f32),
+    DockSideSelected(config::DockSide),
+    DockBorderOuterWidthChanged(f32),
+    DockBorderInnerWidthChanged(f32),
+    DockBorderColorInput(usize, String),
+    DockBorderColorSubmitted(usize),
     FadeDurationChanged(f32),
     WindowAnimationSelected(config::WindowAnimation),
     DockHourLinesToggled(bool),
@@ -517,6 +534,7 @@ impl State {
             shortcut_editors: Default::default(),
             panel_visible: Arc::new(AtomicBool::new(true)),
             view_layout_input: None,
+            dock_border_input: None,
             details_pane_open: false,
             save_queued: false,
             disk_config: config.clone(),
@@ -1228,6 +1246,52 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
+        Message::DockSideSelected(side) => {
+            state.config.views.dock_side = side;
+            queue_save(state)
+        }
+
+        Message::DockBorderOuterWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.dock_border_outer_width =
+                width.clamp(0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH);
+            queue_save(state)
+        }
+
+        Message::DockBorderInnerWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            state.config.views.dock_border_inner_width =
+                width.clamp(0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH);
+            queue_save(state)
+        }
+
+        Message::DockBorderColorInput(layer, input) => {
+            let digits = input.trim().trim_start_matches('#');
+            if digits.len() > 8 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Task::none();
+            }
+            state.dock_border_input = Some((layer, input.clone()));
+            let Ok(color) = crate::hex::parse(&input) else {
+                return Task::none();
+            };
+            match layer {
+                0 => state.config.views.dock_border_outer_color = color.into(),
+                _ => state.config.views.dock_border_inner_color = color.into(),
+            }
+            queue_save(state)
+        }
+
+        Message::DockBorderColorSubmitted(_) => {
+            state.dock_border_input = None;
+            Task::none()
+        }
+
         Message::FadeDurationChanged(duration) => {
             state.view_layout_input = None;
             if !duration.is_finite() {
@@ -1346,6 +1410,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let previous = std::mem::replace(&mut state.config, config);
             if previous.views != state.config.views {
                 state.view_layout_input = None;
+                state.dock_border_input = None;
             }
             // An external edit wins over a save that has not started yet.
             state.save_queued = false;

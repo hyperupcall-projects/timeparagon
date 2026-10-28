@@ -142,6 +142,12 @@ path = "assets/examples/screenshots.rs"
 name = "migrate_calendar"
 path = "assets/examples/migrate_calendar.rs"
 
+# One-off move of the Keep "Habits & Rituals" notes into Calendar habits. Run
+# in plan mode, then again with --apply.
+[[example]]
+name = "migrate_keep_habits"
+path = "assets/examples/migrate_keep_habits.rs"
+
 # Keep synchronous native resizes in sync with the viewport and render surface.
 [patch.crates-io]
 iced_winit = { path = "vendor/iced_winit" }

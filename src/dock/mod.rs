@@ -7,7 +7,7 @@
 //! background, with a red line for "right now". Hovering a span opens a card
 //! beside the strip, level with the span.
 //!
-//! A small button at the very top of the strip, no wider than the strip, brings
+//! A small button at the start of the strip, no wider than the strip, brings
 //! back the window the dock replaced (see [`launch`]).
 //!
 //! The surface is wider than the strip, to leave room for that card. Only the
@@ -54,9 +54,8 @@ use smithay_client_toolkit::{
 };
 
 use crate::calendar::{self, Snapshot, Store};
-use crate::config::Config;
+use crate::config::{Config, DockSide};
 use crate::ipc;
-use crate::panel::Side;
 use crate::theme::Catalog;
 
 use render::{Layout, Palette, PixelRect, Renderer, Scene};
@@ -105,22 +104,35 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         Some(dock_config.animation.namespace("time-slay-dock")),
         None,
     );
-    let (anchor, margin) = match dock_config.side {
-        Side::Left => (
+    let (anchor, margins) = match dock_config.side {
+        DockSide::Left => (
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
-            dock_config.margin,
+            (dock_config.margin as i32, 0, dock_config.margin as i32, 0),
         ),
-        Side::Right => (
+        DockSide::Right => (
             Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
-            dock_config.margin,
+            (dock_config.margin as i32, 0, dock_config.margin as i32, 0),
+        ),
+        DockSide::Top => (
+            Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
+            (0, dock_config.margin as i32, 0, dock_config.margin as i32),
+        ),
+        DockSide::Bottom => (
+            Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            (0, dock_config.margin as i32, 0, dock_config.margin as i32),
         ),
     };
     layer.set_anchor(anchor);
-    layer.set_margin(margin as i32, 0, margin as i32, 0);
+    layer.set_margin(margins.0, margins.1, margins.2, margins.3);
     layer.set_exclusive_zone(0);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    // A height of zero asks the compositor to stretch between the anchors.
-    layer.set_size(dock_config.surface_width(), 0);
+    // A zero asks the compositor to stretch between the anchors along that
+    // axis, so only the strip's fixed size is set.
+    if dock_config.side.is_vertical() {
+        layer.set_size(dock_config.surface_width(), 0);
+    } else {
+        layer.set_size(0, dock_config.surface_height());
+    }
     layer.commit();
 
     let theme = Catalog::load()
@@ -623,14 +635,24 @@ impl LayerShellHandler for Dock {
         _: u32,
     ) {
         let (width, height) = configure.new_size;
+        let vertical = self.config.side.is_vertical();
         let width = if width == 0 {
-            self.config.surface_width()
+            if vertical {
+                self.config.surface_width()
+            } else {
+                return;
+            }
         } else {
             width
         };
-        if height == 0 {
-            return;
-        }
+        let height = if height == 0 {
+            if vertical {
+                return;
+            }
+            self.config.surface_height()
+        } else {
+            height
+        };
 
         self.size = Some((width, height));
         self.refresh_segments();
