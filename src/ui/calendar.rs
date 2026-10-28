@@ -2761,11 +2761,21 @@ impl canvas::Program<Message> for DayCanvas {
                         continue;
                     }
                     let rect = self.block_rect(block, bounds.width);
-                    if block_action(rect).contains(point) {
-                        return Some(
-                            canvas::Action::publish(Message::EventOpened(block.id.clone()))
+                    if let Some((view, open)) = block_actions(rect) {
+                        if open.contains(point) {
+                            return Some(
+                                canvas::Action::publish(Message::EventOpened(block.id.clone()))
+                                    .and_capture(),
+                            );
+                        }
+                        if view.contains(point) {
+                            return Some(
+                                canvas::Action::publish(Message::TimeBlocking(
+                                    crate::timeblocking::Action::View(block.id.clone()),
+                                ))
                                 .and_capture(),
-                        );
+                            );
+                        }
                     }
                 }
 
@@ -2901,7 +2911,9 @@ impl canvas::Program<Message> for DayCanvas {
 
         if let Some(point) = cursor.position_in(bounds) {
             for block in self.blocks.iter().filter(|block| block.time_block) {
-                if block_action(self.block_rect(block, bounds.width)).contains(point) {
+                if let Some((view, open)) = block_actions(self.block_rect(block, bounds.width))
+                    && (view.contains(point) || open.contains(point))
+                {
                     return mouse::Interaction::Pointer;
                 }
             }
@@ -3129,7 +3141,7 @@ impl DayCanvas {
             if block.time_block {
                 if block_bounds.width >= 160.0 {
                     label_bounds.width -= 78.0;
-                } else {
+                } else if block_bounds.width >= 90.0 {
                     label_bounds.y += 22.0;
                     label_bounds.height = (label_bounds.height - 22.0).max(0.0);
                 }
@@ -3144,24 +3156,27 @@ impl DayCanvas {
                     title_size,
                 );
             }
-            if block.time_block {
-                let bounds = block_action(block_bounds);
-                frame.fill(
-                    &Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()),
-                    Color::WHITE.scale_alpha(0.27),
-                );
-                fill_glyphs(
-                    frame,
-                    Text {
-                        content: "Open".into(),
-                        position: Point::new(bounds.center_x(), bounds.center_y()),
-                        color: ink,
-                        size: Pixels(10.0),
-                        align_x: iced::alignment::Horizontal::Center.into(),
-                        align_y: iced::alignment::Vertical::Center,
-                        ..Text::default()
-                    },
-                );
+            if block.time_block
+                && let Some((view, open)) = block_actions(block_bounds)
+            {
+                for (label, bounds) in [("View", view), ("Open", open)] {
+                    frame.fill(
+                        &Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()),
+                        Color::WHITE.scale_alpha(0.27),
+                    );
+                    fill_glyphs(
+                        frame,
+                        Text {
+                            content: label.into(),
+                            position: Point::new(bounds.center_x(), bounds.center_y()),
+                            color: ink,
+                            size: Pixels(10.0),
+                            align_x: iced::alignment::Horizontal::Center.into(),
+                            align_y: iced::alignment::Vertical::Center,
+                            ..Text::default()
+                        },
+                    );
+                }
             }
         }
     }
@@ -3765,17 +3780,27 @@ fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color: Color) {
     );
 }
 
-/// The one "Open" chip in the event's top-right corner. It opens the same
-/// editable panel a click anywhere else on the block opens.
-fn block_action(bounds: Rectangle) -> Rectangle {
-    let width = 36.0_f32.min(((bounds.width - 6.0) / 2.0).max(1.0));
+/// "View" opens the focused timeline for the block; "Open" opens the same
+/// editable panel a click anywhere else on the block opens. They share the
+/// event's top-right corner, in that order. A narrow block has no chips: two
+/// of them would leave almost none of the block itself clickable.
+fn block_actions(bounds: Rectangle) -> Option<(Rectangle, Rectangle)> {
+    if bounds.width < 90.0 {
+        return None;
+    }
+    let width = 30.0_f32.min(((bounds.width - 6.0) / 2.0).max(1.0));
     let height = 18.0_f32.min((bounds.height - 4.0).max(1.0));
-    Rectangle {
+    let open = Rectangle {
         x: bounds.x + bounds.width - width - 2.0,
         y: bounds.y + 2.0,
         width,
         height,
-    }
+    };
+    let view = Rectangle {
+        x: open.x - width - 2.0,
+        ..open
+    };
+    Some((view, open))
 }
 
 /// Blends a color toward white, for the lighter shade an unconfirmed time
@@ -4341,28 +4366,47 @@ mod tests {
     }
 
     #[test]
-    fn the_time_block_open_chip_opens_the_same_editable_panel_as_the_block() {
-        let mut canvas = canvas_with_one_block();
-        canvas.blocks[0].time_block = true;
-        let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
-        let open_rect = block_action(bounds);
-        let element: Element<'_, Message> = canvas_widget(canvas).width(240).height(1440).into();
-        let mut ui = iced_test::Simulator::with_size(
-            iced_test::core::Settings::default(),
-            Size::new(240.0, 1440.0),
-            element,
-        );
-        ui.point_at(open_rect.center());
-        ui.simulate([
-            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
-        ]);
-        let messages: Vec<_> = ui.into_messages().collect();
-        assert!(
-            messages
-                .iter()
-                .any(|m| matches!(m, Message::EventOpened(id) if id == "standup"))
-        );
+    fn time_block_view_and_open_chips_dispatch_different_actions() {
+        for view in [true, false] {
+            let mut canvas = canvas_with_one_block();
+            canvas.blocks[0].time_block = true;
+            let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
+            let (view_rect, open_rect) = block_actions(bounds).unwrap();
+            assert!(view_rect.x < open_rect.x);
+            let element: Element<'_, Message> =
+                canvas_widget(canvas).width(240).height(1440).into();
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                Size::new(240.0, 1440.0),
+                element,
+            );
+            ui.point_at(if view {
+                view_rect.center()
+            } else {
+                open_rect.center()
+            });
+            ui.simulate([
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
+            let messages: Vec<_> = ui.into_messages().collect();
+            if view {
+                assert!(
+                    messages.iter().any(|m| matches!(
+                        m,
+                        Message::TimeBlocking(crate::timeblocking::Action::View(id))
+                            if id == "standup"
+                    )),
+                    "the View chip must open focused mode"
+                );
+            } else {
+                assert!(
+                    messages
+                        .iter()
+                        .any(|m| matches!(m, Message::EventOpened(id) if id == "standup"))
+                );
+            }
+        }
     }
 
     #[test]

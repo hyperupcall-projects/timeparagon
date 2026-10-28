@@ -15,6 +15,7 @@ pub mod alarms;
 pub mod app;
 pub mod audio;
 pub mod blocking;
+pub mod brain_dump;
 pub mod calendar;
 pub mod cli;
 pub mod config;

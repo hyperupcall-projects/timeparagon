@@ -52,6 +52,8 @@ pub enum Screen {
     Habits,
     /// The notepad: a page of free text kept between sessions.
     Notepad,
+    /// One brain dump page per day, with search across all of them.
+    BrainDump,
     KeepNotes,
     Settings,
 }
@@ -264,6 +266,8 @@ pub struct State {
 
     pub calendar: calendar::Store,
     pub timeblocking: crate::timeblocking::Workspace,
+    /// The Brain dump screen and the page open in its editor.
+    pub brain_dump: crate::brain_dump::Workspace,
     /// The Habits tab: the habit masters and the rule editor.
     pub habits: crate::habits::Store,
     pub keep: crate::keep::Store,
@@ -275,6 +279,7 @@ pub struct State {
 #[derive(Debug, Clone)]
 pub enum Message {
     TimeBlocking(crate::timeblocking::Action),
+    BrainDump(crate::brain_dump::Action),
     Inbox(crate::inbox::Action),
     Accounts(crate::integrations::accounts::Action),
     FlashFrame(Instant),
@@ -576,6 +581,7 @@ impl State {
             keep: crate::keep::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
             timeblocking: crate::timeblocking::Workspace::default(),
+            brain_dump: crate::brain_dump::Workspace::default(),
             habits: crate::habits::Store::default(),
             inbox: crate::inbox::Inbox::default(),
             accounts: crate::integrations::accounts::Accounts::load(),
@@ -914,6 +920,7 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
+        Message::BrainDump(action) => crate::brain_dump::update(state, action),
         Message::Inbox(action) => crate::inbox::update(state, action),
         Message::Accounts(action) => crate::integrations::accounts::update(state, action),
         Message::FlashFrame(now) => {
@@ -978,6 +985,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 state.habits.confirm_delete = None;
             }
             state.screen = screen;
+            if screen != Screen::BrainDump {
+                state.brain_dump.open = None;
+            }
             let close = crate::timeblocking::close(state);
             let close = resize_for_week_transition(state, was_weekly, close);
             if returning_to_week {
@@ -1508,6 +1518,19 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.save_queued = false;
             if previous.notepad.text != state.config.notepad.text {
                 state.notepad = text_editor::Content::with_text(&state.config.notepad.text);
+            }
+            // Keep an open brain dump in step with an edit made outside the
+            // app, without disturbing a page that is not open.
+            if previous.brain_dump != state.config.brain_dump
+                && let Some(date) = state.brain_dump.open
+            {
+                let text = state
+                    .config
+                    .brain_dump
+                    .get(date)
+                    .unwrap_or_default()
+                    .to_owned();
+                state.brain_dump.editor = text_editor::Content::with_text(&text);
             }
             state.audio.set_gain(state.config.alarm.sound.gain());
             state.calendar.apply_task_colors(&state.config.calendar);
@@ -3200,6 +3223,22 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             _ => None,
         };
     }
+    if state.brain_dump.open.is_some() {
+        // The page is an editor: only Escape leaves it, and no shortcut may
+        // steal a space while it is being written.
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::BrainDump(crate::brain_dump::Action::Close)),
+            _ => None,
+        };
+    }
+    if state.timeblocking.session_edit.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CloseSession,
+            )),
+            _ => None,
+        };
+    }
     if state.timeblocking.focus.is_some() {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(
@@ -3219,7 +3258,7 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     // show: a space would otherwise silence an alarm halfway through a word.
     if matches!(
         state.screen,
-        Screen::Notepad | Screen::KeepNotes | Screen::Inbox
+        Screen::Notepad | Screen::BrainDump | Screen::KeepNotes | Screen::Inbox
     ) {
         return match key.as_ref() {
             // A task's details come away first; a second press leaves.

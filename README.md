@@ -29,24 +29,15 @@ Same for the week. Notice how yesterday can be included in this view.
 - Intuitive to use (WIP)
 - Manage events and tasks directly within the app
 - Projects (TODO)
-- Directly implement popular productivity methods/ideas within the UI and state like:
+- Implement popular productivity concepts in the UI:
 	- Time blocks
 	- Habits
 	- Pomodoro Timers (TODO)
 	- SMART Goals (TODO)
 	- Eisenhower Matrix (TODO)
+	- Brain dumping (TODO)
+	- Theme/project days (TODO)
 - Uses Google Calendar, Tasks, and Drive to store events, tasks, and app data.
-
-- View and manage events
-	- 
-
-## Design Constraints
-
-The design of this app is, in part, constrainted by the fact that:
-
-- Google Task API does not allow for reading/writing the time of dday of a due date or deadline (only day)
-- Google Task API does not allow writing the deadline field (only due date)
-- Google Keep API cannot be used by non-workspace users
 
 ## Usage
 
@@ -63,8 +54,6 @@ cargo run -p time-slay-dioxus
 
 ## Roadmap
 
-- Better handling of recurring tasks
-- Better drag and drop
 - Better UI
 - File attachments
 - Light Zoom/Google Meets integration (link parsing)
@@ -80,7 +69,7 @@ cargo run -p time-slay-dioxus
 - Command palette
 	- Global search
 - Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
-- Objects/goals for day/week/mo./quarter/custom
+- Objects/goals for day/week/month/quarter/custom
 - Reminders (use Google Calendar)
 - Having the dock take up space on dekstop
 
@@ -93,3 +82,11 @@ cargo run -p time-slay-dioxus
 - Saved custom views for daily/weekly/projects?
 	- Hide info of "private" calendar events
 - Offline write queue
+
+## Design Constraints
+
+The design of this app is, in part, constrainted by the fact that:
+
+- Google Task API does not allow for reading/writing the time of dday of a due date or deadline (only day)
+- Google Task API does not allow writing the deadline field (only due date)
+- Google Keep API cannot be used by non-workspace users

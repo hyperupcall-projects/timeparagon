@@ -21,6 +21,14 @@ pub struct Workspace {
     pub focus: Option<String>,
     pub history_open: bool,
     pub work_now: Option<chrono::DateTime<chrono::Utc>>,
+    /// The work session open in the editor, as an index into the work log.
+    pub session_edit: Option<usize>,
+    /// The day the edited session started, so its times can be parsed back.
+    pub session_date: Option<NaiveDate>,
+    /// The start and end being edited, as local `HH:MM`.
+    pub session_start: String,
+    pub session_end: String,
+    pub session_error: Option<String>,
     pub revision: u64,
     pub original_width: Option<f32>,
     pub date: String,
@@ -76,6 +84,13 @@ pub enum Action {
     StartWork(String),
     StopWork(String),
     WorkTick,
+    /// Open the editor for the work session at this index in the log.
+    EditSession(usize),
+    SessionStart(String),
+    SessionEnd(String),
+    SaveSession,
+    CloseSession,
+    DeleteSession,
     HideOverdue(bool),
     Deadline(String),
     StartTime(String),
@@ -221,6 +236,8 @@ pub fn close(state: &mut State) -> Task<Message> {
     }
     state.timeblocking.block = None;
     state.timeblocking.focus = None;
+    state.timeblocking.session_edit = None;
+    state.timeblocking.session_error = None;
     state.timeblocking.dragging = None;
     state.timeblocking.drag_pointer = None;
     state.timeblocking.available_query.clear();
@@ -337,6 +354,110 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::WorkTick => {
             state.timeblocking.work_now = Some(chrono::Utc::now());
+            return Task::none();
+        }
+        Action::EditSession(index) => {
+            let Some(session) = state.config.task_work.sessions.get(index) else {
+                return Task::none();
+            };
+            let start = session.started_at.with_timezone(&Local);
+            state.timeblocking.session_date = Some(start.date_naive());
+            state.timeblocking.session_start = start.format("%H:%M").to_string();
+            state.timeblocking.session_end = session
+                .stopped_at
+                .map(|end| end.with_timezone(&Local).format("%H:%M").to_string())
+                .unwrap_or_default();
+            state.timeblocking.session_error = None;
+            state.timeblocking.session_edit = Some(index);
+            return iced::widget::operation::focus(iced::widget::Id::new("work-session-start"));
+        }
+        Action::SessionStart(value) => {
+            state.timeblocking.session_start = value;
+            state.timeblocking.session_error = None;
+            return Task::none();
+        }
+        Action::SessionEnd(value) => {
+            state.timeblocking.session_end = value;
+            state.timeblocking.session_error = None;
+            return Task::none();
+        }
+        Action::SaveSession => {
+            let Some(index) = state.timeblocking.session_edit else {
+                return Task::none();
+            };
+            let Some(day) = state.timeblocking.session_date else {
+                return Task::none();
+            };
+            let Some((sh, sm)) = calendar::parse_clock(state.timeblocking.session_start.trim())
+            else {
+                state.timeblocking.session_error = Some("Enter a start time as HH:MM".into());
+                return Task::none();
+            };
+            let Some(start) = Local
+                .from_local_datetime(&day.and_hms_opt(sh, sm, 0).unwrap())
+                .earliest()
+            else {
+                state.timeblocking.session_error =
+                    Some("This start time does not exist in your time zone".into());
+                return Task::none();
+            };
+            let end_text = state.timeblocking.session_end.trim();
+            let end = if end_text.is_empty() {
+                None
+            } else {
+                let Some((eh, em)) = calendar::parse_clock(end_text) else {
+                    state.timeblocking.session_error = Some("Enter an end time as HH:MM".into());
+                    return Task::none();
+                };
+                let end_day = if (eh, em) <= (sh, sm) {
+                    match day.succ_opt() {
+                        Some(day) => day,
+                        None => return Task::none(),
+                    }
+                } else {
+                    day
+                };
+                let Some(end) = Local
+                    .from_local_datetime(&end_day.and_hms_opt(eh, em, 0).unwrap())
+                    .earliest()
+                else {
+                    state.timeblocking.session_error =
+                        Some("This end time does not exist in your time zone".into());
+                    return Task::none();
+                };
+                if end <= start {
+                    state.timeblocking.session_error =
+                        Some("The session must end after it starts".into());
+                    return Task::none();
+                }
+                Some(end)
+            };
+            let Some(session) = state.config.task_work.sessions.get_mut(index) else {
+                state.timeblocking.session_edit = None;
+                return Task::none();
+            };
+            session.started_at = start.with_timezone(&chrono::Utc);
+            session.stopped_at = end.map(|end| end.with_timezone(&chrono::Utc));
+            state.timeblocking.session_edit = None;
+            state.timeblocking.session_error = None;
+            state.timeblocking.work_now = Some(chrono::Utc::now());
+            return crate::app::queue_save(state);
+        }
+        Action::CloseSession => {
+            state.timeblocking.session_edit = None;
+            state.timeblocking.session_error = None;
+            return Task::none();
+        }
+        Action::DeleteSession => {
+            let Some(index) = state.timeblocking.session_edit.take() else {
+                return Task::none();
+            };
+            if index < state.config.task_work.sessions.len() {
+                state.config.task_work.sessions.remove(index);
+                state.timeblocking.session_error = None;
+                state.timeblocking.work_now = Some(chrono::Utc::now());
+                return crate::app::queue_save(state);
+            }
             return Task::none();
         }
         Action::StartWork(id) => {
@@ -2003,6 +2124,60 @@ mod tests {
         });
         state.timeblocking.focus = Some("standup".into());
         state
+    }
+
+    #[test]
+    fn a_work_session_can_have_its_start_and_end_edited_or_removed() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
+        let start = Local.with_ymd_and_hms(2026, 10, 28, 9, 0, 0).unwrap();
+        let end = Local.with_ymd_and_hms(2026, 10, 28, 10, 0, 0).unwrap();
+        state
+            .config
+            .task_work
+            .sessions
+            .push(crate::task_work::Session {
+                task_key: "task:deep".into(),
+                task_title: "Deep work".into(),
+                block_key: Some("work/block".into()),
+                started_at: start.with_timezone(&chrono::Utc),
+                stopped_at: Some(end.with_timezone(&chrono::Utc)),
+            });
+
+        let _ = update(&mut state, Action::EditSession(0));
+        assert_eq!(state.timeblocking.session_start, "09:00");
+        assert_eq!(state.timeblocking.session_end, "10:00");
+        assert_eq!(state.timeblocking.session_date, Some(day));
+
+        let _ = update(&mut state, Action::SessionStart("08:30".into()));
+        let _ = update(&mut state, Action::SessionEnd("09:15".into()));
+        let _ = update(&mut state, Action::SaveSession);
+        assert!(state.timeblocking.session_edit.is_none());
+        let session = &state.config.task_work.sessions[0];
+        assert_eq!(
+            session
+                .started_at
+                .with_timezone(&Local)
+                .format("%H:%M")
+                .to_string(),
+            "08:30"
+        );
+        assert_eq!(
+            session
+                .stopped_at
+                .unwrap()
+                .with_timezone(&Local)
+                .format("%H:%M")
+                .to_string(),
+            "09:15"
+        );
+
+        let _ = update(&mut state, Action::EditSession(0));
+        let _ = update(&mut state, Action::DeleteSession);
+        assert!(state.config.task_work.sessions.is_empty());
     }
 
     #[test]

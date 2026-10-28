@@ -926,6 +926,7 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
     content
 }
 
+pub use super::timeblocking_focus::session_editor;
 pub use super::timeblocking_focus::view as focus_overlay;
 
 fn list_filters<'a>(

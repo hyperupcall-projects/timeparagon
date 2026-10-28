@@ -47,6 +47,10 @@ pub struct Config {
     /// config that never used it stays as it was.
     #[serde(default, skip_serializing_if = "Notepad::is_empty")]
     pub notepad: Notepad,
+    /// One brain dump page per day. It is left out of the file until the first
+    /// page is written.
+    #[serde(default, skip_serializing_if = "crate::brain_dump::Dumps::is_empty")]
+    pub brain_dump: crate::brain_dump::Dumps,
 }
 
 impl Default for Config {
@@ -63,6 +67,7 @@ impl Default for Config {
             task_work: crate::task_work::WorkLog::default(),
             todos: TodoList::default(),
             notepad: Notepad::default(),
+            brain_dump: crate::brain_dump::Dumps::default(),
         }
     }
 }

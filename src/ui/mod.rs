@@ -5,6 +5,7 @@
 //! That is what lets the same code look deliberate at 180px and at 900px.
 
 pub mod alarms;
+pub mod brain_dump;
 pub mod calendar;
 pub mod flash;
 pub mod habits;
@@ -65,6 +66,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // somewhere to write, not somewhere to watch the clock from.
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
+            (Screen::BrainDump, _) => brain_dump::view(state, &metrics),
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Projects, _) => projects::view(state, &metrics),
@@ -138,6 +140,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
         }
         if state.timeblocking.focus.is_some() {
             layers.push(timeblocking::focus_overlay(state, &metrics));
+        }
+        if state.timeblocking.session_edit.is_some() {
+            layers.push(timeblocking::session_editor(state, &metrics));
+        }
+        if state.brain_dump.open.is_some() {
+            layers.push(brain_dump::editor_overlay(state, &metrics));
         }
         if state.timeblocking.estimate_task.is_some() {
             layers.push(timeblocking::estimate_overlay(state, &metrics));
@@ -330,7 +338,7 @@ const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Week", "Tasks", "Proj", "No
 pub const TASKS_LABELS: [&str; 2] = ["Inbox", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 3] = ["Travel", "Habits", "Keep"];
+pub const MORE_LABELS: [&str; 4] = ["Travel", "Habits", "Keep", "Brain dump"];
 
 /// A little breathing room between the menu and the top of the window.
 const TAB_TOP_MARGIN: f32 = 6.0;
@@ -415,7 +423,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let more_active = state.more_menu_open
         || matches!(
             state.screen,
-            Screen::Travel | Screen::Habits | Screen::KeepNotes
+            Screen::Travel | Screen::Habits | Screen::KeepNotes | Screen::BrainDump
         );
 
     let day = tab(
@@ -576,11 +584,12 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .on_press(Message::MoreMenuToggled);
 
     let mut panel = column![].spacing(4.0).width(Fill);
-    for (label, screen) in
-        MORE_LABELS
-            .iter()
-            .zip([Screen::Travel, Screen::Habits, Screen::KeepNotes])
-    {
+    for (label, screen) in MORE_LABELS.iter().zip([
+        Screen::Travel,
+        Screen::Habits,
+        Screen::KeepNotes,
+        Screen::BrainDump,
+    ]) {
         panel = panel.push(
             button(text(*label).size(metrics.label()).center().width(Fill))
                 .width(Fill)
