@@ -12,7 +12,7 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Fill, Theme};
 
 use crate::app::{Message, State};
-use crate::config::{Place, TravelMode};
+use crate::config::{MapApp, Place, TravelMode};
 use crate::travel::{self, Action, Leg, PICKER_INPUT, PickTarget, Picker, Summary};
 
 use super::layout::Metrics;
@@ -149,7 +149,7 @@ fn place_row<'a>(state: &'a State, place: &'a Place, metrics: &Metrics) -> Eleme
     content.into()
 }
 
-/// A place's title being changed. Only the title is edited: what Google needs
+/// A place's title being changed. Only the title is edited: what Mapbox needs
 /// to find the place stays as it was.
 fn rename_row<'a>(name: &'a str, metrics: &Metrics) -> Element<'a, Message> {
     column![
@@ -412,15 +412,15 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
 
     column![
         super::settings::field(
-            "Google Maps API key",
-            text_input("API key", &settings.api_key)
+            "Mapbox access token",
+            text_input("Access token", &settings.api_key)
                 .on_input(|key| msg(Action::ApiKey(key)))
                 .secure(true)
                 .size(metrics.label())
                 .into(),
             metrics,
         ),
-        text("Create an API key in Google Cloud and turn on the Places API (New) and the Routes API. It is used to search for places and to work out how long a trip takes.")
+        text("Create a public access token (pk.) in your Mapbox account. It is used to search for places and to work out how long a trip takes.")
             .size((metrics.label() - 1.0).max(10.0))
             .style(text::secondary),
         super::settings::choice(
@@ -428,6 +428,13 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
             TravelMode::ALL.to_vec(),
             Some(settings.default_mode),
             |mode| msg(Action::DefaultMode(mode)),
+            metrics,
+        ),
+        super::settings::choice(
+            "Open in Maps uses",
+            MapApp::ALL.to_vec(),
+            Some(settings.map_app),
+            |app| msg(Action::SetMapApp(app)),
             metrics,
         ),
         label("Start location"),
@@ -587,14 +594,7 @@ fn leg_details<'a>(
     };
     content = content
         .push(row![choice(TravelMode::Walk), choice(TravelMode::Bike)].spacing(6))
-        .push(row![choice(TravelMode::Car), choice(TravelMode::Multimodal)].spacing(6));
-    if current == TravelMode::Multimodal {
-        content = content.push(
-            text("Public transport, with walking between stops")
-                .size(metrics.label() - 1.0)
-                .style(text::secondary),
-        );
-    }
+        .push(row![choice(TravelMode::Car)].spacing(6));
 
     content = content.push(caption("Travel time"));
     content = content.push(match travel::summary(state, leg) {

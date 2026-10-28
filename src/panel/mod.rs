@@ -1,7 +1,7 @@
 //! The shortcut daemon (`time-slay --daemon`): global shortcuts that show,
 //! hide and reshape TimeSlay **itself**.
 //!
-//! Two mechanisms, the ones `../sidepanel` uses:
+//! Two mechanisms (documented in `IMPLEMENTATION.md`):
 //!
 //! 1. global shortcuts registered through KGlobalAccel (see [`hotkey`]), and
 //! 2. a long-running daemon that owns them, so pressing one never pays for a

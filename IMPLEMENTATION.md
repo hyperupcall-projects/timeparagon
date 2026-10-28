@@ -1,11 +1,16 @@
-# sidepanel — implementation notes
+# TimeSlay — shortcut and panel implementation notes
 
-How the two hard parts of this app were built: **(1)** getting a global keyboard
-shortcut on KDE Plasma Wayland, and **(2)** putting a full-height panel on screen
-with as little latency as possible. Each part covers the approach, the mistakes
-that cost real time, and the code that finally worked.
+How the two hard parts of the side panel and dock were built: **(1)** getting a
+global keyboard shortcut on KDE Plasma Wayland, and **(2)** putting a
+full-height panel on screen with as little latency as possible. Each part
+covers the approach, the mistakes that cost real time, and the code that
+finally worked.
 
-The whole thing is Wayland-only. There is deliberately no X11 path.
+The code samples below come from the original standalone `sidepanel` prototype
+(hence names like `sidepanel` in the layer-shell namespace); the current
+implementation lives in `src/panel/` (shortcuts, daemon) and `src/dock/`. The
+shortcut and layer-shell parts are Wayland-only, with deliberately no X11 path.
+The rest of the app (the regular window) runs on Wayland or X11.
 
 ---
 

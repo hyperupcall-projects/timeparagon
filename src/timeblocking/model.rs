@@ -1,8 +1,7 @@
 //! Task metadata and the pure time-block rules.
 //!
-//! The iced crate keeps the interactive time-block workspace; this module has
-//! only what a read-only day view needs, and what the calendar/task modules
-//! themselves use.
+//! Shared verbatim by the iced crate and `time-slay-core` via `#[path]`, so
+//! both resolve `crate::calendar` and `crate::config` to their own copies.
 
 use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 //! Travel between the places that events and tasks happen at.
 //!
-//! Places are found with the Google Places API and saved in the config
-//! (`config::TravelSettings`), where they keep the Google place ID and the
+//! Places are found with the Mapbox Search Box API and saved in the config
+//! (`config::TravelSettings`), where they keep the Mapbox ID and the
 //! address whatever they are renamed to. A task points at a place by id; a
 //! calendar event is matched to a place by its location text.
 //!
@@ -9,7 +9,7 @@
 //! events A, B and C in a day, that is A to B and B to C, never A to C. The
 //! day's first event is reached from the default start place, and the day's
 //! last event is left for the default end place. How long a trip takes comes
-//! from the Google Routes API, and is kept on disk so that it is only asked
+//! from the Mapbox Directions API, and is kept on disk so that it is only asked
 //! for once.
 
 use std::collections::HashMap;
@@ -18,16 +18,16 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDate;
 use iced::Task;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::app::{Message, State, queue_save};
 use crate::blocking;
 use crate::calendar::Event;
-use crate::config::{Place, TravelMode, TravelSettings};
+use crate::config::{MapApp, Place, TravelMode, TravelSettings};
 use crate::timeblocking as tb;
 
-const SEARCH_URL: &str = "https://places.googleapis.com/v1/places:searchText";
-const ROUTES_URL: &str = "https://routes.googleapis.com/directions/v2:computeRoutes";
+const SEARCH_URL: &str = "https://api.mapbox.com/search/searchbox/v1/forward";
+const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
 
 /// The most places a search offers.
 const MAX_RESULTS: u32 = 8;
@@ -36,7 +36,7 @@ const MAX_RESULTS: u32 = 8;
 pub const START_OF_DAY: &str = "Start of day";
 pub const END_OF_DAY: &str = "End of day";
 
-/// A place Google found, before it is saved.
+/// A place Mapbox found, before it is saved.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
     pub place_id: String,
@@ -160,6 +160,7 @@ pub enum Action {
     Toggle,
     ApiKey(String),
     DefaultMode(TravelMode),
+    SetMapApp(MapApp),
 
     OpenPicker(PickTarget),
     ClosePicker,
@@ -213,6 +214,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 
         Action::DefaultMode(mode) => {
             state.config.travel.default_mode = mode;
+            queue_save(state)
+        }
+
+        Action::SetMapApp(app) => {
+            state.config.travel.map_app = app;
             queue_save(state)
         }
 
@@ -339,7 +345,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::OpenMaps(leg) => {
             if let Some(url) = maps_url(&state.config.travel, leg) {
                 if let Err(error) = crate::calendar::oauth::open_in_browser(&url) {
-                    log::warn!("could not open Google Maps: {error}");
+                    log::warn!("could not open the map: {error}");
                 }
             }
             Task::none()
@@ -396,7 +402,7 @@ fn search(state: &mut State) -> Task<Message> {
 }
 
 /// What is shown when a key is needed and there is none.
-pub const NO_KEY: &str = "Add a Google Maps API key in Settings first.";
+pub const NO_KEY: &str = "Add a Mapbox access token in Settings first.";
 
 fn choose(state: &mut State, index: usize) -> Task<Message> {
     let Some(picker) = state.travel.picker.take() else {
@@ -518,7 +524,7 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
     fetch_missing(state, legs)
 }
 
-/// Asks Google for each trip that has not been asked for.
+/// Asks Mapbox for each trip that has not been asked for.
 fn fetch_missing(state: &mut State, legs: impl IntoIterator<Item = Leg>) -> Task<Message> {
     let Some(key) = state.config.travel.key() else {
         return Task::none();
@@ -617,7 +623,7 @@ pub fn place_of(travel: &TravelSettings, event: &Event) -> Option<u64> {
         .iter()
         .find(|place| normalize(&place.name) == text || normalize(&place.address) == text)
         .or_else(|| {
-            // Google's addresses run on into the country, which is rarely typed.
+            // Mapbox's addresses run on into the country, which is rarely typed.
             travel
                 .places
                 .iter()
@@ -745,7 +751,7 @@ fn unique(hops: impl IntoIterator<Item = Hop>) -> Vec<Leg> {
 /// What is known about a trip.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Summary {
-    /// There is no key to ask Google with.
+    /// There is no token to ask Mapbox with.
     NoKey,
     /// Nobody has asked yet.
     Unknown,
@@ -803,161 +809,159 @@ pub fn short_label(state: &State, leg: Leg) -> String {
         Summary::Ready(route) => format!("{mode} · {}", route_label(route)),
         Summary::Loading | Summary::Unknown => format!("{mode} · calculating…"),
         Summary::Failed(_) => format!("{mode} · no route"),
-        Summary::NoKey => "Add a Maps API key in Settings".to_owned(),
+        Summary::NoKey => "Add a Mapbox token in Settings".to_owned(),
     }
 }
 
-/// A Google Maps page showing the trip.
+/// A page of the chosen map showing the trip. Mapbox has no page of its own
+/// to send someone to. Both pages are given coordinates, as that is what a
+/// place is known by here.
 fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
     let from = travel.place(leg.from)?;
     let to = travel.place(leg.to)?;
     let mode = travel.mode_for(leg.from, leg.to);
 
-    let mut url = format!(
-        "https://www.google.com/maps/dir/?api=1&origin={}&destination={}&travelmode={}",
-        urlencoding::encode(&locator(from)),
-        urlencoding::encode(&locator(to)),
-        mode.maps_url(),
-    );
-    for (name, place) in [("origin_place_id", from), ("destination_place_id", to)] {
-        if !place.place_id.is_empty() {
-            url.push_str(&format!("&{name}={}", urlencoding::encode(&place.place_id)));
-        }
-    }
-    Some(url)
-}
-
-/// What a Maps URL calls a place: its address, or else its coordinates.
-fn locator(place: &Place) -> String {
-    if place.address.is_empty() {
-        format!("{},{}", place.lat, place.lng)
-    } else {
-        place.address.clone()
-    }
+    Some(match travel.map_app {
+        MapApp::OpenStreetMap => format!(
+            "https://www.openstreetmap.org/directions?engine={}&route={}%2C{}%3B{}%2C{}",
+            mode.osm_engine(),
+            from.lat,
+            from.lng,
+            to.lat,
+            to.lng,
+        ),
+        MapApp::GoogleMaps => format!(
+            "https://www.google.com/maps/dir/?api=1&origin={}%2C{}&destination={}%2C{}&travelmode={}",
+            from.lat,
+            from.lng,
+            to.lat,
+            to.lng,
+            mode.google_travelmode(),
+        ),
+    })
 }
 
 // ---------------------------------------------------------------------------
-// Talking to Google
+// Talking to Mapbox
 // ---------------------------------------------------------------------------
 
-/// Searches Google Places for `query`. Blocking: call it from
+/// Searches Mapbox for `query`. Blocking: call it from
 /// [`crate::blocking::run`].
 pub fn search_places(key: &str, query: &str) -> Result<Vec<Found>, String> {
-    let body = json!({ "textQuery": query, "pageSize": MAX_RESULTS });
-    let response = post(
-        SEARCH_URL,
-        key,
-        "places.id,places.displayName,places.formattedAddress,places.location",
-        &body,
-    )?;
+    let url = format!(
+        "{SEARCH_URL}?q={}&limit={MAX_RESULTS}&access_token={}",
+        urlencoding::encode(query),
+        urlencoding::encode(key),
+    );
 
-    Ok(parse_places(&response))
+    Ok(parse_places(&get(&url)?))
 }
 
 pub fn parse_places(response: &Value) -> Vec<Found> {
-    response["places"]
+    response["features"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|place| {
-            let place_id = place["id"].as_str()?.to_owned();
-            let address = place["formattedAddress"].as_str().unwrap_or("").to_owned();
-            let name = place["displayName"]["text"]
+        .filter_map(|feature| {
+            let properties = &feature["properties"];
+            let place_id = properties["mapbox_id"].as_str()?.to_owned();
+            let address = properties["full_address"]
+                .as_str()
+                .or_else(|| properties["place_formatted"].as_str())
+                .unwrap_or("")
+                .to_owned();
+            let name = properties["name"]
                 .as_str()
                 .filter(|name| !name.trim().is_empty())
                 .map(str::to_owned)
                 .or_else(|| address.split(',').next().map(|part| part.trim().to_owned()))
                 .filter(|name| !name.is_empty())?;
 
+            // `[longitude, latitude]`, as GeoJSON has it.
+            let (lng, lat) = match (
+                feature["geometry"]["coordinates"][0].as_f64(),
+                feature["geometry"]["coordinates"][1].as_f64(),
+            ) {
+                (Some(lng), Some(lat)) => (lng, lat),
+                _ => (
+                    properties["coordinates"]["longitude"].as_f64()?,
+                    properties["coordinates"]["latitude"].as_f64()?,
+                ),
+            };
+
             Some(Found {
                 place_id,
                 name,
                 address,
-                lat: place["location"]["latitude"].as_f64()?,
-                lng: place["location"]["longitude"].as_f64()?,
+                lat,
+                lng,
             })
         })
         .collect()
 }
 
-/// How long and how far a trip is, from Google Routes. Blocking: call it from
-/// [`crate::blocking::run`].
+/// How long and how far a trip is, from Mapbox Directions. Blocking: call it
+/// from [`crate::blocking::run`].
 pub fn compute_route(
     key: &str,
     from: &Place,
     to: &Place,
     mode: TravelMode,
 ) -> Result<Route, String> {
-    let response = post(
-        ROUTES_URL,
-        key,
-        "routes.duration,routes.distanceMeters",
-        &route_request(from, to, mode),
-    )?;
-
-    parse_route(&response)
+    parse_route(&get(&route_url(key, from, to, mode))?)
 }
 
-pub fn route_request(from: &Place, to: &Place, mode: TravelMode) -> Value {
-    json!({
-        "origin": waypoint(from),
-        "destination": waypoint(to),
-        "travelMode": mode.routes_api(),
-        "units": "METRIC",
-    })
-}
-
-/// A place as a route's end: by place ID when it has one, as that is how
-/// Google knows the entrance and not just the building.
-fn waypoint(place: &Place) -> Value {
-    if place.place_id.is_empty() {
-        json!({ "location": { "latLng": { "latitude": place.lat, "longitude": place.lng } } })
-    } else {
-        json!({ "placeId": place.place_id })
-    }
+/// The Directions request for a trip. Mapbox takes coordinates only, as
+/// `longitude,latitude` pairs.
+pub fn route_url(key: &str, from: &Place, to: &Place, mode: TravelMode) -> String {
+    format!(
+        "{DIRECTIONS_URL}/{}/{},{};{},{}?overview=false&access_token={}",
+        mode.profile(),
+        from.lng,
+        from.lat,
+        to.lng,
+        to.lat,
+        urlencoding::encode(key),
+    )
 }
 
 pub fn parse_route(response: &Value) -> Result<Route, String> {
     let route = response["routes"]
         .as_array()
         .and_then(|routes| routes.first())
-        .ok_or("Google found no route between these places")?;
+        .ok_or("Mapbox found no route between these places")?;
 
-    // The duration is spelled as seconds with an "s" after: "1234s".
     let seconds = route["duration"]
-        .as_str()
-        .and_then(|text| text.trim_end_matches('s').parse::<f64>().ok())
-        .ok_or("Google did not say how long the trip takes")?;
+        .as_f64()
+        .ok_or("Mapbox did not say how long the trip takes")?;
 
     Ok(Route {
         seconds: seconds.round().max(0.0) as u32,
-        // A trip of no distance leaves the field out altogether.
-        meters: route["distanceMeters"].as_u64().unwrap_or(0) as u32,
+        meters: route["distance"].as_f64().unwrap_or(0.0).round().max(0.0) as u32,
     })
 }
 
-fn post(url: &str, key: &str, mask: &str, body: &Value) -> Result<Value, String> {
-    let result = crate::calendar::api::agent()
-        .post(url)
-        .set("X-Goog-Api-Key", key)
-        .set("X-Goog-FieldMask", mask)
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string());
-
-    match result {
+fn get(url: &str) -> Result<Value, String> {
+    match crate::calendar::api::agent().get(url).call() {
         Ok(response) => response
             .into_json::<Value>()
-            .map_err(|error| format!("Google Maps: {error}")),
+            .map_err(|error| format!("Mapbox: {error}")),
         Err(ureq::Error::Status(code, response)) => {
             let detail = response
                 .into_json::<Value>()
                 .ok()
-                .and_then(|body| body["error"]["message"].as_str().map(str::to_owned))
+                .and_then(|body| {
+                    body["message"]
+                        .as_str()
+                        .or_else(|| body["error"].as_str())
+                        .map(str::to_owned)
+                })
                 .filter(|message| !message.is_empty())
                 .unwrap_or_else(|| format!("HTTP {code}"));
-            Err(format!("Google Maps: {detail}"))
+            Err(format!("Mapbox: {detail}"))
         }
-        Err(error) => Err(format!("Google Maps: {error}")),
+        // The URL carries the token, which must not end up in the settings page.
+        Err(ureq::Error::Transport(error)) => Err(format!("Mapbox: {}", error.kind())),
     }
 }
 
@@ -1025,13 +1029,14 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::theme::Catalog;
+    use serde_json::json;
 
     fn state() -> State {
         State::new(Config::default(), Catalog::built_in())
     }
 
-    fn place(travel: &mut TravelSettings, name: &str, google: &str) -> u64 {
-        travel.add_place(name, &format!("{name}, 1 Main St"), google, 1.0, 2.0)
+    fn place(travel: &mut TravelSettings, name: &str, mapbox: &str) -> u64 {
+        travel.add_place(name, &format!("{name}, 1 Main St"), mapbox, 1.0, 2.0)
     }
 
     fn stop(id: &str, place: Option<u64>) -> Stop {
@@ -1044,7 +1049,7 @@ mod tests {
 
     fn found(name: &str) -> Found {
         Found {
-            place_id: format!("google-{name}"),
+            place_id: format!("mapbox-{name}"),
             name: name.to_owned(),
             address: format!("{name}, 1 Main St"),
             lat: 10.0,
@@ -1241,7 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn choosing_the_same_google_place_twice_keeps_one_place_and_its_title() {
+    fn choosing_the_same_mapbox_place_twice_keeps_one_place_and_its_title() {
         let mut travel = TravelSettings::default();
         let first = travel.add_place("Cafe", "1 Main St", "g-cafe", 1.0, 2.0);
         travel.places[0].name = "The usual".into();
@@ -1262,8 +1267,8 @@ mod tests {
         assert_eq!(travel.mode_for(1, 2), TravelMode::Car);
 
         travel.set_mode(1, 2, TravelMode::Bike);
-        travel.set_mode(1, 2, TravelMode::Multimodal);
-        assert_eq!(travel.mode_for(1, 2), TravelMode::Multimodal);
+        travel.set_mode(1, 2, TravelMode::Walk);
+        assert_eq!(travel.mode_for(1, 2), TravelMode::Walk);
         assert_eq!(
             travel.mode_for(2, 1),
             TravelMode::Car,
@@ -1282,7 +1287,7 @@ mod tests {
         let work = place(&mut config.travel, "Work", "g-work");
         config.travel.api_key = "key".into();
         config.travel.start = Some(home);
-        config.travel.default_mode = TravelMode::Multimodal;
+        config.travel.default_mode = TravelMode::Car;
         config.travel.set_mode(home, work, TravelMode::Bike);
 
         let text = toml::to_string_pretty(&config).unwrap();
@@ -1291,33 +1296,61 @@ mod tests {
     }
 
     #[test]
-    fn places_are_read_out_of_a_places_response() {
+    fn places_are_read_out_of_a_search_response() {
         let response = json!({
-            "places": [
+            "type": "FeatureCollection",
+            "features": [
                 {
-                    "id": "ChIJ1",
-                    "displayName": { "text": "Blue Bottle", "languageCode": "en" },
-                    "formattedAddress": "66 Mint St, San Francisco, CA 94103, USA",
-                    "location": { "latitude": 37.78, "longitude": -122.40 }
+                    "type": "Feature",
+                    "geometry": { "type": "Point", "coordinates": [-122.40, 37.78] },
+                    "properties": {
+                        "mapbox_id": "dXJu1",
+                        "name": "Blue Bottle",
+                        "full_address": "66 Mint St, San Francisco, California 94103, United States",
+                        "place_formatted": "San Francisco, California 94103, United States"
+                    }
                 },
                 {
-                    "id": "ChIJ2",
-                    "formattedAddress": "12 Pine Rd, Oakland, CA, USA",
-                    "location": { "latitude": 37.80, "longitude": -122.27 }
+                    "type": "Feature",
+                    "geometry": { "type": "Point", "coordinates": [-122.27, 37.80] },
+                    "properties": {
+                        "mapbox_id": "dXJu2",
+                        "name": "",
+                        "full_address": "12 Pine Rd, Oakland, California, United States"
+                    }
                 },
-                { "id": "no-location", "displayName": { "text": "Nowhere" } }
+                {
+                    "type": "Feature",
+                    "geometry": { "type": "Point", "coordinates": [-122.0, 37.0] },
+                    "properties": { "name": "No id" }
+                },
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "mapbox_id": "no-location",
+                        "name": "Nowhere"
+                    }
+                }
             ]
         });
 
         let places = parse_places(&response);
-        assert_eq!(places.len(), 2, "a place without a location is skipped");
+        assert_eq!(
+            places.len(),
+            2,
+            "a place without an id or location is skipped"
+        );
         assert_eq!(places[0].name, "Blue Bottle");
-        assert_eq!(places[0].place_id, "ChIJ1");
+        assert_eq!(places[0].place_id, "dXJu1");
         assert_eq!(
             places[0].address,
-            "66 Mint St, San Francisco, CA 94103, USA"
+            "66 Mint St, San Francisco, California 94103, United States"
         );
-        assert_eq!((places[0].lat, places[0].lng), (37.78, -122.40));
+        assert_eq!(
+            (places[0].lat, places[0].lng),
+            (37.78, -122.40),
+            "GeoJSON lists longitude first"
+        );
         assert_eq!(
             places[1].name, "12 Pine Rd",
             "no title falls back to the street"
@@ -1332,7 +1365,8 @@ mod tests {
     #[test]
     fn a_route_response_gives_seconds_and_meters() {
         let route = parse_route(&json!({
-            "routes": [{ "duration": "754s", "distanceMeters": 1234 }]
+            "code": "Ok",
+            "routes": [{ "duration": 753.6, "distance": 1233.8 }]
         }))
         .unwrap();
         assert_eq!(
@@ -1343,7 +1377,7 @@ mod tests {
             }
         );
 
-        let none = parse_route(&json!({ "routes": [{ "duration": "0s" }] })).unwrap();
+        let none = parse_route(&json!({ "routes": [{ "duration": 0.0 }] })).unwrap();
         assert_eq!(
             none,
             Route {
@@ -1354,36 +1388,63 @@ mod tests {
 
         assert!(parse_route(&json!({})).is_err());
         assert!(parse_route(&json!({ "routes": [] })).is_err());
-        assert!(parse_route(&json!({ "routes": [{ "distanceMeters": 5 }] })).is_err());
+        assert!(parse_route(&json!({ "routes": [{ "distance": 5.0 }] })).is_err());
     }
 
     #[test]
     fn a_route_request_names_the_places_and_the_method() {
         let mut travel = TravelSettings::default();
-        let a = place(&mut travel, "A", "g-a");
-        let b = travel.add_place("B", "", "", 3.5, 4.5);
+        let a = travel.add_place("A", "", "m-a", 1.5, 2.5);
+        let b = travel.add_place("B", "", "m-b", 3.5, 4.5);
 
-        let request = route_request(
+        let url = route_url(
+            "pk.key",
             travel.place(a).unwrap(),
             travel.place(b).unwrap(),
-            TravelMode::Multimodal,
+            TravelMode::Car,
         );
-        assert_eq!(request["origin"]["placeId"], "g-a");
         assert_eq!(
-            request["destination"]["location"]["latLng"]["latitude"],
-            3.5
+            url,
+            "https://api.mapbox.com/directions/v5/mapbox/driving/2.5,1.5;4.5,3.5\
+             ?overview=false&access_token=pk.key",
+            "coordinates are longitude then latitude"
         );
-        assert_eq!(request["travelMode"], "TRANSIT");
 
-        for (mode, name) in [
-            (TravelMode::Walk, "WALK"),
-            (TravelMode::Bike, "BICYCLE"),
-            (TravelMode::Car, "DRIVE"),
-            (TravelMode::Multimodal, "TRANSIT"),
+        for (mode, profile) in [
+            (TravelMode::Walk, "walking"),
+            (TravelMode::Bike, "cycling"),
+            (TravelMode::Car, "driving"),
         ] {
-            let request = route_request(travel.place(a).unwrap(), travel.place(b).unwrap(), mode);
-            assert_eq!(request["travelMode"], name);
+            let url = route_url(
+                "k",
+                travel.place(a).unwrap(),
+                travel.place(b).unwrap(),
+                mode,
+            );
+            assert!(url.contains(&format!("/mapbox/{profile}/")), "{url}");
         }
+    }
+
+    #[test]
+    fn the_map_choice_is_kept_in_the_config_only_when_changed() {
+        let untouched = toml::to_string_pretty(&TravelSettings::default()).unwrap();
+        assert!(untouched.contains("map_app = \"OpenStreetMap\""));
+
+        let mut config = Config::default();
+        config.travel.map_app = MapApp::GoogleMaps;
+        let text = toml::to_string_pretty(&config).unwrap();
+        let read: Config = toml::from_str(&text).unwrap();
+        assert_eq!(read.travel.map_app, MapApp::GoogleMaps);
+
+        let old: TravelSettings = toml::from_str("api_key = \"k\"").unwrap();
+        assert_eq!(old.map_app, MapApp::OpenStreetMap);
+    }
+
+    #[test]
+    fn a_config_from_before_mapbox_still_reads() {
+        // Public transport used to be a method; it is a drive now.
+        let read: TravelSettings = toml::from_str("default_mode = \"multimodal\"").unwrap();
+        assert_eq!(read.default_mode, TravelMode::Car);
     }
 
     #[test]
@@ -1473,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    fn renaming_a_place_keeps_what_google_needs() {
+    fn renaming_a_place_keeps_what_mapbox_needs() {
         let mut state = state();
         let id = state
             .config
@@ -1558,15 +1619,27 @@ mod tests {
     #[test]
     fn the_maps_link_names_both_places_and_the_method() {
         let mut travel = TravelSettings::default();
-        let a = place(&mut travel, "A", "g-a");
-        let b = place(&mut travel, "B", "g-b");
+        let a = travel.add_place("A", "", "m-a", 1.5, 2.5);
+        let b = travel.add_place("B", "", "m-b", 3.5, 4.5);
         travel.set_mode(a, b, TravelMode::Car);
 
         let url = maps_url(&travel, Leg { from: a, to: b }).unwrap();
-        assert!(url.starts_with("https://www.google.com/maps/dir/?api=1&origin="));
-        assert!(url.contains("travelmode=driving"));
-        assert!(url.contains("origin_place_id=g-a"));
-        assert!(url.contains("destination_place_id=g-b"));
+        assert_eq!(
+            url,
+            "https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=1.5%2C2.5%3B3.5%2C4.5"
+        );
         assert!(maps_url(&travel, Leg { from: a, to: 99 }).is_none());
+
+        travel.map_app = MapApp::GoogleMaps;
+        assert_eq!(
+            maps_url(&travel, Leg { from: a, to: b }).unwrap(),
+            "https://www.google.com/maps/dir/?api=1&origin=1.5%2C2.5&destination=3.5%2C4.5&travelmode=driving"
+        );
+        travel.set_mode(a, b, TravelMode::Bike);
+        assert!(
+            maps_url(&travel, Leg { from: a, to: b })
+                .unwrap()
+                .ends_with("travelmode=bicycling")
+        );
     }
 }

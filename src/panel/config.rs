@@ -2,11 +2,7 @@
 //! `config.toml`.
 //!
 //! Every field is optional; a missing table or field falls back to the
-//! defaults below, so the panel runs out of the box. Older installs kept these
-//! in a `panel.toml` beside `config.toml`; [`legacy_path`] still finds it so
-//! [`crate::config::Config::load`] can carry its values over.
-
-use std::path::PathBuf;
+//! defaults below, so the panel runs out of the box.
 
 use serde::{Deserialize, Serialize};
 
@@ -135,32 +131,6 @@ impl PanelConfig {
     pub fn load() -> Self {
         crate::config::Config::load().panel
     }
-
-    /// The old standalone `panel.toml`, if it exists and parses.
-    pub(crate) fn load_legacy() -> Option<Self> {
-        let path = legacy_path()?;
-        let text = std::fs::read_to_string(&path).ok()?;
-
-        match toml::from_str(&text) {
-            Ok(config) => Some(config),
-            Err(error) => {
-                log::warn!(
-                    "ignoring invalid panel config at {}: {error}",
-                    path.display()
-                );
-                None
-            }
-        }
-    }
-}
-
-/// The old `panel.toml`, beside the main `config.toml`.
-pub fn legacy_path() -> Option<PathBuf> {
-    Some(
-        crate::config::project_dirs()?
-            .config_dir()
-            .join("panel.toml"),
-    )
 }
 
 #[cfg(test)]
@@ -229,14 +199,5 @@ mod tests {
                 .side,
             Side::Left
         );
-    }
-
-    #[test]
-    fn the_legacy_panel_config_lives_beside_the_main_one() {
-        let panel = legacy_path().expect("a config directory");
-        let main = crate::config::config_path().expect("a config directory");
-
-        assert_eq!(panel.parent(), main.parent());
-        assert_eq!(panel.file_name().unwrap(), "panel.toml");
     }
 }

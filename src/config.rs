@@ -440,21 +440,23 @@ impl ProjectsSettings {
     }
 }
 
-/// A place that tasks and events can happen at, found with Google Places.
+/// A place that tasks and events can happen at, found with Mapbox search.
 ///
-/// Everything Google needs to find the place again is kept apart from the
-/// title, so the title can be renamed to whatever reads best ("Home",
-/// "Campus") without the place losing its address or its Google place ID.
+/// Everything needed to find the place again is kept apart from the title,
+/// so the title can be renamed to whatever reads best ("Home", "Campus")
+/// without the place losing its address or its Mapbox ID.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Place {
     /// What tasks refer to. Unlike the title, it never changes.
     pub id: u64,
     /// The title shown in the app. Free to edit.
     pub name: String,
-    /// The address as Google spelled it when the place was chosen.
+    /// The address as Mapbox spelled it when the place was chosen.
     #[serde(default)]
     pub address: String,
-    /// Google's place ID, which routes can start and end at.
+    /// Mapbox's ID for the place, which keeps one place from being saved
+    /// twice. (Places saved before Mapbox hold a Google ID here; routes use
+    /// the coordinates, so they keep working.)
     #[serde(default)]
     pub place_id: String,
     pub lat: f64,
@@ -468,40 +470,47 @@ pub enum TravelMode {
     #[default]
     Walk,
     Bike,
+    /// Configs written when public transport was offered read as `Car`:
+    /// Mapbox has no transit routing.
+    #[serde(alias = "multimodal")]
     Car,
-    /// Public transport, with walking between stops.
-    Multimodal,
 }
 
 impl TravelMode {
-    pub const ALL: [TravelMode; 4] = [Self::Walk, Self::Bike, Self::Car, Self::Multimodal];
+    pub const ALL: [TravelMode; 3] = [Self::Walk, Self::Bike, Self::Car];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Walk => "Walk",
             Self::Bike => "Bike",
             Self::Car => "Car",
-            Self::Multimodal => "Multimodal",
         }
     }
 
-    /// The `travelMode` the Google Routes API expects.
-    pub fn routes_api(self) -> &'static str {
+    /// The profile the Mapbox Directions API expects.
+    pub fn profile(self) -> &'static str {
         match self {
-            Self::Walk => "WALK",
-            Self::Bike => "BICYCLE",
-            Self::Car => "DRIVE",
-            Self::Multimodal => "TRANSIT",
+            Self::Walk => "walking",
+            Self::Bike => "cycling",
+            Self::Car => "driving",
         }
     }
 
-    /// The `travelmode` of a Google Maps URL.
-    pub fn maps_url(self) -> &'static str {
+    /// The `travelmode` of a Google Maps directions link.
+    pub fn google_travelmode(self) -> &'static str {
         match self {
             Self::Walk => "walking",
             Self::Bike => "bicycling",
             Self::Car => "driving",
-            Self::Multimodal => "transit",
+        }
+    }
+
+    /// The routing engine of an OpenStreetMap directions link.
+    pub fn osm_engine(self) -> &'static str {
+        match self {
+            Self::Walk => "fossgis_osrm_foot",
+            Self::Bike => "fossgis_osrm_bike",
+            Self::Car => "fossgis_osrm_car",
         }
     }
 
@@ -518,6 +527,31 @@ impl std::fmt::Display for TravelMode {
     }
 }
 
+/// The map that "Open in Maps" shows a trip on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MapApp {
+    #[default]
+    OpenStreetMap,
+    GoogleMaps,
+}
+
+impl MapApp {
+    pub const ALL: [MapApp; 2] = [Self::OpenStreetMap, Self::GoogleMaps];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenStreetMap => "OpenStreetMap",
+            Self::GoogleMaps => "Google Maps",
+        }
+    }
+}
+
+impl std::fmt::Display for MapApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// How the trip from one place to another is made, when that is not the default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteMode {
@@ -526,11 +560,12 @@ pub struct RouteMode {
     pub mode: TravelMode,
 }
 
-/// Places, the Google Maps key, and how trips between places are made.
+/// Places, the Mapbox access token, and how trips between places are made.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TravelSettings {
-    /// A Google Cloud API key with the Places API (New) and Routes API on.
+    /// A Mapbox access token (public, `pk.`) that may use the Search Box and
+    /// Directions APIs.
     pub api_key: String,
     /// Where a day's travel starts: the first event is reached from here.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -540,6 +575,8 @@ pub struct TravelSettings {
     pub end: Option<u64>,
     /// How a trip is made until it is set otherwise.
     pub default_mode: TravelMode,
+    /// The map "Open in Maps" opens a trip on.
+    pub map_app: MapApp,
     pub places: Vec<Place>,
     /// Trips whose method was chosen by hand.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -566,20 +603,20 @@ impl TravelSettings {
         places
     }
 
-    /// The key to send to Google: the one in settings, or else the
-    /// `GOOGLE_MAPS_API_KEY` environment variable.
+    /// The token to send to Mapbox: the one in settings, or else the
+    /// `MAPBOX_ACCESS_TOKEN` environment variable.
     pub fn key(&self) -> Option<String> {
         let key = self.api_key.trim();
         if !key.is_empty() {
             return Some(key.to_owned());
         }
-        std::env::var("GOOGLE_MAPS_API_KEY")
+        std::env::var("MAPBOX_ACCESS_TOKEN")
             .ok()
             .map(|key| key.trim().to_owned())
             .filter(|key| !key.is_empty())
     }
 
-    /// Saves a place Google found, unless it is saved already, and returns
+    /// Saves a place Mapbox found, unless it is saved already, and returns
     /// its id. Choosing the same place twice gives the same place back, with
     /// the title it has been renamed to.
     pub fn add_place(
@@ -961,12 +998,6 @@ impl Flash {
     }
 }
 
-fn has_panel_table(contents: &str) -> bool {
-    contents
-        .parse::<toml::Table>()
-        .is_ok_and(|table| table.contains_key("panel"))
-}
-
 /// Where the config and user themes live.
 pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("dev", "TimeSlay", "time-slay")
@@ -993,7 +1024,7 @@ pub fn cache_keep_path() -> Option<PathBuf> {
     Some(project_dirs()?.cache_dir().join("keep").join("notes.json"))
 }
 
-/// Travel times already worked out, so a restart does not ask Google again.
+/// Travel times already worked out, so a restart does not ask Mapbox again.
 pub fn cache_travel_path() -> Option<PathBuf> {
     Some(
         project_dirs()?
@@ -1013,7 +1044,7 @@ impl Config {
 
         match fs::read_to_string(&path) {
             Ok(contents) => match Self::parse(&contents) {
-                Ok(config) => config.with_legacy_panel(has_panel_table(&contents)),
+                Ok(config) => config,
                 Err(error) => {
                     log::warn!(
                         "{} could not be parsed, using defaults instead: {error}",
@@ -1022,24 +1053,12 @@ impl Config {
                     Self::default()
                 }
             },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Self::default().with_legacy_panel(false)
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(error) => {
                 log::warn!("{} could not be read: {error}", path.display());
                 Self::default()
             }
         }
-    }
-
-    /// Until a config has its own `[panel]` table, the panel settings are
-    /// whatever the old `panel.toml` said. The next save writes them into
-    /// `config.toml`, after which `panel.toml` is no longer read.
-    fn with_legacy_panel(mut self, has_panel_table: bool) -> Self {
-        if !has_panel_table && let Some(panel) = crate::panel::PanelConfig::load_legacy() {
-            self.panel = panel;
-        }
-        self
     }
 
     /// Accept fields written by other app versions, reporting their paths.
@@ -1229,13 +1248,6 @@ mod tests {
 
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.panel, crate::panel::PanelConfig::default());
-    }
-
-    #[test]
-    fn a_panel_table_is_recognised_so_the_legacy_file_is_skipped() {
-        assert!(has_panel_table("[panel]\nwidth = 240"));
-        assert!(!has_panel_table("[views]\nmargin = 4.0"));
-        assert!(!has_panel_table("not toml ["));
     }
 
     #[test]

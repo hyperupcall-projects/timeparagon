@@ -435,6 +435,9 @@ impl Remote for Google<'_> {
     }
 }
 
+/// The name of the list new tasks go to, unless another is chosen in Settings.
+pub const DEFAULT_LIST: &str = "Inbox";
+
 /// The Google Tasks list new tasks land in until they are triaged. An explicit
 /// choice wins; otherwise the list called "Inbox" is reused, or created the
 /// first time a task is added.
@@ -446,7 +449,7 @@ pub fn inbox_destination(token: &str, list: Option<&str>) -> Result<String, Stri
             api::TASK_LISTS,
             api::TASK_LISTS,
             "title",
-            crate::inbox::DEFAULT_LIST,
+            DEFAULT_LIST,
         ),
     }
 }

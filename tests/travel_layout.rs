@@ -34,9 +34,9 @@ fn state() -> (State, u64, u64, u64) {
     state.calendar = Store::with_snapshot(sample_snapshot());
 
     let travel = &mut state.config.travel;
-    let home = travel.add_place("Home", "12 Elm St", "g-home", 1.0, 1.0);
-    let office = travel.add_place("Office", "500 Market St", "g-office", 1.0, 2.0);
-    let cafe = travel.add_place("Blue Bottle", "66 Mint St", "g-cafe", 1.0, 3.0);
+    let home = travel.add_place("Home", "12 Elm St", "m-home", 1.0, 1.0);
+    let office = travel.add_place("Office", "500 Market St", "m-office", 1.0, 2.0);
+    let cafe = travel.add_place("Blue Bottle", "66 Mint St", "m-cafe", 1.0, 3.0);
     travel.start = Some(home);
     travel.end = Some(home);
     travel.api_key = "key".into();
@@ -241,7 +241,6 @@ fn the_trip_card_offers_every_method() -> Result<(), Error> {
             "Walk",
             "Bike",
             "Car",
-            "Multimodal",
             "Close",
         ] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
@@ -280,7 +279,7 @@ fn choosing_a_method_changes_it_for_that_trip_only() {
     assert_eq!(state.config.travel.mode_for(home, office), TravelMode::Car);
 }
 
-/// Renaming a place changes the title and nothing Google needs.
+/// Renaming a place changes the title and nothing Mapbox needs.
 #[test]
 fn a_place_can_be_renamed_from_the_travel_tab() -> Result<(), Error> {
     let (mut state, _, office, _) = state();
@@ -300,7 +299,7 @@ fn a_place_can_be_renamed_from_the_travel_tab() -> Result<(), Error> {
     let place = state.config.travel.place(office).unwrap();
     assert_eq!(place.name, "The office");
     assert_eq!(place.address, "500 Market St");
-    assert_eq!(place.place_id, "g-office");
+    assert_eq!(place.place_id, "m-office");
 
     let mut ui = render(&state, Size::new(260.0, 2000.0));
     assert!(ui.find("The office").is_ok());
@@ -317,7 +316,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
         let mut ui = render(&state, Size::new(width, 4000.0));
         for label in [
             "Travel",
-            "Google Maps API key",
+            "Mapbox access token",
             "Start location",
             "End location",
         ] {
@@ -331,7 +330,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
         );
     }
 
-    // Searching shows what Google found, and choosing one sets the place.
+    // Searching shows what Mapbox found, and choosing one sets the place.
     let (mut state, ..) = state();
     state.screen = Screen::Settings;
     state.config.travel.end = None;
@@ -343,7 +342,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
     picker.query = "coffee".into();
     picker.searched = true;
     picker.results = vec![Found {
-        place_id: "g-philz".into(),
+        place_id: "m-philz".into(),
         name: "Philz Coffee".into(),
         address: "1 Main St".into(),
         lat: 5.0,
@@ -364,7 +363,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
     let place = state.config.travel.place(end).unwrap();
     assert_eq!(
         (place.name.as_str(), place.place_id.as_str()),
-        ("Philz Coffee", "g-philz")
+        ("Philz Coffee", "m-philz")
     );
     assert_eq!((place.lat, place.lng), (5.0, 6.0));
     Ok(())

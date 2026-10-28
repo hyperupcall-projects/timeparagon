@@ -15,8 +15,7 @@ use crate::integrations::{self, Auth, Source};
 use crate::timeblocking::{self as tb, UNDATED};
 use crate::{blocking, task_db};
 
-/// The name of the list new tasks go to, unless another is chosen in Settings.
-pub const DEFAULT_LIST: &str = "Inbox";
+pub use crate::calendar::scheduled::DEFAULT_LIST;
 /// Widget id of the new-task text box, so it can be focused when it opens.
 pub const TITLE_FIELD: &str = "inbox-title";
 const MAX_TITLE_CHARS: usize = 1024;

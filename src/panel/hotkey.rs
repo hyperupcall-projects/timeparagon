@@ -19,15 +19,6 @@ use super::config::{Action, PanelConfig};
 pub const COMPONENT: &str = "time-slay";
 const COMPONENT_FRIENDLY: &str = "TimeSlay";
 
-/// The one action older versions registered, "Toggle Side Panel". Its binding
-/// carries over to [`Action::ToggleVisibility`] and the action is removed.
-const LEGACY_ACTION: &str = "panel";
-const LEGACY_ACTION_FRIENDLY: &str = "Toggle Side Panel";
-/// The component id before the project was renamed. Its "panel" action
-/// outlives the old daemon in KGlobalAccel and keeps claiming its key.
-const LEGACY_COMPONENT: &str = "timetracker";
-const LEGACY_COMPONENT_FRIENDLY: &str = "TimeTracker";
-
 /// `KGlobalAccelD::SetShortcutFlag` values (see `kglobalacceld.h`).
 ///
 /// `SetPresent` marks the shortcut as active. `IsDefault` records it as the
@@ -114,10 +105,6 @@ pub fn rebind(action: Action, specs: &[String]) -> Result<()> {
         .shortcut_keys(&id)
         .context("Could not read the current shortcuts")?;
 
-    // Leftovers of earlier versions would otherwise block their old keys with
-    // nothing in System Settings that can release them.
-    evict_legacy(&kga);
-
     let apply = || {
         kga.set_shortcut_keys(&id, &keys, SET_PRESENT | NO_AUTOLOADING)
             .context("Could not change the shortcuts")
@@ -136,16 +123,6 @@ pub fn rebind(action: Action, specs: &[String]) -> Result<()> {
         );
     }
     anyhow::bail!("Shortcut unavailable. {}", blocked.join("; "))
-}
-
-/// Removes the registrations of earlier versions, which no live process owns.
-fn evict_legacy(kga: &KGlobalAccelProxyBlocking<'_>) {
-    for (component, action) in [
-        (LEGACY_COMPONENT, LEGACY_ACTION),
-        (COMPONENT, LEGACY_ACTION),
-    ] {
-        let _ = kga.unregister(component, action);
-    }
 }
 
 /// Describes who owns each requested key that was not applied.
@@ -231,28 +208,6 @@ fn run(sender: Sender<Action>, config: &PanelConfig) -> Result<()> {
     let kga = KGlobalAccelProxyBlocking::new(&conn)
         .context("KGlobalAccel is unavailable (is kglobalacceld running?)")?;
 
-    // What the old single action was bound to, so a binding the user chose in
-    // System Settings is not lost to the new defaults.
-    let legacy_id = [
-        COMPONENT,
-        LEGACY_ACTION,
-        COMPONENT_FRIENDLY,
-        LEGACY_ACTION_FRIENDLY,
-    ];
-    let pre_rename_id = [
-        LEGACY_COMPONENT,
-        LEGACY_ACTION,
-        LEGACY_COMPONENT_FRIENDLY,
-        LEGACY_ACTION_FRIENDLY,
-    ];
-    let mut legacy_keys = kga.shortcut_keys(&legacy_id).unwrap_or_default();
-    if legacy_keys.is_empty() {
-        legacy_keys = kga.shortcut_keys(&pre_rename_id).unwrap_or_default();
-    }
-    // Removed before the new actions are bound, because they would otherwise
-    // still claim their keys, and linger in System Settings.
-    evict_legacy(&kga);
-
     for action in Action::ALL {
         let id = action_id(action);
         kga.do_register(&id)
@@ -265,8 +220,6 @@ fn run(sender: Sender<Action>, config: &PanelConfig) -> Result<()> {
         let saved = kga.shortcut_keys(&id).unwrap_or_default();
         let keys = if !saved.is_empty() {
             saved
-        } else if action == Action::ToggleVisibility && !legacy_keys.is_empty() {
-            legacy_keys.clone()
         } else {
             wanted.clone()
         };

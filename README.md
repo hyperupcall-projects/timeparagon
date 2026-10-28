@@ -6,17 +6,22 @@ TimeSlay has two implementations that live side by side:
 
 | Crate | UI | Status |
 | --- | --- | --- |
-| `time-slay` (workspace root) | [iced](https://iced.rs) | The complete application, unchanged |
+| `time-slay` (workspace root) | [iced](https://iced.rs) | The complete application |
 | `time-slay-core` | none | Shared calendar, OAuth, tasks and time-block data layer |
 | `dioxus` (`time-slay-dioxus`) | [Dioxus](https://dioxuslabs.com) | Day view only |
 
 Both UIs use the same Google Calendar and Google Tasks data, the same OAuth
 token, the same config file, and the same local task database.
 
+`time-slay-core` does not fork the iced crate's data code: `calendar`,
+`config_sync`, `hex`, `task_db` and the pure task rules in
+`src/timeblocking/model.rs` are compiled into both crates from the same source
+files via `#[path]`. Only `core/src/config.rs` is a separate, smaller config.
+
 ## Run
 
 ```sh
-# The original iced application
+# The iced application
 cargo run -p time-slay --release
 
 # The Dioxus day view
@@ -24,7 +29,7 @@ cargo run -p time-slay-dioxus
 ```
 
 The iced package remains the workspace's default member, so a plain `cargo run`
-still launches the original app.
+still launches the iced app.
 
 ## Daily and weekly calendar
 
