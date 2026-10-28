@@ -1,23 +1,30 @@
-//! The side-panel launcher: a global shortcut that opens TimeTracker **itself**
-//! as a separate, 200px-wide instance down a screen edge.
+//! The shortcut daemon (`timetracker --daemon`): global shortcuts that show,
+//! hide and reshape TimeTracker **itself**.
 //!
 //! Two mechanisms, the ones `../sidepanel` uses:
 //!
-//! 1. a global shortcut registered through KGlobalAccel (see [`hotkey`]), and
-//! 2. a long-running daemon that owns the shortcut, so pressing it never pays
-//!    for a process to be registered first.
+//! 1. global shortcuts registered through KGlobalAccel (see [`hotkey`]), and
+//! 2. a long-running daemon that owns them, so pressing one never pays for a
+//!    process to be registered first.
 //!
-//! The daemon does not draw anything itself. When the shortcut fires it starts
-//! a **separate instance of the real application** (`timetracker --sidebar`),
-//! and pressing the shortcut again tells that instance to hide its window.
-//! Keeping the panel a genuine instance of the app — rather than a second,
-//! bespoke view — is the point: it is the same clock, the same calendar, the
-//! same settings.
+//! TimeTracker has two shapes, both started from the one binary: the **panel**
+//! (`timetracker --sidebar`, the full app in a wide edge strip) and the
+//! **dock** (`timetracker --dock`, a very thin strip of today). The daemon
+//! draws neither. It has two actions, each of which can have several
+//! shortcuts:
 //!
-//! The panel process is kept alive across toggles so that showing it again is
-//! nearly instant: only the first press pays for a full process start. The
-//! daemon talks to the panel over a Unix socket (`panel_socket_path`) to show
-//! or hide its window.
+//! * **Toggle Visibility** hides whichever shape is on screen, and when
+//!   nothing is, brings back the shape that was last shown.
+//! * **Toggle Shape** swaps the panel for the dock and the dock for the panel.
+//!
+//! The daemon keeps no record of what is on screen. It asks, over the sockets
+//! in [`crate::ipc`], so the answer is right even when a shape was changed
+//! with the buttons in the app rather than with a shortcut. The one thing it
+//! does remember is which shape was shown last.
+//!
+//! The panel process is kept alive while hidden, so it comes back exactly as it
+//! was (its tab, any open details pane, its width) and nearly instantly. The
+//! dock holds no state worth keeping: hiding it ends the process.
 //!
 //! Where the panel lands is the compositor's business. [`config`] records the
 //! edge and width we ask for; see the packaging README for the one caveat on
@@ -26,174 +33,176 @@
 mod config;
 mod hotkey;
 
-pub use config::{PanelConfig, Side};
-pub use hotkey::{HotkeyEvent, rebind};
+pub use config::{Action, PanelConfig, Side};
+pub use hotkey::{rebind, same_shortcut, validate};
 
-use std::io::Write;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 
-/// The command-line switch that turns the main binary into the panel.
-const SIDEBAR_FLAG: &str = "--sidebar";
+use crate::dock::launch::{self, Origin};
+use crate::ipc;
 
-/// Name of the Unix socket the panel daemon uses to tell a running panel
-/// instance to show or hide its window.
-const PANEL_SOCKET_NAME: &str = "timetracker-panel.sock";
+/// How long a freshly started shape gets to announce itself.
+const START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Runs the daemon: register the shortcut, then toggle the panel on every press.
+/// The two forms TimeTracker takes on screen besides its regular window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Panel,
+    Dock,
+}
+
+impl Shape {
+    fn other(self) -> Self {
+        match self {
+            Self::Panel => Self::Dock,
+            Self::Dock => Self::Panel,
+        }
+    }
+
+    fn socket(self) -> &'static str {
+        match self {
+            Self::Panel => ipc::SIDEBAR,
+            Self::Dock => ipc::DOCK,
+        }
+    }
+
+    fn is_visible(self) -> bool {
+        ipc::is_visible(self.socket())
+    }
+
+    fn hide(self) -> Result<()> {
+        ipc::request(self.socket(), "hide").map(drop)
+    }
+
+    /// Brings the shape on screen, starting its process if there is none.
+    fn show(self) -> Result<()> {
+        match self {
+            // A hidden panel is still running, and only has to be asked.
+            Self::Panel if ipc::request(ipc::SIDEBAR, "show").is_ok() => Ok(()),
+            Self::Panel => start(launch::open_sidebar()?, self),
+            Self::Dock => start(launch::open_dock(Origin::Sidebar)?, self),
+        }
+    }
+}
+
+/// Waits for a freshly started `shape` to be on screen. Gives up early if its
+/// process exits first, as the dock does where there is no layer shell.
+fn start(mut child: Child, shape: Shape) -> Result<()> {
+    let mut exited = None;
+    let appeared = ipc::wait_until(START_TIMEOUT, || {
+        if shape.is_visible() {
+            return true;
+        }
+        exited = child.try_wait().ok().flatten();
+        exited.is_some()
+    });
+
+    // Something has to collect the exit status whenever the process ends.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    match exited {
+        Some(status) => Err(anyhow!("the {shape:?} exited right away ({status})")),
+        None if appeared => Ok(()),
+        None => Err(anyhow!("the {shape:?} did not appear in time")),
+    }
+}
+
+/// Reacts to the shortcuts.
+struct Controller {
+    /// The shape on screen last, which Toggle Visibility brings back.
+    last: Shape,
+}
+
+impl Controller {
+    fn handle(&mut self, action: Action) {
+        match action {
+            Action::ToggleVisibility => self.toggle_visibility(),
+            Action::ToggleShape => self.toggle_shape(),
+        }
+    }
+
+    /// The shapes on screen right now. More than one is not expected, but
+    /// both are reported so that neither is left behind.
+    fn visible(&self) -> Vec<Shape> {
+        [Shape::Panel, Shape::Dock]
+            .into_iter()
+            .filter(|shape| shape.is_visible())
+            .collect()
+    }
+
+    fn hide_all(&self, shapes: &[Shape]) {
+        for shape in shapes {
+            if let Err(error) = shape.hide() {
+                log::warn!("could not hide the {shape:?}: {error:#}");
+            }
+        }
+    }
+
+    fn toggle_visibility(&mut self) {
+        let visible = self.visible();
+        if let Some(&shape) = visible.first() {
+            self.last = shape;
+            self.hide_all(&visible);
+            return;
+        }
+
+        if let Err(error) = self.last.show() {
+            log::error!("could not show the {:?}: {error:#}", self.last);
+        }
+    }
+
+    fn toggle_shape(&mut self) {
+        let visible = self.visible();
+        // Hidden, it comes back in the shape it was not last shown in.
+        let from = visible.first().copied().unwrap_or(self.last);
+        let to = from.other();
+
+        self.hide_all(&visible);
+        match to.show() {
+            Ok(()) => self.last = to,
+            Err(error) => {
+                log::error!("could not switch to the {to:?}: {error:#}");
+                // Do not leave the screen empty because the other shape failed.
+                if !visible.is_empty() {
+                    if let Err(error) = from.show() {
+                        log::error!("could not restore the {from:?}: {error:#}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Runs the daemon: register the shortcuts, then act on every press.
 pub fn run() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
         .init();
 
     let config = PanelConfig::load();
     log::info!(
-        "timetracker-panel starting (side={:?}, width={}px, shortcut={})",
+        "shortcut daemon starting (side={:?}, width={}px)",
         config.side,
-        config.width,
-        config.shortcut
+        config.width
     );
 
     let (tx, rx) = std::sync::mpsc::channel();
     hotkey::spawn(tx, config).context("failed to start the global-shortcut listener")?;
 
-    // The panel is a child process; `None` means it is not currently up.
-    // `panel_visible` tracks whether the panel's window is currently shown,
-    // so the daemon knows whether to send "show" or "hide" on the next press.
-    let mut panel: Option<Child> = None;
-    let mut panel_visible = false;
-
-    while rx.recv().is_ok() {
-        toggle(&mut panel, &mut panel_visible);
+    let mut controller = Controller { last: Shape::Panel };
+    while let Ok(action) = rx.recv() {
+        controller.handle(action);
     }
 
     Ok(())
 }
 
-/// Shows the panel if it is down, or hides it if it is up.
-///
-/// Instead of killing the panel process on hide, we keep it alive and send it
-/// a "hide" command over its IPC socket. The next press sends "show", which is
-/// nearly instant because the process is already running.
-///
-/// A child that has already exited on its own (the user closed the window) is
-/// simply reaped — the next press opens a fresh one.
-fn toggle(panel: &mut Option<Child>, panel_visible: &mut bool) {
-    if let Some(mut running) = panel.take() {
-        match running.try_wait() {
-            Ok(Some(_)) => {
-                log::info!("panel had already closed");
-                *panel_visible = false;
-            }
-            Ok(None) => {
-                if *panel_visible {
-                    if let Err(error) = send_panel_command("hide") {
-                        log::warn!("could not hide panel: {error}");
-                    }
-                    *panel_visible = false;
-                } else {
-                    if let Err(error) = send_panel_command("show") {
-                        log::warn!("could not show panel: {error}");
-                    }
-                    *panel_visible = true;
-                }
-                *panel = Some(running);
-                return;
-            }
-            Err(error) => log::warn!("could not check on the panel: {error}"),
-        }
-    }
-
-    match open_panel() {
-        Ok(child) => {
-            log::info!("panel opened (pid {})", child.id());
-            *panel = Some(child);
-            *panel_visible = true;
-        }
-        Err(error) => log::error!("could not open the panel: {error:#}"),
-    }
-}
-
-/// Returns the path of the panel IPC socket, preferring the XDG runtime
-/// directory and falling back to the temp directory.
-pub fn panel_socket_path() -> Option<PathBuf> {
-    std::env::var("XDG_RUNTIME_DIR")
-        .ok()
-        .map(|dir| PathBuf::from(dir).join(PANEL_SOCKET_NAME))
-        .or_else(|| Some(std::env::temp_dir().join(PANEL_SOCKET_NAME)))
-}
-
-/// Sends a `show` or `hide` command to a running panel instance over its IPC
-/// socket. Retries briefly because the panel may not have bound the socket yet
-/// right after it was spawned.
-fn send_panel_command(command: &str) -> Result<()> {
-    let path = panel_socket_path().context("no socket directory available")?;
-    let mut last_error = None;
-    for _ in 0..20 {
-        match UnixStream::connect(&path) {
-            Ok(mut stream) => {
-                stream.write_all(command.as_bytes())?;
-                return Ok(());
-            }
-            Err(error) => {
-                last_error = Some(error);
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
-    Err(last_error
-        .map(|e| anyhow!("panel socket not available: {e}"))
-        .unwrap_or_else(|| anyhow!("panel socket not available")))
-}
-
 /// Asks a running panel to show its window again. Fails when no panel is
 /// running, so the caller can start one.
 pub fn show_panel() -> Result<()> {
-    send_panel_command("show")
-}
-
-fn open_panel() -> Result<Child> {
-    let exe = sidebar_exe()?;
-    Command::new(&exe)
-        .arg(SIDEBAR_FLAG)
-        .spawn()
-        .with_context(|| format!("failed to run {}", exe.display()))
-}
-
-/// The main `timetracker` binary, which understands [`SIDEBAR_FLAG`].
-///
-/// It is normally installed beside this daemon, so we look there first;
-/// falling back to `PATH` keeps a manual `cargo run` working.
-fn sidebar_exe() -> Result<PathBuf> {
-    let sibling = std::env::current_exe().ok().and_then(|exe| {
-        let candidate = exe.parent()?.join("timetracker");
-        candidate.is_file().then_some(candidate)
-    });
-
-    if let Some(path) = sibling {
-        return Ok(path);
-    }
-
-    if which("timetracker") {
-        return Ok(PathBuf::from("timetracker"));
-    }
-
-    anyhow::bail!(
-        "could not find the timetracker binary next to {} and it is not on PATH",
-        std::env::current_exe()
-            .map(|exe| exe.display().to_string())
-            .unwrap_or_else(|_| "this daemon".to_owned())
-    )
-}
-
-/// A minimal `PATH` lookup, so we do not pull in a `which` crate for one call.
-fn which(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-
-    std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+    ipc::request(ipc::SIDEBAR, "show").map(drop)
 }

@@ -6,20 +6,23 @@
 //! `globalShortcutPressed` when the user presses the key. This is the same
 //! mechanism the side panel uses, and it works on Wayland.
 //!
-//! The registered shortcut also shows up in System Settings → Shortcuts, so the
-//! user can rebind it without touching our config file.
+//! Each action ([`Action`]) can have several shortcuts. They also show up in
+//! System Settings → Shortcuts, so the user can rebind them without touching
+//! our config file.
 
 use anyhow::{Context, Result, anyhow};
 use std::sync::mpsc::Sender;
 
-use super::config::PanelConfig;
+use super::config::{Action, PanelConfig};
 
 /// Component (application) id used with KGlobalAccel.
 pub const COMPONENT: &str = "timetracker";
-/// Action id used with KGlobalAccel.
-pub const ACTION: &str = "panel";
 const COMPONENT_FRIENDLY: &str = "TimeTracker";
-const ACTION_FRIENDLY: &str = "Toggle Side Panel";
+
+/// The one action older versions registered, "Toggle Side Panel". Its binding
+/// carries over to [`Action::ToggleVisibility`] and the action is removed.
+const LEGACY_ACTION: &str = "panel";
+const LEGACY_ACTION_FRIENDLY: &str = "Toggle Side Panel";
 
 /// `KGlobalAccelD::SetShortcutFlag` values (see `kglobalacceld.h`).
 ///
@@ -30,10 +33,9 @@ const IS_DEFAULT: u32 = 0x8;
 /// Apply an explicit user edit instead of reloading the saved binding.
 const NO_AUTOLOADING: u32 = 0x4;
 
-/// Messages sent from the D-Bus thread to the Wayland event loop.
-#[derive(Debug, Clone, Copy)]
-pub enum HotkeyEvent {
-    Toggle,
+/// The four-string id KGlobalAccel identifies an action by.
+fn action_id(action: Action) -> [&'static str; 4] {
+    [COMPONENT, action.id(), COMPONENT_FRIENDLY, action.label()]
 }
 
 #[zbus::proxy(
@@ -62,6 +64,9 @@ trait KGlobalAccel {
     #[zbus(name = "shortcutKeys")]
     fn shortcut_keys(&self, action_id: &[&str]) -> zbus::Result<Vec<(Vec<i32>,)>>;
 
+    #[zbus(name = "unregister")]
+    fn unregister(&self, component_unique: &str, action_unique: &str) -> zbus::Result<bool>;
+
     #[zbus(name = "getComponent")]
     fn get_component(
         &self,
@@ -83,28 +88,28 @@ trait Component {
     ) -> zbus::Result<()>;
 }
 
-/// Changes the running panel's binding. KGlobalAccel persists it across daemon
-/// restarts; startup deliberately respects that saved binding.
-pub fn rebind(spec: &str) -> Result<()> {
-    let combined = parse_shortcut(spec)?;
+/// Replaces every shortcut of `action` with `specs`, which may be empty.
+/// KGlobalAccel persists them across daemon restarts; startup deliberately
+/// respects those saved bindings.
+pub fn rebind(action: Action, specs: &[String]) -> Result<()> {
+    let keys = encode_all(specs)?;
     let conn = zbus::blocking::Connection::session()
         .context("Could not connect to the desktop session")?;
     let kga = KGlobalAccelProxyBlocking::new(&conn)?;
-    // Do not create an action owned by this temporary connection: the panel
-    // daemon must already own it and be listening for presses.
+    // Do not create an action owned by this temporary connection: the daemon
+    // must already own it and be listening for presses.
     kga.get_component(COMPONENT)
-        .context("Side panel unavailable. Start timetracker-panel.service and try again")?;
-    let action_id = [COMPONENT, ACTION, COMPONENT_FRIENDLY, ACTION_FRIENDLY];
-    let keys = [(encode_sequence(combined),)];
+        .context("Shortcut daemon unavailable. Start timetracker-shortcuts.service and try again")?;
+    let id = action_id(action);
     let previous = kga
-        .shortcut_keys(&action_id)
-        .context("Could not read the current side panel shortcut")?;
+        .shortcut_keys(&id)
+        .context("Could not read the current shortcuts")?;
     let applied = kga
-        .set_shortcut_keys(&action_id, &keys, SET_PRESENT | NO_AUTOLOADING)
-        .context("Could not change the side panel shortcut")?;
-    if applied != keys {
-        kga.set_shortcut_keys(&action_id, &previous, SET_PRESENT | NO_AUTOLOADING)
-            .context("Shortcut unavailable, and restoring the previous shortcut failed")?;
+        .set_shortcut_keys(&id, &keys, SET_PRESENT | NO_AUTOLOADING)
+        .context("Could not change the shortcuts")?;
+    if !same_keys(&applied, &keys) {
+        kga.set_shortcut_keys(&id, &previous, SET_PRESENT | NO_AUTOLOADING)
+            .context("Shortcut unavailable, and restoring the previous shortcuts failed")?;
         anyhow::bail!(
             "Shortcut unavailable. It may already be used by another application; try another combination"
         );
@@ -112,9 +117,37 @@ pub fn rebind(spec: &str) -> Result<()> {
     Ok(())
 }
 
-/// Spawns the background thread that registers the shortcut and forwards
+/// Whether `applied` holds exactly the `wanted` sequences, in any order.
+fn same_keys(applied: &[(Vec<i32>,)], wanted: &[(Vec<i32>,)]) -> bool {
+    applied.len() == wanted.len() && wanted.iter().all(|key| applied.contains(key))
+}
+
+/// Checks that `spec` is a shortcut that can be bound.
+pub fn validate(spec: &str) -> Result<()> {
+    parse_shortcut(spec).map(drop)
+}
+
+/// Whether two spellings are the same key combination, e.g. `Meta+U` and
+/// `super + u`.
+pub fn same_shortcut(a: &str, b: &str) -> bool {
+    matches!((parse_shortcut(a), parse_shortcut(b)), (Ok(a), Ok(b)) if a == b)
+}
+
+/// Encodes every shortcut for the wire, dropping repeats.
+fn encode_all(specs: &[String]) -> Result<Vec<(Vec<i32>,)>> {
+    let mut keys: Vec<(Vec<i32>,)> = Vec::new();
+    for spec in specs {
+        let key = (encode_sequence(parse_shortcut(spec)?),);
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    Ok(keys)
+}
+
+/// Spawns the background thread that registers the shortcuts and forwards
 /// presses to `sender`.
-pub fn spawn(sender: Sender<HotkeyEvent>, config: PanelConfig) -> Result<()> {
+pub fn spawn(sender: Sender<Action>, config: PanelConfig) -> Result<()> {
     std::thread::Builder::new()
         .name("kglobalaccel".into())
         .spawn(move || {
@@ -126,31 +159,58 @@ pub fn spawn(sender: Sender<HotkeyEvent>, config: PanelConfig) -> Result<()> {
     Ok(())
 }
 
-fn run(sender: Sender<HotkeyEvent>, config: &PanelConfig) -> Result<()> {
+fn run(sender: Sender<Action>, config: &PanelConfig) -> Result<()> {
     let conn =
         zbus::blocking::Connection::session().context("failed to connect to the session bus")?;
     let kga = KGlobalAccelProxyBlocking::new(&conn)
         .context("KGlobalAccel is unavailable (is kglobalacceld running?)")?;
 
-    let action_id = [COMPONENT, ACTION, COMPONENT_FRIENDLY, ACTION_FRIENDLY];
-    kga.do_register(&action_id)
-        .context("failed to register the component with KGlobalAccel")?;
+    // What the old single action was bound to, so a binding the user chose in
+    // System Settings is not lost to the new defaults.
+    let legacy_id = [
+        COMPONENT,
+        LEGACY_ACTION,
+        COMPONENT_FRIENDLY,
+        LEGACY_ACTION_FRIENDLY,
+    ];
+    let legacy_keys = kga.shortcut_keys(&legacy_id).unwrap_or_default();
+    // Removed before the new actions are bound, because it would otherwise
+    // still claim its key, and linger in System Settings.
+    let _ = kga.unregister(COMPONENT, LEGACY_ACTION);
 
-    let combined = parse_shortcut(&config.shortcut)?;
-    let keys = [(encode_sequence(combined),)];
+    for action in Action::ALL {
+        let id = action_id(action);
+        kga.do_register(&id)
+            .context("failed to register the component with KGlobalAccel")?;
 
-    // `SetPresent` marks the shortcut active. We deliberately do *not* pass
-    // `NoAutoloading`: with autoloading the daemon keeps a binding the user has
-    // customised in System Settings and only installs ours when the action has
-    // none yet. Either way it returns the binding actually in effect.
-    let applied = kga
-        .set_shortcut_keys(&action_id, &keys, SET_PRESENT)
-        .context("failed to set the global shortcut")?;
+        let wanted = encode_all(config.shortcuts(action))?;
 
-    // Also record our binding as the action's default, so it shows up in System
-    // Settings → Shortcuts and can be restored there.
-    kga.set_shortcut_keys(&action_id, &keys, IS_DEFAULT)
-        .context("failed to set the default shortcut")?;
+        // A binding that is already saved (maybe edited in System Settings)
+        // wins over the config, which only fills in an action with none.
+        let saved = kga.shortcut_keys(&id).unwrap_or_default();
+        let keys = if !saved.is_empty() {
+            saved
+        } else if action == Action::ToggleVisibility && !legacy_keys.is_empty() {
+            legacy_keys.clone()
+        } else {
+            wanted.clone()
+        };
+
+        let applied = kga
+            .set_shortcut_keys(&id, &keys, SET_PRESENT)
+            .context("failed to set the global shortcut")?;
+
+        // Also record our binding as the action's default, so it shows up in
+        // System Settings → Shortcuts and can be restored there.
+        kga.set_shortcut_keys(&id, &wanted, IS_DEFAULT)
+            .context("failed to set the default shortcut")?;
+
+        log::info!(
+            "global shortcuts for '{}' registered (active bindings: {})",
+            action.label(),
+            describe(&applied)
+        );
+    }
 
     let path = kga
         .get_component(COMPONENT)
@@ -161,18 +221,14 @@ fn run(sender: Sender<HotkeyEvent>, config: &PanelConfig) -> Result<()> {
         .build()
         .context("failed to build the component proxy")?;
 
-    log::info!(
-        "global shortcut '{}' registered (active binding: {})",
-        config.shortcut,
-        describe(&applied)
-    );
-
     let signals = component
         .receive_global_shortcut_pressed()
         .context("failed to subscribe to globalShortcutPressed")?;
     for signal in signals {
         let args = signal.args().context("failed to decode the signal")?;
-        if *args.action_unique() == ACTION && sender.send(HotkeyEvent::Toggle).is_err() {
+        if let Some(action) = Action::from_id(args.action_unique())
+            && sender.send(action).is_err()
+        {
             break;
         }
     }
@@ -300,10 +356,49 @@ mod tests {
     }
 
     #[test]
-    fn meta_u_is_the_default_binding() {
+    fn the_defaults_are_valid_bindings() {
         let default = PanelConfig::default();
 
-        assert_eq!(parse_shortcut(&default.shortcut).unwrap(), 0x1000_0055);
+        assert_eq!(
+            parse_shortcut(&default.toggle_visibility[0]).unwrap(),
+            0x1000_0055
+        );
+        assert_eq!(
+            parse_shortcut(&default.toggle_shape[0]).unwrap(),
+            0x1200_0055
+        );
+    }
+
+    #[test]
+    fn several_shortcuts_are_encoded_without_repeats() {
+        let specs = ["Meta+J", "Meta+F", "super + j"].map(String::from);
+        let keys = encode_all(&specs).unwrap();
+
+        assert_eq!(
+            keys,
+            vec![
+                (encode_sequence(0x1000_004a),),
+                (encode_sequence(0x1000_0046),)
+            ]
+        );
+        assert!(encode_all(&["Nope".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn applied_keys_are_compared_without_regard_to_order() {
+        let j = (encode_sequence(0x1000_004a),);
+        let f = (encode_sequence(0x1000_0046),);
+
+        assert!(same_keys(&[f.clone(), j.clone()], &[j.clone(), f.clone()]));
+        assert!(!same_keys(&[j.clone()], &[j, f]));
+        assert!(same_keys(&[], &[]));
+    }
+
+    #[test]
+    fn spellings_of_one_combination_are_the_same_shortcut() {
+        assert!(same_shortcut("Meta+U", " super + u "));
+        assert!(!same_shortcut("Meta+U", "Meta+J"));
+        assert!(!same_shortcut("Meta+U", "nonsense"));
     }
 
     #[test]

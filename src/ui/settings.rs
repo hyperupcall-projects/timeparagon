@@ -39,8 +39,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         appearance(state, metrics),
         heading("View layout", metrics),
         view_layout(state, metrics),
-        heading("Side panel", metrics),
-        side_panel(state, metrics),
+        heading("Keyboard shortcuts", metrics),
+        shortcuts(state, metrics),
         heading("Calendar view order", metrics),
         calendar_order(state, metrics),
         heading("Google Calendar", metrics),
@@ -241,42 +241,71 @@ fn layout_number<'a>(
     )
 }
 
-fn side_panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let mut input = text_input("e.g. Meta+U", &state.panel_shortcut_input).size(metrics.label());
-    let mut apply = button(
-        text(if state.panel_shortcut_busy {
-            "Applying…"
-        } else {
-            "Apply shortcut"
-        })
-        .size(metrics.label())
-        .center()
-        .width(Fill),
+fn shortcuts<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let mut section = column![
+        text("Global shortcuts. Each action can have several, and any of them triggers it. Combine Ctrl, Alt, Shift or Meta with a letter, number or named key (e.g. Space or F2).")
+            .size(metrics.label()).style(text::secondary),
+    ].spacing(metrics.spacing * 1.5);
+    for action in crate::panel::Action::ALL {
+        section = section.push(shortcut_action(state, action, metrics));
+    }
+    indent(section.into(), metrics)
+}
+
+fn shortcut_action<'a>(
+    state: &'a State,
+    action: crate::panel::Action,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let editor = &state.shortcut_editors[action.index()];
+    let bound = state.config.panel.shortcuts(action);
+
+    let mut section = column![
+        text(action.label()).size(metrics.label()),
+        text(action.description()).size(metrics.label()).style(text::secondary),
+    ]
+    .spacing(metrics.spacing);
+
+    if bound.is_empty() {
+        section = section.push(text("No shortcut").size(metrics.label()).style(text::secondary));
+    }
+    for (index, shortcut) in bound.iter().enumerate() {
+        let mut remove = button(text("Remove").size(metrics.label())).style(button::secondary);
+        if !editor.busy {
+            remove = remove.on_press(Message::ShortcutRemoved(action, index));
+        }
+        section = section.push(
+            row![text(shortcut.as_str()).size(metrics.label()).width(Fill), remove]
+                .spacing(metrics.spacing)
+                .align_y(Center),
+        );
+    }
+
+    let mut input = text_input("e.g. Meta+U", &editor.input).size(metrics.label());
+    let mut add = button(
+        text(if editor.busy { "Applying…" } else { "Add shortcut" })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
     )
     .width(Fill);
-    if !state.panel_shortcut_busy {
+    if !editor.busy {
         input = input
-            .on_input(Message::PanelShortcutChanged)
-            .on_submit(Message::PanelShortcutApply);
-        if !state.panel_shortcut_input.trim().is_empty() {
-            apply = apply.on_press(Message::PanelShortcutApply);
+            .on_input(move |value| Message::ShortcutInputChanged(action, value))
+            .on_submit(Message::ShortcutAdded(action));
+        if !editor.input.trim().is_empty() {
+            add = add.on_press(Message::ShortcutAdded(action));
         }
     }
-    let mut section = column![
-        field("New shortcut", input.into(), metrics),
-        text("Opens or hides the side panel. Default: Meta+U. Combine Ctrl, Alt, Shift or Meta with a letter, number or named key (e.g. Space or F2).")
-            .size(metrics.label()).style(text::secondary),
-        apply,
-    ].spacing(metrics.spacing);
-    if let Some(result) = &state.panel_shortcut_result {
+    section = section.push(field("New shortcut", input.into(), metrics)).push(add);
+
+    if let Some(result) = &editor.result {
         section = section.push(match result {
-            Ok(shortcut) => text(format!("Shortcut set to {shortcut}"))
-                .size(metrics.label())
-                .style(text::success),
+            Ok(message) => text(message).size(metrics.label()).style(text::success),
             Err(error) => text(error).size(metrics.label()).style(text::danger),
         });
     }
-    indent(section.into(), metrics)
+    section.into()
 }
 
 fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {

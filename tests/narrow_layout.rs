@@ -184,9 +184,11 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
         "Settings",
         // Appearance.
         "Theme",
-        // Side panel.
+        // Keyboard shortcuts.
+        "Toggle Visibility",
+        "Toggle Shape",
         "New shortcut",
-        "Apply shortcut",
+        "Add shortcut",
         "Calendar width (px)",
         "Time block width (px)",
         "Details width (px)",
@@ -879,7 +881,7 @@ fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Erro
     state.screen = Screen::Settings;
     state.calendar.connection = timetracker::calendar::Connection::SignedIn;
 
-    let mut ui = render(&state, Size::new(420.0, 1400.0));
+    let mut ui = render(&state, Size::new(420.0, 1800.0));
 
     let _ = ui.click("Resync calendar and tasks data")?;
 

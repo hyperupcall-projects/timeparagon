@@ -1,16 +1,37 @@
 //! TimeTracker: a calendar with alarms that stays out of the way.
 
-use timetracker::app;
+use timetracker::cli::{self, Mode};
+use timetracker::{app, dock, panel};
 
 /// The boot function the daemon starts from.
 type Boot = fn() -> (app::State, iced::Task<app::Message>);
 
 fn main() -> iced::Result {
-    // The same binary also hosts the dock strip, so the window can always
-    // start it without needing a second program installed beside it. The dock
-    // sets up its own logging.
-    if std::env::args().skip(1).any(|arg| arg == "--dock") {
-        if let Err(error) = timetracker::dock::run() {
+    let (mode, origin) = match cli::parse(std::env::args().skip(1)) {
+        Ok(cli::Action::Run { mode, origin }) => (mode, origin),
+        Ok(cli::Action::Help) => {
+            print!("{}", cli::HELP);
+            return Ok(());
+        }
+        Ok(cli::Action::Version) => {
+            println!("timetracker {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Err(error) => {
+            eprintln!("timetracker: {error}\nTry 'timetracker --help'.");
+            std::process::exit(2);
+        }
+    };
+
+    // The dock and the shortcut daemon are not iced programs, and set up
+    // their own logging.
+    let result = match mode {
+        Mode::Dock => Some(dock::run(origin)),
+        Mode::Daemon => Some(panel::run()),
+        Mode::Window | Mode::Sidebar => None,
+    };
+    if let Some(result) = result {
+        if let Err(error) = result {
             eprintln!("timetracker: {error:#}");
             std::process::exit(1);
         }
@@ -20,10 +41,7 @@ fn main() -> iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
         .init();
 
-    // The same binary is both the main window and the side panel; the switch
-    // is how `timetracker-panel` opens a panel instance of the real app.
-    let sidebar = std::env::args().skip(1).any(|arg| arg == "--sidebar");
-    let boot: Boot = if sidebar {
+    let boot: Boot = if mode == Mode::Sidebar {
         app::boot_sidebar
     } else {
         app::boot

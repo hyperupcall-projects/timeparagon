@@ -1,11 +1,14 @@
 //! TimeTracker: a calendar with alarms that stays out of the way.
 //!
-//! The library backs two thin binaries so the interface can
-//! be exercised by tests without a compositor:
+//! The library backs a single binary, `timetracker`, so the interface can be
+//! exercised by tests without a compositor. A flag picks what it runs (see
+//! [`cli`]):
 //!
-//! * `timetracker` — the main window (this crate's [`app`]).
-//! * `timetracker-panel` — the side-panel companion (see [`panel`]): a 200px,
-//!   left-anchored strip summoned with a global shortcut.
+//! * no flag — the main window (this crate's [`app`]);
+//! * `--sidebar` — the side panel, the full app in a wide edge strip;
+//! * `--dock` — the dock (see [`dock`]), a very thin strip of today;
+//! * `--daemon` — the shortcut daemon (see [`panel`]), which shows, hides and
+//!   switches between the panel and the dock.
 
 pub mod alarm;
 pub mod alarms;
@@ -13,12 +16,14 @@ pub mod app;
 pub mod audio;
 pub mod blocking;
 pub mod calendar;
+pub mod cli;
 pub mod config;
 pub mod config_sync;
 pub mod dock;
 pub mod hex;
 pub mod inbox;
 pub mod integrations;
+pub mod ipc;
 pub mod keep;
 pub mod notify;
 pub mod panel;

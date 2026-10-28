@@ -47,11 +47,13 @@ say() { printf '%s\n' "$*"; }
 # --- Stop and disable the service ------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user disable --now timetracker.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timetracker-shortcuts.service >/dev/null 2>&1 || true
     systemctl --user disable --now timetracker-panel.service >/dev/null 2>&1 || true
 fi
 
 # --- Remove installed files ------------------------------------------------
 rm -f "$config_home/systemd/user/timetracker.service"
+rm -f "$config_home/systemd/user/timetracker-shortcuts.service"
 rm -f "$config_home/systemd/user/timetracker-panel.service"
 rm -f "$data_home/applications/timetracker.desktop"
 rm -f "$data_home/icons/hicolor/512x512/apps/timetracker.png"

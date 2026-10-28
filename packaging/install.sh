@@ -2,9 +2,10 @@
 # Install TimeTracker as a desktop application.
 #
 # This builds the debug binary, drops it on your PATH, registers a desktop
-# entry and icon so it shows up in the application menu, and installs a
-# systemd *user* service so the daemon starts with your graphical
-# session.
+# entry and icon so it shows up in the application menu, and installs systemd
+# *user* services so the app and the shortcut daemon start with your graphical
+# session. There is one `timetracker` binary: the side panel, the dock and the
+# shortcut daemon are its --sidebar, --dock and --daemon modes.
 #
 # Everything lands under your home directory by default; nothing needs root.
 #
@@ -69,14 +70,12 @@ icon_dir=$data_home/icons/hicolor/512x512/apps
 unit_dir=$config_home/systemd/user
 
 binary=$bin_dir/timetracker
-panel_binary=$bin_dir/timetracker-panel
-dock_binary=$bin_dir/timetracker-dock
 
 say() { printf '%s\n' "$*"; }
 
 # --- Build -----------------------------------------------------------------
 if [ "$build" -eq 1 ]; then
-    say "Building debug binaries..."
+    say "Building the debug binary..."
     ( cd "$repo_root" && cargo build )
 fi
 
@@ -86,26 +85,14 @@ if [ ! -x "$built" ]; then
     exit 1
 fi
 
-built_panel=$repo_root/target/debug/timetracker-panel
-if [ ! -x "$built_panel" ]; then
-    echo "install.sh: $built_panel not found; run without --no-build" >&2
-    exit 1
-fi
-
-built_dock=$repo_root/target/debug/timetracker-dock
-if [ ! -x "$built_dock" ]; then
-    echo "install.sh: $built_dock not found; run without --no-build" >&2
-    exit 1
-fi
-
 # --- Install the binaries --------------------------------------------------
 mkdir -p "$bin_dir"
 install -m 0755 "$built" "$binary"
 say "Installed binary:  $binary"
-install -m 0755 "$built_panel" "$panel_binary"
-say "Installed binary:  $panel_binary"
-install -m 0755 "$built_dock" "$dock_binary"
-say "Installed binary:  $dock_binary"
+
+# Earlier versions installed separate panel and dock binaries. They are now
+# modes of the one binary (--sidebar, --dock, --daemon).
+rm -f "$bin_dir/timetracker-panel" "$bin_dir/timetracker-dock"
 
 # Google Keep uses this optional browser helper. Task sync uses Google APIs. Desktop
 # launchers do not inherit a shell's PATH or the checkout's working directory.
@@ -137,10 +124,16 @@ sed "s|@EXEC@|$binary|g" "$script_dir/timetracker.service.in" \
 chmod 0644 "$unit_dir/timetracker.service"
 say "Installed unit:    $unit_dir/timetracker.service"
 
-sed "s|@EXEC@|$panel_binary|g" "$script_dir/timetracker-panel.service.in" \
-    > "$unit_dir/timetracker-panel.service"
-chmod 0644 "$unit_dir/timetracker-panel.service"
-say "Installed unit:    $unit_dir/timetracker-panel.service"
+sed "s|@EXEC@|$binary|g" "$script_dir/timetracker-shortcuts.service.in" \
+    > "$unit_dir/timetracker-shortcuts.service"
+chmod 0644 "$unit_dir/timetracker-shortcuts.service"
+say "Installed unit:    $unit_dir/timetracker-shortcuts.service"
+
+# The shortcut daemon used to be the separate timetracker-panel.service.
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now timetracker-panel.service >/dev/null 2>&1 || true
+fi
+rm -f "$unit_dir/timetracker-panel.service"
 
 # --- Pin the panel with a KWin window rule --------------------------------
 # A Wayland client cannot position or raise its own window, so the panel is
@@ -198,14 +191,14 @@ if [ "$enable" -eq 1 ]; then
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload
         systemctl --user enable timetracker.service
-        systemctl --user enable timetracker-panel.service
-        systemctl --user restart timetracker-panel.service
+        systemctl --user enable timetracker-shortcuts.service
+        systemctl --user restart timetracker-shortcuts.service
         say "Enabled for the next graphical session: timetracker.service"
-        say "Enabled and restarted: timetracker-panel.service"
+        say "Enabled and restarted: timetracker-shortcuts.service"
     else
         say "systemctl not found; enable the units yourself with:"
-        say "  systemctl --user enable timetracker.service timetracker-panel.service"
-        say "  systemctl --user start timetracker-panel.service"
+        say "  systemctl --user enable timetracker.service timetracker-shortcuts.service"
+        say "  systemctl --user start timetracker-shortcuts.service"
     fi
 fi
 

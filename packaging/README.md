@@ -10,9 +10,23 @@ desktop session:
 - a systemd **user** service goes to
   `~/.config/systemd/user/timetracker.service` and is enabled so the timer
   daemon starts with your graphical session;
-- a second binary, `timetracker-panel`, and its service
-  `timetracker-panel.service` are installed too, so the side panel (below) is
-  ready and listening for its shortcut.
+- a second service, `timetracker-shortcuts.service`, runs
+  `timetracker --daemon` so the global shortcuts (below) are ready and
+  listening.
+
+There is a single `timetracker` binary. The side panel, the dock and the
+shortcut daemon are modes of it, chosen by a flag (`timetracker --help` lists
+them):
+
+| Command | What it runs |
+| --- | --- |
+| `timetracker` | The regular window |
+| `timetracker --sidebar` | The side panel: the full app in a wide strip down a screen edge |
+| `timetracker --dock` | The dock: a very thin strip of today along a screen edge |
+| `timetracker --daemon` | The background process that owns the global shortcuts |
+
+The installer removes the separate `timetracker-panel` and `timetracker-dock`
+binaries and the `timetracker-panel.service` that earlier versions installed.
 
 Nothing needs root; everything lives under your home directory.
 
@@ -28,7 +42,7 @@ packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 The installer does not launch the TimeTracker application. Open it from the
 application menu when ready; its service will start with your next graphical
 session. The installer restarts the background shortcut daemon,
-`timetracker-panel.service`, so the side-panel shortcut is ready immediately,
+`timetracker-shortcuts.service`, so the shortcuts are ready immediately,
 unless `--no-enable` is passed.
 
 Google Tasks and Calendar sync use the public Google APIs and require no
@@ -109,22 +123,35 @@ on the right rather than over the view: the window widens by `detail_width`
 beside the calendar or backlog. When the time block editor is open too, the
 details pane sits to the right of it. `detail_width` is the pane's default width.
 
-`Meta+U` opens **TimeTracker itself** as a slim panel — 200px wide by default —
-down the **left** edge of the screen. It is a separate instance of the real
-application, not a second, cut-down view: the same clock, calendar, todos and
-settings, just in a narrow window. Pressing `Meta+U` again closes it.
+`timetracker --sidebar` opens **TimeTracker itself** as a slim panel — 200px
+wide by default — down the **left** edge of the screen. It is a separate
+instance of the real application, not a second, cut-down view: the same clock,
+calendar, todos and settings, just in a narrow window.
 
-The shortcut is owned by `timetracker-panel`, a small daemon that does nothing
-but register the key through KDE's KGlobalAccel and start or stop the panel
-instance. To rebind it, open **Settings → Side panel** in TimeTracker, enter a
-combination such as `Meta+Shift+U` or `Ctrl+Alt+T`, and select **Apply shortcut**.
-The change takes effect immediately and KDE remembers it across restarts. The
-action also appears in KDE **System Settings → Shortcuts**. The daemon must be running for the shortcut to exist:
+### Shortcuts
+
+The shortcuts are owned by `timetracker --daemon`, a small process that does
+nothing but register the keys through KDE's KGlobalAccel and show, hide or
+reshape the panel and the dock. There are two actions:
+
+- **Toggle Visibility** (`Meta+U` by default) hides TimeTracker completely, as
+  the panel or as the dock. Pressed again, it brings back the same shape as it
+  was: the panel keeps running while hidden, so its tab, open panes and width
+  are all as you left them.
+- **Toggle Shape** (`Meta+Shift+U` by default) switches between the panel and
+  the dock. While TimeTracker is hidden it comes back in the other shape.
+
+Each action can have **several** shortcuts, and any of them triggers it. Open
+**Settings → Keyboard shortcuts**, type a combination such as `Meta+J` or
+`Ctrl+Alt+T` under the action, and select **Add shortcut**; **Remove** drops
+one. Changes take effect immediately and KDE remembers them across restarts.
+The actions also appear in KDE **System Settings → Shortcuts**. The daemon must
+be running for the shortcuts to exist:
 
 ```sh
-systemctl --user status timetracker-panel.service
-systemctl --user restart timetracker-panel.service
-journalctl --user -u timetracker-panel.service -f
+systemctl --user status timetracker-shortcuts.service
+systemctl --user restart timetracker-shortcuts.service
+journalctl --user -u timetracker-shortcuts.service -f
 ```
 
 Its settings live in the `[panel]` table of `~/.config/timetracker/config.toml`
@@ -139,9 +166,12 @@ side = "left"
 # Panel width in logical pixels. Height always fills the screen.
 width = 200
 
-# Global shortcut, as Modifier+Key. This is only the default: once registered
-# it also appears in System Settings -> Shortcuts, where it can be rebound.
-shortcut = "Meta+U"
+# Global shortcuts, as Modifier+Key. Any number per action. These are only the
+# defaults: once registered they also appear in System Settings -> Shortcuts,
+# where they can be rebound. The old single `shortcut = "Meta+U"` key is still
+# read as toggle_visibility.
+toggle_visibility = ["Meta+U"]
+toggle_shape = ["Meta+Shift+U"]
 ```
 
 ### Why a KWin window rule
@@ -177,17 +207,17 @@ If you would rather not use a window rule, the alternative is a
 cannot draw to one without the `iced_layershell` crate, which in turn needs
 `libxkbcommon-dev` at build time.
 
-To run the panel without installing it, build and launch the daemon directly:
+To run the shortcut daemon without installing it, launch it directly:
 
 ```sh
-cargo run --release --bin timetracker-panel
+cargo run --release -- --daemon
 ```
 
 ## Dock strip
 
-`timetracker-dock` is a much thinner companion than the panel: a 10px line
-down the left edge of the screen showing today. It is a real
-`zwlr_layer_shell_v1` surface, so it needs no window rule. KDE Plasma, Sway,
+`timetracker --dock` is a much thinner companion than the panel: a thin line
+(the **Dock width** setting, 10px by default) down the left edge of the screen
+showing today. It is a real `zwlr_layer_shell_v1` surface, so it needs no window rule. KDE Plasma, Sway,
 Hyprland, niri and COSMIC provide that protocol; GNOME does not.
 
 - It draws only the leftmost column of the day view, so where events overlap
@@ -206,13 +236,12 @@ from and closes the dock. The dock is told where it came from with
 `--from window|sidebar`, which defaults to `window`.
 
 ```sh
-cargo run --release --bin timetracker-dock
-timetracker --dock   # the same thing, from the main binary
+timetracker --dock
+cargo run --release -- --dock   # from a checkout
 ```
 
-`install.sh` installs `timetracker-dock` beside the other binaries, and the
-window's button starts the dock through `timetracker --dock`, so it works even
-if the separate binary is missing.
+The **Toggle Shape** shortcut switches between the panel and the dock without
+going through the menu.
 
 It reads `$XDG_CONFIG_HOME/timetracker/dock.toml` at start-up; every key is
 optional:

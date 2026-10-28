@@ -54,6 +54,7 @@ use smithay_client_toolkit::{
 
 use crate::calendar::{self, Snapshot, Store};
 use crate::config::Config;
+use crate::ipc;
 use crate::panel::Side;
 use crate::theme::Catalog;
 
@@ -66,16 +67,22 @@ const BTN_LEFT: u32 = 0x110;
 /// How often the "now" line moves and the day rolls over.
 const TICK: Duration = Duration::from_secs(30);
 
-/// Runs the dock until its surface is closed.
-pub fn run() -> Result<()> {
+/// Runs the dock until its surface is closed or it is told to hide.
+///
+/// `origin` is what the dock replaced, which its back button returns to.
+pub fn run(origin: launch::Origin) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timetracker=info"))
         .init();
 
-    let origin = launch::Origin::from_args(std::env::args().skip(1));
+    anyhow::ensure!(
+        !ipc::is_visible(ipc::DOCK),
+        "the dock is already running"
+    );
+
     let app_config = Config::load();
     let dock_config = config::DockConfig::load(&app_config.views);
     log::info!(
-        "timetracker-dock starting (side={:?}, width={}px)",
+        "dock starting (side={:?}, width={}px)",
         dock_config.side,
         dock_config.width
     );
@@ -124,6 +131,18 @@ pub fn run() -> Result<()> {
 
     let mut event_loop: EventLoop<Dock> = EventLoop::try_new()?;
     let handle = event_loop.handle();
+
+    // Listening only now means the shortcut daemon can take an answer to mean
+    // the strip is really going to appear.
+    let (hide_tx, hide_rx) = channel::channel::<()>();
+    spawn_ipc(hide_tx)?;
+    handle
+        .insert_source(hide_rx, |event, _, dock| {
+            if let channel::Event::Msg(()) = event {
+                dock.exit = true;
+            }
+        })
+        .map_err(|error| anyhow!("could not listen for the hide command: {error}"))?;
 
     let (snapshots_tx, snapshots_rx) = channel::channel::<Result<Snapshot, String>>();
     let wake = store
@@ -178,10 +197,45 @@ pub fn run() -> Result<()> {
         })
         .map_err(|error| anyhow!("could not listen for syncs: {error}"))?;
 
+    // The socket file is left behind on purpose: a dock started straight
+    // after this one was hidden has already replaced it, and an unanswered
+    // socket reads as "not running".
     while !dock.exit {
         event_loop.dispatch(None, &mut dock)?;
     }
 
+    Ok(())
+}
+
+/// Answers the shortcut daemon: `status` says the strip is up, and `hide`
+/// makes the dock quit.
+fn spawn_ipc(hide: channel::Sender<()>) -> Result<()> {
+    let listener = ipc::bind(ipc::DOCK)?;
+    let closing = std::sync::atomic::AtomicBool::new(false);
+
+    std::thread::Builder::new()
+        .name("dock-ipc".into())
+        .spawn(move || {
+            let result = ipc::serve(listener, |command| match command {
+                "hide" => {
+                    closing.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = hide.send(());
+                    ipc::OK.to_owned()
+                }
+                "status" if closing.load(std::sync::atomic::Ordering::Relaxed) => {
+                    ipc::HIDDEN.to_owned()
+                }
+                "status" => ipc::VISIBLE.to_owned(),
+                other => {
+                    log::warn!("unknown dock command: {other:?}");
+                    String::new()
+                }
+            });
+            if let Err(error) = result {
+                log::error!("dock IPC listener stopped: {error:#}");
+            }
+        })
+        .context("failed to spawn the dock IPC listener")?;
     Ok(())
 }
 

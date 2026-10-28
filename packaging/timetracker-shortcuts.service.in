@@ -1,14 +1,15 @@
 [Unit]
-Description=TimeTracker side-panel daemon
-# Owns the global shortcut (Meta+U by default) and maps the 200px strip on the
-# left edge when it fires. It is Wayland-only: a layer surface needs a
+Description=TimeTracker shortcut daemon
+# Owns the global shortcuts (Toggle Visibility, Meta+U by default, and Toggle
+# Shape, Meta+Shift+U) and shows, hides and switches the side panel and the
+# dock when they fire. The dock is Wayland-only: a layer surface needs a
 # compositor that speaks zwlr_layer_shell_v1 (KWin does).
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=@EXEC@
+ExecStart=@EXEC@ --daemon
 Restart=on-failure
 RestartSec=2
 

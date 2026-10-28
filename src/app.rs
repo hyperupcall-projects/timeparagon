@@ -1,12 +1,11 @@
 //! State, messages and the update loop.
 
-use std::io::Read;
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result as AnyhowResult};
+use anyhow::Result as AnyhowResult;
 
 use iced::keyboard::{self, Key};
 use iced::widget::text_editor;
@@ -119,7 +118,18 @@ pub struct Sidebar {
     pub side: panel::Side,
 }
 
-/// A command sent from the panel daemon to the panel process over its IPC
+/// The state of one action's row in the shortcut settings.
+#[derive(Debug, Default)]
+pub struct ShortcutEditor {
+    /// What has been typed into the "add" box.
+    pub input: String,
+    /// A change is being applied.
+    pub busy: bool,
+    /// How the last change went.
+    pub result: Option<Result<String, String>>,
+}
+
+/// A command sent from the shortcut daemon to the panel process over its IPC
 /// socket, telling it to show or hide its window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelCommand {
@@ -194,9 +204,11 @@ pub struct State {
     /// The last thing that went wrong with a sound, shown in settings.
     pub audio_error: Option<String>,
 
-    pub panel_shortcut_input: String,
-    pub panel_shortcut_busy: bool,
-    pub panel_shortcut_result: Option<Result<String, String>>,
+    /// The "add a shortcut" boxes of the settings page, one per [`panel::Action`].
+    pub shortcut_editors: [ShortcutEditor; 2],
+    /// Whether the panel window is on screen, as the shortcut daemon sees it
+    /// when it asks. Only meaningful when this process is the side panel.
+    pub panel_visible: Arc<AtomicBool>,
     /// Keep empty or incomplete numbers editable until they are submitted.
     pub view_layout_input: Option<(LayoutField, String)>,
     /// Whether the window has been widened for the event details pane. Kept so
@@ -266,9 +278,11 @@ pub enum Message {
     BorderRadiusChanged(f32),
     ViewLayoutInputChanged(LayoutField, String),
     ViewLayoutInputSubmitted(LayoutField),
-    PanelShortcutChanged(String),
-    PanelShortcutApply,
-    PanelShortcutApplied(Result<String, String>),
+    ShortcutInputChanged(panel::Action, String),
+    ShortcutAdded(panel::Action),
+    ShortcutRemoved(panel::Action, usize),
+    /// The shortcuts of an action were applied, or could not be.
+    ShortcutsApplied(panel::Action, Result<Vec<String>, String>),
 
     /// A sound finished rendering and is ready to hand to PipeWire.
     SoundRendered(Result<Pcm, String>, PlaySpec),
@@ -478,9 +492,8 @@ impl State {
             alarm_active: false,
             audio: Audio::new(),
             audio_error: None,
-            panel_shortcut_input: String::new(),
-            panel_shortcut_busy: false,
-            panel_shortcut_result: None,
+            shortcut_editors: Default::default(),
+            panel_visible: Arc::new(AtomicBool::new(true)),
             view_layout_input: None,
             details_pane_open: false,
             save_queued: false,
@@ -630,15 +643,19 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
     let (tx, rx) = mpsc::channel();
     state.panel_command_rx = Some(rx);
 
-    if let Some(socket_path) = crate::panel::panel_socket_path() {
-        std::thread::Builder::new()
-            .name("panel-ipc".into())
-            .spawn(move || {
-                if let Err(error) = panel_ipc_listener(socket_path, tx) {
-                    log::error!("panel IPC listener stopped: {error:#}");
-                }
-            })
-            .expect("failed to spawn the panel IPC listener");
+    match crate::ipc::bind(crate::ipc::SIDEBAR) {
+        Ok(listener) => {
+            let visible = Arc::clone(&state.panel_visible);
+            std::thread::Builder::new()
+                .name("panel-ipc".into())
+                .spawn(move || {
+                    if let Err(error) = panel_ipc_listener(listener, tx, visible) {
+                        log::error!("panel IPC listener stopped: {error:#}");
+                    }
+                })
+                .expect("failed to spawn the panel IPC listener");
+        }
+        Err(error) => log::error!("panel IPC is unavailable: {error:#}"),
     }
 
     state.main_size = Size::new(state.calendar_width() + state.screen_margin(), PANEL_FILL);
@@ -1004,30 +1021,63 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::Dismiss => dismiss(state),
 
-        Message::PanelShortcutChanged(value) => {
-            state.panel_shortcut_input = value;
-            state.panel_shortcut_result = None;
+        Message::ShortcutInputChanged(action, value) => {
+            let editor = &mut state.shortcut_editors[action.index()];
+            editor.input = value;
+            editor.result = None;
             Task::none()
         }
 
-        Message::PanelShortcutApply => {
-            if state.panel_shortcut_busy || state.panel_shortcut_input.trim().is_empty() {
+        Message::ShortcutAdded(action) => {
+            let editor = &mut state.shortcut_editors[action.index()];
+            let spec = editor.input.trim().to_owned();
+            if editor.busy || spec.is_empty() {
                 return Task::none();
             }
-            state.panel_shortcut_busy = true;
-            state.panel_shortcut_result = None;
-            let shortcut = state.panel_shortcut_input.trim().to_owned();
-            blocking::run(move || {
-                panel::rebind(&shortcut).map_err(|error| format!("{error:#}"))?;
-                Ok(shortcut)
-            })
-            .map(Message::PanelShortcutApplied)
+            let mut shortcuts = state.config.panel.shortcuts(action).to_vec();
+            let problem = if let Err(error) = panel::validate(&spec) {
+                Some(format!("{error:#}"))
+            } else if shortcuts.iter().any(|known| panel::same_shortcut(known, &spec)) {
+                Some(format!("{spec} is already a {} shortcut", action.label()))
+            } else {
+                None
+            };
+            if let Some(problem) = problem {
+                editor.result = Some(Err(problem));
+                return Task::none();
+            }
+            shortcuts.push(spec);
+            apply_shortcuts(state, action, shortcuts)
         }
 
-        Message::PanelShortcutApplied(result) => {
-            state.panel_shortcut_busy = false;
-            state.panel_shortcut_result = Some(result);
-            Task::none()
+        Message::ShortcutRemoved(action, index) => {
+            let mut shortcuts = state.config.panel.shortcuts(action).to_vec();
+            if state.shortcut_editors[action.index()].busy || index >= shortcuts.len() {
+                return Task::none();
+            }
+            shortcuts.remove(index);
+            apply_shortcuts(state, action, shortcuts)
+        }
+
+        Message::ShortcutsApplied(action, result) => {
+            let editor = &mut state.shortcut_editors[action.index()];
+            editor.busy = false;
+            match result {
+                Ok(shortcuts) => {
+                    editor.input.clear();
+                    editor.result = Some(Ok(if shortcuts.is_empty() {
+                        format!("{} has no shortcut", action.label())
+                    } else {
+                        format!("{} is {}", action.label(), shortcuts.join(", "))
+                    }));
+                    state.config.panel.set_shortcuts(action, shortcuts);
+                    queue_save(state)
+                }
+                Err(error) => {
+                    editor.result = Some(Err(error));
+                    Task::none()
+                }
+            }
         }
 
         Message::ViewLayoutInputChanged(field, input) => {
@@ -1692,6 +1742,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // The panel process stays up with its window hidden, so it can be
             // brought back; the regular window just quits.
             state.panel_expected_close = state.sidebar.is_some();
+            state.panel_visible.store(false, Ordering::Relaxed);
             window::close(id)
         }
 
@@ -2829,6 +2880,20 @@ fn dismiss(state: &mut State) -> Task<Message> {
 /// would be a config write per pixel too. The flag turns on a subscription in
 /// [`subscription`] that fires the write once things have settled, and edits
 /// made while it is pending are all captured by that one write.
+/// Binds `shortcuts` to `action`. The config only takes them once the desktop
+/// has accepted them, so the settings never list a key that is not bound.
+fn apply_shortcuts(state: &mut State, action: panel::Action, shortcuts: Vec<String>) -> Task<Message> {
+    let editor = &mut state.shortcut_editors[action.index()];
+    editor.busy = true;
+    editor.result = None;
+
+    blocking::run(move || {
+        panel::rebind(action, &shortcuts).map_err(|error| format!("{error:#}"))?;
+        Ok(shortcuts)
+    })
+    .map(move |result| Message::ShortcutsApplied(action, result))
+}
+
 pub(crate) fn queue_save(state: &mut State) -> Task<Message> {
     state.save_queued = true;
 
@@ -2965,37 +3030,33 @@ fn launch_width(monitor_width: f32) -> f32 {
 
 /// Listens on the panel IPC socket and forwards show/hide commands to the
 /// main thread via `tx`. Runs in a background thread spawned by `boot_sidebar`.
-fn panel_ipc_listener(socket_path: PathBuf, tx: mpsc::Sender<PanelCommand>) -> AnyhowResult<()> {
-    // Remove any stale socket from a previous run.
-    let _ = std::fs::remove_file(&socket_path);
+fn panel_ipc_listener(
+    listener: UnixListener,
+    tx: mpsc::Sender<PanelCommand>,
+    visible: Arc<AtomicBool>,
+) -> AnyhowResult<()> {
+    log::info!("panel IPC socket listening");
 
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("failed to bind panel socket at {}", socket_path.display()))?;
-
-    log::info!("panel IPC socket listening at {}", socket_path.display());
-
-    for stream in listener.incoming() {
-        let mut stream = stream.context("failed to accept panel IPC connection")?;
-        let mut buffer = [0u8; 16];
-        match stream.read(&mut buffer) {
-            Ok(0) => continue, // client disconnected without sending
-            Ok(n) => {
-                let command = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
-                match command.as_str() {
-                    "show" => {
-                        let _ = tx.send(PanelCommand::Show);
-                    }
-                    "hide" => {
-                        let _ = tx.send(PanelCommand::Hide);
-                    }
-                    _ => log::warn!("unknown panel IPC command: {command:?}"),
-                }
-            }
-            Err(error) => log::warn!("failed to read panel IPC command: {error}"),
+    crate::ipc::serve(listener, |command| match command {
+        "show" => {
+            // Answered from here rather than from the window, so that a
+            // `status` straight afterwards is already right.
+            visible.store(true, Ordering::Relaxed);
+            let _ = tx.send(PanelCommand::Show);
+            crate::ipc::OK.to_owned()
         }
-    }
-
-    Ok(())
+        "hide" => {
+            visible.store(false, Ordering::Relaxed);
+            let _ = tx.send(PanelCommand::Hide);
+            crate::ipc::OK.to_owned()
+        }
+        "status" if visible.load(Ordering::Relaxed) => crate::ipc::VISIBLE.to_owned(),
+        "status" => crate::ipc::HIDDEN.to_owned(),
+        other => {
+            log::warn!("unknown panel IPC command: {other:?}");
+            String::new()
+        }
+    })
 }
 
 #[cfg(test)]
@@ -3195,6 +3256,44 @@ mod tests {
         let state = State::new(config, Catalog::built_in());
 
         assert_eq!(state.notepad.text(), "remember the milk");
+    }
+
+    #[test]
+    fn a_bad_or_repeated_shortcut_is_refused_without_touching_the_desktop() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let action = panel::Action::ToggleVisibility;
+
+        for input in ["nonsense", "super + u"] {
+            let _ = update(&mut state, Message::ShortcutInputChanged(action, input.into()));
+            let _ = update(&mut state, Message::ShortcutAdded(action));
+
+            let editor = &state.shortcut_editors[action.index()];
+            assert!(!editor.busy, "{input:?} was sent to the desktop");
+            assert!(matches!(editor.result, Some(Err(_))), "{input:?}");
+        }
+        assert_eq!(state.config.panel.toggle_visibility, ["Meta+U"]);
+    }
+
+    #[test]
+    fn an_action_keeps_every_shortcut_that_was_applied() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let action = panel::Action::ToggleVisibility;
+        let both = vec!["Meta+J".to_owned(), "Meta+F".to_owned()];
+
+        let _ = update(&mut state, Message::ShortcutsApplied(action, Ok(both.clone())));
+
+        assert_eq!(state.config.panel.toggle_visibility, both);
+        assert_eq!(
+            state.config.panel.toggle_shape,
+            panel::PanelConfig::default().toggle_shape
+        );
+        assert!(state.save_queued);
+
+        let _ = update(
+            &mut state,
+            Message::ShortcutsApplied(action, Err("taken".into())),
+        );
+        assert_eq!(state.config.panel.toggle_visibility, both);
     }
 
     #[test]

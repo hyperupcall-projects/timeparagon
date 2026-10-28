@@ -6,7 +6,7 @@
 //! "back" button can return there.
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
 
 use anyhow::{Context, Result};
 
@@ -31,7 +31,7 @@ impl Origin {
         }
     }
 
-    fn parse(name: &str) -> Option<Self> {
+    pub fn parse(name: &str) -> Option<Self> {
         match name {
             "window" => Some(Self::Window),
             "sidebar" => Some(Self::Sidebar),
@@ -46,43 +46,36 @@ impl Origin {
             Self::Sidebar => "Open the side panel",
         }
     }
-
-    /// Reads `--from <origin>` or `--from=<origin>` from the arguments.
-    pub fn from_args(args: impl IntoIterator<Item = String>) -> Self {
-        let mut args = args.into_iter();
-        while let Some(arg) = args.next() {
-            let value = if arg == FROM_FLAG {
-                args.next()
-            } else {
-                arg.strip_prefix(&format!("{FROM_FLAG}="))
-                    .map(str::to_owned)
-            };
-            if let Some(origin) = value.as_deref().and_then(Self::parse) {
-                return origin;
-            }
-        }
-        Self::default()
-    }
 }
 
-/// The switch that makes the main binary run the dock instead of the window.
+/// The switch that makes the main binary run the dock.
 pub const DOCK_FLAG: &str = "--dock";
+
+/// The switch that makes the main binary run the side panel.
+pub const SIDEBAR_FLAG: &str = "--sidebar";
 
 /// Starts the dock. The caller is expected to put its own window away once
 /// this succeeds.
 ///
 /// The dock is the running program itself with [`DOCK_FLAG`], which is always
-/// there, whatever was installed. Only a caller that is not the main binary
-/// has to go looking for it.
-pub fn open_dock(origin: Origin) -> Result<()> {
+/// there, whatever was installed.
+pub fn open_dock(origin: Origin) -> Result<Child> {
     let exe = main_binary()?;
     Command::new(&exe)
         .arg(DOCK_FLAG)
         .arg(FROM_FLAG)
         .arg(origin.name())
         .spawn()
-        .with_context(|| format!("failed to run {}", exe.display()))?;
-    Ok(())
+        .with_context(|| format!("failed to run {}", exe.display()))
+}
+
+/// Starts a side panel process, which opens its window straight away.
+pub fn open_sidebar() -> Result<Child> {
+    let exe = main_binary()?;
+    Command::new(&exe)
+        .arg(SIDEBAR_FLAG)
+        .spawn()
+        .with_context(|| format!("failed to run {}", exe.display()))
 }
 
 /// Brings back what the dock replaced. The dock exits afterwards.
@@ -101,19 +94,15 @@ pub fn close_dock(origin: Origin) -> Result<()> {
             if crate::panel::show_panel().is_ok() {
                 return Ok(());
             }
-            let exe = main_binary()?;
-            Command::new(&exe)
-                .arg("--sidebar")
-                .spawn()
-                .with_context(|| format!("failed to run {}", exe.display()))?;
+            open_sidebar()?;
             Ok(())
         }
     }
 }
 
-/// The main `timetracker` binary: this very program when that is what is
-/// running, and otherwise the one installed beside it.
-fn main_binary() -> Result<PathBuf> {
+/// The `timetracker` binary: this very program when that is what is running,
+/// and otherwise the one installed beside it.
+pub(crate) fn main_binary() -> Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && exe.file_stem().is_some_and(|stem| stem == "timetracker")
     {
@@ -147,37 +136,20 @@ fn find_binary(name: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
-    fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|arg| (*arg).to_owned()).collect()
-    }
-
     #[test]
     fn the_origin_defaults_to_the_window() {
-        assert_eq!(Origin::from_args(args(&[])), Origin::Window);
+        assert_eq!(Origin::default(), Origin::Window);
     }
 
     #[test]
-    fn the_origin_is_read_in_both_spellings() {
-        assert_eq!(
-            Origin::from_args(args(&["--from", "sidebar"])),
-            Origin::Sidebar
-        );
-        assert_eq!(
-            Origin::from_args(args(&["--from=sidebar"])),
-            Origin::Sidebar
-        );
-        assert_eq!(Origin::from_args(args(&["--from=window"])), Origin::Window);
-    }
-
-    #[test]
-    fn an_unknown_origin_falls_back_to_the_window() {
-        assert_eq!(Origin::from_args(args(&["--from=moon"])), Origin::Window);
+    fn an_unknown_origin_is_not_parsed() {
+        assert_eq!(Origin::parse("moon"), None);
     }
 
     #[test]
     fn what_the_dock_is_told_is_what_it_reads_back() {
         for origin in [Origin::Window, Origin::Sidebar] {
-            assert_eq!(Origin::from_args(args(&[FROM_FLAG, origin.name()])), origin);
+            assert_eq!(Origin::parse(origin.name()), Some(origin));
         }
     }
 }
