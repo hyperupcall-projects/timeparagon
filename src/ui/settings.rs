@@ -1,9 +1,10 @@
 //! The settings tab and the timer-hits-zero menu.
 
+use iced::font::Weight::{self, Black};
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };
-use iced::{Center, Element, Fill, Length};
+use iced::{Center, Element, Fill, Font, Length};
 
 use crate::app::{LayoutField, Message, State};
 use crate::calendar;
@@ -77,7 +78,13 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
-    text(label).size(metrics.label() + 1.0).into()
+    text(label)
+        .size(metrics.label() + 4.0)
+        .font(Font {
+            weight: Weight::Black,
+            ..Font::DEFAULT
+        })
+        .into()
 }
 
 /// A labelled row that stacks vertically once there is no room for two
@@ -187,20 +194,51 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     column![
-        layout_number("Calendar width (px)", LayoutField::CalendarWidth, state, metrics),
-        layout_number("Time block width (px)", LayoutField::TimeBlockWidth, state, metrics),
-        layout_number("Details width (px)", LayoutField::DetailWidth, state, metrics),
-        layout_number("Screen margin (px, 0–30)", LayoutField::ScreenMargin, state, metrics),
-        layout_number("Border radius (px, 0–30)", LayoutField::BorderRadius, state, metrics),
-        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel and the top and bottom of a side dock from their screen edge.")
-            .size(metrics.label()).style(text::secondary),
-    ].spacing(metrics.spacing).into()
+        text("Change the appearance of the application and its panels.")
+            .size(metrics.label())
+            .style(text::secondary),
+        layout_number(
+            "Calendar dday width (px)",
+            LayoutField::CalendarWidth,
+            state,
+            metrics
+        ),
+        layout_number(
+            "Time block panel width (px)",
+            LayoutField::TimeBlockWidth,
+            state,
+            metrics
+        ),
+        layout_number(
+            "Task details width (px)",
+            LayoutField::DetailWidth,
+            state,
+            metrics
+        ),
+        layout_number(
+            "Screen margin (px, 0–30)",
+            LayoutField::ScreenMargin,
+            state,
+            metrics
+        ),
+        layout_number(
+            "Border radius (px, 0–30)",
+            LayoutField::BorderRadius,
+            state,
+            metrics
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .into()
 }
 
 fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let views = &state.config.views;
 
     column![
+        text("Change the appearance of the dock.")
+            .size(metrics.label())
+            .style(text::secondary),
         choice(
             "Screen edge",
             crate::config::DockSide::ALL.to_vec(),
@@ -208,7 +246,12 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             Message::DockSideSelected,
             metrics,
         ),
-        layout_number("Dock width (px, 2–40)", LayoutField::DockWidth, state, metrics),
+        layout_number(
+            "Dock width (px, 2–40)",
+            LayoutField::DockWidth,
+            state,
+            metrics
+        ),
         layout_number(
             "Left/right margin (px, 0–100)",
             LayoutField::DockMargin,
@@ -240,10 +283,7 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             views.dock_border_inner_color,
             state,
             metrics,
-        ),
-        text("The dock can sit on the left, right, top or bottom edge. The dock margin is the gap from the left and right screen edges: on a top or bottom dock it is the space at each end, and on a side dock it is the gap between the strip and the edge it hugs. The two borders are drawn inside the strip, outermost first, so a dark inner border still shows on a white background and a light outer border still shows on a black one. A border width of 0 hides that layer. Border colors are hex values such as #FFFFFF or #000000. Changes apply the next time the dock opens.")
-            .size(metrics.label())
-            .style(text::secondary),
+        )
     ]
     .spacing(metrics.spacing)
     .into()
@@ -253,6 +293,9 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let views = &state.config.views;
 
     column![
+        text("Update the borders of the dock and panel.")
+            .size(metrics.label())
+            .style(text::secondary),
         layout_number(
             "Outer border (first layer, px, 0–5)",
             LayoutField::PanelBorderOuterWidth,
@@ -278,10 +321,7 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             views.panel_border_inner_color,
             state,
             metrics,
-        ),
-        text("The two borders are drawn inside the side panel, outermost first, so a dark inner border still shows on a white background and a light outer border still shows on a black one. A border width of 0 hides that layer. Border colors are hex values such as #FFFFFF or #000000. Changes apply the next time the panel opens.")
-            .size(metrics.label())
-            .style(text::secondary),
+        )
     ]
     .spacing(metrics.spacing)
     .into()
@@ -361,10 +401,7 @@ fn restart<'a>(metrics: &Metrics) -> Element<'a, Message> {
                 .width(Fill),
         )
         .width(Fill)
-        .on_press(Message::RestartRequested),
-        text("Saves, quits, and starts again from the installed binary, as the same panel, dock or window. The shortcut daemon is restarted too.")
-            .size(metrics.label())
-            .style(text::secondary),
+        .on_press(Message::RestartRequested)
     ]
     .spacing(metrics.spacing)
     .into()
@@ -396,7 +433,7 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics,
         ))
         .push(
-            text("Desktop default lets the desktop pop the window in. Fade in ramps its opacity over the duration, in and out, and Instant shows it at once. These apply to the dock and the side panel, the next time either appears. On the side panel they need KDE's KWin.")
+            text("Customize the app's transition effects for KDE.")
                 .size(metrics.label())
                 .style(text::secondary),
         )
@@ -584,6 +621,9 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let connected = state.calendar.is_signed_in();
 
     let mut section = column![
+    text("Create a Desktop OAuth client in Google Cloud; enable the Calendar API, Tasks API, Drive API, and the Gmail API. Allow http://127.0.0.1 as a redirect.")
+        .size((metrics.label() - 1.0).max(10.0))
+        .style(text::secondary),
         field(
             "OAuth client ID",
             text_input("Desktop client ID", &settings.client_id)
@@ -600,10 +640,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .size(metrics.label())
                 .into(),
             metrics,
-        ),
-        text("Create a Desktop OAuth client in Google Cloud, enable the Calendar API and the Tasks API, and allow http://127.0.0.1 as a redirect. Reconnect after enabling Tasks so they can be read and ticked off, and so events can be dragged to a new time. To turn Gmail links pasted into a new task into titles, also enable the Gmail API and reconnect to grant read-only access to Gmail.")
-            .size((metrics.label() - 1.0).max(10.0))
-            .style(text::secondary),
+        )
     ]
     .spacing(metrics.spacing);
 
@@ -915,6 +952,11 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
     section = section.push(heading("TimeSlay colors", metrics));
+    section = section.push(
+        text("Change the color of different types of events that is written to the calendar")
+            .size(metrics.label())
+            .style(text::secondary),
+    );
     section = section.push(field(
         "Time Blocks",
         kind_color_picker(
@@ -938,7 +980,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         kind_color_picker(settings.habit_color, Message::HabitColorPicked, metrics),
         metrics,
     ));
-    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks, scheduled tasks and habits can each be given a color of their own; the color is also written to Google. The Inbox, Triaged, Time Blocked and Backlog lists are created on first use if needed; they are the only task lists the app manages. New tasks added from the Inbox tab go to the Inbox list. Triaging a task checks the required fields and moves it to the Triaged list; time-blocking or scheduling it moves it to the Time Blocked list; moving it to the backlog parks it on the Backlog list. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM or DUE: YYYY-MM-DD for a day only. A task's clock time comes from its Calendar-backed schedule, never from its notes. Events and time blocks repeat from the same plain-language controls in their New event and details panels. Habits live on the TimeSlay calendar as recurring events and are edited from the Habits tab with those same controls. A habit can also be started from the New event popup on the calendar. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }
@@ -981,7 +1022,7 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let mut section = column![
         text("Gmail").size(metrics.label()),
-        text("Connect every Google account whose mail you link to. When a Gmail link is pasted into a new task, each account is checked to find the one that has the message. Accounts are asked for read-only access to Gmail and share the OAuth client above. The Google Calendar account is checked too.")
+        text("Use to fetch the title and description of Gmail emails from their URL")
             .size(small)
             .style(text::secondary),
     ]

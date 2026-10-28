@@ -420,7 +420,7 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
                 .into(),
             metrics,
         ),
-        text("Create a public access token (pk.) in your Mapbox account. It is used to search for places and to work out how long a trip takes.")
+        text("Create a public access token from your Mapbox account. It is used to search for places and to calculate trip durations.")
             .size((metrics.label() - 1.0).max(10.0))
             .style(text::secondary),
         super::settings::choice(
