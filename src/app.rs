@@ -64,6 +64,7 @@ pub enum LayoutField {
     ScreenMargin,
     BorderRadius,
     DockWidth,
+    DockMargin,
     DockBorderOuterWidth,
     DockBorderInnerWidth,
     FadeDuration,
@@ -78,6 +79,7 @@ impl LayoutField {
             Self::ScreenMargin => state.config.views.margin(),
             Self::BorderRadius => state.config.views.border_radius(),
             Self::DockWidth => state.config.views.dock_width(),
+            Self::DockMargin => state.config.views.dock_margin(),
             Self::DockBorderOuterWidth => state.config.views.dock_border_outer_width(),
             Self::DockBorderInnerWidth => state.config.views.dock_border_inner_width(),
             Self::FadeDuration => state.config.views.fade_duration_ms() as f32,
@@ -92,6 +94,7 @@ impl LayoutField {
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
             ),
+            Self::DockMargin => (0.0, config::ViewSettings::MAX_DOCK_MARGIN),
             Self::DockBorderOuterWidth | Self::DockBorderInnerWidth => {
                 (0.0, config::ViewSettings::MAX_DOCK_BORDER_WIDTH)
             }
@@ -111,6 +114,7 @@ impl LayoutField {
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
             Self::BorderRadius => Message::BorderRadiusChanged(value),
             Self::DockWidth => Message::DockWidthChanged(value),
+            Self::DockMargin => Message::DockMarginChanged(value),
             Self::DockBorderOuterWidth => Message::DockBorderOuterWidthChanged(value),
             Self::DockBorderInnerWidth => Message::DockBorderInnerWidthChanged(value),
             Self::FadeDuration => Message::FadeDurationChanged(value),
@@ -296,6 +300,7 @@ pub enum Message {
     DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
     DockWidthChanged(f32),
+    DockMarginChanged(f32),
     DockSideSelected(config::DockSide),
     DockBorderOuterWidthChanged(f32),
     DockBorderInnerWidthChanged(f32),
@@ -1243,6 +1248,16 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
             );
+            queue_save(state)
+        }
+
+        Message::DockMarginChanged(margin) => {
+            state.view_layout_input = None;
+            if !margin.is_finite() {
+                return Task::none();
+            }
+            state.config.views.dock_margin =
+                margin.clamp(0.0, config::ViewSettings::MAX_DOCK_MARGIN);
             queue_save(state)
         }
 
@@ -2527,6 +2542,25 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDraftKindSelected(calendar::DraftKind::Habit) => {
+            // A habit is edited by the Habits tab's own popup, so hand the
+            // fields over and close the calendar's.
+            let Some(draft) = state.calendar.draft.take() else {
+                return Task::none();
+            };
+            let color_id =
+                calendar::colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
+            state.habits.draft = Some(crate::habits::Draft::for_calendar(
+                draft.start,
+                draft.end,
+                draft.title,
+                draft.description,
+                color_id,
+            ));
+            state.habits.error = None;
+            Task::none()
+        }
+
         Message::EventDraftKindSelected(kind) => {
             let app_calendar = state.config.calendar.app_calendar.clone();
             let default_calendar = state.calendar.default_calendar_id(&state.config.calendar);
@@ -2536,7 +2570,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 // switching back to an event returns to the normal default.
                 if let Some(calendar_id) = match kind {
                     calendar::DraftKind::TimeBlock => app_calendar,
-                    calendar::DraftKind::Event => default_calendar,
+                    calendar::DraftKind::Event | calendar::DraftKind::Habit => default_calendar,
                 } {
                     draft.calendar_id = calendar_id;
                 }
@@ -4654,6 +4688,36 @@ mod tests {
         assert_eq!(state.keep.snapshot.notes[0].title, "Saved");
         assert_eq!(state.keep.query, "saved");
         assert_eq!(state.keep.error.as_deref(), Some("Reconnect"));
+    }
+
+    #[test]
+    fn choosing_habit_hands_the_calendar_draft_to_the_habits_editor() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let start =
+            calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+        let mut draft = calendar::Draft::new(
+            "primary".into(),
+            start,
+            start + chrono::Duration::minutes(45),
+        );
+        draft.title = "Stretch".into();
+        draft.description = "Slow and steady".into();
+        state.calendar.draft = Some(draft);
+
+        let _ = update(
+            &mut state,
+            Message::EventDraftKindSelected(calendar::DraftKind::Habit),
+        );
+
+        assert!(state.calendar.draft.is_none());
+        let habit = state.habits.draft.as_ref().expect("the habit editor opens");
+        assert_eq!(habit.title, "Stretch");
+        assert_eq!(habit.notes, "Slow and steady");
+        assert_eq!(habit.date, "2026-10-28");
+        assert_eq!(habit.start, "09:00");
+        assert_eq!(habit.end, "09:45");
+        assert_eq!(habit.repeat, crate::habits::RepeatMode::Weekly);
+        assert!(habit.weekdays[2], "Wednesday is preselected");
     }
 }
 

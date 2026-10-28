@@ -1729,6 +1729,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     let kinds: Element<'a, Message> = row![
         kind_button("Event", calendar::DraftKind::Event),
         kind_button("Time Block", calendar::DraftKind::TimeBlock),
+        kind_button("Habit", calendar::DraftKind::Habit),
     ]
     .spacing(6.0)
     .width(Fill)
@@ -4138,6 +4139,35 @@ fn zoom_steps(delta: mouse::ScrollDelta) -> f32 {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    #[test]
+    fn the_new_event_popup_offers_a_habit() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        let start =
+            calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+        state.calendar.draft = Some(calendar::Draft::new(
+            "primary".into(),
+            start,
+            start + chrono::Duration::minutes(45),
+        ));
+        let metrics = Metrics::of(Size::new(800.0, 600.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(800.0, 600.0),
+            draft_overlay(&state, &metrics),
+        );
+        assert!(ui.find("Event").is_ok());
+        assert!(ui.find("Time Block").is_ok());
+        assert!(ui.find("Habit").is_ok());
+        ui.click("Habit").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::EventDraftKindSelected(calendar::DraftKind::Habit)
+        )));
+    }
 
     #[test]
     fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {

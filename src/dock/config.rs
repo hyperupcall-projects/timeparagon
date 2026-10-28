@@ -25,6 +25,11 @@ pub struct DockConfig {
     /// `dock.toml`: it is the "Screen margin" in the app's settings, shared
     /// with the side panel.
     #[serde(skip)]
+    pub screen_margin: u32,
+    /// Space between the dock and the left and right screen edges, in logical
+    /// pixels. Not read from `dock.toml`: it is the "Dock margin" in the app's
+    /// settings.
+    #[serde(skip)]
     pub margin: u32,
     /// Thickness of the outermost border, in logical pixels. Zero hides it.
     #[serde(skip)]
@@ -58,7 +63,8 @@ impl Default for DockConfig {
         Self {
             side: DockSide::Left,
             width: 10,
-            margin: 8,
+            screen_margin: 8,
+            margin: 0,
             border_outer_width: 1.0,
             border_outer_color: HexColor(iced::Color::WHITE),
             border_inner_width: 1.0,
@@ -79,7 +85,8 @@ impl DockConfig {
     pub fn load(views: &ViewSettings) -> Self {
         let mut config = Self::from_file();
         config.width = views.dock_width().round() as u32;
-        config.margin = views.margin().round() as u32;
+        config.screen_margin = views.margin().round() as u32;
+        config.margin = views.dock_margin().round() as u32;
         config.side = views.dock_side;
         config.border_outer_width = views.dock_border_outer_width();
         config.border_outer_color = views.dock_border_outer_color;
@@ -132,7 +139,7 @@ impl DockConfig {
     /// pixel for events even when the strip is at its thinnest.
     pub fn border_inset(&self) -> f32 {
         let wanted = self.border_outer_width + self.border_inner_width;
-        wanted.min((self.width as f32 - 1.0).max(0.0))
+        wanted.min(((self.width as f32 - 1.0) / 2.0).max(0.0))
     }
 
     /// Width of the whole layer surface: the strip plus room for the hover
@@ -183,6 +190,7 @@ mod tests {
     fn the_strip_size_margin_and_border_come_from_the_view_settings() {
         let views = ViewSettings {
             dock_width: 14.0,
+            dock_margin: 12.0,
             margin: 20.0,
             dock_side: DockSide::Top,
             dock_border_outer_width: 2.0,
@@ -194,7 +202,8 @@ mod tests {
         let config = DockConfig::load(&views);
 
         assert_eq!(config.width, 14);
-        assert_eq!(config.margin, 20);
+        assert_eq!(config.margin, 12);
+        assert_eq!(config.screen_margin, 20);
         assert_eq!(config.side, DockSide::Top);
         assert_eq!(config.border_outer_width, 2.0);
         assert_eq!(config.border_inner_width, 3.0);
@@ -221,6 +230,7 @@ mod tests {
 
         assert_eq!(config.width, DockConfig::default().width);
         assert_eq!(config.margin, DockConfig::default().margin);
+        assert_eq!(config.screen_margin, DockConfig::default().screen_margin);
     }
 
     #[test]

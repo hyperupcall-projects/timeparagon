@@ -107,11 +107,21 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     let (anchor, margins) = match dock_config.side {
         DockSide::Left => (
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
-            (dock_config.margin as i32, 0, dock_config.margin as i32, 0),
+            (
+                dock_config.screen_margin as i32,
+                0,
+                dock_config.screen_margin as i32,
+                dock_config.margin as i32,
+            ),
         ),
         DockSide::Right => (
             Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
-            (dock_config.margin as i32, 0, dock_config.margin as i32, 0),
+            (
+                dock_config.screen_margin as i32,
+                dock_config.margin as i32,
+                dock_config.screen_margin as i32,
+                0,
+            ),
         ),
         DockSide::Top => (
             Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,

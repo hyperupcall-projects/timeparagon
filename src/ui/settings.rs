@@ -190,7 +190,7 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         layout_number("Details width (px)", LayoutField::DetailWidth, state, metrics),
         layout_number("Screen margin (px, 0–30)", LayoutField::ScreenMargin, state, metrics),
         layout_number("Border radius (px, 0–30)", LayoutField::BorderRadius, state, metrics),
-        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel and the dock strip from their screen edge.")
+        text("Widths apply to the calendar, the time block pane beside it, and the event details pane on the right. The screen margin insets the side panel and the top and bottom of a side dock from their screen edge.")
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).into()
 }
@@ -208,13 +208,19 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         layout_number("Dock width (px, 2–40)", LayoutField::DockWidth, state, metrics),
         layout_number(
+            "Left/right margin (px, 0–100)",
+            LayoutField::DockMargin,
+            state,
+            metrics,
+        ),
+        layout_number(
             "Outer border (first layer, px, 0–5)",
             LayoutField::DockBorderOuterWidth,
             state,
             metrics,
         ),
         dock_color_input(
-            "Outer border colour",
+            "Outer border color",
             0,
             views.dock_border_outer_color,
             state,
@@ -227,13 +233,13 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics,
         ),
         dock_color_input(
-            "Inner border colour",
+            "Inner border color",
             1,
             views.dock_border_inner_color,
             state,
             metrics,
         ),
-        text("The dock can sit on the left, right, top or bottom edge. Its two borders are drawn inside the strip, outermost first, so a dark inner border still shows on a white background and a light outer border still shows on a black one. A border width of 0 hides that layer. Changes apply the next time the dock opens.")
+        text("The dock can sit on the left, right, top or bottom edge. The dock margin is the gap from the left and right screen edges: on a top or bottom dock it is the space at each end, and on a side dock it is the gap between the strip and the edge it hugs. The two borders are drawn inside the strip, outermost first, so a dark inner border still shows on a white background and a light outer border still shows on a black one. A border width of 0 hides that layer. Border colors are hex values such as #FFFFFF or #000000. Changes apply the next time the dock opens.")
             .size(metrics.label())
             .style(text::secondary),
     ]
@@ -326,6 +332,7 @@ fn layout_number<'a>(
         LayoutField::ScreenMargin
         | LayoutField::BorderRadius
         | LayoutField::DockWidth
+        | LayoutField::DockMargin
         | LayoutField::DockBorderOuterWidth
         | LayoutField::DockBorderInnerWidth => 1.0,
         LayoutField::FadeDuration => 10.0,
@@ -775,7 +782,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         kind_color_picker(settings.habit_color, Message::HabitColorPicked, metrics),
         metrics,
     ));
-    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks, scheduled tasks and habits can each be given a color of their own; the color is also written to Google. The Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM or DUE: YYYY-MM-DD for a day only. A task's clock time comes from its Calendar-backed schedule, never from its notes. Habits live on the TimeSlay calendar as recurring events and are edited, with their full RFC 5545 recurrence rules, from the Habits tab. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks, scheduled tasks and habits can each be given a color of their own; the color is also written to Google. The Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM or DUE: YYYY-MM-DD for a day only. A task's clock time comes from its Calendar-backed schedule, never from its notes. Habits live on the TimeSlay calendar as recurring events and are edited from the Habits tab, where the repeat schedule is picked in plain language. A habit can also be started from the New event popup on the calendar. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
 }

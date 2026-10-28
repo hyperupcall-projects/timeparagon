@@ -148,11 +148,14 @@ pub struct PendingTime {
 /// An `Event` is an ordinary calendar entry on the chosen calendar. A
 /// `TimeBlock` is written to the app's single TimeSlay calendar and is
 /// labelled and colored as a block, the same as one created anywhere else.
+/// A `Habit` is a recurring event; choosing it hands the popup's fields to
+/// the Habits editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DraftKind {
     #[default]
     Event,
     TimeBlock,
+    Habit,
 }
 
 /// A new event being filled in before it is written to Google.

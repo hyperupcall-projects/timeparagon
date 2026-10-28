@@ -2,11 +2,12 @@
 //!
 //! A habit is an ordinary Google Calendar event tagged with `ttKind=habit`,
 //! so Google expands it and every other client sees a normal recurring event.
-//! The Habits tab edits the master rather than an instance, which is what lets
-//! it expose the whole RFC 5545 recurrence array: `RRULE`, `RDATE` and
-//! `EXDATE` lines.
+//! The Habits tab edits the master rather than an instance. Its editor uses a
+//! structured repeat model (daily, weekly days, monthly day or weekday, and an
+//! end date), so nobody has to type RFC 5545 parts by hand. The structured
+//! model is turned into `RRULE`/`RDATE`/`EXDATE` lines only when it is written.
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Utc, Weekday};
 use iced::{Color, Task};
 
 use crate::app::{Message, State};
@@ -18,6 +19,17 @@ pub const KIND: &str = "habit";
 
 /// The text input that holds a habit's name in the editor.
 pub const TITLE_FIELD: &str = "habit-title";
+
+/// Monday first, the order the weekday picker uses.
+pub const WEEKDAYS: [Weekday; 7] = [
+    Weekday::Mon,
+    Weekday::Tue,
+    Weekday::Wed,
+    Weekday::Thu,
+    Weekday::Fri,
+    Weekday::Sat,
+    Weekday::Sun,
+];
 
 /// One habit, as the master event on the TimeSlay calendar.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,13 +67,12 @@ impl Habit {
             .unwrap_or_else(|| settings.habit_color())
     }
 
-    /// A one-line description of the recurrence, or "Does not repeat".
+    /// A readable description of the recurrence, or "Does not repeat".
     pub fn recurrence_label(&self) -> String {
         if self.recurrence.is_empty() {
-            "Does not repeat".to_owned()
-        } else {
-            self.recurrence.lines().join(" · ")
+            return "Does not repeat".to_owned();
         }
+        Draft::from_habit(self).repeat_summary()
     }
 
     /// The time of day the habit runs.
@@ -76,7 +87,7 @@ impl Habit {
 
 /// The recurrence array exactly as Google stores it. The lines are kept in
 /// order and are never interpreted by the app beyond validating them before a
-/// write, so any rule Google accepts can be round-tripped untouched.
+/// write, so a rule Google accepts can be round-tripped untouched.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Recurrence {
     lines: Vec<String>,
@@ -99,34 +110,6 @@ impl Recurrence {
 
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
-    }
-
-    /// The first `RRULE` value without its prefix, for the editor.
-    pub fn rrule(&self) -> String {
-        self.lines
-            .iter()
-            .find_map(|line| strip_prefix(line, "RRULE:"))
-            .unwrap_or("")
-            .to_owned()
-    }
-
-    /// Every `RDATE` line, one per line, for the editor.
-    pub fn rdates(&self) -> String {
-        self.by_prefix("RDATE")
-    }
-
-    /// Every `EXDATE` line, one per line, for the editor.
-    pub fn exdates(&self) -> String {
-        self.by_prefix("EXDATE")
-    }
-
-    fn by_prefix(&self, kind: &str) -> String {
-        self.lines
-            .iter()
-            .filter(|line| starts_with_kind(line, kind))
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }
 
@@ -163,6 +146,61 @@ fn normalize_line(line: &str) -> Option<String> {
     None
 }
 
+/// How a habit repeats, in the words the editor offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatMode {
+    Never,
+    Daily,
+    Weekdays,
+    Weekly,
+    Monthly,
+    Yearly,
+    /// A rule imported from another app that the structured editor cannot
+    /// express. It is preserved until the user chooses a simple schedule.
+    Custom,
+}
+
+impl RepeatMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Never => "Does not repeat",
+            Self::Daily => "Daily",
+            Self::Weekdays => "Every weekday",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+            Self::Yearly => "Yearly",
+            Self::Custom => "Custom",
+        }
+    }
+
+    /// The noun that follows the interval number, as in "every 2 weeks".
+    pub fn unit(self) -> &'static str {
+        match self {
+            Self::Daily => "day(s)",
+            Self::Weekly | Self::Weekdays => "week(s)",
+            Self::Monthly => "month(s)",
+            Self::Yearly => "year(s)",
+            Self::Never | Self::Custom => "",
+        }
+    }
+}
+
+/// How a monthly habit picks its day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonthlyMode {
+    Day,
+    NthWeekday,
+    LastDay,
+}
+
+/// When the series stops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndKind {
+    Never,
+    OnDate,
+    After,
+}
+
 /// A habit being filled in before it is written to Google.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
@@ -174,18 +212,34 @@ pub struct Draft {
     pub date: String,
     pub start: String,
     pub end: String,
-    /// The `RRULE` value, without the `RRULE:` prefix.
-    pub rrule: String,
-    /// One `RDATE` line per newline or semicolon.
-    pub rdates: String,
-    /// One `EXDATE` line per newline or semicolon.
-    pub exdates: String,
+    pub repeat: RepeatMode,
+    /// "1" in "every 1 week".
+    pub interval: String,
+    /// Monday first, matching [`WEEKDAYS`].
+    pub weekdays: [bool; 7],
+    pub monthly: MonthlyMode,
+    pub monthly_day: String,
+    /// 1–5, or -1 for the last weekday of the month.
+    pub monthly_nth: i8,
+    pub monthly_weekday: Weekday,
+    pub ends: EndKind,
+    pub until: String,
+    pub count: String,
+    /// Dates removed from the series, shown as "Skip dates".
+    pub skips: Vec<NaiveDate>,
+    pub skip_input: String,
+    /// Extra dates kept from an imported `RDATE`; they are written back but
+    /// not shown as raw text.
+    pub extra: Vec<NaiveDate>,
+    /// The original lines when [`RepeatMode::Custom`] is selected.
+    pub custom: Option<Vec<String>>,
     pub color_id: Option<String>,
     pub error: Option<String>,
 }
 
 impl Draft {
     pub fn new(day: NaiveDate, color_id: Option<String>) -> Self {
+        let nth = nth_weekday(day);
         Self {
             id: None,
             calendar_id: None,
@@ -194,29 +248,275 @@ impl Draft {
             date: day.to_string(),
             start: "09:00".to_owned(),
             end: "09:30".to_owned(),
-            rrule: "FREQ=WEEKLY".to_owned(),
-            rdates: String::new(),
-            exdates: String::new(),
+            repeat: RepeatMode::Weekly,
+            interval: "1".to_owned(),
+            weekdays: weekday_flags(&[day.weekday()]),
+            monthly: MonthlyMode::Day,
+            monthly_day: day.day().to_string(),
+            monthly_nth: nth,
+            monthly_weekday: day.weekday(),
+            ends: EndKind::Never,
+            until: String::new(),
+            count: "10".to_owned(),
+            skips: Vec::new(),
+            skip_input: String::new(),
+            extra: Vec::new(),
+            custom: None,
             color_id,
             error: None,
         }
     }
 
+    /// A draft seeded from the calendar's drag-to-create dialog.
+    pub fn for_calendar(
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+        title: String,
+        notes: String,
+        color_id: Option<String>,
+    ) -> Self {
+        let mut draft = Self::new(start.date_naive(), color_id);
+        draft.title = title;
+        draft.notes = notes;
+        draft.start = start.format("%H:%M").to_string();
+        draft.end = end.format("%H:%M").to_string();
+        draft
+    }
+
     pub fn from_habit(habit: &Habit) -> Self {
-        Self {
-            id: Some(habit.id.clone()),
-            calendar_id: Some(habit.calendar_id.clone()),
-            title: habit.title.clone(),
-            notes: habit.notes.clone(),
-            date: habit.start.date_naive().to_string(),
-            start: habit.start.format("%H:%M").to_string(),
-            end: habit.end.format("%H:%M").to_string(),
-            rrule: habit.recurrence.rrule(),
-            rdates: habit.recurrence.rdates(),
-            exdates: habit.recurrence.exdates(),
-            color_id: habit.color_id.clone(),
-            error: None,
+        let mut draft = Self::new(habit.start.date_naive(), habit.color_id.clone());
+        draft.id = Some(habit.id.clone());
+        draft.calendar_id = Some(habit.calendar_id.clone());
+        draft.title = habit.title.clone();
+        draft.notes = habit.notes.clone();
+        draft.start = habit.start.format("%H:%M").to_string();
+        draft.end = habit.end.format("%H:%M").to_string();
+        if habit.recurrence.is_empty() {
+            draft.repeat = RepeatMode::Never;
+        } else if !draft.apply_recurrence(&habit.recurrence) {
+            draft.repeat = RepeatMode::Custom;
+            draft.custom = Some(habit.recurrence.lines().to_vec());
         }
+        draft
+    }
+
+    /// Reads an imported recurrence into the structured fields. Returns false
+    /// for anything the editor cannot show without RFC text, which then stays
+    /// untouched as a custom schedule.
+    fn apply_recurrence(&mut self, recurrence: &Recurrence) -> bool {
+        let Ok(date) = deadline::parse_date(self.date.trim()) else {
+            return false;
+        };
+        let mut rule = None;
+        let mut skips = Vec::new();
+        let mut extra = Vec::new();
+        for line in recurrence.lines() {
+            if starts_with_kind(line, "RRULE") {
+                if rule.is_some() {
+                    return false;
+                }
+                let Some(value) = strip_prefix(line, "RRULE:") else {
+                    return false;
+                };
+                rule = Some(value.to_owned());
+            } else if starts_with_kind(line, "EXDATE") {
+                let Some(mut dates) = dates_in(line, "EXDATE") else {
+                    return false;
+                };
+                skips.append(&mut dates);
+            } else if starts_with_kind(line, "RDATE") {
+                let Some(mut dates) = dates_in(line, "RDATE") else {
+                    return false;
+                };
+                extra.append(&mut dates);
+            }
+        }
+        let Some(rule) = rule else {
+            return false;
+        };
+
+        let mut freq = String::new();
+        let mut interval = 1u32;
+        let mut byday: Vec<String> = Vec::new();
+        let mut bymonthday: Vec<i32> = Vec::new();
+        let mut bymonth: Vec<u32> = Vec::new();
+        let mut ends = EndKind::Never;
+        let mut until = String::new();
+        let mut count = String::new();
+
+        for part in rule.split(';') {
+            let Some((key, value)) = part.split_once('=') else {
+                return false;
+            };
+            let key = key.trim().to_ascii_uppercase();
+            let value = value.trim();
+            if value.is_empty() {
+                return false;
+            }
+            match key.as_str() {
+                "FREQ" => freq = value.to_ascii_uppercase(),
+                "INTERVAL" => match value.parse::<u32>() {
+                    Ok(number) if number > 0 => interval = number,
+                    _ => return false,
+                },
+                "BYDAY" => {
+                    byday = value
+                        .split(',')
+                        .map(|day| day.trim().to_ascii_uppercase())
+                        .collect();
+                }
+                "BYMONTHDAY" => {
+                    bymonthday.clear();
+                    for day in value.split(',') {
+                        let Ok(day) = day.trim().parse::<i32>() else {
+                            return false;
+                        };
+                        if day == 0 || day.abs() > 31 {
+                            return false;
+                        }
+                        bymonthday.push(day);
+                    }
+                }
+                "BYMONTH" => {
+                    bymonth.clear();
+                    for month in value.split(',') {
+                        let Ok(month) = month.trim().parse::<u32>() else {
+                            return false;
+                        };
+                        if !(1..=12).contains(&month) {
+                            return false;
+                        }
+                        bymonth.push(month);
+                    }
+                }
+                "WKST" => {
+                    if parse_weekday(value).is_none() {
+                        return false;
+                    }
+                }
+                "UNTIL" => {
+                    let Some(day) = parse_until(value) else {
+                        return false;
+                    };
+                    ends = EndKind::OnDate;
+                    until = day.to_string();
+                }
+                "COUNT" => {
+                    let Ok(number) = value.parse::<u32>() else {
+                        return false;
+                    };
+                    if number == 0 {
+                        return false;
+                    }
+                    ends = EndKind::After;
+                    count = number.to_string();
+                }
+                // Anything else (BYSETPOS, BYHOUR, BYYEARDAY, …) is a custom
+                // schedule the simple editor must not silently rewrite.
+                _ => return false,
+            }
+        }
+
+        if !bymonth.is_empty() || !bymonthday.is_empty() {
+            if freq != "MONTHLY" && freq != "YEARLY" {
+                return false;
+            }
+        }
+
+        match freq.as_str() {
+            "DAILY" => {
+                if !byday.is_empty() || !bymonthday.is_empty() || !bymonth.is_empty() {
+                    return false;
+                }
+                self.repeat = RepeatMode::Daily;
+            }
+            "WEEKLY" => {
+                if !bymonthday.is_empty() || !bymonth.is_empty() {
+                    return false;
+                }
+                let days = if byday.is_empty() {
+                    vec![date.weekday()]
+                } else {
+                    let mut days = Vec::new();
+                    for day in &byday {
+                        let Some(day) = parse_weekday(day) else {
+                            return false;
+                        };
+                        days.push(day);
+                    }
+                    days
+                };
+                if interval == 1
+                    && days
+                        == [
+                            Weekday::Mon,
+                            Weekday::Tue,
+                            Weekday::Wed,
+                            Weekday::Thu,
+                            Weekday::Fri,
+                        ]
+                {
+                    self.repeat = RepeatMode::Weekdays;
+                } else {
+                    self.repeat = RepeatMode::Weekly;
+                }
+                self.weekdays = weekday_flags(&days);
+            }
+            "MONTHLY" => {
+                if !bymonth.is_empty() {
+                    return false;
+                }
+                if byday.len() == 1 && bymonthday.is_empty() {
+                    let Some((nth, weekday)) = parse_ordinal_weekday(&byday[0]) else {
+                        return false;
+                    };
+                    self.monthly = MonthlyMode::NthWeekday;
+                    self.monthly_nth = nth;
+                    self.monthly_weekday = weekday;
+                } else if byday.is_empty() && bymonthday.len() == 1 {
+                    let day = bymonthday[0];
+                    if day == -1 {
+                        self.monthly = MonthlyMode::LastDay;
+                    } else if (1..=31).contains(&day) {
+                        self.monthly = MonthlyMode::Day;
+                        self.monthly_day = day.to_string();
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+                self.repeat = RepeatMode::Monthly;
+            }
+            "YEARLY" => {
+                if !byday.is_empty() || bymonth.len() > 1 || bymonthday.len() > 1 {
+                    return false;
+                }
+                // The start date is the anchor. A yearly rule that picks a
+                // different month or day is left as a custom schedule.
+                if bymonth.first().is_some_and(|month| *month != date.month())
+                    || bymonthday
+                        .first()
+                        .is_some_and(|day| *day != date.day() as i32)
+                {
+                    return false;
+                }
+                self.repeat = RepeatMode::Yearly;
+            }
+            _ => return false,
+        }
+
+        self.interval = interval.to_string();
+        self.ends = ends;
+        self.until = until;
+        self.count = count;
+        skips.sort_unstable();
+        skips.dedup();
+        extra.sort_unstable();
+        extra.dedup();
+        self.skips = skips;
+        self.extra = extra;
+        true
     }
 
     /// Parses the fields into the values the Calendar API write needs.
@@ -231,7 +531,7 @@ impl Draft {
         if end <= start {
             return Err("The end time has to be after the start".to_owned());
         }
-        let recurrence = self.recurrence_lines()?;
+        let recurrence = self.recurrence_lines_at(start)?;
         Ok(ParsedHabit {
             title: title.to_owned(),
             date,
@@ -241,23 +541,230 @@ impl Draft {
         })
     }
 
-    /// Builds and validates the full recurrence array, with prefixes added
-    /// where the user left them off.
+    /// Builds the recurrence array the editor describes. The clock time is
+    /// used for skipped and extra dates; without a valid one it falls back to
+    /// the usual 09:00 default so validation can still report other problems.
     pub fn recurrence_lines(&self) -> Result<Vec<String>, String> {
-        let mut lines = Vec::new();
-        let rrule = self.rrule.trim();
-        let rrule = rrule
-            .strip_prefix("RRULE:")
-            .or_else(|| rrule.strip_prefix("rrule:"))
-            .unwrap_or(rrule)
-            .trim();
-        if !rrule.is_empty() {
-            validate_rrule(rrule)?;
-            lines.push(format!("RRULE:{rrule}"));
+        let start = deadline::parse_time(self.start.trim())
+            .unwrap_or_else(|_| NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+        self.recurrence_lines_at(start)
+    }
+
+    fn recurrence_lines_at(&self, start: NaiveTime) -> Result<Vec<String>, String> {
+        if self.repeat == RepeatMode::Custom {
+            return Ok(self.custom.clone().unwrap_or_default());
         }
-        lines.extend(validate_date_lines(&self.rdates, "RDATE")?);
-        lines.extend(validate_date_lines(&self.exdates, "EXDATE")?);
+
+        let date = deadline::parse_date(self.date.trim())?;
+        let mut lines = Vec::new();
+        if self.repeat != RepeatMode::Never {
+            let interval = self.interval_value()?;
+            let mut rule = match self.repeat {
+                RepeatMode::Daily => format!("FREQ=DAILY;INTERVAL={interval}"),
+                RepeatMode::Weekdays => "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR".to_owned(),
+                RepeatMode::Weekly => {
+                    let days = self.selected_weekdays();
+                    if days.is_empty() {
+                        return Err("Pick at least one day to repeat on".to_owned());
+                    }
+                    let codes = days
+                        .iter()
+                        .map(|day| weekday_code(*day))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("FREQ=WEEKLY;INTERVAL={interval};BYDAY={codes}")
+                }
+                RepeatMode::Monthly => {
+                    let monthly = match self.monthly {
+                        MonthlyMode::Day => {
+                            let day = self.monthly_day_value()?;
+                            format!("BYMONTHDAY={day}")
+                        }
+                        MonthlyMode::NthWeekday => {
+                            format!(
+                                "BYDAY={}{}",
+                                self.monthly_nth,
+                                weekday_code(self.monthly_weekday)
+                            )
+                        }
+                        MonthlyMode::LastDay => "BYMONTHDAY=-1".to_owned(),
+                    };
+                    format!("FREQ=MONTHLY;INTERVAL={interval};{monthly}")
+                }
+                RepeatMode::Yearly => format!(
+                    "FREQ=YEARLY;INTERVAL={interval};BYMONTH={};BYMONTHDAY={}",
+                    date.month(),
+                    date.day()
+                ),
+                RepeatMode::Never | RepeatMode::Custom => unreachable!(),
+            };
+            match self.ends {
+                EndKind::Never => {}
+                EndKind::OnDate => {
+                    let until = deadline::parse_date(self.until.trim())?;
+                    if until < date {
+                        return Err("The repeat cannot end before it starts".to_owned());
+                    }
+                    rule.push_str(&format!(";UNTIL={}", until_utc(until)));
+                }
+                EndKind::After => {
+                    let count = self.count_value()?;
+                    rule.push_str(&format!(";COUNT={count}"));
+                }
+            }
+            let rule = rule
+                .strip_prefix("FREQ=")
+                .map(|rest| format!("FREQ={rest}"))
+                .unwrap_or(rule);
+            validate_rrule(&rule)?;
+            lines.push(format!("RRULE:{rule}"));
+        }
+
+        for day in &self.extra {
+            lines.push(format!(
+                "RDATE:{}{}",
+                day.format("%Y%m%d"),
+                start.format("%H%M%S")
+            ));
+        }
+        for day in &self.skips {
+            lines.push(format!(
+                "EXDATE:{}{}",
+                day.format("%Y%m%d"),
+                start.format("%H%M%S")
+            ));
+        }
         Ok(lines)
+    }
+
+    fn interval_value(&self) -> Result<u32, String> {
+        self.interval
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|number| *number > 0)
+            .ok_or_else(|| "The repeat interval needs to be a whole number".to_owned())
+    }
+
+    fn monthly_day_value(&self) -> Result<u32, String> {
+        self.monthly_day
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|day| (1..=31).contains(day))
+            .ok_or_else(|| "The day of the month has to be between 1 and 31".to_owned())
+    }
+
+    fn count_value(&self) -> Result<u32, String> {
+        self.count
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|number| *number > 0)
+            .ok_or_else(|| "The number of repeats needs to be a whole number".to_owned())
+    }
+
+    fn selected_weekdays(&self) -> Vec<Weekday> {
+        WEEKDAYS
+            .iter()
+            .zip(self.weekdays)
+            .filter(|(_, selected)| *selected)
+            .map(|(day, _)| *day)
+            .collect()
+    }
+
+    /// A short, human description used by the cards.
+    pub fn repeat_summary(&self) -> String {
+        if self.repeat == RepeatMode::Custom {
+            return "Custom schedule".to_owned();
+        }
+        if self.repeat == RepeatMode::Never {
+            return "Does not repeat".to_owned();
+        }
+        let interval = self
+            .interval
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|number| *number > 0)
+            .unwrap_or(1);
+        let mut summary = match self.repeat {
+            RepeatMode::Daily => {
+                if interval == 1 {
+                    "Daily".to_owned()
+                } else {
+                    format!("Every {interval} days")
+                }
+            }
+            RepeatMode::Weekdays => "Every weekday".to_owned(),
+            RepeatMode::Weekly => {
+                let days = self
+                    .weekdays
+                    .iter()
+                    .zip(WEEKDAYS)
+                    .filter(|(selected, _)| **selected)
+                    .map(|(_, day)| day)
+                    .collect::<Vec<_>>();
+                let days = if days.is_empty() {
+                    weekday_name(self.monthly_weekday).to_owned()
+                } else {
+                    weekday_list(&days)
+                };
+                if interval == 1 {
+                    format!("Weekly on {days}")
+                } else {
+                    format!("Every {interval} weeks on {days}")
+                }
+            }
+            RepeatMode::Monthly => {
+                let base = match self.monthly {
+                    MonthlyMode::Day => {
+                        let day = self.monthly_day.trim().parse::<u32>().unwrap_or(1);
+                        format!("on day {day}")
+                    }
+                    MonthlyMode::NthWeekday => format!(
+                        "on the {} {}",
+                        nth_label(self.monthly_nth),
+                        weekday_name(self.monthly_weekday)
+                    ),
+                    MonthlyMode::LastDay => "on the last day".to_owned(),
+                };
+                if interval == 1 {
+                    format!("Monthly {base}")
+                } else {
+                    format!("Every {interval} months {base}")
+                }
+            }
+            RepeatMode::Yearly => {
+                let date = deadline::parse_date(self.date.trim()).ok();
+                let day = date
+                    .map(pretty_date)
+                    .unwrap_or_else(|| "the same day".to_owned());
+                if interval == 1 {
+                    format!("Yearly on {day}")
+                } else {
+                    format!("Every {interval} years on {day}")
+                }
+            }
+            RepeatMode::Never | RepeatMode::Custom => unreachable!(),
+        };
+        match self.ends {
+            EndKind::Never => {}
+            EndKind::OnDate => {
+                if let Ok(day) = deadline::parse_date(self.until.trim()) {
+                    summary.push_str(&format!(" until {}", pretty_date(day)));
+                }
+            }
+            EndKind::After => {
+                if let Ok(count) = self.count.trim().parse::<u32>() {
+                    summary.push_str(&format!(" for {count} times"));
+                }
+            }
+        }
+        if !self.skips.is_empty() {
+            summary.push_str(&format!(" · {} skipped", self.skips.len()));
+        }
+        summary
     }
 }
 
@@ -271,117 +778,154 @@ pub struct ParsedHabit {
     pub recurrence: Vec<String>,
 }
 
-/// Shortcuts that seed the raw RRULE editor. Every rule remains editable after
-/// a shortcut is chosen, so these are starting points rather than limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Preset {
-    Daily,
-    Weekdays,
-    Weekly,
-    Monthly,
-    Yearly,
-    None,
-}
-
-impl Preset {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Daily => "Daily",
-            Self::Weekdays => "Weekdays",
-            Self::Weekly => "Weekly",
-            Self::Monthly => "Monthly",
-            Self::Yearly => "Yearly",
-            Self::None => "One-off",
-        }
-    }
-
-    pub fn rrule(self, date: Option<NaiveDate>) -> String {
-        let date = date.unwrap_or_else(|| Local::now().date_naive());
-        match self {
-            Self::Daily => "FREQ=DAILY".to_owned(),
-            Self::Weekdays => "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR".to_owned(),
-            Self::Weekly => format!("FREQ=WEEKLY;BYDAY={}", weekday_code(date)),
-            Self::Monthly => format!("FREQ=MONTHLY;BYMONTHDAY={}", date.day()),
-            Self::Yearly => "FREQ=YEARLY".to_owned(),
-            Self::None => String::new(),
-        }
+fn parse_weekday(value: &str) -> Option<Weekday> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "MO" => Some(Weekday::Mon),
+        "TU" => Some(Weekday::Tue),
+        "WE" => Some(Weekday::Wed),
+        "TH" => Some(Weekday::Thu),
+        "FR" => Some(Weekday::Fri),
+        "SA" => Some(Weekday::Sat),
+        "SU" => Some(Weekday::Sun),
+        _ => None,
     }
 }
 
-fn weekday_code(date: NaiveDate) -> &'static str {
-    match date.weekday() {
-        chrono::Weekday::Mon => "MO",
-        chrono::Weekday::Tue => "TU",
-        chrono::Weekday::Wed => "WE",
-        chrono::Weekday::Thu => "TH",
-        chrono::Weekday::Fri => "FR",
-        chrono::Weekday::Sat => "SA",
-        chrono::Weekday::Sun => "SU",
+fn weekday_code(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Mon => "MO",
+        Weekday::Tue => "TU",
+        Weekday::Wed => "WE",
+        Weekday::Thu => "TH",
+        Weekday::Fri => "FR",
+        Weekday::Sat => "SA",
+        Weekday::Sun => "SU",
     }
 }
 
-fn validate_date_lines(value: &str, kind: &str) -> Result<Vec<String>, String> {
-    let mut lines = Vec::new();
-    for line in value.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let before = lines.len();
-        let rest = if starts_with_kind(line, kind) {
-            line[kind.len()..].trim()
-        } else {
-            line
-        };
-        if rest.starts_with(';') {
-            // A parameter section makes the whole line one RFC 5545 entry:
-            // `RDATE;VALUE=DATE:20261102,20261109`.
-            lines.push(date_line(kind, rest)?);
-        } else {
-            // The editor also accepts several bare dates separated by
-            // semicolons, with or without the `RDATE:` prefix.
-            for part in rest.trim_start_matches(':').split(';') {
-                let part = part.trim();
-                if part.is_empty() {
-                    continue;
-                }
-                // A second prefixed line may follow a semicolon.
-                let part = if starts_with_kind(part, kind) {
-                    part[kind.len()..].trim_start_matches(':').trim()
-                } else {
-                    part
-                };
-                if !part.is_empty() {
-                    lines.push(date_line(kind, part)?);
-                }
-            }
-        }
-        if lines.len() == before {
-            return Err(format!("{kind} needs at least one date"));
-        }
+fn weekday_name(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Mon => "Monday",
+        Weekday::Tue => "Tuesday",
+        Weekday::Wed => "Wednesday",
+        Weekday::Thu => "Thursday",
+        Weekday::Fri => "Friday",
+        Weekday::Sat => "Saturday",
+        Weekday::Sun => "Sunday",
     }
-    Ok(lines)
 }
 
-/// One `RDATE` or `EXDATE` line, with any parameters kept in front of the
-/// colon.
-fn date_line(kind: &str, rest: &str) -> Result<String, String> {
-    let rest = rest.trim();
-    let (params, values) = if let Some(after) = rest.strip_prefix(';') {
-        let (params, values) = after
-            .split_once(':')
-            .ok_or_else(|| format!("{kind} parameters need a `:` before the dates"))?;
-        (Some(params.trim()), values.trim())
+fn weekday_short(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Mon => "Mon",
+        Weekday::Tue => "Tue",
+        Weekday::Wed => "Wed",
+        Weekday::Thu => "Thu",
+        Weekday::Fri => "Fri",
+        Weekday::Sat => "Sat",
+        Weekday::Sun => "Sun",
+    }
+}
+
+fn weekday_list(days: &[Weekday]) -> String {
+    if days.len() == 1 {
+        return weekday_name(days[0]).to_owned();
+    }
+    days.iter()
+        .map(|day| weekday_short(*day))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn weekday_flags(days: &[Weekday]) -> [bool; 7] {
+    let mut flags = [false; 7];
+    for day in days {
+        flags[weekday_index(*day)] = true;
+    }
+    flags
+}
+
+fn weekday_index(day: Weekday) -> usize {
+    day.num_days_from_monday() as usize
+}
+
+fn nth_label(nth: i8) -> &'static str {
+    match nth {
+        1 => "first",
+        2 => "second",
+        3 => "third",
+        4 => "fourth",
+        5 => "fifth",
+        -1 => "last",
+        _ => "first",
+    }
+}
+
+fn nth_weekday(date: NaiveDate) -> i8 {
+    let next = date + chrono::Duration::days(7);
+    if next.month() == date.month() {
+        ((date.day() - 1) / 7 + 1) as i8
     } else {
-        (None, rest.trim_start_matches(':').trim())
-    };
-    if values.is_empty() || values.split(',').any(|value| value.trim().is_empty()) {
-        return Err(format!("{kind} has an empty date"));
+        -1
     }
-    Ok(match params.filter(|params| !params.is_empty()) {
-        Some(params) => format!("{kind};{params}:{values}"),
-        None => format!("{kind}:{values}"),
-    })
+}
+
+fn parse_ordinal_weekday(value: &str) -> Option<(i8, Weekday)> {
+    if value.len() < 3 {
+        return None;
+    }
+    let (prefix, day) = value.split_at(value.len() - 2);
+    let weekday = parse_weekday(day)?;
+    if prefix.is_empty() {
+        return None;
+    }
+    let nth = prefix.parse::<i8>().ok()?;
+    if nth == 0 || nth.abs() > 5 {
+        return None;
+    }
+    Some((nth, weekday))
+}
+
+fn parse_until(value: &str) -> Option<NaiveDate> {
+    let date: String = value.chars().take(8).collect();
+    if date.len() != 8 {
+        return None;
+    }
+    NaiveDate::parse_from_str(&date, "%Y%m%d").ok()
+}
+
+fn dates_in(line: &str, kind: &str) -> Option<Vec<NaiveDate>> {
+    if !starts_with_kind(line, kind) {
+        return None;
+    }
+    let values = line[kind.len()..].split_once(':')?.1;
+    let mut dates = Vec::new();
+    for value in values.split(',') {
+        let date: String = value.trim().chars().take(8).collect();
+        if date.len() != 8 {
+            return None;
+        }
+        dates.push(NaiveDate::parse_from_str(&date, "%Y%m%d").ok()?);
+    }
+    if dates.is_empty() { None } else { Some(dates) }
+}
+
+fn until_utc(date: NaiveDate) -> String {
+    let naive = date
+        .and_hms_opt(23, 59, 59)
+        .expect("a valid end-of-day time");
+    let local = Local
+        .from_local_datetime(&naive)
+        .single()
+        .unwrap_or_else(|| Local.from_utc_datetime(&naive));
+    local
+        .with_timezone(&Utc)
+        .format("%Y%m%dT%H%M%SZ")
+        .to_string()
+}
+
+fn pretty_date(date: NaiveDate) -> String {
+    format!("{} {}", date.format("%B"), date.day())
 }
 
 fn validate_rrule(rrule: &str) -> Result<(), String> {
@@ -389,15 +933,15 @@ fn validate_rrule(rrule: &str) -> Result<(), String> {
     for part in rrule.split(';') {
         let part = part.trim();
         if part.is_empty() {
-            return Err("RRULE has an empty part".to_owned());
+            return Err("The repeat has an empty part".to_owned());
         }
         let (key, value) = part
             .split_once('=')
-            .ok_or_else(|| format!("RRULE part `{part}` needs a value"))?;
+            .ok_or_else(|| "The repeat has a part without a value".to_owned())?;
         let key = key.trim().to_ascii_uppercase();
         let value = value.trim();
         if value.is_empty() {
-            return Err(format!("RRULE part `{key}` needs a value"));
+            return Err("The repeat has a part without a value".to_owned());
         }
         match key.as_str() {
             "FREQ" => {
@@ -406,7 +950,7 @@ fn validate_rrule(rrule: &str) -> Result<(), String> {
                     value.to_ascii_uppercase().as_str(),
                     "SECONDLY" | "MINUTELY" | "HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY"
                 ) {
-                    return Err(format!("Unknown RRULE frequency `{value}`"));
+                    return Err("The repeat frequency is not one the calendar knows".to_owned());
                 }
             }
             "INTERVAL" | "COUNT" => {
@@ -414,12 +958,14 @@ fn validate_rrule(rrule: &str) -> Result<(), String> {
                     .parse::<u32>()
                     .ok()
                     .filter(|number| *number > 0)
-                    .ok_or_else(|| format!("RRULE {key} has to be a positive number"))?;
+                    .ok_or_else(|| "The repeat numbers have to be positive".to_owned())?;
             }
             "BYDAY" => {
                 for day in value.split(',') {
-                    if !valid_byday(day.trim()) {
-                        return Err(format!("Unknown RRULE weekday `{day}`"));
+                    if parse_ordinal_weekday(day.trim()).is_none()
+                        && parse_weekday(day.trim()).is_none()
+                    {
+                        return Err("The repeat has an unknown weekday".to_owned());
                     }
                 }
             }
@@ -428,9 +974,9 @@ fn validate_rrule(rrule: &str) -> Result<(), String> {
                     let day: i32 = day
                         .trim()
                         .parse()
-                        .map_err(|_| format!("Invalid RRULE BYMONTHDAY `{day}`"))?;
+                        .map_err(|_| "The repeat has an invalid day of the month".to_owned())?;
                     if day == 0 || day.abs() > 31 {
-                        return Err(format!("Invalid RRULE BYMONTHDAY `{day}`"));
+                        return Err("The repeat has an invalid day of the month".to_owned());
                     }
                 }
             }
@@ -439,9 +985,9 @@ fn validate_rrule(rrule: &str) -> Result<(), String> {
                     let month: u32 = month
                         .trim()
                         .parse()
-                        .map_err(|_| format!("Invalid RRULE BYMONTH `{month}`"))?;
+                        .map_err(|_| "The repeat has an invalid month".to_owned())?;
                     if !(1..=12).contains(&month) {
-                        return Err(format!("Invalid RRULE BYMONTH `{month}`"));
+                        return Err("The repeat has an invalid month".to_owned());
                     }
                 }
             }
@@ -450,56 +996,29 @@ fn validate_rrule(rrule: &str) -> Result<(), String> {
                     let position: i32 = position
                         .trim()
                         .parse()
-                        .map_err(|_| format!("Invalid RRULE BYSETPOS `{position}`"))?;
+                        .map_err(|_| "The repeat has an invalid position".to_owned())?;
                     if position == 0 {
-                        return Err("RRULE BYSETPOS cannot be zero".to_owned());
+                        return Err("The repeat position cannot be zero".to_owned());
                     }
                 }
             }
             "WKST" => {
-                if !valid_weekday(value) {
-                    return Err(format!("Unknown RRULE week start `{value}`"));
+                if parse_weekday(value).is_none() {
+                    return Err("The repeat has an unknown week start".to_owned());
                 }
             }
             "UNTIL" => {
-                if !valid_until(value) {
-                    return Err(format!("Invalid RRULE UNTIL `{value}`"));
+                if parse_until(value).is_none() {
+                    return Err("The repeat has an invalid end date".to_owned());
                 }
             }
-            // The remaining RFC 5545 parts (BYHOUR, BYMINUTE, BYSECOND,
-            // BYWEEKNO, BYYEARDAY, and any future extension) are passed
-            // through so the editor is not a subset of the standard.
             _ => {}
         }
     }
     if !has_freq {
-        return Err("RRULE needs a FREQ part".to_owned());
+        return Err("The repeat needs a frequency".to_owned());
     }
     Ok(())
-}
-
-fn valid_weekday(value: &str) -> bool {
-    matches!(
-        value.to_ascii_uppercase().as_str(),
-        "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU"
-    )
-}
-
-fn valid_byday(value: &str) -> bool {
-    if value.len() < 2 || !value.is_ascii() {
-        return false;
-    }
-    let (prefix, day) = value.split_at(value.len() - 2);
-    valid_weekday(day)
-        && (prefix.is_empty()
-            || prefix
-                .parse::<i32>()
-                .is_ok_and(|number| (1..=53).contains(&number.abs())))
-}
-
-fn valid_until(value: &str) -> bool {
-    let value = value.trim_end_matches('Z');
-    matches!(value.len(), 8 | 15) && value.chars().all(|ch| ch.is_ascii_digit() || ch == 'T')
 }
 
 /// What the Habits tab is holding.
@@ -529,10 +1048,20 @@ pub enum Action {
     Date(String),
     Start(String),
     End(String),
-    Rule(String),
-    Rdates(String),
-    Exdates(String),
-    Preset(Preset),
+    Repeat(RepeatMode),
+    Interval(String),
+    ToggleWeekday(usize),
+    MonthlyMode(MonthlyMode),
+    MonthlyDay(String),
+    MonthlyNth(i8),
+    MonthlyWeekday(Weekday),
+    Ends(EndKind),
+    Until(String),
+    Count(String),
+    SkipInput(String),
+    SkipAdd,
+    SkipRemove(NaiveDate),
+    SimpleRepeat,
     Color(Option<Color>),
     Save,
     Saved(Result<HabitEvent, String>),
@@ -589,21 +1118,75 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Date(value) => edit(state, |draft| draft.date = value),
         Action::Start(value) => edit(state, |draft| draft.start = value),
         Action::End(value) => edit(state, |draft| draft.end = value),
-        Action::Rule(value) => edit(state, |draft| draft.rrule = value),
-        Action::Rdates(value) => edit(state, |draft| draft.rdates = value),
-        Action::Exdates(value) => edit(state, |draft| draft.exdates = value),
-        Action::Color(color) => edit(state, |draft| {
-            draft.color_id = color.and_then(colors::event_id).map(str::to_owned);
+        Action::Interval(value) => edit(state, |draft| draft.interval = value),
+        Action::MonthlyDay(value) => edit(state, |draft| draft.monthly_day = value),
+        Action::Until(value) => edit(state, |draft| draft.until = value),
+        Action::Count(value) => edit(state, |draft| draft.count = value),
+
+        Action::Repeat(mode) => edit(state, |draft| {
+            draft.repeat = mode;
+            if mode != RepeatMode::Custom {
+                draft.custom = None;
+            }
+            if mode == RepeatMode::Weekly && draft.weekdays.iter().all(|selected| !*selected) {
+                if let Ok(date) = deadline::parse_date(draft.date.trim()) {
+                    draft.weekdays[weekday_index(date.weekday())] = true;
+                }
+            }
         }),
 
-        Action::Preset(preset) => {
+        Action::ToggleWeekday(index) => edit(state, |draft| {
+            if let Some(selected) = draft.weekdays.get_mut(index) {
+                *selected = !*selected;
+            }
+        }),
+
+        Action::MonthlyMode(mode) => edit(state, |draft| draft.monthly = mode),
+        Action::MonthlyNth(nth) => edit(state, |draft| {
+            draft.monthly = MonthlyMode::NthWeekday;
+            draft.monthly_nth = nth;
+        }),
+        Action::MonthlyWeekday(day) => edit(state, |draft| {
+            draft.monthly = MonthlyMode::NthWeekday;
+            draft.monthly_weekday = day;
+        }),
+
+        Action::Ends(kind) => edit(state, |draft| draft.ends = kind),
+
+        Action::SkipInput(value) => edit(state, |draft| draft.skip_input = value),
+
+        Action::SkipAdd => {
             if let Some(draft) = state.habits.draft.as_mut() {
-                let date = deadline::parse_date(draft.date.trim()).ok();
-                draft.rrule = preset.rrule(date);
-                draft.error = None;
+                match deadline::parse_date(draft.skip_input.trim()) {
+                    Ok(day) => {
+                        if !draft.skips.contains(&day) {
+                            draft.skips.push(day);
+                            draft.skips.sort_unstable();
+                        }
+                        draft.skip_input.clear();
+                        draft.error = None;
+                    }
+                    Err(error) => draft.error = Some(error),
+                }
             }
             Task::none()
         }
+
+        Action::SkipRemove(day) => edit(state, |draft| draft.skips.retain(|date| *date != day)),
+
+        Action::SimpleRepeat => edit(state, |draft| {
+            draft.repeat = RepeatMode::Weekly;
+            draft.custom = None;
+            if draft.weekdays.iter().all(|selected| !*selected) {
+                if let Ok(date) = deadline::parse_date(draft.date.trim()) {
+                    draft.weekdays[weekday_index(date.weekday())] = true;
+                }
+            }
+        }),
+
+        Action::Color(color) => edit(state, |draft| {
+            draft.color_id = color.and_then(colors::event_id).map(str::to_owned);
+        }),
 
         Action::Save => save(state),
 
@@ -781,53 +1364,107 @@ mod tests {
     }
 
     #[test]
-    fn recurrence_lines_round_trip_without_losing_rdate_or_exdate() {
-        let lines = vec![
-            "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;INTERVAL=2".to_owned(),
-            "RDATE;VALUE=DATE:20261102,20261109".to_owned(),
-            "EXDATE;TZID=Europe/London:20261111T090000".to_owned(),
-        ];
-        let recurrence = Recurrence::from_lines(&lines);
-        assert_eq!(recurrence.lines(), lines);
-        assert_eq!(recurrence.rrule(), "FREQ=WEEKLY;BYDAY=MO,WE;INTERVAL=2");
-        assert_eq!(recurrence.rdates(), "RDATE;VALUE=DATE:20261102,20261109");
-        assert_eq!(
-            recurrence.exdates(),
-            "EXDATE;TZID=Europe/London:20261111T090000"
-        );
+    fn common_rules_round_trip_through_the_structured_editor() {
+        for (rule, expected) in [
+            (
+                "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE",
+                "Every 2 weeks on Mon, Wed",
+            ),
+            ("RRULE:FREQ=DAILY", "Daily"),
+            ("RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", "Every weekday"),
+            ("RRULE:FREQ=MONTHLY;BYMONTHDAY=28", "Monthly on day 28"),
+            (
+                "RRULE:FREQ=MONTHLY;BYDAY=4WE",
+                "Monthly on the fourth Wednesday",
+            ),
+            (
+                "RRULE:FREQ=MONTHLY;BYMONTHDAY=-1",
+                "Monthly on the last day",
+            ),
+            ("RRULE:FREQ=YEARLY", "Yearly on October 28"),
+        ] {
+            let habit = Habit {
+                id: "1".into(),
+                calendar_id: "time-slay".into(),
+                title: "Stretch".into(),
+                notes: String::new(),
+                start: calendar::at_clock(date("2026-10-28"), 9, 0),
+                end: calendar::at_clock(date("2026-10-28"), 9, 30),
+                recurrence: Recurrence::from_lines(&[rule.to_owned()]),
+                color_id: None,
+            };
+            let mut draft = Draft::from_habit(&habit);
+            assert_eq!(draft.repeat_summary(), expected, "{rule}");
+            let lines = draft.recurrence_lines().unwrap();
+            assert!(
+                lines.iter().all(|line| line.starts_with("RRULE:")),
+                "{rule}"
+            );
+            // Reopening the written rule keeps the same readable summary.
+            draft.custom = None;
+            let rewritten = Recurrence::from_lines(&lines);
+            assert!(draft.apply_recurrence(&rewritten), "{rule}");
+            assert_eq!(draft.repeat_summary(), expected, "{rule}");
+        }
     }
 
     #[test]
-    fn the_editor_builds_every_recurrence_line() {
+    fn ends_and_skips_are_written_without_showing_rfc_text() {
         let mut draft = draft();
-        draft.rrule = "FREQ=MONTHLY;BYMONTHDAY=1;COUNT=5".into();
-        draft.rdates = "20261201T090000;20270101T090000".into();
-        draft.exdates = "RDATE:20270101T090000".into();
-        // The typo in the last field is on purpose: an EXDATE prefix is added.
-        draft.exdates = "EXDATE:20270201T090000".into();
+        draft.repeat = RepeatMode::Weekly;
+        draft.weekdays = weekday_flags(&[Weekday::Mon, Weekday::Wed]);
+        draft.interval = "2".into();
+        draft.ends = EndKind::OnDate;
+        draft.until = "2026-12-31".into();
+        draft.skips = vec![date("2026-11-11")];
         let lines = draft.recurrence_lines().unwrap();
         assert_eq!(
-            lines,
-            [
-                "RRULE:FREQ=MONTHLY;BYMONTHDAY=1;COUNT=5",
-                "RDATE:20261201T090000",
-                "RDATE:20270101T090000",
-                "EXDATE:20270201T090000",
-            ]
+            lines[0],
+            "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;UNTIL=20270101T075959Z"
         );
+        assert_eq!(lines[1], "EXDATE:20261111090000");
+        assert!(draft.repeat_summary().contains("until December 31"));
+        assert!(draft.repeat_summary().contains("1 skipped"));
     }
 
     #[test]
-    fn the_full_rrule_editor_accepts_standard_and_extension_parts() {
-        for rule in [
-            "FREQ=DAILY;INTERVAL=3",
-            "FREQ=WEEKLY;BYDAY=MO,WE,FR;WKST=SU",
-            "FREQ=MONTHLY;BYMONTHDAY=-1;BYSETPOS=1",
-            "FREQ=YEARLY;BYMONTH=10;BYMONTHDAY=28;UNTIL=20301231T235959Z",
-            "FREQ=WEEKLY;BYHOUR=9;BYMINUTE=30;BYSECOND=0",
-        ] {
-            assert!(validate_rrule(rule).is_ok(), "{rule}");
-        }
+    fn weekly_needs_at_least_one_day_and_monthly_needs_a_real_day() {
+        let mut draft = draft();
+        draft.repeat = RepeatMode::Weekly;
+        draft.weekdays = [false; 7];
+        assert!(draft.parsed().is_err());
+        draft.monthly = MonthlyMode::Day;
+        draft.monthly_day = "32".into();
+        draft.repeat = RepeatMode::Monthly;
+        assert!(draft.parsed().is_err());
+        draft.monthly_day = "28".into();
+        assert!(draft.parsed().is_ok());
+    }
+
+    #[test]
+    fn an_unsupported_rule_stays_custom_until_the_user_simplifies_it() {
+        let recurrence = Recurrence::from_lines(&[
+            "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1".to_owned(),
+            "RDATE;VALUE=DATE:20261102".to_owned(),
+        ]);
+        let habit = Habit {
+            id: "1".into(),
+            calendar_id: "time-slay".into(),
+            title: "Stretch".into(),
+            notes: String::new(),
+            start: calendar::at_clock(date("2026-10-28"), 9, 0),
+            end: calendar::at_clock(date("2026-10-28"), 9, 30),
+            recurrence: recurrence.clone(),
+            color_id: None,
+        };
+        let mut draft = Draft::from_habit(&habit);
+        assert_eq!(draft.repeat, RepeatMode::Custom);
+        assert_eq!(draft.repeat_summary(), "Custom schedule");
+        assert_eq!(draft.recurrence_lines().unwrap(), recurrence.lines());
+
+        draft.repeat = RepeatMode::Weekly;
+        draft.custom = None;
+        assert!(draft.recurrence_lines().unwrap()[0].starts_with("RRULE:FREQ=WEEKLY"));
     }
 
     #[test]
@@ -841,52 +1478,47 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_keeps_rdate_and_exdate_parameters() {
-        let mut draft = draft();
-        draft.rrule = "FREQ=WEEKLY".into();
-        draft.rdates = "RDATE;VALUE=DATE:20261102,20261109".into();
-        draft.exdates = "EXDATE;TZID=Europe/London:20261111T090000".into();
-        assert_eq!(
-            draft.recurrence_lines().unwrap(),
-            [
-                "RRULE:FREQ=WEEKLY",
-                "RDATE;VALUE=DATE:20261102,20261109",
-                "EXDATE;TZID=Europe/London:20261111T090000",
-            ]
-        );
+    fn imported_rdates_survive_without_being_shown() {
+        let lines = vec![
+            "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;INTERVAL=2".to_owned(),
+            "RDATE;VALUE=DATE:20261102,20261109".to_owned(),
+            "EXDATE;TZID=Europe/London:20261111T090000".to_owned(),
+        ];
+        let recurrence = Recurrence::from_lines(&lines);
+        let habit = Habit {
+            id: "1".into(),
+            calendar_id: "time-slay".into(),
+            title: "Stretch".into(),
+            notes: String::new(),
+            start: calendar::at_clock(date("2026-10-28"), 9, 0),
+            end: calendar::at_clock(date("2026-10-28"), 9, 30),
+            recurrence,
+            color_id: None,
+        };
+        let draft = Draft::from_habit(&habit);
+        assert_eq!(draft.repeat, RepeatMode::Weekly);
+        assert_eq!(draft.extra, [date("2026-11-02"), date("2026-11-09")]);
+        assert_eq!(draft.skips, [date("2026-11-11")]);
+        let written = draft.recurrence_lines().unwrap();
+        assert!(written.contains(&"RDATE:20261102090000".to_owned()));
+        assert!(written.contains(&"RDATE:20261109090000".to_owned()));
+        assert!(written.contains(&"EXDATE:20261111090000".to_owned()));
     }
 
     #[test]
-    fn a_malformed_rule_is_reported_before_anything_is_written() {
-        for rule in [
-            "BYDAY=MO",
-            "FREQ=SOMETIMES",
-            "FREQ=WEEKLY;INTERVAL=0",
-            "FREQ=WEEKLY;BYDAY=XX",
-            "FREQ=MONTHLY;BYMONTHDAY=32",
-            "FREQ=WEEKLY;UNTIL=tomorrow",
-            "",
-        ] {
-            let mut draft = draft();
-            draft.rrule = rule.into();
-            if rule.is_empty() {
-                assert!(draft.recurrence_lines().is_ok());
-            } else {
-                assert!(draft.recurrence_lines().is_err(), "{rule}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_preset_only_seeds_the_editor_and_can_be_changed_further() {
+    fn a_malformed_schedule_is_reported_before_anything_is_written() {
         let mut draft = draft();
-        draft.rrule = Preset::Weekdays.rrule(Some(date("2026-10-28")));
-        assert_eq!(draft.rrule, "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR");
-        draft.rrule = Preset::Monthly.rrule(Some(date("2026-10-28")));
-        assert_eq!(draft.rrule, "FREQ=MONTHLY;BYMONTHDAY=28");
-        draft.rrule = Preset::None.rrule(Some(date("2026-10-28")));
-        assert!(draft.rrule.is_empty());
-        assert!(draft.recurrence_lines().unwrap().is_empty());
+        draft.repeat = RepeatMode::Daily;
+        draft.interval = "0".into();
+        assert!(draft.parsed().is_err());
+        draft.interval = "1".into();
+        draft.ends = EndKind::After;
+        draft.count = "0".into();
+        assert!(draft.parsed().is_err());
+        draft.count = "5".into();
+        draft.ends = EndKind::OnDate;
+        draft.until = "2026-10-01".into();
+        assert!(draft.parsed().is_err());
     }
 
     #[test]
@@ -908,7 +1540,7 @@ mod tests {
     }
 
     #[test]
-    fn the_recurrence_label_is_readable_without_hiding_the_rule() {
+    fn the_recurrence_label_is_readable_without_rfc_details() {
         let habit = Habit {
             id: "1".into(),
             calendar_id: "time-slay".into(),
@@ -919,7 +1551,7 @@ mod tests {
             recurrence: Recurrence::from_lines(&["RRULE:FREQ=DAILY".into()]),
             color_id: None,
         };
-        assert_eq!(habit.recurrence_label(), "RRULE:FREQ=DAILY");
+        assert_eq!(habit.recurrence_label(), "Daily");
         assert_eq!(habit.time_label(), "09:00 – 09:30");
         let one_off = Habit {
             recurrence: Recurrence::default(),

@@ -1084,10 +1084,23 @@ mod tests {
     }
 
     #[test]
+    fn a_two_pixel_strip_still_has_a_pixel_for_events() {
+        let config = DockConfig {
+            width: 2,
+            ..DockConfig::default()
+        };
+        let layout = Layout::new(&config, 316, 1000, 1);
+
+        assert_eq!(layout.content_width, 1.0);
+    }
+
+    #[test]
     fn the_two_borders_paint_outermost_first() {
-        let mut config = DockConfig::default();
-        config.border_outer_color = crate::hex::HexColor(Color::from_rgb(1.0, 0.0, 0.0));
-        config.border_inner_color = crate::hex::HexColor(Color::from_rgb(0.0, 1.0, 0.0));
+        let config = DockConfig {
+            border_outer_color: crate::hex::HexColor(Color::from_rgb(1.0, 0.0, 0.0)),
+            border_inner_color: crate::hex::HexColor(Color::from_rgb(0.0, 1.0, 0.0)),
+            ..DockConfig::default()
+        };
         let layout = Layout::new(&config, 316, 1000, 1);
         let (width, height) = layout.pixel_size();
         let mut pixmap = Pixmap::new(width, height).unwrap();
@@ -1119,8 +1132,10 @@ mod tests {
 
     #[test]
     fn a_horizontal_strip_runs_left_to_right_and_its_card_hangs_below() {
-        let mut config = DockConfig::default();
-        config.side = DockSide::Top;
+        let config = DockConfig {
+            side: DockSide::Top,
+            ..DockConfig::default()
+        };
         let layout = Layout::new(&config, 1000, 316, 1);
         let segment = segment(600, 630);
 

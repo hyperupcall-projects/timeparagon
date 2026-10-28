@@ -305,7 +305,7 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
         let (mut state, ..) = state();
         state.screen = Screen::Settings;
 
-        let mut ui = render(&state, Size::new(width, 4000.0));
+        let mut ui = render(&state, Size::new(width, 4400.0));
         for label in [
             "Travel",
             "Mapbox access token",

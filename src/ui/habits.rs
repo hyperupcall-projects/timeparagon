@@ -1,9 +1,9 @@
 //! The Habits tab: the recurring events on the TimeSlay calendar.
 //!
 //! A habit is a Calendar event like any other, so the list shows what Google
-//! holds. The editor edits the master event, including the raw RFC 5545
-//! recurrence array (`RRULE`, `RDATE` and `EXDATE`), so a rule is never
-//! limited to the handful of shortcuts offered above it.
+//! holds. The editor describes the repeat in the same words a person would
+//! use — daily, every weekday, weekly on Monday and Wednesday, monthly on the
+//! fourth Wednesday, and so on — rather than asking for RFC 5545 parts.
 
 use iced::widget::{
     Space, button, column, container, mouse_area, row, scrollable, stack, text, text_input,
@@ -12,22 +12,34 @@ use iced::{Alignment, Color, Element, Fill, Length, Theme};
 
 use crate::app::{Message, State};
 use crate::calendar::colors;
-use crate::habits::{self, Action, Draft, Habit, Preset};
+use crate::habits::{self, Action, Draft, EndKind, Habit, MonthlyMode, RepeatMode};
 
 use super::layout::Metrics;
 
 /// Room left for the scrollbar, which is drawn over the content.
 const SCROLLBAR_GUTTER: f32 = 14.0;
 
-/// The shortcuts offered above the rule editor. Choosing one only fills the
-/// editor; the rule stays editable afterwards.
-const PRESETS: [Preset; 6] = [
-    Preset::Daily,
-    Preset::Weekdays,
-    Preset::Weekly,
-    Preset::Monthly,
-    Preset::Yearly,
-    Preset::None,
+/// The simple schedules offered by the repeat picker.
+const REPEAT_MODES: [RepeatMode; 6] = [
+    RepeatMode::Never,
+    RepeatMode::Daily,
+    RepeatMode::Weekdays,
+    RepeatMode::Weekly,
+    RepeatMode::Monthly,
+    RepeatMode::Yearly,
+];
+
+/// The weekday buttons, Monday first, matching [`WEEKDAYS`].
+const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// The positions a monthly weekday repeat can take.
+const NTH_LABELS: [(i8, &str); 6] = [
+    (1, "First"),
+    (2, "Second"),
+    (3, "Third"),
+    (4, "Fourth"),
+    (5, "Fifth"),
+    (-1, "Last"),
 ];
 
 fn msg(action: Action) -> Message {
@@ -47,7 +59,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ]
         .spacing(metrics.spacing)
         .align_y(Alignment::Center),
-        text("Recurring events on the TimeSlay calendar. Open one to edit its name, time or full RFC 5545 recurrence rule.")
+        text("Recurring events on the TimeSlay calendar. Open one to change its name, time or repeat schedule.")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
     ]
@@ -103,7 +115,7 @@ fn card_style(theme: &Theme) -> container::Style {
     }
 }
 
-/// One habit: its color, name, rule and time, with the actions it offers.
+/// One habit: its color, name, repeat summary and time, with its actions.
 fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a, Message> {
     let color = habit.color(&state.config.calendar);
     let mut edit = button(text("Edit").size(metrics.label())).padding([2, 6]);
@@ -264,6 +276,26 @@ fn overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Mess
     stack![backdrop, foreground].into()
 }
 
+/// A choice that looks selected when it is the current one. The buttons are
+/// the only way to pick a schedule, so there is no raw rule text anywhere.
+fn choice<'a>(
+    label: &str,
+    selected: bool,
+    on_press: Message,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let style: fn(&Theme, button::Status) -> button::Style = if selected {
+        button::primary
+    } else {
+        button::secondary
+    };
+    button(text(label.to_owned()).size(metrics.label()).center())
+        .padding([3, 7])
+        .style(style)
+        .on_press(on_press)
+        .into()
+}
+
 fn form<'a>(draft: &'a Draft, busy: bool, metrics: &Metrics) -> Element<'a, Message> {
     let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
 
@@ -318,45 +350,261 @@ fn form<'a>(draft: &'a Draft, busy: bool, metrics: &Metrics) -> Element<'a, Mess
     };
     body = body.push(label("Day and time")).push(when);
 
-    // Shortcuts only seed the editor; the rule below stays the source of
-    // truth and can be changed in any way RFC 5545 allows.
-    let mut presets = column![].spacing(4);
-    for chunk in PRESETS.chunks(3) {
-        let mut line = row![].spacing(4);
-        for preset in chunk {
-            line = line.push(
-                button(text(preset.label()).size(metrics.label()).center())
-                    .padding([2, 6])
-                    .style(button::secondary)
-                    .on_press(msg(Action::Preset(*preset))),
+    // Repeat: a row of everyday choices, then only the controls that the
+    // chosen schedule needs.
+    let mut modes = Vec::new();
+    for mode in REPEAT_MODES {
+        modes.push(choice(
+            mode.label(),
+            draft.repeat == mode,
+            msg(Action::Repeat(mode)),
+            metrics,
+        ));
+    }
+    body = body
+        .push(label("Repeat"))
+        .push(row(modes).spacing(4).wrap().vertical_spacing(4))
+        .push(
+            text(draft.repeat_summary())
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+
+    match draft.repeat {
+        RepeatMode::Custom => {
+            body = body
+                .push(
+                    text("This habit has a custom schedule that the simple editor cannot show. You can keep it as it is, or replace it with a simple schedule.")
+                        .size(metrics.label() - 1.0)
+                        .style(text::secondary),
+                )
+                .push(
+                    button(text("Use a simple schedule").size(metrics.label()).center())
+                        .padding([3, 7])
+                        .style(button::secondary)
+                        .on_press(msg(Action::SimpleRepeat)),
+                );
+        }
+        RepeatMode::Never => {}
+        mode => {
+            if mode != RepeatMode::Weekdays {
+                body = body.push(
+                    row![
+                        text("Every").size(metrics.label()),
+                        text_input("1", &draft.interval)
+                            .on_input(|value| msg(Action::Interval(value)))
+                            .size(metrics.label())
+                            .width(52),
+                        text(mode.unit()).size(metrics.label()),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                );
+            }
+
+            if mode == RepeatMode::Weekly {
+                let mut days = Vec::new();
+                for (index, day) in WEEKDAY_LABELS.iter().enumerate() {
+                    days.push(choice(
+                        day,
+                        draft.weekdays.get(index).copied().unwrap_or(false),
+                        msg(Action::ToggleWeekday(index)),
+                        metrics,
+                    ));
+                }
+                body = body
+                    .push(label("On"))
+                    .push(row(days).spacing(4).wrap().vertical_spacing(4));
+            }
+
+            if mode == RepeatMode::Monthly {
+                let monthly: Element<'a, Message> = match draft.monthly {
+                    MonthlyMode::Day => row![
+                        text("On day").size(metrics.label()),
+                        text_input("28", &draft.monthly_day)
+                            .on_input(|value| msg(Action::MonthlyDay(value)))
+                            .size(metrics.label())
+                            .width(52),
+                        text("of the month").size(metrics.label()),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .into(),
+                    MonthlyMode::NthWeekday => {
+                        let mut positions = Vec::new();
+                        for (nth, name) in NTH_LABELS {
+                            positions.push(choice(
+                                name,
+                                draft.monthly_nth == nth,
+                                msg(Action::MonthlyNth(nth)),
+                                metrics,
+                            ));
+                        }
+                        let mut weekdays = Vec::new();
+                        for (index, day) in WEEKDAY_LABELS.iter().enumerate() {
+                            weekdays.push(choice(
+                                day,
+                                habits::WEEKDAYS[index] == draft.monthly_weekday,
+                                msg(Action::MonthlyWeekday(habits::WEEKDAYS[index])),
+                                metrics,
+                            ));
+                        }
+                        column![
+                            row(positions).spacing(4).wrap().vertical_spacing(4),
+                            row(weekdays).spacing(4).wrap().vertical_spacing(4)
+                        ]
+                        .spacing(4)
+                        .into()
+                    }
+                    MonthlyMode::LastDay => text("On the last day of each month.")
+                        .size(metrics.label() - 1.0)
+                        .style(text::secondary)
+                        .into(),
+                };
+                body = body
+                    .push(
+                        row![
+                            choice(
+                                "Day of the month",
+                                draft.monthly == MonthlyMode::Day,
+                                msg(Action::MonthlyMode(MonthlyMode::Day)),
+                                metrics,
+                            ),
+                            choice(
+                                "Weekday",
+                                draft.monthly == MonthlyMode::NthWeekday,
+                                msg(Action::MonthlyMode(MonthlyMode::NthWeekday)),
+                                metrics,
+                            ),
+                            choice(
+                                "Last day",
+                                draft.monthly == MonthlyMode::LastDay,
+                                msg(Action::MonthlyMode(MonthlyMode::LastDay)),
+                                metrics,
+                            ),
+                        ]
+                        .spacing(4)
+                        .wrap()
+                        .vertical_spacing(4),
+                    )
+                    .push(monthly);
+            }
+
+            if mode == RepeatMode::Yearly {
+                body = body.push(
+                    text("Once a year on the day the habit starts.")
+                        .size(metrics.label() - 1.0)
+                        .style(text::secondary),
+                );
+            }
+
+            // When the series stops.
+            body = body.push(
+                row![
+                    label("Ends"),
+                    choice(
+                        "Never",
+                        draft.ends == EndKind::Never,
+                        msg(Action::Ends(EndKind::Never)),
+                        metrics,
+                    ),
+                    choice(
+                        "On date",
+                        draft.ends == EndKind::OnDate,
+                        msg(Action::Ends(EndKind::OnDate)),
+                        metrics,
+                    ),
+                    choice(
+                        "After",
+                        draft.ends == EndKind::After,
+                        msg(Action::Ends(EndKind::After)),
+                        metrics,
+                    ),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .wrap()
+                .vertical_spacing(4),
+            );
+
+            match draft.ends {
+                EndKind::OnDate => {
+                    body = body.push(
+                        row![
+                            text("Last day").size(metrics.label()),
+                            text_input("YYYY-MM-DD", &draft.until)
+                                .on_input(|value| msg(Action::Until(value)))
+                                .size(metrics.label())
+                                .width(120),
+                        ]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    );
+                }
+                EndKind::After => {
+                    body = body.push(
+                        row![
+                            text("For").size(metrics.label()),
+                            text_input("10", &draft.count)
+                                .on_input(|value| msg(Action::Count(value)))
+                                .size(metrics.label())
+                                .width(52),
+                            text("repeats").size(metrics.label()),
+                        ]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    );
+                }
+                EndKind::Never => {}
+            }
+
+            // Dates taken out of the series, shown as chips rather than text.
+            body = body.push(label("Skip dates"));
+            if draft.skips.is_empty() {
+                body = body.push(
+                    text("No skipped dates.")
+                        .size(metrics.label() - 1.0)
+                        .style(text::secondary),
+                );
+            } else {
+                let mut chips = Vec::new();
+                for day in &draft.skips {
+                    chips.push(
+                        container(
+                            row![
+                                text(day.format("%B %-d").to_string()).size(metrics.label() - 1.0),
+                                button(text("×").size(metrics.label()).center())
+                                    .padding([0, 5])
+                                    .style(button::text)
+                                    .on_press(msg(Action::SkipRemove(*day))),
+                            ]
+                            .spacing(2)
+                            .align_y(Alignment::Center),
+                        )
+                        .padding([2, 5])
+                        .style(card_style)
+                        .into(),
+                    );
+                }
+                body = body.push(row(chips).spacing(4).wrap().vertical_spacing(4));
+            }
+            body = body.push(
+                row![
+                    text_input("YYYY-MM-DD", &draft.skip_input)
+                        .on_input(|value| msg(Action::SkipInput(value)))
+                        .on_submit(msg(Action::SkipAdd))
+                        .size(metrics.label())
+                        .width(120),
+                    button(text("Skip this date").size(metrics.label()).center())
+                        .padding([3, 7])
+                        .style(button::secondary)
+                        .on_press(msg(Action::SkipAdd)),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
             );
         }
-        presets = presets.push(line);
     }
-    body = body.push(label("Repeat")).push(presets);
-
-    body = body
-        .push(label("RRULE (without the RRULE: prefix)"))
-        .push(
-            text_input("FREQ=WEEKLY;BYDAY=MO,WE", &draft.rrule)
-                .on_input(|value| msg(Action::Rule(value)))
-                .size(metrics.label())
-                .width(Fill),
-        )
-        .push(label("RDATE (one per line or semicolon)"))
-        .push(
-            text_input("RDATE;VALUE=DATE:20261102,20261109", &draft.rdates)
-                .on_input(|value| msg(Action::Rdates(value)))
-                .size(metrics.label())
-                .width(Fill),
-        )
-        .push(label("EXDATE (one per line or semicolon)"))
-        .push(
-            text_input("EXDATE;TZID=Europe/London:20261111T090000", &draft.exdates)
-                .on_input(|value| msg(Action::Exdates(value)))
-                .size(metrics.label())
-                .width(Fill),
-        );
 
     body = body.push(label("Color")).push(color_picker(draft, metrics));
 
@@ -456,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn a_habit_shows_its_rule() {
+    fn a_habit_shows_its_repeat_in_words() {
         let mut state = state();
         state.habits.habits = vec![habit("one", "RRULE:FREQ=WEEKLY;BYDAY=MO")];
         let mut ui = iced_test::Simulator::with_size(
@@ -465,12 +713,13 @@ mod tests {
             crate::ui::view(&state),
         );
         assert!(ui.find("Stretch").is_ok());
-        assert!(ui.find("RRULE:FREQ=WEEKLY;BYDAY=MO").is_ok());
+        assert!(ui.find("Weekly on Monday").is_ok());
+        assert!(ui.find("RRULE").is_err());
         assert!(ui.find("Edit").is_ok());
     }
 
     #[test]
-    fn the_editor_offers_the_whole_recurrence_array() {
+    fn the_editor_offers_a_simple_schedule_without_rfc_text() {
         let mut state = state();
         state.habits.draft = Some(Draft::new(
             chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
@@ -481,9 +730,32 @@ mod tests {
             iced::Size::new(800.0, 700.0),
             crate::ui::view(&state),
         );
-        assert!(ui.find("RRULE (without the RRULE: prefix)").is_ok());
-        assert!(ui.find("RDATE (one per line or semicolon)").is_ok());
-        assert!(ui.find("EXDATE (one per line or semicolon)").is_ok());
-        assert!(ui.find("New habit").is_ok());
+        assert!(ui.find("Repeat").is_ok());
+        assert!(ui.find("Weekly").is_ok());
+        assert!(ui.find("Does not repeat").is_ok());
+        assert!(ui.find("Mon").is_ok());
+        assert!(ui.find("Skip dates").is_ok());
+        assert!(ui.find("RRULE").is_err());
+        assert!(ui.find("RDATE").is_err());
+        assert!(ui.find("EXDATE").is_err());
+    }
+
+    #[test]
+    fn a_monthly_habit_can_use_a_weekday_position() {
+        let mut state = state();
+        let mut draft = Draft::new(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), None);
+        draft.repeat = RepeatMode::Monthly;
+        draft.monthly = MonthlyMode::NthWeekday;
+        state.habits.draft = Some(draft);
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            iced::Size::new(800.0, 700.0),
+            crate::ui::view(&state),
+        );
+        assert!(ui.find("Weekday").is_ok());
+        assert!(ui.find("Fourth").is_ok());
+        assert!(ui.find("Last").is_ok());
+        assert!(ui.find("Monthly on the last Wednesday").is_ok());
+        assert!(ui.find("RRULE").is_err());
     }
 }

@@ -183,6 +183,10 @@ pub struct ViewSettings {
     pub border_radius: f32,
     /// Width of the dock strip, in logical pixels.
     pub dock_width: f32,
+    /// Space between the dock and the left and right screen edges, in logical
+    /// pixels. A top or bottom dock uses it at both ends; a side dock uses it
+    /// as the gap from the edge it hugs.
+    pub dock_margin: f32,
     /// Which screen edge the dock hugs.
     pub dock_side: DockSide,
     /// Thickness of the dock's outer border, in logical pixels. Zero hides it.
@@ -282,6 +286,7 @@ impl Default for ViewSettings {
             margin: 8.0,
             border_radius: 4.0,
             dock_width: 10.0,
+            dock_margin: 0.0,
             dock_side: DockSide::Left,
             dock_border_outer_width: 1.0,
             dock_border_outer_color: HexColor(Color::WHITE),
@@ -301,6 +306,7 @@ impl ViewSettings {
     pub const MAX_BORDER_RADIUS: f32 = 30.0;
     pub const MIN_DOCK_WIDTH: f32 = 2.0;
     pub const MAX_DOCK_WIDTH: f32 = 40.0;
+    pub const MAX_DOCK_MARGIN: f32 = 100.0;
     pub const MAX_DOCK_BORDER_WIDTH: f32 = 5.0;
     pub const MAX_FADE_DURATION_MS: u32 = 5000;
 
@@ -342,6 +348,15 @@ impl ViewSettings {
                 .clamp(Self::MIN_DOCK_WIDTH, Self::MAX_DOCK_WIDTH)
         } else {
             Self::default().dock_width
+        }
+    }
+
+    /// The gap between the dock and the left and right screen edges.
+    pub fn dock_margin(&self) -> f32 {
+        if self.dock_margin.is_finite() {
+            self.dock_margin.clamp(0.0, Self::MAX_DOCK_MARGIN)
+        } else {
+            Self::default().dock_margin
         }
     }
 
@@ -1400,14 +1415,16 @@ mod tests {
     fn the_dock_edge_and_borders_round_trip() {
         let views = ViewSettings::default();
         assert_eq!(views.dock_side, DockSide::Left);
+        assert_eq!(views.dock_margin(), 0.0);
         assert_eq!(views.dock_border_outer_width(), 1.0);
         assert_eq!(views.dock_border_inner_width(), 1.0);
 
         let views: ViewSettings = toml::from_str(
-            "dock_side = \"bottom\"\ndock_border_outer_width = 2.0\ndock_border_outer_color = \"#FFFFFF\"\ndock_border_inner_width = 4.0\ndock_border_inner_color = \"#000000\"",
+            "dock_side = \"bottom\"\ndock_margin = 18.0\ndock_border_outer_width = 2.0\ndock_border_outer_color = \"#FFFFFF\"\ndock_border_inner_width = 4.0\ndock_border_inner_color = \"#000000\"",
         )
         .unwrap();
         assert_eq!(views.dock_side, DockSide::Bottom);
+        assert_eq!(views.dock_margin(), 18.0);
         assert_eq!(views.dock_border_outer_width(), 2.0);
         assert_eq!(views.dock_border_inner_width(), 4.0);
         assert_eq!(views.dock_border_outer_color.to_string(), "#FFFFFF");
