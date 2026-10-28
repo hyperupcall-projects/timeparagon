@@ -37,6 +37,14 @@ const TITLE_SIZE: f32 = 14.0;
 const BODY_SIZE: f32 = 12.0;
 const LINE_SPACING: f32 = 1.3;
 const BLOCK_GAP: f32 = 4.0;
+/// Hour lines are a faint gray.
+const HOUR_GRAY: Color = Color {
+    r: 0.6,
+    g: 0.6,
+    b: 0.6,
+    a: 0.55,
+};
+const HOUR_LINE_HEIGHT: f32 = 1.0;
 
 /// The theme colors the dock paints with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -167,6 +175,12 @@ pub struct Scene<'a> {
     pub segments: &'a [Segment],
     pub now_minute: Option<f32>,
     pub hovered: Option<usize>,
+    /// The segment whose full card was left open by a click.
+    pub pinned: Option<usize>,
+    /// Minutes past midnight at which the strip's day begins, which places
+    /// the hour lines.
+    pub day_offset_min: i32,
+    pub hour_lines: bool,
     /// Whether the pointer is on the back button.
     pub button_hovered: bool,
     /// What the back button says when hovered.
@@ -228,6 +242,19 @@ struct CardKey {
 }
 
 type TextSystem = (FontSystem, SwashCache);
+
+/// The font database, built now if the warm-up thread has not delivered it.
+fn text_system<'a>(
+    text: &'a mut Option<TextSystem>,
+    warmup: &mut Option<mpsc::Receiver<TextSystem>>,
+) -> &'a mut TextSystem {
+    text.get_or_insert_with(|| {
+        warmup
+            .take()
+            .and_then(|loading| loading.recv().ok())
+            .unwrap_or_else(|| (FontSystem::new(), SwashCache::new()))
+    })
+}
 
 /// Loads the system fonts on a thread of their own. Building the font
 /// database takes long enough to be felt as lag on the first hover, so it
@@ -299,6 +326,21 @@ impl Renderer {
 
             if hovered {
                 stroke_rounded(pixmap, layout, rect, 2.0, palette.text, 1.0);
+            } else if scene.pinned == Some(index) {
+                stroke_rounded(pixmap, layout, rect, 2.0, palette.accent, 1.0);
+            }
+        }
+
+        if scene.hour_lines {
+            for minute in (1..DAY_MINUTES).filter(|m| (scene.day_offset_min + m) % 60 == 0) {
+                let y = layout.y_of(minute as f32) - HOUR_LINE_HEIGHT / 2.0;
+                fill_rect(
+                    pixmap,
+                    layout,
+                    (layout.strip_x, y, layout.strip_width, HOUR_LINE_HEIGHT),
+                    HOUR_GRAY,
+                    1.0,
+                );
             }
         }
 
@@ -323,11 +365,22 @@ impl Renderer {
                 lines: Vec::new(),
             };
             Some(self.paint_card(layout, palette, &card, 0.0, pixmap))
-        } else if let Some(segment) = scene.hovered.and_then(|index| scene.segments.get(index)) {
-            let (_, top, _, _) = layout.segment_rect(segment);
-            Some(self.paint_card(layout, palette, &segment.card, top, pixmap))
         } else {
-            None
+            // Hovering shows the short card, except over the pinned segment,
+            // which keeps showing everything. With nothing hovered, the
+            // pinned card stays.
+            let shown = match (scene.hovered, scene.pinned) {
+                (Some(hovered), Some(pinned)) if hovered == pinned => Some((pinned, true)),
+                (Some(hovered), _) => Some((hovered, false)),
+                (None, Some(pinned)) => Some((pinned, true)),
+                (None, None) => None,
+            };
+            shown.and_then(|(index, full)| {
+                let segment = scene.segments.get(index)?;
+                let (_, top, _, _) = layout.segment_rect(segment);
+                let card = if full { &segment.full } else { &segment.card };
+                Some(self.paint_card(layout, palette, card, top, pixmap))
+            })
         };
 
         if let Some(card) = card {
@@ -356,12 +409,7 @@ impl Renderer {
             cards,
             ..
         } = self;
-        let (font_system, swash) = text.get_or_insert_with(|| {
-            warmup
-                .take()
-                .and_then(|loading| loading.recv().ok())
-                .unwrap_or_else(|| (FontSystem::new(), SwashCache::new()))
-        });
+        let (font_system, swash) = text_system(text, warmup);
 
         let inner = (layout.card_width - 2.0 * CARD_PADDING).max(10.0);
         let key = CardKey {
@@ -399,22 +447,15 @@ impl Renderer {
             if cursor + block.height > y + height - CARD_PADDING + 0.5 {
                 break;
             }
-            let origin = (
-                layout.physical(layout.card_x + CARD_PADDING),
-                layout.physical(cursor),
+            draw_block(
+                pixmap,
+                layout,
+                font_system,
+                swash,
+                block,
+                layout.card_x + CARD_PADDING,
+                cursor,
             );
-            block
-                .buffer
-                .draw(font_system, swash, block.color, |x, y, w, h, color| {
-                    blend_rect(
-                        pixmap,
-                        origin.0.round() as i32 + x,
-                        origin.1.round() as i32 + y,
-                        w,
-                        h,
-                        color,
-                    )
-                });
             cursor += block.height + BLOCK_GAP;
         }
 
@@ -492,6 +533,27 @@ fn paint_button(pixmap: &mut Pixmap, layout: &Layout, scene: &Scene) {
             None,
         );
     }
+}
+
+/// Draws a laid-out block with its top-left corner at a logical position.
+fn draw_block(
+    pixmap: &mut Pixmap,
+    layout: &Layout,
+    font_system: &mut FontSystem,
+    swash: &mut SwashCache,
+    block: &Block,
+    x: f32,
+    y: f32,
+) {
+    let origin = (
+        layout.physical(x).round() as i32,
+        layout.physical(y).round() as i32,
+    );
+    block
+        .buffer
+        .draw(font_system, swash, block.color, |dx, dy, w, h, color| {
+            blend_rect(pixmap, origin.0 + dx, origin.1 + dy, w, h, color)
+        });
 }
 
 struct Block {
@@ -701,17 +763,83 @@ mod tests {
     use crate::dock::model::Card;
 
     fn segment(start_min: i32, end_min: i32) -> Segment {
+        let card = Card {
+            title: "Standup".into(),
+            when: "09:00 – 09:30".into(),
+            lines: vec!["Room 4".into()],
+        };
         Segment {
             start_min,
             end_min,
             color: Color::from_rgb(0.2, 0.4, 0.9),
             completed: false,
-            card: Card {
-                title: "Standup".into(),
-                when: "09:00 – 09:30".into(),
-                lines: vec!["Room 4".into()],
+            full: Card {
+                lines: vec!["Room 4".into(), "Everything else".into()],
+                ..card.clone()
             },
+            card,
         }
+    }
+
+    #[test]
+    fn hour_lines_cross_the_strip_only_when_asked() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let (width, height) = layout.pixel_size();
+        let scene = |hour_lines| Scene {
+            segments: &[],
+            now_minute: None,
+            hovered: None,
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines,
+            button_hovered: false,
+            back_label: "",
+            side: Side::Left,
+            palette: palette(),
+        };
+        // One o'clock sits 60 minutes into the day.
+        let y = layout.y_of(60.0).floor() as u32;
+
+        let mut off = Pixmap::new(width, height).unwrap();
+        Renderer::default().paint(&layout, &scene(false), &mut off);
+        let mut on = Pixmap::new(width, height).unwrap();
+        Renderer::default().paint(&layout, &scene(true), &mut on);
+
+        assert_ne!(on.pixel(5, y), off.pixel(5, y));
+        assert_eq!(on.pixel(5, y + 10), off.pixel(5, y + 10));
+        assert_eq!(on.pixel(150, y).unwrap().alpha(), 0);
+    }
+
+    #[test]
+    fn a_pinned_card_stays_after_the_pointer_leaves_and_is_the_full_one() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let (width, height) = layout.pixel_size();
+        let segments = [segment(600, 630)];
+        let scene = |hovered, pinned| Scene {
+            segments: &segments,
+            now_minute: None,
+            hovered,
+            pinned,
+            day_offset_min: 0,
+            hour_lines: false,
+            button_hovered: false,
+            back_label: "",
+            side: Side::Left,
+            palette: palette(),
+        };
+        let mut renderer = Renderer::default();
+        let mut pixmap = Pixmap::new(width, height).unwrap();
+
+        renderer.paint(&layout, &scene(None, Some(0)), &mut pixmap);
+        assert_eq!(pixmap.pixel(150, 615).unwrap().alpha(), 255);
+        let shown = renderer.cards.last().unwrap().0.card.clone();
+        assert_eq!(shown, segments[0].full);
+
+        renderer.paint(&layout, &scene(Some(0), None), &mut pixmap);
+        assert_eq!(renderer.cards.last().unwrap().0.card, segments[0].card);
+
+        renderer.paint(&layout, &scene(None, None), &mut pixmap);
+        assert_eq!(pixmap.pixel(150, 615).unwrap().alpha(), 0);
     }
 
     fn palette() -> Palette {
@@ -770,6 +898,9 @@ mod tests {
             segments: &[],
             now_minute: None,
             hovered: None,
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines: false,
             button_hovered: true,
             back_label: "Open the full window",
             side: Side::Left,
@@ -804,6 +935,9 @@ mod tests {
             segments: &[segment(60, 120)],
             now_minute: Some(600.0),
             hovered: None,
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines: false,
             button_hovered: false,
             back_label: "Open the full window",
             side: Side::Left,
@@ -840,6 +974,9 @@ mod tests {
             segments: &[segment(600, 630)],
             now_minute: None,
             hovered: Some(0),
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines: false,
             button_hovered: false,
             back_label: "Open the full window",
             side: Side::Left,
@@ -862,6 +999,9 @@ mod tests {
             segments: &segments,
             now_minute: None,
             hovered,
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines: false,
             button_hovered: false,
             back_label: "Open the full window",
             side: Side::Left,
@@ -902,6 +1042,9 @@ mod tests {
                 segments: &segments,
                 now_minute: None,
                 hovered: Some(hovered),
+                pinned: None,
+                day_offset_min: 0,
+                hour_lines: false,
                 button_hovered: false,
                 back_label: "Open the full window",
                 side: Side::Left,

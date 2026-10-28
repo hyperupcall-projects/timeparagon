@@ -50,7 +50,7 @@ fn main() -> iced::Result {
     // A daemon rather than an application: it opens no window on its own, so
     // the clock and the flash overlay are peers, and it does not quit the
     // moment the overlay closes.
-    iced::daemon(boot, app::update, app::view)
+    let result = iced::daemon(boot, app::update, app::view)
         .title(app::title)
         .theme(app::active_theme)
         .style(|_state, theme| {
@@ -59,5 +59,8 @@ fn main() -> iced::Result {
             style
         })
         .subscription(app::subscription)
-        .run()
+        .run();
+
+    time_slay::window_effect::shutdown();
+    result
 }

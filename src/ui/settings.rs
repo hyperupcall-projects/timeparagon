@@ -39,6 +39,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         appearance(state, metrics),
         heading("View layout", metrics),
         view_layout(state, metrics),
+        heading("Windowing", metrics),
+        windowing(state, metrics),
+        heading("Application", metrics),
+        restart(metrics),
         heading("Keyboard shortcuts", metrics),
         shortcuts(state, metrics),
         heading("Calendar view order", metrics),
@@ -190,6 +194,57 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
     ].spacing(metrics.spacing).into()
 }
 
+fn restart<'a>(metrics: &Metrics) -> Element<'a, Message> {
+    column![
+        button(
+            text("Restart and load the latest version")
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .on_press(Message::RestartRequested),
+        text("Saves, quits, and starts again from the installed binary, as the same panel, dock or window. The shortcut daemon is restarted too.")
+            .size(metrics.label())
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing)
+    .into()
+}
+
+fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let views = &state.config.views;
+    let mut section = column![choice(
+        "When the window appears",
+        crate::config::WindowAnimation::ALL.to_vec(),
+        Some(views.window_animation),
+        Message::WindowAnimationSelected,
+        metrics,
+    )]
+    .spacing(metrics.spacing);
+    if views.window_animation == crate::config::WindowAnimation::FadeIn {
+        section = section.push(layout_number(
+            "Fade duration (ms, 0–5000)",
+            LayoutField::FadeDuration,
+            state,
+            metrics,
+        ));
+    }
+    section
+        .push(switch(
+            "Dock hour lines",
+            views.dock_hour_lines,
+            Message::DockHourLinesToggled,
+            metrics,
+        ))
+        .push(
+            text("Desktop default lets the desktop pop the window in. Fade in ramps its opacity over the duration, in and out, and Instant shows it at once. These apply to the dock and the side panel, the next time either appears. On the side panel they need KDE's KWin.")
+                .size(metrics.label())
+                .style(text::secondary),
+        )
+        .into()
+}
+
 fn layout_number<'a>(
     label: &str,
     kind: LayoutField,
@@ -200,6 +255,7 @@ fn layout_number<'a>(
     let step = match kind {
         LayoutField::CalendarWidth | LayoutField::TimeBlockWidth | LayoutField::DetailWidth => 10.0,
         LayoutField::ScreenMargin | LayoutField::BorderRadius | LayoutField::DockWidth => 1.0,
+        LayoutField::FadeDuration => 10.0,
     };
     let (min, max) = kind.bounds();
     let shown = state
@@ -262,12 +318,18 @@ fn shortcut_action<'a>(
 
     let mut section = column![
         text(action.label()).size(metrics.label()),
-        text(action.description()).size(metrics.label()).style(text::secondary),
+        text(action.description())
+            .size(metrics.label())
+            .style(text::secondary),
     ]
     .spacing(metrics.spacing);
 
     if bound.is_empty() {
-        section = section.push(text("No shortcut").size(metrics.label()).style(text::secondary));
+        section = section.push(
+            text("No shortcut")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
     }
     for (index, shortcut) in bound.iter().enumerate() {
         let mut remove = button(text("Remove").size(metrics.label())).style(button::secondary);
@@ -275,18 +337,25 @@ fn shortcut_action<'a>(
             remove = remove.on_press(Message::ShortcutRemoved(action, index));
         }
         section = section.push(
-            row![text(shortcut.as_str()).size(metrics.label()).width(Fill), remove]
-                .spacing(metrics.spacing)
-                .align_y(Center),
+            row![
+                text(shortcut.as_str()).size(metrics.label()).width(Fill),
+                remove
+            ]
+            .spacing(metrics.spacing)
+            .align_y(Center),
         );
     }
 
     let mut input = text_input("e.g. Meta+U", &editor.input).size(metrics.label());
     let mut add = button(
-        text(if editor.busy { "Applying…" } else { "Add shortcut" })
-            .size(metrics.label())
-            .center()
-            .width(Fill),
+        text(if editor.busy {
+            "Applying…"
+        } else {
+            "Add shortcut"
+        })
+        .size(metrics.label())
+        .center()
+        .width(Fill),
     )
     .width(Fill);
     if !editor.busy {
@@ -297,7 +366,9 @@ fn shortcut_action<'a>(
             add = add.on_press(Message::ShortcutAdded(action));
         }
     }
-    section = section.push(field("New shortcut", input.into(), metrics)).push(add);
+    section = section
+        .push(field("New shortcut", input.into(), metrics))
+        .push(add);
 
     if let Some(result) = &editor.result {
         section = section.push(match result {

@@ -57,10 +57,7 @@ fn main() {
                 let at = time_slay::alarms::minute_of(chrono::Local::now())
                     + chrono::Duration::minutes(45);
                 let id = state.alarms.add(at, state.config.alarm.clone());
-                let _ = app::update(
-                    state,
-                    Message::Alarms(time_slay::alarms::Action::Open(id)),
-                );
+                let _ = app::update(state, Message::Alarms(time_slay::alarms::Action::Open(id)));
             });
 
             count += shoot(directory, theme, size, "settings", |state| {

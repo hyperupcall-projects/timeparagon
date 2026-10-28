@@ -17,13 +17,14 @@
 //! Layer shell is supported by KDE Plasma, Sway, Hyprland, niri and COSMIC. It
 //! is not available on GNOME.
 
+pub mod animation;
 pub mod config;
 pub mod launch;
 pub mod model;
 pub mod render;
 
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{Local, NaiveDate};
@@ -64,6 +65,9 @@ use tiny_skia::Pixmap;
 /// Linux evdev code of the left mouse button, which is what Wayland reports.
 const BTN_LEFT: u32 = 0x110;
 
+/// How often the fade-in is redrawn, about 60 frames a second.
+const FADE_STEP: Duration = Duration::from_millis(16);
+
 /// How often the "now" line moves and the day rolls over.
 const TICK: Duration = Duration::from_secs(30);
 
@@ -74,10 +78,7 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
         .init();
 
-    anyhow::ensure!(
-        !ipc::is_visible(ipc::DOCK),
-        "the dock is already running"
-    );
+    anyhow::ensure!(!ipc::is_visible(ipc::DOCK), "the dock is already running");
 
     let app_config = Config::load();
     let dock_config = config::DockConfig::load(&app_config.views);
@@ -97,8 +98,13 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     let shm = Shm::bind(&globals, &qh).context("wl_shm is missing")?;
 
     let surface = compositor.create_surface(&qh);
-    let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("time-slay-dock"), None);
+    let layer = layer_shell.create_layer_surface(
+        &qh,
+        surface,
+        Layer::Top,
+        Some(dock_config.animation.namespace("time-slay-dock")),
+        None,
+    );
     let (anchor, margin) = match dock_config.side {
         Side::Left => (
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
@@ -139,7 +145,7 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     handle
         .insert_source(hide_rx, |event, _, dock| {
             if let channel::Event::Msg(()) = event {
-                dock.exit = true;
+                dock.request_exit();
             }
         })
         .map_err(|error| anyhow!("could not listen for the hide command: {error}"))?;
@@ -150,6 +156,7 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         .then(|| spawn_sync(&app_config, snapshots_tx));
 
     let pool = SlotPool::new(4096, &shm).context("could not allocate shared memory")?;
+    let opening = animation::Opening::new(dock_config.animation, dock_config.fade_duration_ms);
     let mut dock = Dock {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
@@ -167,6 +174,9 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         day: today,
         origin,
         hovered: None,
+        pinned: None,
+        opening,
+        fading: false,
         button_hovered: false,
         pointer_position: None,
         size: None,
@@ -201,7 +211,15 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     // after this one was hidden has already replaced it, and an unanswered
     // socket reads as "not running".
     while !dock.exit {
-        event_loop.dispatch(None, &mut dock)?;
+        // The fade has no frame callback to pace it, so the loop wakes itself.
+        let timeout = dock.fading.then_some(FADE_STEP);
+        event_loop.dispatch(timeout, &mut dock)?;
+        if dock.fading {
+            dock.draw();
+        }
+        if dock.opening.is_closed() {
+            dock.exit = true;
+        }
     }
 
     Ok(())
@@ -306,6 +324,11 @@ struct Dock {
     /// What the dock replaced, which its back button returns to.
     origin: launch::Origin,
     hovered: Option<usize>,
+    /// The segment whose full card a click left open.
+    pinned: Option<usize>,
+    opening: animation::Opening,
+    /// Whether the fade-in is still running, so the loop keeps drawing.
+    fading: bool,
     button_hovered: bool,
     pointer_position: Option<(f64, f64)>,
     /// The configured logical size, once the compositor has sent one.
@@ -330,17 +353,42 @@ impl Dock {
     }
 
     fn refresh_segments(&mut self) {
+        // A pinned card follows its segment, or goes if the segment is gone.
+        let pinned = self
+            .pinned
+            .and_then(|index| self.segments.get(index))
+            .map(|segment| {
+                (
+                    segment.start_min,
+                    segment.end_min,
+                    segment.card.title.clone(),
+                )
+            });
         self.segments = model::segments(&self.store, &self.app_config.calendar, self.day);
+        self.pinned = pinned.and_then(|(start, end, title)| {
+            self.segments.iter().position(|segment| {
+                segment.start_min == start && segment.end_min == end && segment.card.title == title
+            })
+        });
         self.hovered = match (self.layout(), self.pointer_position) {
             (Some(layout), Some((x, y))) => layout.hit(&self.segments, x, y),
             _ => None,
         };
     }
 
+    /// Quits, fading out first when the dock fades in.
+    fn request_exit(&mut self) {
+        if self.layout().is_none() || !self.opening.begin_close(Instant::now()) {
+            self.exit = true;
+            return;
+        }
+        self.fading = true;
+    }
+
     /// Hands over to what the dock replaced, then quits.
     fn go_back(&mut self) {
         match launch::close_dock(self.origin) {
-            Ok(()) => self.exit = true,
+            Ok(()) => self.request_exit(),
             Err(error) => log::error!("could not leave the dock: {error:#}"),
         }
     }
@@ -392,6 +440,9 @@ impl Dock {
             segments: &self.segments,
             now_minute: now,
             hovered: self.hovered,
+            pinned: self.pinned,
+            day_offset_min: self.app_config.calendar.day_end_minutes(),
+            hour_lines: self.config.hour_lines,
             button_hovered: self.button_hovered,
             back_label: self.origin.back_label(),
             side: self.config.side,
@@ -439,18 +490,29 @@ impl Dock {
             }
         };
 
+        let (opacity, fading) = self.opening.sample(Instant::now());
+        let was_fading = std::mem::replace(&mut self.fading, fading);
+
         let frame = &mut self.frames[index];
         let Some(canvas) = frame.buffer.canvas(&mut self.pool) else {
             return;
         };
-        for patch in frame.stale.drain(..) {
-            render::copy_patch(pixmap, canvas, patch);
+        if fading {
+            // A faded buffer can't be patched later, so it is rewritten whole
+            // now and again on its next use.
+            render::copy_patch(pixmap, canvas, whole);
+            animation::apply_opacity(canvas, opacity);
+            frame.stale = vec![whole];
+        } else {
+            for patch in frame.stale.drain(..) {
+                render::copy_patch(pixmap, canvas, patch);
+            }
         }
         let buffer = &frame.buffer;
 
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.scale);
-        if resized {
+        if resized || fading || was_fading {
             surface.damage_buffer(0, 0, whole.width, whole.height);
         } else {
             for patch in &damage {
@@ -638,6 +700,12 @@ impl PointerHandler for Dock {
                     if button == BTN_LEFT && self.button_hovered =>
                 {
                     self.go_back();
+                }
+                PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                    if let Some(hovered) = self.hovered {
+                        self.pinned = (self.pinned != Some(hovered)).then_some(hovered);
+                        changed = true;
+                    }
                 }
                 _ => {}
             }

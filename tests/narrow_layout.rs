@@ -6,7 +6,6 @@
 //! no golden images are involved, which is what makes them worth running on
 //! every change.
 
-
 use chrono::Local;
 use iced::{Element, Point, Size};
 use iced_test::core::Settings;
@@ -323,10 +322,7 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
     let mut state = state();
 
     {
-        let mut ui = at(
-            Size::new(800.0, 600.0),
-            time_slay::ui::flash::view(&state),
-        );
+        let mut ui = at(Size::new(800.0, 600.0), time_slay::ui::flash::view(&state));
         let _: Result<_, _> = ui.find("nothing");
     }
 
@@ -336,10 +332,7 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
         settings: time_slay::config::Flash::default(),
     });
 
-    let mut ui = at(
-        Size::new(800.0, 600.0),
-        time_slay::ui::flash::view(&state),
-    );
+    let mut ui = at(Size::new(800.0, 600.0), time_slay::ui::flash::view(&state));
     let _: Result<_, _> = ui.find("nothing");
 }
 

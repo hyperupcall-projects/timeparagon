@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::config::ViewSettings;
+use crate::config::{ViewSettings, WindowAnimation};
 use crate::panel::Side;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -24,6 +24,15 @@ pub struct DockConfig {
     /// with the side panel.
     #[serde(skip)]
     pub margin: u32,
+    /// How the strip appears, from the app's "Windowing" settings.
+    #[serde(skip)]
+    pub animation: WindowAnimation,
+    /// Fade-in length in milliseconds, from the app's settings.
+    #[serde(skip)]
+    pub fade_duration_ms: u32,
+    /// Whether to draw hour lines, from the app's settings.
+    #[serde(skip)]
+    pub hour_lines: bool,
     /// Width of the hover card, in logical pixels.
     pub popup_width: u32,
     /// Space between the strip and the hover card, in logical pixels.
@@ -36,6 +45,9 @@ impl Default for DockConfig {
             side: Side::Left,
             width: 10,
             margin: 8,
+            animation: WindowAnimation::DesktopDefault,
+            fade_duration_ms: 150,
+            hour_lines: true,
             popup_width: 300,
             popup_gap: 6,
         }
@@ -50,6 +62,9 @@ impl DockConfig {
         let mut config = Self::from_file();
         config.width = views.dock_width().round() as u32;
         config.margin = views.margin().round() as u32;
+        config.animation = views.window_animation;
+        config.fade_duration_ms = views.fade_duration_ms();
+        config.hour_lines = views.dock_hour_lines;
         config.sanitized()
     }
 
@@ -128,6 +143,21 @@ mod tests {
 
         assert_eq!(config.width, 14);
         assert_eq!(config.margin, 20);
+    }
+
+    #[test]
+    fn the_window_options_come_from_the_view_settings() {
+        let views = ViewSettings {
+            window_animation: WindowAnimation::FadeIn,
+            fade_duration_ms: 400,
+            dock_hour_lines: false,
+            ..ViewSettings::default()
+        };
+        let config = DockConfig::load(&views);
+
+        assert_eq!(config.animation, WindowAnimation::FadeIn);
+        assert_eq!(config.fade_duration_ms, 400);
+        assert!(!config.hour_lines);
     }
 
     #[test]

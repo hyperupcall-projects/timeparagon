@@ -226,6 +226,15 @@ Hyprland, niri and COSMIC provide that protocol; GNOME does not.
   background colour (from the configured theme), not transparent.
 - A red line marks the current time.
 - Hovering a span opens a card beside the strip, level with that span.
+- Clicking a span pins its card open with everything about it (the whole
+  description, and for a time block every task assigned to it). It stays when
+  the pointer leaves; click the span again to close it.
+- A faint gray line marks each hour across the strip. Turn this off in
+  Settings → Windowing.
+- Settings → Windowing sets how the dock appears: the desktop default, a fade
+  in (with a duration in ms), or instantly. The dock does this itself; the side
+  panel loads a temporary KWin script effect (so it needs KDE) and carries the
+  mode in its application ID, which means it loses its desktop-file icon.
 - Only the strip takes the pointer; the card area is transparent and click-through.
 
 Switching modes: in the regular window or the side panel, open the calendar

@@ -102,6 +102,33 @@ pub fn close_dock(origin: Origin) -> Result<()> {
 
 /// The `time-slay` binary: this very program when that is what is running,
 /// and otherwise the one installed beside it.
+/// Starts a fresh copy of this process, same mode and arguments, from
+/// whatever binary is on disk now, a moment after this one has quit. The
+/// shortcut daemon is restarted too, so it is not left on the old binary.
+pub fn relaunch() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    // Linux marks the path of a replaced executable as deleted.
+    let exe = std::env::current_exe().context("could not find the running binary")?;
+    let exe = match exe.to_str().and_then(|path| path.strip_suffix(" (deleted)")) {
+        Some(path) => PathBuf::from(path),
+        None => exe,
+    };
+
+    Command::new("sh")
+        .arg("-c")
+        .arg(
+            "sleep 0.7; systemctl --user try-restart time-slay-shortcuts.service \
+             >/dev/null 2>&1; exec \"$0\" \"$@\"",
+        )
+        .arg(&exe)
+        .args(std::env::args_os().skip(1))
+        .process_group(0)
+        .spawn()
+        .with_context(|| format!("failed to relaunch {}", exe.display()))?;
+    Ok(())
+}
+
 pub(crate) fn main_binary() -> Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && exe.file_stem().is_some_and(|stem| stem == "time-slay")

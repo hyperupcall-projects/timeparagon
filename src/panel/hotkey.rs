@@ -23,6 +23,10 @@ const COMPONENT_FRIENDLY: &str = "TimeSlay";
 /// carries over to [`Action::ToggleVisibility`] and the action is removed.
 const LEGACY_ACTION: &str = "panel";
 const LEGACY_ACTION_FRIENDLY: &str = "Toggle Side Panel";
+/// The component id before the project was renamed. Its "panel" action
+/// outlives the old daemon in KGlobalAccel and keeps claiming its key.
+const LEGACY_COMPONENT: &str = "timetracker";
+const LEGACY_COMPONENT_FRIENDLY: &str = "TimeTracker";
 
 /// `KGlobalAccelD::SetShortcutFlag` values (see `kglobalacceld.h`).
 ///
@@ -64,6 +68,11 @@ trait KGlobalAccel {
     #[zbus(name = "shortcutKeys")]
     fn shortcut_keys(&self, action_id: &[&str]) -> zbus::Result<Vec<(Vec<i32>,)>>;
 
+    /// The `[component, action, component friendly name, action friendly
+    /// name]` that currently owns `key`, or an empty list when it is free.
+    #[zbus(name = "action")]
+    fn action(&self, key: i32) -> zbus::Result<Vec<String>>;
+
     #[zbus(name = "unregister")]
     fn unregister(&self, component_unique: &str, action_unique: &str) -> zbus::Result<bool>;
 
@@ -104,17 +113,74 @@ pub fn rebind(action: Action, specs: &[String]) -> Result<()> {
     let previous = kga
         .shortcut_keys(&id)
         .context("Could not read the current shortcuts")?;
-    let applied = kga
-        .set_shortcut_keys(&id, &keys, SET_PRESENT | NO_AUTOLOADING)
-        .context("Could not change the shortcuts")?;
-    if !same_keys(&applied, &keys) {
-        kga.set_shortcut_keys(&id, &previous, SET_PRESENT | NO_AUTOLOADING)
-            .context("Shortcut unavailable, and restoring the previous shortcuts failed")?;
+
+    // Leftovers of earlier versions would otherwise block their old keys with
+    // nothing in System Settings that can release them.
+    evict_legacy(&kga);
+
+    let apply = || {
+        kga.set_shortcut_keys(&id, &keys, SET_PRESENT | NO_AUTOLOADING)
+            .context("Could not change the shortcuts")
+    };
+    let applied = apply()?;
+    if same_keys(&applied, &keys) {
+        return Ok(());
+    }
+
+    let blocked = blocked_by(&kga, specs, &keys, &applied, &id);
+    kga.set_shortcut_keys(&id, &previous, SET_PRESENT | NO_AUTOLOADING)
+        .context("Shortcut unavailable, and restoring the previous shortcuts failed")?;
+    if blocked.is_empty() {
         anyhow::bail!(
             "Shortcut unavailable. It may already be used by another application; try another combination"
         );
     }
-    Ok(())
+    anyhow::bail!("Shortcut unavailable. {}", blocked.join("; "))
+}
+
+/// Removes the registrations of earlier versions, which no live process owns.
+fn evict_legacy(kga: &KGlobalAccelProxyBlocking<'_>) {
+    for (component, action) in [
+        (LEGACY_COMPONENT, LEGACY_ACTION),
+        (COMPONENT, LEGACY_ACTION),
+    ] {
+        let _ = kga.unregister(component, action);
+    }
+}
+
+/// Describes who owns each requested key that was not applied.
+fn blocked_by(
+    kga: &KGlobalAccelProxyBlocking<'_>,
+    specs: &[String],
+    wanted: &[(Vec<i32>,)],
+    applied: &[(Vec<i32>,)],
+    own: &[&str; 4],
+) -> Vec<String> {
+    let mut blocked = Vec::new();
+    // `encode_all` drops repeats, so pair each distinct key with its spelling.
+    let mut seen: Vec<&(Vec<i32>,)> = Vec::new();
+    for spec in specs {
+        let Ok(code) = parse_shortcut(spec) else {
+            continue;
+        };
+        let key = (encode_sequence(code),);
+        let Some(key) = wanted.iter().find(|w| **w == key) else {
+            continue;
+        };
+        if seen.contains(&key) || applied.contains(key) {
+            continue;
+        }
+        seen.push(key);
+        let owner = kga.action(code).unwrap_or_default();
+        let described = match owner.as_slice() {
+            [component, action, ..] if component == own[0] && action == own[1] => continue,
+            [_, _, component, action] => format!("{component} → {action}"),
+            [component, action, ..] => format!("{component} → {action}"),
+            _ => continue,
+        };
+        blocked.push(format!("{spec} is already used by {described}"));
+    }
+    blocked
 }
 
 /// Whether `applied` holds exactly the `wanted` sequences, in any order.
@@ -173,10 +239,19 @@ fn run(sender: Sender<Action>, config: &PanelConfig) -> Result<()> {
         COMPONENT_FRIENDLY,
         LEGACY_ACTION_FRIENDLY,
     ];
-    let legacy_keys = kga.shortcut_keys(&legacy_id).unwrap_or_default();
-    // Removed before the new actions are bound, because it would otherwise
-    // still claim its key, and linger in System Settings.
-    let _ = kga.unregister(COMPONENT, LEGACY_ACTION);
+    let pre_rename_id = [
+        LEGACY_COMPONENT,
+        LEGACY_ACTION,
+        LEGACY_COMPONENT_FRIENDLY,
+        LEGACY_ACTION_FRIENDLY,
+    ];
+    let mut legacy_keys = kga.shortcut_keys(&legacy_id).unwrap_or_default();
+    if legacy_keys.is_empty() {
+        legacy_keys = kga.shortcut_keys(&pre_rename_id).unwrap_or_default();
+    }
+    // Removed before the new actions are bound, because they would otherwise
+    // still claim their keys, and linger in System Settings.
+    evict_legacy(&kga);
 
     for action in Action::ALL {
         let id = action_id(action);

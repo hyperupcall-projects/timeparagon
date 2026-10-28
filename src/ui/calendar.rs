@@ -4298,7 +4298,7 @@ mod tests {
     }
 
     #[test]
-    fn hour_labels_match_google_calendar() {
+    fn hour_lines_match_google_calendar() {
         assert_eq!(calendar::hour_label(0), "12 AM");
         assert_eq!(calendar::hour_label(9), "9 AM");
         assert_eq!(calendar::hour_label(12), "12 PM");

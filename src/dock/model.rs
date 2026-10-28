@@ -10,6 +10,7 @@ use iced::Color;
 use crate::calendar::layout::{self, Span};
 use crate::calendar::{self, Event, Store};
 use crate::config::CalendarSettings;
+use crate::timeblocking;
 
 /// Minutes in a day, the height of the strip in minutes.
 pub const DAY_MINUTES: i32 = 24 * 60;
@@ -25,7 +26,10 @@ pub struct Segment {
     pub color: Color,
     /// A ticked-off task is drawn faded rather than hidden.
     pub completed: bool,
+    /// The short card shown while hovering.
     pub card: Card,
+    /// Everything about the segment, shown once it is clicked.
+    pub full: Card,
 }
 
 /// What the hover card says about a segment.
@@ -54,6 +58,7 @@ pub fn segments(store: &Store, settings: &CalendarSettings, day: NaiveDate) -> V
         })
         .collect();
 
+    let all = store.events_on(day);
     let sources = store.display_sources(settings);
     let priorities: Vec<usize> = timed
         .iter()
@@ -71,14 +76,39 @@ pub fn segments(store: &Store, settings: &CalendarSettings, day: NaiveDate) -> V
         .zip(&spans)
         .zip(&packed)
         .filter(|(_, slot)| slot.column == 0)
-        .map(|((event, span), _)| Segment {
-            start_min: span.start_min,
-            end_min: span.end_min,
-            color: event.color,
-            completed: event.is_task() && event.completed,
-            card: card(event),
+        .map(|((event, span), _)| {
+            let assigned = assigned_tasks(all, event, settings);
+            Segment {
+                start_min: span.start_min,
+                end_min: span.end_min,
+                color: event.color,
+                completed: event.is_task() && event.completed,
+                card: card(event, &assigned, false),
+                full: card(event, &assigned, true),
+            }
         })
         .collect()
+}
+
+/// The tasks assigned to `event`, when it is a time block, in the order they
+/// were arranged in.
+fn assigned_tasks<'a>(
+    all: &'a [Event],
+    event: &Event,
+    settings: &CalendarSettings,
+) -> Vec<&'a Event> {
+    if !timeblocking::is_block(event, settings) {
+        return Vec::new();
+    }
+    let key = timeblocking::block_key(event);
+    let mut tasks: Vec<&Event> = all
+        .iter()
+        .filter(|task| {
+            task.is_task() && timeblocking::metadata(task).block.as_deref() == Some(&key)
+        })
+        .collect();
+    tasks.sort_by_key(|task| (timeblocking::metadata(task).order, task.id.clone()));
+    tasks
 }
 
 /// Where "right now" sits in the day, in minutes, or `None` outside the day.
@@ -99,7 +129,9 @@ fn minutes_into_day(when: DateTime<Local>, day: NaiveDate, offset: i32) -> i32 {
     days * DAY_MINUTES + calendar::minutes_from_midnight(when) - offset
 }
 
-fn card(event: &Event) -> Card {
+/// `full` keeps the whole description and lists a time block's tasks; the
+/// hover card only says how many there are.
+fn card(event: &Event, assigned: &[&Event], full: bool) -> Card {
     let title = if event.is_task() {
         crate::timeblocking::task_label(event)
     } else {
@@ -121,17 +153,47 @@ fn card(event: &Event) -> Card {
         lines.push(format!("Organizer: {}", details.organizer.trim()));
     }
     if !details.attendees.is_empty() {
-        lines.push(format!("{} attendees", details.attendees.len()));
+        lines.push(if full {
+            format!("Attendees: {}", details.attendees.join(", "))
+        } else {
+            format!("{} attendees", details.attendees.len())
+        });
     }
     let description = details.description.trim();
     if !description.is_empty() {
-        lines.push(truncate(description, DESCRIPTION_CHARS));
+        lines.push(if full {
+            description.to_owned()
+        } else {
+            truncate(description, DESCRIPTION_CHARS)
+        });
+    }
+
+    if full && !assigned.is_empty() {
+        lines.push(format!("Assigned tasks ({})", assigned.len()));
+        lines.extend(assigned.iter().map(|task| task_line(task)));
+    } else if !assigned.is_empty() {
+        lines.push(format!("{} assigned tasks", assigned.len()));
+    }
+    if !full {
+        lines.push("Click for everything".to_owned());
     }
 
     Card {
         title,
         when: calendar::event_time_label(event),
         lines,
+    }
+}
+
+/// One task in a block's list: a checkbox, its name, and its length.
+fn task_line(task: &Event) -> String {
+    let mark = if task.completed { "☑" } else { "☐" };
+    let minutes = timeblocking::metadata(task).minutes;
+    let label = &task.title;
+    if minutes > 0 {
+        format!("{mark} {label} ({minutes}m)")
+    } else {
+        format!("{mark} {label}")
     }
 }
 
@@ -249,11 +311,60 @@ mod tests {
         );
         long.details.description = "x".repeat(1000);
 
-        let card = card(&long);
+        let card = card(&long, &[], false);
 
+        let description = &card.lines[card.lines.len() - 2];
+        assert_eq!(description.chars().count(), DESCRIPTION_CHARS + 1);
         assert_eq!(
-            card.lines.last().unwrap().chars().count(),
-            DESCRIPTION_CHARS + 1
+            card.lines.last().map(String::as_str),
+            Some("Click for everything")
         );
+
+        let full = self::card(&long, &[], true);
+        assert_eq!(full.lines.last().unwrap().chars().count(), 1000);
+    }
+
+    #[test]
+    fn a_time_block_lists_every_task_assigned_to_it_when_clicked() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap();
+        let settings = CalendarSettings {
+            time_block_calendar: Some("blocks".into()),
+            ..CalendarSettings::default()
+        };
+        let task = |id: &str, block: &str, order: i64| {
+            let mut task = event(id, "tasks:list", at(day, 0, 0), 0);
+            task.id = format!("task:{id}");
+            task.all_day = true;
+            task.details.description = format!(
+                "tt-timeblocking: {{\"block\":\"{block}\",\"minutes\":30,\"order\":{order}}}"
+            );
+            task
+        };
+        let store = store(
+            vec![
+                event("b1", "blocks", at(day, 9, 0), 60),
+                task("second", "blocks/b1", 2),
+                task("first", "blocks/b1", 1),
+                task("elsewhere", "blocks/other", 1),
+            ],
+            day,
+        );
+
+        let found = segments(&store, &settings, day);
+        let block = found.iter().find(|s| s.card.title == "b1").unwrap();
+
+        let tasks: Vec<_> = block
+            .full
+            .lines
+            .iter()
+            .skip_while(|line| !line.starts_with("Assigned tasks"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            tasks,
+            ["Assigned tasks (2)", "☐ first (30m)", "☐ second (30m)"]
+        );
+        assert!(block.card.lines.contains(&"2 assigned tasks".to_owned()));
+        assert!(!block.card.lines.iter().any(|line| line.contains("first")));
     }
 }

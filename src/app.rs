@@ -62,6 +62,7 @@ pub enum LayoutField {
     ScreenMargin,
     BorderRadius,
     DockWidth,
+    FadeDuration,
 }
 
 impl LayoutField {
@@ -73,6 +74,7 @@ impl LayoutField {
             Self::ScreenMargin => state.config.views.margin(),
             Self::BorderRadius => state.config.views.border_radius(),
             Self::DockWidth => state.config.views.dock_width(),
+            Self::FadeDuration => state.config.views.fade_duration_ms() as f32,
         }
     }
 
@@ -84,6 +86,7 @@ impl LayoutField {
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
             ),
+            Self::FadeDuration => (0.0, config::ViewSettings::MAX_FADE_DURATION_MS as f32),
             _ => (
                 config::ViewSettings::MIN_WIDTH,
                 config::ViewSettings::MAX_WIDTH,
@@ -99,6 +102,7 @@ impl LayoutField {
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
             Self::BorderRadius => Message::BorderRadiusChanged(value),
             Self::DockWidth => Message::DockWidthChanged(value),
+            Self::FadeDuration => Message::FadeDurationChanged(value),
         }
     }
 }
@@ -275,6 +279,11 @@ pub enum Message {
     DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
     DockWidthChanged(f32),
+    FadeDurationChanged(f32),
+    WindowAnimationSelected(config::WindowAnimation),
+    DockHourLinesToggled(bool),
+    /// Quit and start again from the binary on disk.
+    RestartRequested,
     BorderRadiusChanged(f32),
     ViewLayoutInputChanged(LayoutField, String),
     ViewLayoutInputSubmitted(LayoutField),
@@ -692,7 +701,16 @@ fn sidebar_settings(panel: &panel::PanelConfig, views: &config::ViewSettings) ->
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: true,
         icon: window_icon(),
-        platform_specific: window_platform(),
+        platform_specific: sidebar_platform(views),
+        ..Default::default()
+    }
+}
+
+/// The panel's app ID carries its opening animation to KWin. That costs the
+/// panel its desktop-file icon, which only matters for the title bar it lacks.
+fn sidebar_platform(views: &config::ViewSettings) -> window::settings::PlatformSpecific {
+    window::settings::PlatformSpecific {
+        application_id: crate::window_effect::prepare(views, APPLICATION_ID),
         ..Default::default()
     }
 }
@@ -1037,7 +1055,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let mut shortcuts = state.config.panel.shortcuts(action).to_vec();
             let problem = if let Err(error) = panel::validate(&spec) {
                 Some(format!("{error:#}"))
-            } else if shortcuts.iter().any(|known| panel::same_shortcut(known, &spec)) {
+            } else if shortcuts
+                .iter()
+                .any(|known| panel::same_shortcut(known, &spec))
+            {
                 Some(format!("{spec} is already a {} shortcut", action.label()))
             } else {
                 None
@@ -1180,6 +1201,48 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
             );
+            queue_save(state)
+        }
+
+        Message::FadeDurationChanged(duration) => {
+            state.view_layout_input = None;
+            if !duration.is_finite() {
+                return Task::none();
+            }
+            state.config.views.fade_duration_ms = duration
+                .round()
+                .clamp(0.0, config::ViewSettings::MAX_FADE_DURATION_MS as f32)
+                as u32;
+            queue_save(state)
+        }
+
+        Message::WindowAnimationSelected(animation) => {
+            state.config.views.window_animation = animation;
+            queue_save(state)
+        }
+
+        Message::RestartRequested => {
+            let config = state.config.clone();
+            blocking::run(move || {
+                let saved = config.save();
+                (saved, crate::dock::launch::relaunch())
+            })
+            .then(|(saved, relaunched)| {
+                if let Err(error) = &saved {
+                    log::error!("could not save before restarting: {error:#}");
+                }
+                match relaunched {
+                    Ok(()) => iced::exit(),
+                    Err(error) => {
+                        log::error!("could not restart: {error:#}");
+                        Task::none()
+                    }
+                }
+            })
+        }
+
+        Message::DockHourLinesToggled(on) => {
+            state.config.views.dock_hour_lines = on;
             queue_save(state)
         }
 
@@ -2772,10 +2835,7 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 ///
 /// An alarm already ringing stays dismissable if a quieter one goes off on
 /// top of it.
-pub(crate) fn fire(
-    state: &mut State,
-    profile: &config::AlarmProfile,
-) -> Task<Message> {
+pub(crate) fn fire(state: &mut State, profile: &config::AlarmProfile) -> Task<Message> {
     let actions = alarm::on_finished(profile);
 
     state.alarm_active = state.alarm_active || actions.is_dismissable();
@@ -2783,10 +2843,7 @@ pub(crate) fn fire(
     perform(state, actions)
 }
 
-pub(crate) fn perform(
-    state: &mut State,
-    actions: alarm::Actions,
-) -> Task<Message> {
+pub(crate) fn perform(state: &mut State, actions: alarm::Actions) -> Task<Message> {
     let mut tasks = Vec::new();
 
     if let Some(sound) = actions.sound {
@@ -2807,8 +2864,7 @@ pub(crate) fn perform(
 
     if let Some(notification) = actions.notification {
         tasks.push(
-            blocking::run(move || notify::show(&notification))
-                .map(Message::NotificationPosted),
+            blocking::run(move || notify::show(&notification)).map(Message::NotificationPosted),
         );
     }
 
@@ -2882,7 +2938,11 @@ fn dismiss(state: &mut State) -> Task<Message> {
 /// made while it is pending are all captured by that one write.
 /// Binds `shortcuts` to `action`. The config only takes them once the desktop
 /// has accepted them, so the settings never list a key that is not bound.
-fn apply_shortcuts(state: &mut State, action: panel::Action, shortcuts: Vec<String>) -> Task<Message> {
+fn apply_shortcuts(
+    state: &mut State,
+    action: panel::Action,
+    shortcuts: Vec<String>,
+) -> Task<Message> {
     let editor = &mut state.shortcut_editors[action.index()];
     editor.busy = true;
     editor.result = None;
@@ -3264,7 +3324,10 @@ mod tests {
         let action = panel::Action::ToggleVisibility;
 
         for input in ["nonsense", "super + u"] {
-            let _ = update(&mut state, Message::ShortcutInputChanged(action, input.into()));
+            let _ = update(
+                &mut state,
+                Message::ShortcutInputChanged(action, input.into()),
+            );
             let _ = update(&mut state, Message::ShortcutAdded(action));
 
             let editor = &state.shortcut_editors[action.index()];
@@ -3280,7 +3343,10 @@ mod tests {
         let action = panel::Action::ToggleVisibility;
         let both = vec!["Meta+J".to_owned(), "Meta+F".to_owned()];
 
-        let _ = update(&mut state, Message::ShortcutsApplied(action, Ok(both.clone())));
+        let _ = update(
+            &mut state,
+            Message::ShortcutsApplied(action, Ok(both.clone())),
+        );
 
         assert_eq!(state.config.panel.toggle_visibility, both);
         assert_eq!(

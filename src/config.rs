@@ -182,6 +182,49 @@ pub struct ViewSettings {
     pub border_radius: f32,
     /// Width of the dock strip, in logical pixels.
     pub dock_width: f32,
+    /// How the dock appears on screen.
+    pub window_animation: WindowAnimation,
+    /// Length of the fade-in, in milliseconds.
+    pub fade_duration_ms: u32,
+    /// Whether the dock draws a faint gray line at each hour on its strip.
+    pub dock_hour_lines: bool,
+}
+
+/// How a window appears. Shared by the dock's layer surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowAnimation {
+    /// Whatever the desktop does for a new window, such as KWin's pop-in.
+    #[default]
+    DesktopDefault,
+    /// Fades from transparent to opaque over the configured duration.
+    FadeIn,
+    /// Appears at once, with no desktop effect.
+    Instant,
+}
+
+impl WindowAnimation {
+    pub const ALL: [Self; 3] = [Self::DesktopDefault, Self::FadeIn, Self::Instant];
+
+    /// The layer-shell namespace to ask for. KWin maps "dock" to its Dock
+    /// window type, which its Scale, Fade and Fading Popups effects skip, so
+    /// the desktop's own pop-in can't fight ours.
+    pub fn namespace(self, desktop_default: &'static str) -> &'static str {
+        match self {
+            Self::DesktopDefault => desktop_default,
+            Self::FadeIn | Self::Instant => "dock",
+        }
+    }
+}
+
+impl std::fmt::Display for WindowAnimation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DesktopDefault => "Desktop default",
+            Self::FadeIn => "Fade in",
+            Self::Instant => "Instant",
+        })
+    }
 }
 
 impl Default for ViewSettings {
@@ -193,6 +236,9 @@ impl Default for ViewSettings {
             margin: 8.0,
             border_radius: 4.0,
             dock_width: 10.0,
+            window_animation: WindowAnimation::DesktopDefault,
+            fade_duration_ms: 150,
+            dock_hour_lines: true,
         }
     }
 }
@@ -204,6 +250,11 @@ impl ViewSettings {
     pub const MAX_BORDER_RADIUS: f32 = 30.0;
     pub const MIN_DOCK_WIDTH: f32 = 2.0;
     pub const MAX_DOCK_WIDTH: f32 = 40.0;
+    pub const MAX_FADE_DURATION_MS: u32 = 5000;
+
+    pub fn fade_duration_ms(&self) -> u32 {
+        self.fade_duration_ms.min(Self::MAX_FADE_DURATION_MS)
+    }
 
     pub fn calendar_width(&self, fallback: f32) -> f32 {
         Self::width(self.calendar_width.unwrap_or(fallback), fallback)
@@ -1185,6 +1236,21 @@ mod tests {
         assert!(has_panel_table("[panel]\nwidth = 240"));
         assert!(!has_panel_table("[views]\nmargin = 4.0"));
         assert!(!has_panel_table("not toml ["));
+    }
+
+    #[test]
+    fn window_options_default_to_the_desktop_and_round_trip() {
+        let views = ViewSettings::default();
+        assert_eq!(views.window_animation, WindowAnimation::DesktopDefault);
+        assert_eq!(views.fade_duration_ms(), 150);
+        assert!(views.dock_hour_lines);
+
+        let views: ViewSettings =
+            toml::from_str("window_animation = \"fade_in\"\nfade_duration_ms = 99999").unwrap();
+        assert_eq!(views.window_animation, WindowAnimation::FadeIn);
+        assert_eq!(views.fade_duration_ms(), ViewSettings::MAX_FADE_DURATION_MS);
+        let back: ViewSettings = toml::from_str(&toml::to_string(&views).unwrap()).unwrap();
+        assert_eq!(back, views);
     }
 
     #[test]

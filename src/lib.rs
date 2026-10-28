@@ -32,6 +32,7 @@ pub mod theme;
 pub mod todos;
 pub mod travel;
 pub mod ui;
+pub mod window_effect;
 
 pub mod timeblocking;
 
