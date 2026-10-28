@@ -54,7 +54,7 @@ fn state() -> State {
     spanning.start = at(16, 0);
     spanning.end = at(19, 0);
     snapshot.events = vec![block, task, final_event, spanning];
-    state.config.calendar.time_block_calendar = Some("work".into());
+    state.config.calendar.app_calendar = Some("work".into());
     state.calendar = Store::with_snapshot(calendar::Snapshot {
         events: Vec::new(),
         ..snapshot.clone()

@@ -1423,21 +1423,6 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     .spacing(metrics.spacing)
     .width(Fill);
 
-    if !event.is_task() && !event.all_day && state.config.calendar.time_block_calendar.is_none() {
-        body = body.push(
-            button(
-                text("Use this calendar for time blocks")
-                    .size(metrics.label())
-                    .center(),
-            )
-            .width(Fill)
-            .on_press(Message::TimeBlocking(
-                crate::timeblocking::Action::Calendar(event.calendar_id.clone()),
-            ))
-            .style(button::primary),
-        );
-    }
-
     let details = &event.details;
     if !is_task(event) && !details.status.is_empty() {
         body = body.push(detail_line("Status", details.status.clone(), metrics));
@@ -1697,10 +1682,10 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
 
 /// The add-event popup, opened by a click or a drag on empty grid space.
 ///
-/// It follows the shape of Google Calendar's own dialog: a title, the event
-/// kind, the time, the calendar and a description, with Save at the foot. Only
-/// the times, the calendar and the description are editable here; the event
-/// kind is shown for parity but only "Event" is implemented.
+/// It follows the shape of Google Calendar's own dialog: a title, the entry
+/// kind, the time, the calendar and a description, with Save at the foot. The
+/// kind switches between an ordinary event and a time block; a time block is
+/// always written to the app's TimeSlay calendar.
 fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(draft) = state.calendar.draft.as_ref() else {
         return iced::widget::Space::new().width(0.0).height(0.0).into();
@@ -1730,9 +1715,24 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         .size(metrics.label() + 2.0)
         .width(Fill);
 
-    let kinds: Element<'a, Message> = button(text("Event").size(metrics.label()).center())
-        .style(button::primary)
-        .into();
+    let kind_button = |label: &'static str, kind: calendar::DraftKind| {
+        let selected = draft.kind == kind;
+        button(text(label).size(metrics.label()).center())
+            .width(Fill)
+            .on_press(Message::EventDraftKindSelected(kind))
+            .style(if selected {
+                button::primary
+            } else {
+                button::secondary
+            })
+    };
+    let kinds: Element<'a, Message> = row![
+        kind_button("Event", calendar::DraftKind::Event),
+        kind_button("Time Block", calendar::DraftKind::TimeBlock),
+    ]
+    .spacing(6.0)
+    .width(Fill)
+    .into();
 
     let when = column![
         text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
@@ -1996,11 +1996,6 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
         .calendars
         .iter()
         .filter(|calendar| !calendar.is_task_list())
-        // Assigned task times live on a calendar the app manages. A new event
-        // is a normal calendar event, so that calendar is not a choice.
-        .filter(|calendar| {
-            state.config.calendar.tasks_calendar.as_deref() != Some(calendar.id.as_str())
-        })
         .map(|calendar| CalendarChoice {
             id: calendar.id.clone(),
             name: calendar.name.clone(),
@@ -2025,6 +2020,36 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
     let caption = text("Calendar")
         .size(metrics.label() - 1.0)
         .style(text::secondary);
+
+    // A time block always goes to the app's TimeSlay calendar, so the picker
+    // is a fixed label rather than a choice.
+    if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|draft| draft.kind == calendar::DraftKind::TimeBlock)
+    {
+        let name = state
+            .config
+            .calendar
+            .app_calendar
+            .as_ref()
+            .and_then(|id| state.calendar.calendars.iter().find(|c| &c.id == id))
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| crate::config::CalendarSettings::APP_CALENDAR_NAME.to_owned());
+        let fixed = container(
+            row![
+                color_circle(state.config.calendar.time_block_color()),
+                text(name).size(metrics.label()).width(Fill),
+            ]
+            .spacing(8.0)
+            .align_y(Alignment::Center)
+            .padding([2.0, 8.0]),
+        )
+        .width(Fill)
+        .padding(2.0);
+        return column![caption, fixed].spacing(2.0).width(Fill).into();
+    }
 
     if metrics.breakpoint.is_compact() {
         let shown = selected
@@ -4130,7 +4155,7 @@ mod tests {
             .clone();
         block.start = block.start.with_hour(1).unwrap().with_minute(0).unwrap();
         block.end = block.start + chrono::Duration::hours(1);
-        state.config.calendar.time_block_calendar = Some(block.calendar_id.clone());
+        state.config.calendar.app_calendar = Some(block.calendar_id.clone());
         let mut task = block.clone();
         task.id = "task:planned".into();
         task.calendar_id = "tasks:list".into();

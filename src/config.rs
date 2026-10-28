@@ -15,6 +15,7 @@ use iced::Color;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::Tone;
+use crate::calendar::colors;
 use crate::hex::HexColor;
 use crate::todos::TodoList;
 
@@ -692,7 +693,11 @@ pub struct CalendarSettings {
     /// Whether standalone Google Tasks are visible; tasks inside time blocks stay visible.
     pub show_tasks: bool,
     pub hide_overdue_tasks: bool,
-    pub time_block_calendar: Option<String>,
+    /// The discovered id of the app-owned TimeSlay calendar. Every event the
+    /// app writes (time blocks and scheduled tasks) lives here. Managed by the
+    /// app from the calendar list; not exposed as a user setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_calendar: Option<String>,
     pub time_block_list: Option<String>,
     /// Google Tasks list for tasks moved to the backlog. None uses Triaged.
     pub backlog_list: Option<String>,
@@ -700,8 +705,6 @@ pub struct CalendarSettings {
     /// uses Inbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbox_list: Option<String>,
-    /// Calendar for individual scheduled task events; independent of container blocks.
-    pub tasks_calendar: Option<String>,
     /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
     /// to 3 and the day runs 3am to 3am, so the small hours stay with the
     /// evening they belong to. This only moves the view: an event keeps its
@@ -718,6 +721,14 @@ pub struct CalendarSettings {
     /// shared task blue.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
+    /// Color of time-block events on the TimeSlay calendar. None uses the
+    /// built-in block color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_block_color: Option<HexColor>,
+    /// Color of scheduled task events on the TimeSlay calendar. None uses
+    /// Google's task blue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_event_color: Option<HexColor>,
     /// The calendar new events are created on, by id. `None` means the primary
     /// calendar, falling back to the first writable one. Set from the calendar
     /// settings pane.
@@ -735,15 +746,16 @@ impl Default for CalendarSettings {
             source_order: Vec::new(),
             show_tasks: true,
             hide_overdue_tasks: false,
-            time_block_calendar: None,
+            app_calendar: None,
             time_block_list: None,
             backlog_list: None,
             inbox_list: None,
-            tasks_calendar: None,
             day_end_hour: 0,
             weekly_days: 8,
             weekly_day_width: 150,
             task_colors: BTreeMap::new(),
+            time_block_color: None,
+            task_event_color: None,
             default_calendar: None,
         }
     }
@@ -752,6 +764,20 @@ impl Default for CalendarSettings {
 impl CalendarSettings {
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
+
+    /// The name of the single calendar every event the app writes lives on.
+    /// Created on first use; not customizable from Settings.
+    pub const APP_CALENDAR_NAME: &str = "TimeSlay";
+
+    /// Names the app calendar has had before. They are still recognized so a
+    /// half-renamed calendar is reused rather than duplicated.
+    pub const APP_CALENDAR_ALIASES: [&str; 2] = ["TimeSlayer", "TimeSlay"];
+
+    /// Whether `name` is the app calendar or one of its former names.
+    pub fn is_app_calendar_name(name: &str) -> bool {
+        let name = name.trim();
+        name == Self::APP_CALENDAR_NAME || Self::APP_CALENDAR_ALIASES.contains(&name)
+    }
 
     pub const MIN_SYNC_MINUTES: u32 = 1;
     pub const MAX_SYNC_MINUTES: u32 = 120;
@@ -817,6 +843,26 @@ impl CalendarSettings {
                 self.task_colors.remove(calendar_id);
             }
         }
+    }
+
+    /// The color time-block events are drawn in, or the built-in block color.
+    pub fn time_block_color(&self) -> Color {
+        self.time_block_color.map_or(colors::TIME_BLOCK, |color| color.0)
+    }
+
+    /// The color scheduled task events are drawn in, or Google's task blue.
+    pub fn task_event_color(&self) -> Color {
+        self.task_event_color.map_or(colors::TASK, |color| color.0)
+    }
+
+    /// Sets the time-block color, or clears it back to the built-in default.
+    pub fn set_time_block_color(&mut self, color: Option<Color>) {
+        self.time_block_color = color.map(HexColor);
+    }
+
+    /// Sets the scheduled task color, or clears it back to Google's blue.
+    pub fn set_task_event_color(&mut self, color: Option<Color>) {
+        self.task_event_color = color.map(HexColor);
     }
 }
 

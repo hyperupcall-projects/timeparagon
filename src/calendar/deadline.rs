@@ -1,8 +1,8 @@
-//! Reserved lines at the top of a Google Task's notes.
+//! Deadlines kept in a Google Task's notes.
 //!
 //! Google Tasks only stores a day for `due`, and has no deadline at all, so the
-//! app keeps the rest in the notes. Any leading lines that start with one of
-//! these keys are the header; the first other line starts the human prose:
+//! app keeps the rest in the notes. Any line that starts with one of these
+//! keys is reserved; the others are human prose:
 //!
 //! ```text
 //! DEADLINE: 2026-10-30 17:00   the deadline, day and time
@@ -13,12 +13,12 @@ use std::fmt;
 
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
+use super::notes::{Notes, line_value};
 use super::Event;
 
 const DEADLINE: &str = "DEADLINE:";
 const DUE: &str = "DUE:";
 const DUE_TIME: &str = "DUE_TIME:";
-const KEYS: [&str; 3] = [DEADLINE, DUE, DUE_TIME];
 
 /// How long a task occupies the grid when its notes give a start time but the
 /// task has no estimate.
@@ -104,54 +104,30 @@ pub fn parse_input(input: &str) -> Result<Deadline, String> {
     }
 }
 
-/// Splits the notes into the leading reserved lines and everything after them,
-/// which is returned untouched.
-fn split(notes: &str) -> (Vec<&str>, &str) {
-    let mut header = Vec::new();
-    let mut rest = notes;
-    loop {
-        let (line, tail) = match rest.split_once('\n') {
-            Some((line, tail)) => (line, Some(tail)),
-            None => (rest, None),
-        };
-        if !KEYS.iter().any(|key| line.starts_with(key)) {
-            break;
-        }
-        header.push(line);
-        match tail {
-            Some(tail) => rest = tail,
-            None => {
-                rest = "";
-                break;
-            }
-        }
-    }
-    (header, rest)
-}
-
-fn value<'a>(header: &[&'a str], key: &str) -> Option<&'a str> {
-    header
-        .iter()
-        .find_map(|line| line.strip_prefix(key))
-        .map(str::trim)
-}
-
-/// The deadline in the notes. `DEADLINE:` takes precedence over `DUE:`.
+/// The deadline in the notes. `DEADLINE:` takes precedence over `DUE:`, and
+/// every reserved line is checked so a typo is reported wherever it appears.
 pub fn read_deadline(notes: &str) -> Result<Option<Deadline>, String> {
-    let (header, _) = split(notes);
-    if let Some(text) = value(&header, DEADLINE) {
-        return parse_date_time(text).map(Some);
+    let mut timed = None;
+    let mut dated = None;
+    for line in Notes::new(notes).lines() {
+        if let Some(text) = line_value(line, DEADLINE) {
+            timed.get_or_insert(parse_date_time(text)?);
+        } else if let Some(text) = line_value(line, DUE) {
+            dated.get_or_insert(parse_date(text).map(|date| Deadline { date, time: None })?);
+        }
     }
-    match value(&header, DUE) {
-        Some(text) => parse_date(text).map(|date| Some(Deadline { date, time: None })),
-        None => Ok(None),
-    }
+    Ok(timed.or(dated))
 }
 
 /// The clock time the task should be shown at on its due day.
 pub fn read_due_time(notes: &str) -> Result<Option<NaiveTime>, String> {
-    let (header, _) = split(notes);
-    value(&header, DUE_TIME).map(parse_time).transpose()
+    let mut time = None;
+    for line in Notes::new(notes).lines() {
+        if let Some(text) = line_value(line, DUE_TIME) {
+            time.get_or_insert(parse_time(text)?);
+        }
+    }
+    Ok(time)
 }
 
 /// Whether every reserved line parses, so a typo can be reported.
@@ -167,32 +143,21 @@ pub fn input_text(notes: &str) -> String {
     if let Ok(Some(deadline)) = read_deadline(notes) {
         return deadline.value();
     }
-    let (header, _) = split(notes);
-    value(&header, DEADLINE)
-        .or_else(|| value(&header, DUE))
+    let notes = Notes::new(notes);
+    notes
+        .value(DEADLINE)
+        .or_else(|| notes.value(DUE))
         .unwrap_or("")
         .to_owned()
 }
 
-/// Replace only the deadline line; other reserved lines and the prose stay
-/// exactly as they were.
+/// Replace the deadline lines; every other line stays exactly as it was.
 pub fn write(notes: &str, deadline: Option<Deadline>) -> String {
-    let (header, body) = split(notes);
-    let mut lines: Vec<String> = deadline.iter().map(Deadline::to_string).collect();
-    lines.extend(
-        header
-            .iter()
-            .filter(|line| !line.starts_with(DEADLINE) && !line.starts_with(DUE))
-            .map(|line| (*line).to_owned()),
-    );
-    if lines.is_empty() {
-        return body.to_owned();
-    }
-    let head = lines.join("\n");
-    if body.is_empty() {
-        head
-    } else {
-        format!("{head}\n{body}")
+    let body = Notes::new(notes).without(&[DEADLINE, DUE]);
+    match deadline {
+        Some(deadline) if body.is_empty() => deadline.to_string(),
+        Some(deadline) => format!("{deadline}\n{body}"),
+        None => body,
     }
 }
 
@@ -235,7 +200,7 @@ mod tests {
     #[test]
     fn deadlines_round_trip_without_changing_prose() {
         let deadline = at("2026-10-30");
-        let body = "\nPrepare report.\nDUE: this is ordinary prose\n";
+        let body = "\nPrepare report.\nDUE this is ordinary prose\n";
         let notes = write(body, Some(deadline));
         assert_eq!(read_deadline(&notes).unwrap(), Some(deadline));
         assert_eq!(write(&notes, None), body);
@@ -279,12 +244,24 @@ mod tests {
     }
 
     #[test]
-    fn reserved_lines_only_count_at_the_top() {
-        let notes = "Prose first\nDEADLINE: 2026-10-30 17:00\nDUE_TIME: 09:30";
-        assert_eq!(read_deadline(notes).unwrap(), None);
-        assert_eq!(read_due_time(notes).unwrap(), None);
+    fn reserved_lines_are_found_on_any_line() {
+        let notes = "Prose first\nDEADLINE: 2026-10-30 17:00\nMore prose\nDUE_TIME: 09:30";
+        assert_eq!(read_deadline(notes).unwrap(), Some(at("2026-10-30 17:00")));
+        assert_eq!(
+            read_due_time(notes).unwrap(),
+            Some(parse_time("09:30").unwrap())
+        );
         assert!(check("DUE: tomorrow").is_err());
-        assert!(check("Prose first\nDUE: tomorrow").is_ok());
+        assert!(check("Prose first\nDUE: tomorrow").is_err());
+        let edited = write(notes, Some(at("2026-11-02")));
+        assert_eq!(
+            edited,
+            "DUE: 2026-11-02\nProse first\nMore prose\nDUE_TIME: 09:30"
+        );
+        assert_eq!(
+            write(&edited, None),
+            "Prose first\nMore prose\nDUE_TIME: 09:30"
+        );
     }
 
     #[test]

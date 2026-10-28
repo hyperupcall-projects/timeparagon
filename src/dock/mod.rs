@@ -280,7 +280,7 @@ fn spawn_sync(
                     &calendar.disabled,
                     day,
                     hour,
-                    calendar.tasks_calendar.as_deref(),
+                    calendar.app_calendar.as_deref(),
                 );
                 if results.send(result).is_err() {
                     break;

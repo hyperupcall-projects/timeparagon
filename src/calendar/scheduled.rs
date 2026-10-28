@@ -18,6 +18,10 @@ pub struct Link {
     pub block: Option<String>,
     #[serde(default)]
     pub order: i64,
+    /// The Google event `colorId` the app last wrote for this task, so the
+    /// event keeps the chosen task color across syncs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_id: Option<String>,
 }
 
 impl Link {
@@ -36,6 +40,7 @@ impl Link {
             pending: true,
             block: None,
             order: 0,
+            color_id: None,
         })
     }
 
@@ -76,24 +81,25 @@ impl Link {
                 .as_str()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_default(),
+            color_id: p["ttColor"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
         })
     }
 }
 
 pub fn description(task: &Event) -> String {
     let notes = crate::timeblocking::description(&task.details.description);
-    if task.details.link.is_empty() {
-        return notes;
+    let mut extra = Vec::new();
+    if !task.details.link.is_empty() {
+        extra.push(format!("Google Task: {}", task.details.link));
     }
-    format!(
-        "{notes}{}Google Task: {}",
-        if notes.is_empty() { "" } else { "\n\n" },
-        task.details.link
-    )
+    super::event_description(&notes, "Task", &extra)
 }
 
 pub fn content(task: &Event, link: &Link) -> Value {
-    json!({
+    let mut body = json!({
         "summary": match crate::timeblocking::task_status(task) {
             crate::timeblocking::TaskStatus::Ignored => format!("Ignored · {}", task.title),
             crate::timeblocking::TaskStatus::Completed => format!("✓ {}", task.title),
@@ -104,8 +110,13 @@ pub fn content(task: &Event, link: &Link) -> Value {
             "ttKind": "task", "ttTaskList": link.list_id, "ttTask": link.task_id,
             "ttBlock": link.block.as_deref().unwrap_or(""), "ttOrder": link.order.to_string(),
             "ttCompleted": task.completed.to_string(),
+            "ttColor": link.color_id.as_deref().unwrap_or(""),
         }},
-    })
+    });
+    if let Some(color_id) = &link.color_id {
+        body["colorId"] = json!(color_id);
+    }
+    body
 }
 
 pub fn event_body(
@@ -454,8 +465,61 @@ pub fn inbox_destination(token: &str, list: Option<&str>) -> Result<String, Stri
     }
 }
 
-/// Explicitly configured destinations win. Otherwise reuse the named default
-/// or create it at the first scheduling operation, never during a read-only sync.
+/// The id of the app's single TimeSlay calendar: the one already there under
+/// that name or a former name, or a freshly created one. Matching by name and
+/// ignoring the access role means a calendar the app just made is reused rather
+/// than duplicated on the next sync.
+pub fn app_calendar(token: &str) -> Result<String, String> {
+    if let Some(id) = find_app_calendar(token)? {
+        return Ok(id);
+    }
+    let mut body = json!({});
+    body["summary"] = json!(crate::config::CalendarSettings::APP_CALENDAR_NAME);
+    request("POST", api::EVENTS, token, Some(&body)).map_err(|e| e.message)?["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "Google did not return an ID for the TimeSlay calendar".into())
+}
+
+/// The id of the first calendar whose name is the app calendar or a former
+/// name of it, if there is one.
+pub fn find_app_calendar(token: &str) -> Result<Option<String>, String> {
+    let mut page: Option<String> = None;
+    loop {
+        let url = format!(
+            "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250{}",
+            page.as_ref()
+                .map(|p| format!("&pageToken={}", urlencoding::encode(p)))
+                .unwrap_or_default()
+        );
+        let response = request("GET", &url, token, None).map_err(|e| e.message)?;
+        if let Some(id) = response["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| {
+                // A local rename is reported as `summaryOverride`, so match
+                // both or the app would create a second calendar.
+                ["summary", "summaryOverride"].iter().any(|key| {
+                    item[*key]
+                        .as_str()
+                        .is_some_and(crate::config::CalendarSettings::is_app_calendar_name)
+                })
+            })
+            .and_then(|item| item["id"].as_str())
+        {
+            return Ok(Some(id.to_owned()));
+        }
+        page = response["nextPageToken"].as_str().map(str::to_owned);
+        if page.is_none() {
+            return Ok(None);
+        }
+    }
+}
+
+/// The Calendar and Google Tasks list a scheduled task is written to. The
+/// calendar is always the app's single TimeSlay calendar: an already
+/// discovered id wins, otherwise the calendar is reused by name or created.
 pub fn destinations(
     token: &str,
     calendar: Option<&str>,
@@ -463,13 +527,7 @@ pub fn destinations(
 ) -> Result<(String, String), String> {
     let calendar = match calendar {
         Some(id) => id.to_owned(),
-        None => find_or_create(
-            token,
-            "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-            api::EVENTS,
-            "summary",
-            "Tasks",
-        )?,
+        None => app_calendar(token)?,
     };
     let list = match list {
         Some(id) => id.trim_start_matches("tasks:").to_owned(),

@@ -114,7 +114,7 @@ pub fn load_day(day: NaiveDate, settings: &CalendarSettings) -> Result<Snapshot,
         &settings.disabled,
         day,
         settings.day_start_hour(),
-        settings.tasks_calendar.as_deref(),
+        settings.app_calendar.as_deref(),
     )
 }
 
@@ -337,7 +337,7 @@ fn is_time_block(
     !event.is_task()
         && !event.all_day
         && event.details.scheduled.is_none()
-        && (settings.time_block_calendar.as_deref() == Some(event.calendar_id.as_str())
+        && (settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
             || assigned_keys.contains(&tb::block_key(event)))
 }
 
@@ -363,12 +363,9 @@ fn event_enabled(event: &Event, settings: &CalendarSettings) -> bool {
 /// Mirrors `omit_managed_tasks_event`: app-owned scheduled copies are shown
 /// beside their task or inside their block, not as a second calendar chip.
 fn managed_copy(event: &Event, settings: &CalendarSettings, block_keys: &HashSet<String>) -> bool {
-    let Some(managed) = settings.tasks_calendar.as_deref() else {
+    let Some(managed) = settings.app_calendar.as_deref() else {
         return false;
     };
-    if event.calendar_id == managed {
-        return true;
-    }
     event
         .details
         .scheduled
@@ -727,7 +724,7 @@ mod tests {
 
     fn settings() -> CalendarSettings {
         CalendarSettings {
-            time_block_calendar: Some("blocks".into()),
+            app_calendar: Some("blocks".into()),
             ..CalendarSettings::default()
         }
     }
@@ -849,6 +846,7 @@ mod tests {
             pending: false,
             block: None,
             order: 0,
+            color_id: None,
         });
         let snapshot = Snapshot {
             calendars: vec![
@@ -861,7 +859,7 @@ mod tests {
             notice: None,
         };
         let settings = CalendarSettings {
-            tasks_calendar: Some("scheduled".into()),
+            app_calendar: Some("scheduled".into()),
             disabled: vec!["scheduled".into()],
             ..CalendarSettings::default()
         };
@@ -905,24 +903,25 @@ mod tests {
     }
 
     #[test]
-    fn a_managed_task_calendar_copy_is_not_drawn_as_a_calendar_event() {
-        let copy = event("copy", "scheduled", "Write", at(9, 0), at(9, 45));
+    fn a_plain_event_on_the_app_calendar_is_drawn_as_a_time_block() {
+        let block = event("b1", "scheduled", "Write", at(9, 0), at(9, 45));
         let snapshot = Snapshot {
             calendars: vec![
-                calendar("scheduled", "Tasks"),
+                calendar("scheduled", "TimeSlay"),
                 calendar("tasks:work", "Work"),
             ],
-            events: vec![copy],
+            events: vec![block],
             day: day(),
             fetched_at: at(10, 0),
             notice: None,
         };
         let settings = CalendarSettings {
-            tasks_calendar: Some("scheduled".into()),
+            app_calendar: Some("scheduled".into()),
             ..CalendarSettings::default()
         };
         let model = build_model(&snapshot, &settings);
-        assert!(model.timed.is_empty());
+        assert_eq!(model.blocks.len(), 1);
+        assert_eq!(model.blocks[0].event.title, "Write");
     }
 
     #[test]

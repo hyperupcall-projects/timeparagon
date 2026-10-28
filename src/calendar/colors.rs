@@ -67,6 +67,26 @@ pub const TASK: Color = Color {
     a: 1.0,
 };
 
+/// The default color of a time-block event on the app's TimeSlay calendar.
+/// Banana, so blocks read apart from the blue of a scheduled task before the
+/// user picks colors of their own.
+pub const TIME_BLOCK: Color = Color {
+    r: 0xFB as f32 / 255.0,
+    g: 0xD7 as f32 / 255.0,
+    b: 0x5B as f32 / 255.0,
+    a: 1.0,
+};
+
+/// The Google event `colorId` for `color`, when it is one of the palette
+/// colors. The settings pickers only offer palette colors, so a chosen color
+/// always maps back to the id Google needs for an event.
+pub fn event_id(color: Color) -> Option<&'static str> {
+    EVENT
+        .iter()
+        .find(|(_, hex)| hex::parse(hex).ok() == Some(color))
+        .map(|(id, _)| *id)
+}
+
 /// Fallback when a calendar has no color of its own.
 pub const DEFAULT_EVENT: Color = Color {
     r: 0x03 as f32 / 255.0,
@@ -180,5 +200,12 @@ mod tests {
     #[test]
     fn the_needle_is_google_red() {
         assert_eq!(NEEDLE, hex::parse("#EA4335").unwrap());
+    }
+
+    #[test]
+    fn the_kind_defaults_map_to_google_event_ids() {
+        assert_eq!(event_id(TIME_BLOCK), Some("5"));
+        assert_eq!(event_id(TASK), Some("9"));
+        assert_eq!(event_id(Color::from_rgb8(1, 2, 3)), None);
     }
 }

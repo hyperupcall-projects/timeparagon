@@ -6,11 +6,13 @@
 use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use crate::calendar::notes::Notes;
 use crate::calendar::{self, Event};
 use crate::config::CalendarSettings;
 
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 const META: &str = "tt-timeblocking: ";
+const LEGACY_ID: &str = "ttid:";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
@@ -124,20 +126,17 @@ pub fn task_label(task: &Event) -> String {
     }
 }
 
+/// Whether a line carries app metadata rather than something a person wrote.
+fn is_internal(line: &str) -> bool {
+    line.starts_with(META) || line.trim_start().starts_with(LEGACY_ID)
+}
+
 pub fn description(notes: &str) -> String {
-    if !notes
-        .lines()
-        .any(|line| line.starts_with(META) || line.trim().starts_with("ttid:"))
-    {
-        return notes.to_owned();
+    let notes = Notes::new(notes);
+    if !notes.lines().any(is_internal) {
+        return notes.text().to_owned();
     }
-    notes
-        .lines()
-        .filter(|line| !line.starts_with(META) && !line.trim().starts_with("ttid:"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end()
-        .to_owned()
+    notes.without_where(is_internal).trim_end().to_owned()
 }
 
 pub fn metadata(event: &Event) -> Metadata {
@@ -150,7 +149,7 @@ pub fn metadata(event: &Event) -> Metadata {
 }
 
 pub fn legacy_metadata(notes: &str) -> Metadata {
-    notes
+    Notes::new(notes)
         .lines()
         .find_map(|line| {
             line.strip_prefix(META)
@@ -160,9 +159,9 @@ pub fn legacy_metadata(notes: &str) -> Metadata {
 }
 
 pub fn legacy_id(notes: &str) -> Option<String> {
-    notes
+    Notes::new(notes)
         .lines()
-        .filter_map(|line| line.trim().strip_prefix("ttid:"))
+        .filter_map(|line| line.trim().strip_prefix(LEGACY_ID))
         .map(str::trim)
         .find(|id| {
             (id.len() == 36
@@ -197,7 +196,7 @@ pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
     !event.is_task()
         && event.details.scheduled.is_none()
         && !event.all_day
-        && settings.time_block_calendar.as_deref() == Some(&event.calendar_id)
+        && settings.app_calendar.as_deref() == Some(&event.calendar_id)
 }
 
 /// A task that still needs a time: unscheduled, or waiting on a schedule write.

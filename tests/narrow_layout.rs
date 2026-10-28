@@ -1015,7 +1015,7 @@ fn timeblocking_state() -> State {
     let mut state = state();
     let mut snapshot = time_slay::calendar::sample_snapshot();
     snapshot.day = Local::now().date_naive();
-    state.config.calendar.time_block_calendar = Some("work".into());
+    state.config.calendar.app_calendar = Some("work".into());
     state.config.calendar.time_block_list = Some("tasks:list".into());
     let block = snapshot
         .events
@@ -2212,34 +2212,6 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
             .iter()
             .any(|e| e.id == "task:planned" && e.completed)
     );
-}
-
-#[test]
-fn an_unconfigured_event_offers_a_direct_way_to_enable_its_time_block_controls() -> Result<(), Error>
-{
-    use time_slay::timeblocking::{self as tb, Action};
-    let mut state = timeblocking_state();
-    state.config.calendar.time_block_calendar = None;
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
-    assert!(!tb::is_block(
-        state.calendar.event("standup").unwrap(),
-        &state.config.calendar
-    ));
-    let mut ui = render(&state, Size::new(420.0, 720.0));
-    let _ = ui.click("Use this calendar for time blocks")?;
-    let action = ui
-        .into_messages()
-        .find(|m| matches!(m, Message::TimeBlocking(Action::Calendar(_))))
-        .expect("calendar selection action");
-    let _ = app::update(&mut state, action);
-    assert!(tb::is_block(
-        state.calendar.event("standup").unwrap(),
-        &state.config.calendar
-    ));
-    assert!(state.calendar.open_event.is_none());
-    assert!(state.timeblocking.block.is_none());
-    assert!(state.timeblocking.original_width.is_none());
-    Ok(())
 }
 
 #[test]

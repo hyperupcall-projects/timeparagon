@@ -20,7 +20,7 @@ fn state(config: Config, sidebar: bool) -> State {
         state.main_size.width = 200.0;
     }
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-    state.config.calendar.time_block_calendar =
+    state.config.calendar.app_calendar =
         Some(state.calendar.event("standup").unwrap().calendar_id.clone());
     state
 }

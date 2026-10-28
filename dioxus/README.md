@@ -167,14 +167,14 @@ current time (or 8am on another day), and the time-block popup becomes a bottom 
   that block**, in planned order, with each task's list, status, estimate,
   and the block's total planned time against its capacity.
 
-Time blocks are read from `calendar.time_block_calendar`. A block referenced by
-a task's metadata is still recognized if that setting is later cleared.
+Time blocks are read from the app's single TimeSlay calendar
+(`calendar.app_calendar`, discovered from the calendar list). A block referenced
+by a task's metadata is still recognized even if the id changes.
 
 ## Notes
 
 - Only the Dioxus crate enables the desktop/mobile renderers; the root
   workspace defaults to the iced package (`default-members = ["."]`).
 - The day view has no settings screen. On Android it only asks for the Google
-  client ID and secret. Configure the time-block calendar, task lists, and
-  visible calendars in the iced application; this crate reloads the same config
-  at startup.
+  client ID and secret. Configure the task lists and visible calendars in the
+  iced application; this crate reloads the same config at startup.

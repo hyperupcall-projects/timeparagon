@@ -328,7 +328,7 @@ mod tests {
     fn a_time_block_lists_every_task_assigned_to_it_when_clicked() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap();
         let settings = CalendarSettings {
-            time_block_calendar: Some("blocks".into()),
+            app_calendar: Some("blocks".into()),
             ..CalendarSettings::default()
         };
         let task = |id: &str, block: &str, order: i64| {

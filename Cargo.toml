@@ -135,6 +135,12 @@ resolver = "3"
 name = "screenshots"
 path = "assets/examples/screenshots.rs"
 
+# One-off move of the legacy time-block/task calendars into TimeSlay. Run in
+# plan mode, then again with --apply.
+[[example]]
+name = "migrate_calendar"
+path = "assets/examples/migrate_calendar.rs"
+
 # Keep synchronous native resizes in sync with the viewport and render surface.
 [patch.crates-io]
 iced_winit = { path = "vendor/iced_winit" }

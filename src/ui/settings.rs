@@ -557,7 +557,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .calendars
         .iter()
         .filter(|calendar| !calendar.is_task_list())
-        .filter(|calendar| settings.tasks_calendar.as_deref() != Some(calendar.id.as_str()))
         .cloned()
         .collect();
 
@@ -591,40 +590,25 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ));
 
     section = section.push(heading("Time Blocking", metrics));
-    for (label, tasks) in [
-        (
-            "Google Tasks list for scheduled tasks (default: Has Time)",
-            true,
-        ),
-        ("Calendar for time blocks", false),
-    ] {
+    {
         let options: Vec<CalendarOption> = state
             .calendar
             .calendars
             .iter()
-            .filter(|c| c.is_task_list() == tasks)
+            .filter(|c| c.is_task_list())
             .map(|c| CalendarOption {
                 id: c.id.clone(),
                 name: c.name.clone(),
             })
             .collect();
-        let selected_id = if tasks {
-            &settings.time_block_list
-        } else {
-            &settings.time_block_calendar
-        };
         let selected = options
             .iter()
-            .find(|o| Some(&o.id) == selected_id.as_ref())
+            .find(|o| Some(&o.id) == settings.time_block_list.as_ref())
             .cloned();
         section = section.push(field(
-            label,
-            pick_list(options, selected, move |o: CalendarOption| {
-                Message::TimeBlocking(if tasks {
-                    crate::timeblocking::Action::List(o.id)
-                } else {
-                    crate::timeblocking::Action::Calendar(o.id)
-                })
+            "Google Tasks list for scheduled tasks (default: Has Time)",
+            pick_list(options, selected, |o: CalendarOption| {
+                Message::TimeBlocking(crate::timeblocking::Action::List(o.id))
             })
             .text_size(metrics.label())
             .width(Fill)
@@ -694,33 +678,51 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
-    let options: Vec<CalendarOption> = state
-        .calendar
-        .calendars
-        .iter()
-        .filter(|c| !c.is_task_list())
-        .map(|c| CalendarOption {
-            id: c.id.clone(),
-            name: c.name.clone(),
-        })
-        .collect();
-    let selected = options
-        .iter()
-        .find(|o| settings.tasks_calendar.as_deref() == Some(o.id.as_str()))
-        .cloned();
+    section = section.push(heading("TimeSlay colors", metrics));
     section = section.push(field(
-        "Calendar for scheduled tasks (default: Tasks)",
-        pick_list(options, selected, |o: CalendarOption| {
-            Message::TimeBlocking(crate::timeblocking::Action::TaskCalendar(o.id))
-        })
-        .text_size(metrics.label())
-        .width(Fill)
-        .into(),
+        "Time Blocks",
+        kind_color_picker(settings.time_block_color, Message::TimeBlockColorPicked, metrics),
         metrics,
     ));
-    section = section.push(text("Schedule tasks by dragging onto the grid or a time block, or enter a time in task details. Moving a task to Backlog also moves it to the selected backlog list. The Tasks calendar, Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can start with reserved lines: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
+    section = section.push(field(
+        "Tasks",
+        kind_color_picker(settings.task_event_color, Message::TaskEventColorPicked, metrics),
+        metrics,
+    ));
+    section = section.push(text("Every event TimeSlay writes lives on the single TimeSlay calendar, which is created automatically. Time blocks and scheduled tasks can each be given a color of their own; the color is also written to Google. The Has Time list, Triaged backlog list, and Inbox list are created on first use if needed. New tasks added from the Inbox tab go to the Inbox list and leave it once given a day. Task notes can contain reserved lines anywhere: DEADLINE: YYYY-MM-DD HH:MM (or DUE: YYYY-MM-DD for a day only) and DUE_TIME: HH:MM to show the task at that time on its due day. Reconnect Google to allow calendar creation.").size(metrics.label()).style(text::secondary));
 
     indent(section.into(), metrics)
+}
+
+/// A palette for one of the app calendar's event kinds, with a reset button
+/// that puts the color back to its built-in default.
+fn kind_color_picker<'a>(
+    current: Option<crate::hex::HexColor>,
+    pick: fn(Option<iced::Color>) -> Message,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let selected = current.map(|color| color.0);
+    let mut swatches = column![].spacing(6);
+    for chunk in calendar::colors::palette().chunks(6) {
+        let mut line = row![].spacing(6);
+        for &color in chunk {
+            line = line.push(super::calendar::swatch_button(
+                color,
+                selected == Some(color),
+                pick(Some(color)),
+            ));
+        }
+        swatches = swatches.push(line);
+    }
+    let reset = button(text("Default").size(metrics.label() - 1.0))
+        .width(Fill)
+        .on_press(pick(None))
+        .style(if selected.is_none() {
+            button::primary
+        } else {
+            button::secondary
+        });
+    swatches.push(reset).into()
 }
 
 /// Services a pasted link can come from, and the accounts each one reads as.

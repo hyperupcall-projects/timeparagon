@@ -6,6 +6,7 @@ pub mod colors;
 mod day_cache;
 pub mod deadline;
 pub mod layout;
+pub mod notes;
 pub mod oauth;
 pub mod scheduled;
 
@@ -84,6 +85,49 @@ impl Event {
     }
 }
 
+/// The delimiter between a person's prose and the app's metadata in the
+/// description of an event the app writes. The metadata is everything after the
+/// last one, so prose may itself contain a `---`.
+pub const METADATA_DELIMITER: &str = "---";
+
+/// Builds the description of an app-written event: the human notes, the
+/// delimiter, then the event's kind and any extra metadata lines. A person
+/// reading the event in Google Calendar sees what kind it is; the app sees the
+/// same lines below the delimiter.
+pub fn event_description(notes: &str, kind: &str, extra: &[String]) -> String {
+    let notes = notes.trim_end();
+    let mut footer = vec![format!("Type: {kind}")];
+    footer.extend(extra.iter().cloned());
+    let footer = footer.join("\n");
+    if notes.is_empty() {
+        format!("{METADATA_DELIMITER}\n{footer}")
+    } else {
+        format!("{notes}\n{METADATA_DELIMITER}\n{footer}")
+    }
+}
+
+/// The app metadata written below the last [`METADATA_DELIMITER`] of an event
+/// description, or `None` when there is no footer.
+pub fn metadata_block(description: &str) -> Option<&str> {
+    description
+        .rsplit_once(METADATA_DELIMITER)
+        .map(|(_, after)| after.trim_start_matches(['\r', '\n']))
+}
+
+/// The human prose of an event description, without the app's metadata footer.
+/// Only a footer that starts with a `Type:` line is stripped, so prose that
+/// happens to contain `---` is left alone.
+pub fn description_notes(description: &str) -> &str {
+    if metadata_block(description).is_some_and(|block| block.starts_with("Type: ")) {
+        description
+            .rsplit_once(METADATA_DELIMITER)
+            .map(|(before, _)| before.trim_end())
+            .unwrap_or(description)
+    } else {
+        description
+    }
+}
+
 /// A time change that has been applied to the view but not yet confirmed by
 /// Google.
 ///
@@ -99,6 +143,18 @@ pub struct PendingTime {
     pub previous_end: DateTime<Local>,
 }
 
+/// What a new event from the add-event popup is.
+///
+/// An `Event` is an ordinary calendar entry on the chosen calendar. A
+/// `TimeBlock` is written to the app's single TimeSlay calendar and is
+/// labelled and colored as a block, the same as one created anywhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DraftKind {
+    #[default]
+    Event,
+    TimeBlock,
+}
+
 /// A new event being filled in before it is written to Google.
 ///
 /// It is created by a click or a drag on empty grid space and lives in the
@@ -107,6 +163,8 @@ pub struct PendingTime {
 /// throw away the last valid time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
+    /// Whether this is an ordinary event or a time block.
+    pub kind: DraftKind,
     pub title: String,
     pub description: String,
     /// The calendar the event will be created on.
@@ -125,6 +183,7 @@ impl Draft {
     /// A draft on `calendar_id` spanning `start` to `end`.
     pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
         Self {
+            kind: DraftKind::Event,
             title: String::new(),
             description: String::new(),
             calendar_id,
@@ -180,7 +239,7 @@ impl EditDraft {
         Self {
             id: event.id.clone(),
             title: event.title.clone(),
-            description: event.details.description.clone(),
+            description: description_notes(&event.details.description).to_owned(),
             calendar_id: event.calendar_id.clone(),
             start: event.start,
             end: event.end,
@@ -331,10 +390,19 @@ fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
     settings.task_color(calendar_id).unwrap_or(colors::TASK)
 }
 
-/// Gives a Google Tasks event its list's color, leaving calendar events alone.
-fn recolor_task(event: &mut Event, settings: &CalendarSettings) {
+/// Gives a Google Tasks event its list's color and an app-calendar event the
+/// per-kind color from settings, leaving every other calendar's events alone.
+fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
     if event.calendar_id.starts_with("tasks:") && event.details.scheduled.is_none() {
         event.color = task_color(settings, &event.calendar_id);
+    } else if event.details.scheduled.is_some() {
+        // A task's calendar block, on the TimeSlay calendar.
+        event.color = settings.task_event_color();
+    } else if !event.all_day
+        && settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
+    {
+        // A plain timed event on the TimeSlay calendar is a time block.
+        event.color = settings.time_block_color();
     }
 }
 
@@ -634,11 +702,11 @@ impl Store {
         }
     }
 
-    /// Gives every Google Tasks list its saved color, or Google's blue when it
-    /// has none. Google hands all lists back with the same blue, so this is
-    /// what keeps a customized list its own color across syncs, and what puts a
-    /// list back to blue after its custom color is cleared. Real calendars are
-    /// left exactly as Google returned them.
+    /// Gives every Google Tasks list its saved color, and every event on the
+    /// app's TimeSlay calendar the color for its kind: a time block or a
+    /// scheduled task. Google hands all task lists back with the same blue, so
+    /// this keeps a customized list its own color across syncs. Every other
+    /// calendar's events are left exactly as Google returned them.
     pub fn apply_task_colors(&mut self, settings: &CalendarSettings) {
         for calendar in &mut self.calendars {
             if calendar.is_task_list() {
@@ -647,14 +715,14 @@ impl Store {
         }
 
         for event in &mut self.events {
-            recolor_task(event, settings);
+            recolor_event(event, settings);
         }
 
         // The cached days are recolored too, so a day painted from the cache
         // does not flash the old color before the sync lands.
         for events in self.cache.values_mut() {
             for event in events {
-                recolor_task(event, settings);
+                recolor_event(event, settings);
             }
         }
     }
@@ -899,15 +967,10 @@ impl Store {
     ///
     /// The configured default wins when it still exists; otherwise the primary
     /// calendar, and failing that the first writable one. Task lists are never
-    /// offered, since they hold Google Tasks rather than events. The calendar
-    /// that stores assigned task times is managed by the app, so a new event
-    /// is never filed there either.
+    /// offered, since they hold Google Tasks rather than events. The TimeSlay
+    /// calendar is a normal target: a plain event there is a time block.
     pub fn default_calendar_id(&self, settings: &CalendarSettings) -> Option<String> {
-        if let Some(id) = settings
-            .time_block_calendar
-            .as_ref()
-            .or(settings.default_calendar.as_ref())
-            && !is_managed_tasks_calendar(settings, id)
+        if let Some(id) = settings.default_calendar.as_ref()
             && self
                 .calendars
                 .iter()
@@ -918,15 +981,11 @@ impl Store {
 
         self.calendars
             .iter()
-            .find(|calendar| {
-                calendar.primary
-                    && !calendar.is_task_list()
-                    && !is_managed_tasks_calendar(settings, &calendar.id)
-            })
+            .find(|calendar| calendar.primary && !calendar.is_task_list())
             .or_else(|| {
-                self.calendars.iter().find(|calendar| {
-                    !calendar.is_task_list() && !is_managed_tasks_calendar(settings, &calendar.id)
-                })
+                self.calendars
+                    .iter()
+                    .find(|calendar| !calendar.is_task_list())
             })
             .map(|calendar| calendar.id.clone())
     }
@@ -1139,30 +1198,21 @@ fn timed_in<'a>(
     })
 }
 
-/// The calendar that holds a task's assigned time. The app writes those
-/// events itself, so they are not a calendar the user files new events on.
-fn is_managed_tasks_calendar(settings: &CalendarSettings, id: &str) -> bool {
-    settings.tasks_calendar.as_deref() == Some(id)
-}
-
-/// Whether this event is the managed tasks calendar showing up as a normal chip.
+/// Whether this event is a task's calendar copy that is already drawn as part
+/// of its time block.
 ///
 /// A task that already sits beside its time block is drawn there, so the grid
-/// does not draw it again. A plain event stored on that calendar is managed by
-/// the app and stays off the day view. A task given a time of its own, with no
-/// time block, still occupies the grid: that chip is the only place its time
-/// is visible.
+/// does not draw it again. A plain event on the app calendar is a time block and
+/// is always drawn; a task given a time of its own, with no block, still
+/// occupies the grid because that chip is the only place its time is visible.
 fn omit_managed_tasks_event(
     event: &Event,
     time_blocks: &[String],
     settings: &CalendarSettings,
 ) -> bool {
-    let Some(managed) = settings.tasks_calendar.as_deref() else {
+    let Some(managed) = settings.app_calendar.as_deref() else {
         return false;
     };
-    if event.calendar_id == managed {
-        return true;
-    }
     event
         .details
         .scheduled
@@ -1265,7 +1315,7 @@ pub fn sync_day(
     disabled: &[String],
     day: NaiveDate,
     day_end_hour: u32,
-    tasks_calendar: Option<&str>,
+    app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1275,7 +1325,7 @@ pub fn sync_day(
         disabled,
         day,
         day_end_hour,
-        tasks_calendar,
+        app_calendar,
     )
 }
 
@@ -1286,7 +1336,7 @@ pub fn sync_week(
     anchor: NaiveDate,
     days: u32,
     day_end_hour: u32,
-    tasks_calendar: Option<&str>,
+    app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1299,7 +1349,7 @@ pub fn sync_week(
         dates[0],
         *dates.last().unwrap(),
         day_end_hour,
-        tasks_calendar,
+        app_calendar,
     )
 }
 
@@ -1425,7 +1475,7 @@ pub fn delete_task(
     client_id: &str,
     client_secret: &str,
     task: &Event,
-    tasks_calendar: Option<&str>,
+    app_calendar: Option<&str>,
 ) -> Result<(), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1451,7 +1501,7 @@ pub fn delete_task(
     if let Some(link) = &task.details.scheduled {
         calendars.push(link.calendar_id.as_str());
     }
-    if let Some(calendar) = tasks_calendar.filter(|calendar| !calendars.contains(calendar)) {
+    if let Some(calendar) = app_calendar.filter(|calendar| !calendars.contains(calendar)) {
         calendars.push(calendar);
     }
     for calendar in calendars {
@@ -1524,6 +1574,7 @@ pub fn create_event(
     calendar_id: &str,
     title: &str,
     description: &str,
+    color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<String, String> {
@@ -1536,6 +1587,7 @@ pub fn create_event(
         calendar_id,
         title,
         description,
+        color_id,
         start,
         end,
     )
@@ -1551,6 +1603,7 @@ pub fn update_event(
     event_id: &str,
     title: &str,
     description: &str,
+    color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<(), String> {
@@ -1564,6 +1617,7 @@ pub fn update_event(
         event_id,
         title,
         description,
+        color_id,
         start,
         end,
     )
@@ -1863,6 +1917,7 @@ mod tests {
                     pending: false,
                     block: None,
                     order: 0,
+                    color_id: None,
                 }),
                 ..Details::default()
             },
@@ -2053,7 +2108,7 @@ mod tests {
     }
 
     #[test]
-    fn the_managed_tasks_calendar_is_not_drawn_like_a_normal_calendar() {
+    fn the_timeslayer_calendar_draws_blocks_but_not_task_copies() {
         let mut snapshot = sample_snapshot();
         let day = snapshot.day;
         let at = |hour, minute| {
@@ -2064,7 +2119,7 @@ mod tests {
         };
         snapshot.events.push(Event {
             id: "focus".into(),
-            calendar_id: "work".into(),
+            calendar_id: "tasks".into(),
             title: "Focus".into(),
             start: at(10, 0),
             end: at(12, 0),
@@ -2098,11 +2153,11 @@ mod tests {
         };
         let mut link = scheduled::Link::new("tasks".into(), &assigned).unwrap();
         link.pending = false;
-        link.block = Some("work/focus".into());
+        link.block = Some("tasks/focus".into());
         assigned.details.task_data = Some(crate::task_db::TaskData {
             id: 100,
             metadata: crate::timeblocking::Metadata {
-                block: Some("work/focus".into()),
+                block: Some("tasks/focus".into()),
                 minutes: 30,
                 schedule: Some(link.clone()),
                 ..Default::default()
@@ -2139,8 +2194,7 @@ mod tests {
 
         let store = Store::with_snapshot(snapshot);
         let mut settings = CalendarSettings::default();
-        settings.tasks_calendar = Some("tasks".into());
-        settings.time_block_calendar = Some("work".into());
+        settings.app_calendar = Some("tasks".into());
 
         let titles: Vec<_> = store
             .timed_events(&settings)
@@ -2149,10 +2203,10 @@ mod tests {
         assert!(titles.contains(&"Standup"));
         assert!(titles.contains(&"Focus"));
         assert!(titles.contains(&"On my own"));
+        assert!(titles.contains(&"Write the Cal tab"));
         assert!(!titles.contains(&"Inside the block"));
-        assert!(!titles.contains(&"Write the Cal tab"));
         assert!(
-            !store
+            store
                 .all_day_events(&settings)
                 .any(|event| event.title == "Managed all day")
         );
@@ -2162,12 +2216,8 @@ mod tests {
                 .any(|event| event.title == "Team offsite")
         );
 
-        settings.time_block_calendar = None;
         settings.default_calendar = Some("tasks".into());
-        assert_eq!(
-            store.default_calendar_id(&settings).as_deref(),
-            Some("personal")
-        );
+        assert_eq!(store.default_calendar_id(&settings).as_deref(), Some("tasks"));
     }
 
     #[test]
@@ -2571,6 +2621,44 @@ mod tests {
 
         assert_eq!(store.event("standup").unwrap().start, start);
         assert_eq!(store.event("standup").unwrap().end, end);
+    }
+
+    #[test]
+    fn a_new_draft_starts_as_an_event() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let start = day
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        let draft = Draft::new(
+            "personal".into(),
+            start,
+            start + chrono::Duration::hours(1),
+        );
+        assert_eq!(draft.kind, DraftKind::Event);
+    }
+
+    #[test]
+    fn the_event_type_sits_after_the_last_metadata_delimiter() {
+        let description = event_description(
+            "Notes\n---\nprose after a delimiter",
+            "Time Block",
+            &["Google Task: https://example.test/task".into()],
+        );
+        assert_eq!(
+            description,
+            "Notes\n---\nprose after a delimiter\n---\nType: Time Block\nGoogle Task: https://example.test/task"
+        );
+        assert_eq!(
+            description_notes(&description),
+            "Notes\n---\nprose after a delimiter"
+        );
+        assert!(
+            metadata_block(&description)
+                .unwrap()
+                .starts_with("Type: Time Block")
+        );
     }
 
     #[test]

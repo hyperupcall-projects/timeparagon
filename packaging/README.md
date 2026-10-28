@@ -46,12 +46,12 @@ session. The installer restarts the background shortcut daemon,
 unless `--no-enable` is passed.
 
 Google Tasks and Calendar sync use the public Google APIs and require no
-browser helper. In Settings, choose a calendar for scheduled task events and
-a Google Tasks list for scheduled tasks, or let the first scheduling operation
-create/reuse **Tasks** and **Has Time**. Reconnect Google once to authorize
+browser helper. Every event TimeSlay writes lives on a single **TimeSlay**
+calendar, created automatically on the first sync that needs it; in Settings,
+choose the Google Tasks list scheduled tasks go to, or let the first scheduling
+operation create/reuse **Has Time**. Reconnect Google once to authorize
 calendar creation. Google Tasks only stores a day for a task, so times and
-deadlines live in reserved lines at the top of the task's notes (the first
-line that isn't one of these starts your own notes):
+deadlines live in reserved lines anywhere in the task's notes:
 
 ```text
 DEADLINE: 2026-10-30 17:00   deadline, day and time

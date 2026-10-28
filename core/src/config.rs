@@ -34,14 +34,18 @@ pub struct CalendarSettings {
     pub source_order: Vec<String>,
     pub show_tasks: bool,
     pub hide_overdue_tasks: bool,
-    pub time_block_calendar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_calendar: Option<String>,
     pub time_block_list: Option<String>,
     pub backlog_list: Option<String>,
-    pub tasks_calendar: Option<String>,
     /// The hour the day ends, 0-5. 0 is midnight.
     pub day_end_hour: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_block_color: Option<HexColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_event_color: Option<HexColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_calendar: Option<String>,
 }
@@ -56,12 +60,13 @@ impl Default for CalendarSettings {
             source_order: Vec::new(),
             show_tasks: true,
             hide_overdue_tasks: false,
-            time_block_calendar: None,
+            app_calendar: None,
             time_block_list: None,
             backlog_list: None,
-            tasks_calendar: None,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),
+            time_block_color: None,
+            task_event_color: None,
             default_calendar: None,
         }
     }
@@ -70,6 +75,19 @@ impl Default for CalendarSettings {
 impl CalendarSettings {
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
+
+    /// The name of the single calendar every event the app writes lives on.
+    pub const APP_CALENDAR_NAME: &str = "TimeSlay";
+
+    /// Names the app calendar has had before. They are still recognized so a
+    /// half-renamed calendar is reused rather than duplicated.
+    pub const APP_CALENDAR_ALIASES: [&str; 2] = ["TimeSlayer", "TimeSlay"];
+
+    /// Whether `name` is the app calendar or one of its former names.
+    pub fn is_app_calendar_name(name: &str) -> bool {
+        let name = name.trim();
+        name == Self::APP_CALENDAR_NAME || Self::APP_CALENDAR_ALIASES.contains(&name)
+    }
 
     pub const MIN_SYNC_MINUTES: u32 = 1;
     pub const MAX_SYNC_MINUTES: u32 = 120;
@@ -123,6 +141,28 @@ impl CalendarSettings {
                 self.task_colors.remove(calendar_id);
             }
         }
+    }
+
+    /// The color time-block events are drawn in, or the built-in block color.
+    pub fn time_block_color(&self) -> crate::Color {
+        self.time_block_color
+            .map_or(crate::calendar::colors::TIME_BLOCK, |color| color.0)
+    }
+
+    /// The color scheduled task events are drawn in, or Google's task blue.
+    pub fn task_event_color(&self) -> crate::Color {
+        self.task_event_color
+            .map_or(crate::calendar::colors::TASK, |color| color.0)
+    }
+
+    /// Sets the time-block color, or clears it back to the built-in default.
+    pub fn set_time_block_color(&mut self, color: Option<crate::Color>) {
+        self.time_block_color = color.map(HexColor);
+    }
+
+    /// Sets the scheduled task color, or clears it back to Google's blue.
+    pub fn set_task_event_color(&mut self, color: Option<crate::Color>) {
+        self.task_event_color = color.map(HexColor);
     }
 }
 

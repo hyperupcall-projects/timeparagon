@@ -151,7 +151,7 @@ pub fn fetch_day(
     disabled: &[String],
     day: NaiveDate,
     day_end_hour: u32,
-    tasks_calendar: Option<&str>,
+    app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     fetch_range(
         access_token,
@@ -160,7 +160,7 @@ pub fn fetch_day(
         day,
         day,
         day_end_hour,
-        tasks_calendar,
+        app_calendar,
     )
 }
 
@@ -171,9 +171,12 @@ pub fn fetch_range(
     first: NaiveDate,
     last: NaiveDate,
     day_end_hour: u32,
-    tasks_calendar: Option<&str>,
+    app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     let mut calendars = fetch_calendars(access_token)?;
+    // Every event TimeSlay writes lives on one calendar. Find it by name, or
+    // create it the first time it is missing.
+    let app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
     // Task refresh and independent calendar requests overlap. Bound concurrency
     // so an account with many calendars does not open an unbounded worker pool.
     let _ = disabled;
@@ -209,13 +212,7 @@ pub fn fetch_range(
                 .map(|link| link.calendar_id)
         })
         .collect();
-    linked_calendars.extend(tasks_calendar.map(str::to_owned));
-    linked_calendars.extend(
-        calendars
-            .iter()
-            .filter(|c| c.name == "Tasks")
-            .map(|c| c.id.clone()),
-    );
+    linked_calendars.extend(app_calendar.clone());
     let mut loaded_calendars = std::collections::HashSet::new();
     for calendar in calendars
         .iter()
@@ -270,6 +267,44 @@ pub fn fetch_range(
         fetched_at: Local::now(),
         notice,
     })
+}
+
+/// The id of the app's TimeSlay calendar: the remembered id while it still
+/// exists, otherwise the calendar by that name, otherwise a freshly created
+/// one. Creation is best-effort so a read-only token still syncs; the calendar
+/// is then made on the first scheduling operation instead.
+fn resolve_app_calendar(
+    access_token: &str,
+    calendars: &mut Vec<Calendar>,
+    known: Option<&str>,
+) -> Option<String> {
+    if let Some(id) = known
+        && calendars.iter().any(|calendar| calendar.id == id)
+    {
+        return Some(id.to_owned());
+    }
+    if let Some(calendar) = calendars
+        .iter()
+        .find(|calendar| !calendar.is_task_list() && CalendarSettings::is_app_calendar_name(&calendar.name))
+    {
+        return Some(calendar.id.clone());
+    }
+    match super::scheduled::app_calendar(access_token) {
+        Ok(id) => {
+            calendars.push(Calendar {
+                id: id.clone(),
+                name: CalendarSettings::APP_CALENDAR_NAME.to_owned(),
+                color: colors::TIME_BLOCK,
+                primary: false,
+                selected_by_google: true,
+            });
+            Some(id)
+        }
+        Err(error) => {
+            log::warn!("could not create the TimeSlay calendar: {error}");
+            None
+        }
+    }
 }
 
 fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
@@ -917,6 +952,7 @@ pub fn patch_event(
     event_id: &str,
     title: &str,
     description: &str,
+    color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<(), String> {
@@ -933,6 +969,9 @@ pub fn patch_event(
     if !description.is_empty() {
         body["description"] = serde_json::Value::String(description.to_owned());
     }
+    if let Some(color_id) = color_id {
+        body["colorId"] = serde_json::Value::String(color_id.to_owned());
+    }
 
     patch(&url, access_token, &body.to_string(), "Google Calendar")
 }
@@ -947,6 +986,7 @@ pub fn insert_event(
     calendar_id: &str,
     title: &str,
     description: &str,
+    color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<String, String> {
@@ -958,6 +998,9 @@ pub fn insert_event(
     });
     if !description.is_empty() {
         body["description"] = serde_json::Value::String(description.to_owned());
+    }
+    if let Some(color_id) = color_id {
+        body["colorId"] = serde_json::Value::String(color_id.to_owned());
     }
 
     let response = post(&url, access_token, &body.to_string(), "Google Calendar")?;

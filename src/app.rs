@@ -371,6 +371,10 @@ pub enum Message {
     TaskColorEditorToggled(String),
     /// Give a Google Tasks list a custom color, or `None` to reset it.
     TaskColorPicked(String, Option<iced::Color>),
+    /// Color time-block events on the TimeSlay calendar; `None` resets it.
+    TimeBlockColorPicked(Option<iced::Color>),
+    /// Color scheduled task events on the TimeSlay calendar; `None` resets it.
+    TaskEventColorPicked(Option<iced::Color>),
     /// Delete a single Google Task instance (one occurrence of a recurring task).
     TaskDeleteRequested(String),
     /// The user confirmed the task deletion prompt.
@@ -421,6 +425,8 @@ pub enum Message {
     EventDraftStartChanged(String),
     /// The end field was edited, as `HH:MM`.
     EventDraftEndChanged(String),
+    /// The new entry's kind was switched between an event and a time block.
+    EventDraftKindSelected(calendar::DraftKind),
     /// The new event was moved to another calendar.
     EventDraftCalendarSelected(String),
     /// The calendar dropdown in the add-event popup was opened or closed.
@@ -1741,9 +1747,15 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                         });
                     }
                     let dates = calendar::week_dates(anchor, days);
+                    let remember = remember_app_calendar(state, &snapshot);
                     state.calendar.apply_week_snapshot(snapshot, &dates);
                     state.calendar.apply_task_colors(&state.config.calendar);
-                    reconcile_completed_task(state)
+                    let reconcile = reconcile_completed_task(state);
+                    if remember {
+                        Task::batch([queue_save(state), reconcile])
+                    } else {
+                        reconcile
+                    }
                 }
                 Err(error) => dispatch(state, Message::CalendarSynced(Err(error))),
             }
@@ -1763,9 +1775,15 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     None => notice,
                 });
             }
+            let remember = remember_app_calendar(state, &snapshot);
             state.calendar.apply_snapshot(snapshot);
             state.calendar.apply_task_colors(&state.config.calendar);
-            reconcile_completed_task(state)
+            let reconcile = reconcile_completed_task(state);
+            if remember {
+                Task::batch([queue_save(state), reconcile])
+            } else {
+                reconcile
+            }
         }
 
         Message::CalendarSynced(Err(error)) => {
@@ -2032,12 +2050,12 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
-            let tasks_calendar = state.config.calendar.tasks_calendar.clone();
+            let app_calendar = state.config.calendar.app_calendar.clone();
             state.calendar.error = None;
             state.timeblocking.busy.insert(id.clone());
 
             blocking::run(move || {
-                calendar::delete_task(&client_id, &client_secret, &task, tasks_calendar.as_deref())
+                calendar::delete_task(&client_id, &client_secret, &task, app_calendar.as_deref())
             })
             .map(move |result| Message::TaskDeleted(id.clone(), result))
         }
@@ -2171,6 +2189,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.config.calendar.set_task_color(&id, color);
             state.calendar.apply_task_colors(&state.config.calendar);
             state.calendar.color_editor = None;
+            queue_save(state)
+        }
+
+        Message::TimeBlockColorPicked(color) => {
+            state.config.calendar.set_time_block_color(color);
+            state.calendar.apply_task_colors(&state.config.calendar);
+            queue_save(state)
+        }
+
+        Message::TaskEventColorPicked(color) => {
+            state.config.calendar.set_task_event_color(color);
+            state.calendar.apply_task_colors(&state.config.calendar);
             queue_save(state)
         }
 
@@ -2408,6 +2438,26 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDraftKindSelected(kind) => {
+            let app_calendar = state.config.calendar.app_calendar.clone();
+            let default_calendar = state
+                .calendar
+                .default_calendar_id(&state.config.calendar);
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.kind = kind;
+                // A time block always lives on the app's TimeSlay calendar;
+                // switching back to an event returns to the normal default.
+                if let Some(calendar_id) = match kind {
+                    calendar::DraftKind::TimeBlock => app_calendar,
+                    calendar::DraftKind::Event => default_calendar,
+                } {
+                    draft.calendar_id = calendar_id;
+                }
+                draft.calendar_dropdown_open = false;
+            }
+            Task::none()
+        }
+
         Message::EventDraftCalendarSelected(id) => {
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.calendar_id = id;
@@ -2438,7 +2488,37 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            let color = state.calendar.calendar_color(&draft.calendar_id);
+            // A time block is always written to the app's TimeSlay calendar
+            // and labelled and colored as a block; an ordinary event stays on
+            // the calendar the picker shows.
+            let is_block = draft.kind == calendar::DraftKind::TimeBlock
+                || state.config.calendar.app_calendar.as_deref()
+                    == Some(draft.calendar_id.as_str());
+            let calendar_id = if draft.kind == calendar::DraftKind::TimeBlock {
+                state
+                    .config
+                    .calendar
+                    .app_calendar
+                    .clone()
+                    .unwrap_or_else(|| draft.calendar_id.clone())
+            } else {
+                draft.calendar_id.clone()
+            };
+            let color = if is_block {
+                state.config.calendar.time_block_color()
+            } else {
+                state.calendar.calendar_color(&calendar_id)
+            };
+            let description = if is_block {
+                calendar::event_description(&draft.description, "Time Block", &[])
+            } else {
+                draft.description.clone()
+            };
+            let color_id = if is_block {
+                calendar::colors::event_id(state.config.calendar.time_block_color())
+            } else {
+                None
+            };
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
             state.calendar.error = None;
@@ -2447,16 +2527,17 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 let id = calendar::create_event(
                     &client_id,
                     &client_secret,
-                    &draft.calendar_id,
+                    &calendar_id,
                     &draft.title,
-                    &draft.description,
+                    &description,
+                    color_id,
                     draft.start,
                     draft.end,
                 )?;
 
                 Ok(calendar::Event {
                     id,
-                    calendar_id: draft.calendar_id.clone(),
+                    calendar_id,
                     title: if draft.title.trim().is_empty() {
                         "(No title)".to_owned()
                     } else {
@@ -2468,7 +2549,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     color,
                     completed: false,
                     details: calendar::Details {
-                        description: draft.description.clone(),
+                        description,
                         ..calendar::Details::default()
                     },
                 })
@@ -2544,6 +2625,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            let is_block = state.config.calendar.app_calendar.as_deref()
+                == Some(draft.calendar_id.as_str());
+            let description = if is_block {
+                calendar::event_description(&draft.description, "Time Block", &[])
+            } else {
+                draft.description.clone()
+            };
+            let color_id = if is_block {
+                calendar::colors::event_id(state.config.calendar.time_block_color())
+            } else {
+                None
+            };
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
             state.calendar.error = None;
@@ -2555,7 +2648,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     &draft.calendar_id,
                     &draft.id,
                     &draft.title,
-                    &draft.description,
+                    &description,
+                    color_id,
                     draft.start,
                     draft.end,
                 )?;
@@ -3026,6 +3120,34 @@ fn reconcile_completed_task(state: &mut State) -> Task<Message> {
     }
 }
 
+/// Remembers the id of the app-owned TimeSlay calendar from a fresh calendar
+/// list, so time blocks and scheduled tasks are recognized even after the id
+/// changes (a re-created calendar, or a different account). Returns whether the
+/// id changed and needs saving.
+fn remember_app_calendar(state: &mut State, snapshot: &calendar::Snapshot) -> bool {
+    let app = |calendar: &&calendar::Calendar| {
+        !calendar.is_task_list()
+            && calendar.name == crate::config::CalendarSettings::APP_CALENDAR_NAME
+    };
+    let legacy = |calendar: &&calendar::Calendar| {
+        !calendar.is_task_list()
+            && crate::config::CalendarSettings::is_app_calendar_name(&calendar.name)
+    };
+    // The canonical name wins; a former name is used until it is migrated.
+    let found = snapshot
+        .calendars
+        .iter()
+        .find(app)
+        .or_else(|| snapshot.calendars.iter().find(legacy));
+    match found {
+        Some(app) if state.config.calendar.app_calendar.as_deref() != Some(app.id.as_str()) => {
+            state.config.calendar.app_calendar = Some(app.id.clone());
+            true
+        }
+        _ => false,
+    }
+}
+
 fn sync_calendar(state: &mut State) -> Task<Message> {
     if state.screen == Screen::Calendar && state.weekly {
         let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
@@ -3048,7 +3170,7 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     let day_end_hour = state.config.calendar.day_start_hour();
 
     let revision = state.timeblocking.revision;
-    let tasks_calendar = state.config.calendar.tasks_calendar.clone();
+    let app_calendar = state.config.calendar.app_calendar.clone();
     if state.screen == Screen::Calendar && state.weekly {
         let anchor = state.week_anchor;
         let days = state.config.calendar.weekly_days();
@@ -3060,7 +3182,7 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
                 anchor,
                 days,
                 day_end_hour,
-                tasks_calendar.as_deref(),
+                app_calendar.as_deref(),
             )
         })
         .map(move |result| Message::CalendarWeekSynced(revision, anchor, days, result));
@@ -3072,7 +3194,7 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
             &disabled,
             day,
             day_end_hour,
-            tasks_calendar.as_deref(),
+            app_calendar.as_deref(),
         )
     })
     .map(move |result| Message::CalendarSyncedAt(revision, result))

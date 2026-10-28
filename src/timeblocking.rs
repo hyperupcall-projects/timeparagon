@@ -74,8 +74,6 @@ pub enum Action {
     StopWork(String),
     WorkTick,
     HideOverdue(bool),
-    Calendar(String),
-    TaskCalendar(String),
     Deadline(String),
     StartTime(String),
     EndTime(String),
@@ -345,10 +343,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.config.calendar.hide_overdue_tasks = hide;
             return crate::app::queue_save(state);
         }
-        Action::TaskCalendar(id) => {
-            state.config.calendar.tasks_calendar = Some(id);
-            return crate::app::queue_save(state);
-        }
         Action::StartTime(value) => {
             state.timeblocking.start_time = value;
             return Task::none();
@@ -433,12 +427,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Time(start, end))
         }
         Action::RefreshBlock(id) => return refresh_block(state, &id),
-        Action::Calendar(id) => {
-            state.config.calendar.time_block_calendar = Some(id);
-            // Reveal the newly enabled View/Edit controls without opening a sidebar.
-            state.calendar.open_event = None;
-            return crate::app::queue_save(state);
-        }
         Action::List(id) => {
             state.config.calendar.time_block_list = Some(id);
             return crate::app::queue_save(state);
@@ -581,8 +569,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         state.timeblocking.todo_open = false;
                     }
                     if let Some(link) = &event.details.scheduled {
-                        if state.config.calendar.tasks_calendar.is_none() {
-                            state.config.calendar.tasks_calendar = Some(link.calendar_id.clone());
+                        // Remember the app calendar the first time an event
+                        // lands on it, so blocks and tasks are recognized.
+                        if state.config.calendar.app_calendar.is_none() {
+                            state.config.calendar.app_calendar = Some(link.calendar_id.clone());
                         }
                         if state.config.calendar.time_block_list.is_none() {
                             state.config.calendar.time_block_list =
@@ -945,7 +935,7 @@ fn create_and_assign(
     let token = access(&settings)?;
     let (_, list_id) = calendar::scheduled::destinations(
         &token,
-        settings.tasks_calendar.as_deref(),
+        settings.app_calendar.as_deref(),
         settings.time_block_list.as_deref(),
     )?;
     let created = calendar::api::insert_task(&token, &list_id, &title)?;
@@ -1395,7 +1385,7 @@ fn schedule_with(
     }
     let (destination_calendar, destination_list) = remote.destinations(
         settings
-            .tasks_calendar
+            .app_calendar
             .as_deref()
             .or_else(|| old.as_ref().map(|l| l.calendar_id.as_str())),
         settings
@@ -1410,6 +1400,9 @@ fn schedule_with(
     // Reserve a stable event ID before any remote write. Preserve aliases and
     // this reservation even if a later API call fails.
     link.calendar_id = destination_calendar;
+    // Keep Google's event color in step with the chosen task color.
+    link.color_id =
+        calendar::colors::event_id(settings.task_event_color()).map(str::to_owned);
     link.pending = true;
     link.block = data.metadata.block.clone();
     link.order = data.metadata.order;
@@ -1550,7 +1543,7 @@ mod tests {
         let remote = FakeGoogle::default();
         remote.fail_calendar.set(true);
         let settings = CalendarSettings {
-            tasks_calendar: Some("custom-calendar".into()),
+            app_calendar: Some("custom-calendar".into()),
             time_block_list: Some("tasks:has-time".into()),
             ..Default::default()
         };

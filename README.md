@@ -2,65 +2,49 @@
 
 Slay the day with TimeSlay.
 
-TimeSlay has two implementations that live side by side:
+There's currently two implementations:
 
-| Crate | UI | Status |
-| --- | --- | --- |
-| `time-slay` (workspace root) | [iced](https://iced.rs) | The complete application |
-| `time-slay-core` | none | Shared calendar, OAuth, tasks and time-block data layer |
-| `dioxus` (`time-slay-dioxus`) | [Dioxus](https://dioxuslabs.com) | Day view only |
+- An [iced](https://iced.rs) desktop application
+- A [Dioxus](https://dioxuslabs.com) mobile and desktop application
 
-Both UIs use the same Google Calendar and Google Tasks data, the same OAuth
-token, the same config file, and the same local task database.
-
-`time-slay-core` does not fork the iced crate's data code: `calendar`,
-`config_sync`, `hex`, `task_db` and the pure task rules in
-`src/timeblocking/model.rs` are compiled into both crates from the same source
-files via `#[path]`. Only `core/src/config.rs` is a separate, smaller config.
-
-## Run
+## Usage
 
 ```sh
-# The iced application
+# iced.
 cargo run -p time-slay --release
 
-# The Dioxus day view
+# Dioxus desktop app.
 cargo run -p time-slay-dioxus
-```
 
-The iced package remains the workspace's default member, so a plain `cargo run`
-still launches the iced app.
-
-## Daily and weekly calendar
-
-The iced app has **Daily** and **Weekly** tabs. Weekly starts with the day
-before the selected date, followed by seven or eight days beginning with that
-date. Use the month picker to select a date; hovering a date previews the
-displayed range. The arrows move to the previous or next range. The window
-widens to fit the columns where the screen allows, then returns to its normal
-width when you leave Weekly. Scroll horizontally if the columns exceed the
-available screen width, and vertically to move through time.
-
-Calendar settings control the number of weekly days and each column's width.
-Event, task, and time-block details open over neighboring columns, leaving the
-selected day visible.
-
-## Android
-
-The Dioxus day view also builds as an Android app:
-
-```sh
+# Dioxus mobile app.
 ./scripts/build-android.sh
 ```
 
-The script produces a debug-signed APK in `dist/` (arm64-v8a by default). It
-embeds no config or credentials: the app asks for the Google client ID and
-secret on first launch. `--release` needs your own signing keystore. Use
-`./scripts/build-android.sh --help` for ABI, release and install options.
+## Roadmap
 
-The Android build needs the Android SDK, an NDK, Java 17+, the Rust Android
-targets, and `dx` (Dioxus CLI 0.7). The script checks for these and prints
-install commands when something is missing.
+- Better handling of recurring tasks
+- Better drag and drop
+- Better UI
+- File attachments
+- Light Zoom/Google Meets integration (link parsing)
+- More integrations (GMail)
+- Actual projects
+	- Controlling windows
+	- List/kanban/calendar
+- Better inbox
+	- Input like todoist
+	- Natural language add
+	- +New button everywhere in interface
+- Command palette
+	- Global search
+- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
+- Objects/goals for day/week/mo./quarter/custom
 
-See [`dioxus/README.md`](dioxus/README.md) for what the day view includes and
-how the mobile build is wired up.
+### Stretch
+
+- Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
+- Analytics of time spent
+- People/contacts
+- Start/shutdown/review rituals for day/week/month
+- Saved custom views for daily/weekly/projects?
+- Offline write queue
