@@ -14,6 +14,7 @@ pub mod layout;
 pub mod links;
 pub mod notepad;
 pub mod projects;
+pub mod recurrence;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;
@@ -156,6 +157,39 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.inbox.draft.is_some() {
             layers.push(inbox::new_task_overlay(state, &metrics));
         }
+        // The floating task card is drawn last so it is never hidden, and it is
+        // only added while a task is actually in the air.
+        if let Some(task) = state
+            .timeblocking
+            .dragging
+            .as_deref()
+            .and_then(|id| state.calendar.event(id))
+            .filter(|_| state.timeblocking.drag_pointer.is_some())
+        {
+            let pointer = state.timeblocking.drag_pointer.unwrap_or_default();
+            // The sidebar body is inset from the window, and the pointer is in
+            // window coordinates, so shift it into the view's own space.
+            let inset = if let Some(sidebar) = &state.sidebar {
+                let margin = state.screen_margin();
+                iced::Point::new(
+                    if sidebar.side == crate::panel::Side::Left {
+                        margin
+                    } else {
+                        0.0
+                    },
+                    margin,
+                )
+            } else {
+                iced::Point::ORIGIN
+            };
+            layers.push(drag_ghost(
+                state,
+                task,
+                &metrics,
+                iced::Point::new(pointer.x - inset.x, pointer.y - inset.y),
+                size,
+            ));
+        }
         iced::widget::stack(layers).into()
     });
     let radius = state.config.views.border_radius();
@@ -248,6 +282,35 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
         body
     }
+}
+
+/// Places the floating task card just under the pointer, clamped to the window
+/// so it stays fully on screen.
+fn drag_ghost<'a>(
+    state: &'a State,
+    task: &'a crate::calendar::Event,
+    metrics: &Metrics,
+    pointer: iced::Point,
+    size: Size,
+) -> Element<'a, Message> {
+    /// How far the card trails the pointer, so the pointer reads as holding it.
+    const OFFSET: f32 = 12.0;
+    let width = (size.width - 24.0).clamp(160.0, 320.0);
+    let left = (pointer.x + OFFSET)
+        .min((size.width - width - 4.0).max(0.0))
+        .max(0.0);
+    let top = (pointer.y + OFFSET)
+        .min((size.height - 80.0).max(0.0))
+        .max(0.0);
+    container(timeblocking::drag_ghost(state, task, metrics, width))
+        .width(Fill)
+        .height(Fill)
+        .padding(Padding {
+            top,
+            left,
+            ..Padding::default()
+        })
+        .into()
 }
 
 /// How many top-level navigation items there are: Day/Week, Tasks/Projects,

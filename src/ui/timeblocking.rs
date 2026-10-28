@@ -152,7 +152,62 @@ pub fn task_row<'a>(
                 ..Default::default()
             }
         });
-    super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.is_some())
+    super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref())
+}
+
+/// The floating card that follows the pointer while a task is in the air.
+///
+/// It is drawn above everything else but never takes the pointer, so the drop
+/// targets underneath still see the release. The border uses the theme's
+/// primary color to echo the highlight on the places it can be dropped.
+pub(super) fn drag_ghost<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+    width: f32,
+) -> Element<'a, Message> {
+    let m = tb::metadata(task);
+    let mut body = column![
+        row![
+            text("⠿").size(metrics.label() + 2.0).style(text::secondary),
+            task_title(task, metrics.label()),
+        ]
+        .spacing(6)
+        .align_y(iced::Center),
+        text(tb::task_list_name(state, &task.calendar_id))
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    ]
+    .spacing(3);
+    if m.minutes > 0 {
+        body = body.push(
+            text(format!("Estimate: {}m", m.minutes))
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+    container(body)
+        .padding([6, 8])
+        .width(Length::Fixed(width))
+        .style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(palette.background.base.text),
+                border: iced::Border {
+                    color: palette.primary.base.color,
+                    width: 2.0,
+                    radius: 6.0.into(),
+                },
+                shadow: iced::Shadow {
+                    color: Color::BLACK.scale_alpha(0.32),
+                    offset: iced::Vector::new(0.0, 4.0),
+                    blur_radius: 12.0,
+                },
+                ..container::Style::default()
+            }
+        })
+        .into()
 }
 
 /// "Due Today", "Due Tomorrow", or "Due Mon, Oct 26" (with the year when it
@@ -572,9 +627,6 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let block_id = block.id.clone();
     let compact_weekly =
         state.weekly && state.screen == crate::app::Screen::Calendar && metrics.size.width < 240.0;
-    let edit = button(text("Edit").size(metrics.label()).center().width(Fill))
-        .width(Fill)
-        .on_press(Message::EventEditRequested(block_id.clone()));
     let delete = button(text("Delete").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .on_press(Message::EventDeleteRequested(block_id.clone()))
@@ -584,12 +636,15 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .on_press(msg(Action::Close))
         .style(button::secondary);
     let actions: Element<'a, Message> = if compact_weekly {
-        column![edit, delete, close].spacing(metrics.spacing).into()
+        column![delete, close].spacing(metrics.spacing).into()
     } else {
-        row![edit, delete, close].spacing(metrics.spacing).into()
+        row![delete, close].spacing(metrics.spacing).into()
     };
+    // The block is edited in place: title, day and time, description and
+    // repeat are all fields in this panel, with no Edit popup in between.
+    let editor = super::calendar::event_editor(state, block, metrics);
     let mut body = column![
-        text(block.title.clone()).size(20).width(Fill),
+        editor,
         actions,
         text("Planned Tasks").size(16),
         planned_slot(state, &block_id, metrics),

@@ -720,13 +720,18 @@ fn opening_an_event_shows_its_google_details() {
         ..time_slay::calendar::Details::default()
     };
     state.calendar.open_event = Some("standup".into());
+    let event = state.calendar.event("standup").unwrap();
+    state.calendar.edit_draft = Some(time_slay::calendar::EditDraft::from_event(event));
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
 
     for label in [
         "Standup",
         "Room 4",
-        "Bring notes",
+        "Title",
+        "Day and time",
+        "Save changes",
+        "Repeat",
         "Confirmed",
         "Ada",
         "Grace (accepted)",
@@ -1204,7 +1209,8 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     assert!(state.calendar.open_event.is_none());
     let mut ui = render(&state, Size::new(660.0, 720.0));
     for label in [
-        "Edit",
+        "Save changes",
+        "Repeat",
         "Delete",
         "Close",
         "Planned Tasks",
@@ -1253,12 +1259,9 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
 
     for width in [500.0, 660.0] {
         let mut ui = render(&state, Size::new(width, 720.0));
-        let edit = ui.find("Edit")?.bounds();
         let delete = ui.find("Delete")?.bounds();
         let close = ui.find("Close")?.bounds();
-        assert_eq!(edit.y, delete.y);
         assert_eq!(delete.y, close.y);
-        assert!(edit.x + edit.width <= delete.x);
         assert!(delete.x + delete.width <= close.x);
         assert!(close.x + close.width <= width);
         let _ = ui.click("Delete")?;
@@ -1304,7 +1307,7 @@ fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error
 
     let mut ui = render(&state, Size::new(260.0 + 400.0 + 360.0, 900.0));
     let calendar = ui.find("Menu")?.bounds();
-    let block = ui.find("Edit")?.bounds();
+    let block = ui.find("Save changes")?.bounds();
     let details = ui.find("Complete task")?.bounds();
 
     assert!(
@@ -1622,13 +1625,6 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
         Message::TimeBlocking(Action::AvailableAll(true)),
     );
     let mut ui = render(&state, Size::new(900.0, 900.0));
-    let _ = ui.click("Edit")?;
-    assert!(ui.into_messages().any(|message| matches!(
-        message,
-        Message::EventEditRequested(id) if id == "standup"
-    )));
-
-    let mut ui = render(&state, Size::new(900.0, 900.0));
     let _ = ui.click("+")?;
     assert!(
         ui.into_messages()
@@ -1654,7 +1650,7 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
     ))]);
     let messages: Vec<_> = ui.into_messages().collect();
     assert!(messages.iter().any(
-        |message| matches!(message, Message::TimeBlocking(Action::Drag(id)) if id == "task:backlog")
+        |message| matches!(message, Message::TimeBlocking(Action::Drag(id, _)) if id == "task:backlog")
     ));
     assert!(messages.iter().any(|message| {
         matches!(message, Message::TimeBlocking(Action::DropBlock(id)) if id == "standup")
@@ -2105,9 +2101,9 @@ fn task_drag_handles_start_a_drag_and_task_rows_accept_a_drop() -> Result<(), Er
     ))]);
     let messages: Vec<_> = ui.into_messages().collect();
     assert!(
-        messages
-            .iter()
-            .any(|m| matches!(m, Message::TimeBlocking(Action::Drag(id)) if id == "task:backlog"))
+        messages.iter().any(
+            |m| matches!(m, Message::TimeBlocking(Action::Drag(id, _)) if id == "task:backlog")
+        )
     );
     assert!(
         messages.iter().any(

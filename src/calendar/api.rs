@@ -1210,6 +1210,7 @@ pub fn patch_event(
     color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
+    recurrence: Option<&[String]>,
 ) -> Result<(), String> {
     let url = format!(
         "{EVENTS}/{}/events/{}",
@@ -1226,6 +1227,18 @@ pub fn patch_event(
     }
     if let Some(color_id) = color_id {
         body["colorId"] = serde_json::Value::String(color_id.to_owned());
+    }
+    // Always send the array when the caller owns the recurrence, even when
+    // empty: omitting it on a PATCH would leave an earlier recurrence in
+    // place when the user turned it off. An expanded instance passes `None`
+    // so editing one occurrence does not rewrite its series.
+    if let Some(recurrence) = recurrence {
+        body["recurrence"] = serde_json::Value::Array(
+            recurrence
+                .iter()
+                .map(|line| serde_json::Value::String(line.clone()))
+                .collect(),
+        );
     }
 
     patch(&url, access_token, &body.to_string(), "Google Calendar")
@@ -1244,6 +1257,7 @@ pub fn insert_event(
     color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
+    recurrence: &[String],
 ) -> Result<String, String> {
     let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
     let mut body = serde_json::json!({
@@ -1256,6 +1270,14 @@ pub fn insert_event(
     }
     if let Some(color_id) = color_id {
         body["colorId"] = serde_json::Value::String(color_id.to_owned());
+    }
+    if !recurrence.is_empty() {
+        body["recurrence"] = serde_json::Value::Array(
+            recurrence
+                .iter()
+                .map(|line| serde_json::Value::String(line.clone()))
+                .collect(),
+        );
     }
 
     let response = post(&url, access_token, &body.to_string(), "Google Calendar")?;

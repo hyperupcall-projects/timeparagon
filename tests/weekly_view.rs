@@ -337,8 +337,7 @@ fn weekly_canvas_click_reports_the_clicked_day() -> Result<(), Error> {
                 if *day == date(14)
                     && matches!(
                         action.as_ref(),
-                        Message::TimeBlocking(time_slay::timeblocking::Action::View(id))
-                            if id == "standup"
+                        Message::EventOpened(id) if id == "standup"
                     )
         )),
         "click produced {messages:?}"

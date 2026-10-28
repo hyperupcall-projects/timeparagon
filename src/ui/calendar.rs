@@ -115,8 +115,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // Event details are no longer an overlay: they are a pane beside the view.
     let overlay = if state.calendar.draft.is_some() {
         draft_overlay(state, metrics)
-    } else if state.calendar.edit_draft.is_some() {
-        edit_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
     } else if let Some(day) = state.calendar.pending_open {
@@ -331,8 +329,6 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     }
     let overlay = if state.calendar.draft.is_some() {
         draft_overlay(state, metrics)
-    } else if state.calendar.edit_draft.is_some() {
-        edit_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
     } else if let Some(day) = state.calendar.pending_open {
@@ -716,11 +712,42 @@ fn all_day_row_on<'a>(
         return None;
     }
 
+    let dragging = state.timeblocking.dragging.is_some();
     Some(
-        mouse_area(container(scrollable(column(chips).spacing(4.0).width(Fill))).max_height(180))
-            .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
-            .into(),
+        mouse_area(
+            container(scrollable(column(chips).spacing(4.0).width(Fill)))
+                .max_height(180)
+                .style(move |theme: &Theme| drop_zone_style(theme, dragging)),
+        )
+        .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
+        .into(),
     )
+}
+
+/// Outlines a place a task in the air can be dropped, in the theme's primary
+/// color, so the destination is clear while dragging.
+fn drop_zone_style(theme: &Theme, active: bool) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(
+            if active {
+                palette.primary.weak.color
+            } else {
+                Color::TRANSPARENT
+            }
+            .into(),
+        ),
+        border: iced::Border {
+            color: if active {
+                palette.primary.strong.color
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 5.0.into(),
+        },
+        ..container::Style::default()
+    }
 }
 
 pub(super) fn weekly_task_chip<'a>(
@@ -752,7 +779,7 @@ pub(super) fn weekly_task_chip<'a>(
                 ..container::Style::default()
             }),
         &task.id,
-        state.timeblocking.dragging.is_some(),
+        state.timeblocking.dragging.as_deref(),
     )
 }
 
@@ -1048,6 +1075,7 @@ fn day_canvas<'a>(
         can_create,
         create_color,
         external_drag: state.timeblocking.dragging.is_some(),
+        dragged_task: state.timeblocking.dragging.clone(),
     })
     .width(Fill)
     .height(Length::Fixed(height))
@@ -1390,6 +1418,117 @@ fn day_cell<'a>(
     }
 }
 
+/// The in-place editor for a calendar event or time block.
+///
+/// It is the same set of fields the new-event dialog collects, bound to the
+/// event's live [`calendar::EditDraft`] so changes appear in the pane rather
+/// than in a popup. Save writes them to Google; Close discards the draft.
+pub fn event_editor<'a>(
+    state: &'a State,
+    event: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let Some(draft) = state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .filter(|draft| draft.id == event.id)
+    else {
+        return column![
+            super::links::text(event.title.clone(), metrics.label() + 2.0),
+            text(schedule_line(event))
+                .size(metrics.label())
+                .style(text::secondary),
+        ]
+        .spacing(metrics.spacing)
+        .into();
+    };
+
+    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
+
+    let title = text_input("Title", &draft.title)
+        .on_input(Message::EventEditTitleChanged)
+        .size(metrics.label() + 1.0)
+        .width(Fill);
+
+    let when: Element<'a, Message> = if metrics.breakpoint.is_compact() {
+        column![
+            text_input("YYYY-MM-DD", &draft.date_text)
+                .on_input(Message::EventEditDateChanged)
+                .size(metrics.label()),
+            row![
+                text_input("HH:MM", &draft.start_text)
+                    .on_input(Message::EventEditStartChanged)
+                    .size(metrics.label()),
+                text("–").size(metrics.label()),
+                text_input("HH:MM", &draft.end_text)
+                    .on_input(Message::EventEditEndChanged)
+                    .size(metrics.label()),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        row![
+            text_input("YYYY-MM-DD", &draft.date_text)
+                .on_input(Message::EventEditDateChanged)
+                .size(metrics.label())
+                .width(Length::FillPortion(2)),
+            text_input("HH:MM", &draft.start_text)
+                .on_input(Message::EventEditStartChanged)
+                .size(metrics.label()),
+            text("–").size(metrics.label()),
+            text_input("HH:MM", &draft.end_text)
+                .on_input(Message::EventEditEndChanged)
+                .size(metrics.label()),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    };
+
+    let mut body = column![
+        label("Title"),
+        title,
+        label("Day and time"),
+        when,
+        label("Description"),
+        text_input("Add description", &draft.description)
+            .on_input(Message::EventEditDescriptionChanged)
+            .size(metrics.label())
+            .width(Fill),
+        super::recurrence::editor(
+            &draft.rule,
+            draft.start.date_naive(),
+            metrics,
+            false,
+            Message::EventEditRecurrence,
+        ),
+    ]
+    .spacing(6)
+    .width(Fill);
+
+    if let Some(error) = &state.calendar.error {
+        body = body.push(text(error).size(metrics.label()).style(text::danger));
+    }
+
+    body = body.push(
+        button(
+            text("Save changes")
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+        )
+        .width(Fill)
+        .on_press(Message::EventEditSaveRequested)
+        .style(button::primary),
+    );
+
+    body.into()
+}
+
 /// The details card as a full-height pane, drawn to the right of the view.
 ///
 /// It is the same information the old floating card held, but it lives in a
@@ -1413,15 +1552,26 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         .map(|calendar| calendar.name.as_str())
         .unwrap_or("Calendar");
 
-    let mut body = column![
-        super::links::text(event.title.clone(), metrics.label() + 2.0),
-        text(schedule_line(event))
-            .size(metrics.label())
-            .style(text::secondary),
-        detail_line("Calendar", calendar_name.to_owned(), metrics),
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
+    let mut body = column![].spacing(metrics.spacing).width(Fill);
+    if is_task(event) {
+        body = body
+            .push(super::links::text(
+                event.title.clone(),
+                metrics.label() + 2.0,
+            ))
+            .push(
+                text(schedule_line(event))
+                    .size(metrics.label())
+                    .style(text::secondary),
+            )
+            .push(detail_line("Calendar", calendar_name.to_owned(), metrics));
+    } else {
+        // An event is edited right here. There is no separate Edit button and
+        // no popup: every field the app can write is in the pane.
+        body = body
+            .push(event_editor(state, event, metrics))
+            .push(detail_line("Calendar", calendar_name.to_owned(), metrics));
+    }
 
     let details = &event.details;
     if !is_task(event) && !details.status.is_empty() {
@@ -1454,14 +1604,10 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     if !details.attendees.is_empty() {
         body = body.push(detail_line("Guests", details.attendees.join("\n"), metrics));
     }
-    if !details.description.is_empty() {
+    if is_task(event) && !details.description.is_empty() {
         body = body.push(detail_line(
             "Description",
-            if event.is_task() {
-                crate::timeblocking::description(&details.description)
-            } else {
-                details.description.clone()
-            },
+            crate::timeblocking::description(&details.description),
             metrics,
         ));
     }
@@ -1520,18 +1666,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 .into(),
         );
     }
-    // Editing an existing calendar event reuses the same fields as creating
-    // one: title, time, calendar and description. Google Tasks are not
-    // calendar events and cannot be edited this way.
     if !is_task(event) {
-        let id = event.id.clone();
-        buttons.push(
-            button(text("Edit").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::EventEditRequested(id))
-                .style(button::primary)
-                .into(),
-        );
         let id = event.id.clone();
         buttons.push(
             button(text("Delete").size(metrics.label()).center().width(Fill))
@@ -1736,7 +1871,15 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     .into();
 
     let when = column![
-        text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
+        row![
+            text_input("YYYY-MM-DD", &draft.date_text)
+                .on_input(Message::EventDraftDateChanged)
+                .size(metrics.label())
+                .width(Length::Fixed(116.0)),
+            text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
+        ]
+        .spacing(6.0)
+        .align_y(Alignment::Center),
         row![
             text_input("09:00", &draft.start_text)
                 .on_input(Message::EventDraftStartChanged)
@@ -1793,6 +1936,13 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         when,
         draft_calendar_picker(state, metrics),
         description,
+        super::recurrence::editor(
+            &draft.rule,
+            draft.start.date_naive(),
+            metrics,
+            false,
+            Message::EventDraftRecurrence,
+        ),
         actions,
     ]
     .spacing(metrics.spacing)
@@ -1816,138 +1966,6 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     // Swallow presses on the card so a click on its blank area cannot fall
     // through to the dismiss layer and close the draft.
-    let card = mouse_area(card).on_press(Message::Ignored);
-
-    let aligned = column![
-        iced::widget::Space::new().height(Fill),
-        container(card).padding(metrics.padding).width(Fill),
-        iced::widget::Space::new().height(Fill),
-    ]
-    .width(Fill)
-    .height(Fill);
-
-    stack![dismiss, aligned].into()
-}
-
-/// The edit-event popup, opened from the details card of an existing event.
-///
-/// It mirrors the add-event popup: title, time, calendar and description,
-/// pre-filled from the event the user clicked. Save writes the changes to
-/// Google; Cancel throws them away.
-fn edit_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let Some(draft) = state.calendar.edit_draft.as_ref() else {
-        return iced::widget::Space::new().width(0.0).height(0.0).into();
-    };
-
-    // Clicking outside the card puts the edit away.
-    let dismiss = mouse_area(
-        container(iced::widget::Space::new())
-            .width(Fill)
-            .height(Fill),
-    )
-    .on_press(Message::EventEditCancelled);
-
-    let header = row![
-        text("Edit event").size(metrics.label() + 1.0).width(Fill),
-        button(text("✕").size(metrics.label()).center())
-            .width(Length::Fixed(metrics.icon_button()))
-            .height(Length::Fixed(metrics.icon_button()))
-            .padding(0.0)
-            .on_press(Message::EventEditCancelled)
-            .style(button::secondary),
-    ]
-    .align_y(Alignment::Center);
-
-    let title = text_input("Add title", &draft.title)
-        .on_input(Message::EventEditTitleChanged)
-        .size(metrics.label() + 2.0)
-        .width(Fill);
-
-    let kinds: Element<'a, Message> = button(text("Event").size(metrics.label()).center())
-        .style(button::primary)
-        .into();
-
-    let when = column![
-        text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
-        row![
-            text_input("09:00", &draft.start_text)
-                .on_input(Message::EventEditStartChanged)
-                .size(metrics.label())
-                .width(Length::Fixed(72.0)),
-            text("–").size(metrics.label()),
-            text_input("10:00", &draft.end_text)
-                .on_input(Message::EventEditEndChanged)
-                .size(metrics.label())
-                .width(Length::Fixed(72.0)),
-        ]
-        .spacing(6.0)
-        .align_y(Alignment::Center),
-    ]
-    .spacing(4.0)
-    .width(Fill);
-
-    let mut description = column![
-        text("Description")
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
-        text_input("Add description", &draft.description)
-            .on_input(Message::EventEditDescriptionChanged)
-            .size(metrics.label())
-            .width(Fill)
-            .padding(8.0),
-    ]
-    .spacing(2.0)
-    .width(Fill);
-
-    if let Some(links) = super::links::for_editor(
-        &format!("{}\n{}", draft.title, draft.description),
-        metrics.label(),
-    ) {
-        description = description.push(links);
-    }
-
-    let actions = row![
-        Space::new().width(Fill),
-        button(text("Cancel").size(metrics.label()).center())
-            .on_press(Message::EventEditCancelled)
-            .style(button::secondary),
-        button(text("Save").size(metrics.label()).center())
-            .on_press(Message::EventEditSaveRequested)
-            .style(button::primary),
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
-
-    let panel = column![
-        header,
-        title,
-        kinds,
-        when,
-        draft_calendar_picker(state, metrics),
-        description,
-        actions,
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
-
-    let card = container(panel)
-        .padding(metrics.padding)
-        .width(Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        });
-
-    // Swallow presses on the card so a click on its blank area cannot fall
-    // through to the dismiss layer and close the edit.
     let card = mouse_area(card).on_press(Message::Ignored);
 
     let aligned = column![
@@ -2475,6 +2493,9 @@ struct DayCanvas {
     /// event will land on.
     create_color: Color,
     external_drag: bool,
+    /// The task currently being dragged by an external row, so its own row on
+    /// the grid can be left out while it is in the air.
+    dragged_task: Option<String>,
 }
 
 /// A drag on empty grid space that is drawing out a new event.
@@ -2664,17 +2685,14 @@ impl canvas::Program<Message> for DayCanvas {
                     .and_capture(),
                 )
             }
-            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if let Some((id, origin)) = &state.task_press {
-                    if cursor
-                        .position()
-                        .is_some_and(|point| point.distance(*origin) >= 4.0)
-                    {
+                    if position.distance(*origin) >= 4.0 {
                         let id = id.clone();
                         state.task_press = None;
                         return Some(
                             canvas::Action::publish(Message::TimeBlocking(
-                                crate::timeblocking::Action::Drag(id),
+                                crate::timeblocking::Action::Drag(id, *position),
                             ))
                             .and_capture(),
                         );
@@ -2743,19 +2761,10 @@ impl canvas::Program<Message> for DayCanvas {
                         continue;
                     }
                     let rect = self.block_rect(block, bounds.width);
-                    let (view, edit) = block_actions(rect);
-                    if edit.contains(point) {
+                    if block_action(rect).contains(point) {
                         return Some(
                             canvas::Action::publish(Message::EventOpened(block.id.clone()))
                                 .and_capture(),
-                        );
-                    }
-                    if view.contains(point) {
-                        return Some(
-                            canvas::Action::publish(Message::TimeBlocking(
-                                crate::timeblocking::Action::View(block.id.clone()),
-                            ))
-                            .and_capture(),
                         );
                     }
                 }
@@ -2892,8 +2901,7 @@ impl canvas::Program<Message> for DayCanvas {
 
         if let Some(point) = cursor.position_in(bounds) {
             for block in self.blocks.iter().filter(|block| block.time_block) {
-                let (view, edit) = block_actions(self.block_rect(block, bounds.width));
-                if view.contains(point) || edit.contains(point) {
+                if block_action(self.block_rect(block, bounds.width)).contains(point) {
                     return mouse::Interaction::Pointer;
                 }
             }
@@ -2926,7 +2934,7 @@ impl canvas::Program<Message> for DayCanvas {
         &self,
         state: &Self::State,
         renderer: &Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
@@ -2947,7 +2955,15 @@ impl canvas::Program<Message> for DayCanvas {
             dragging,
         )
         .wrapping_mul(31)
-        .wrapping_add(travel_key(&self.travel));
+        .wrapping_add(travel_key(&self.travel))
+        // A task row in the air leaves its row behind, so the cached grid has
+        // to retrace when the drag starts and when it ends.
+        .wrapping_mul(31)
+        .wrapping_add(self.dragged_task.as_deref().map_or(u64::MAX, |id| {
+            id.bytes().fold(0_u64, |hash, byte| {
+                hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+            })
+        }));
         if state.key.get() != key {
             state.grid.clear();
             state.key.set(key);
@@ -2959,6 +2975,20 @@ impl canvas::Program<Message> for DayCanvas {
         });
 
         let mut overlay = Frame::new(renderer, bounds.size());
+        // A task in the air can land anywhere on the grid, so tinting the whole
+        // day in the theme's primary color reads as one big drop target.
+        if self.external_drag && !self.alarm_mode {
+            overlay.fill_rectangle(
+                Point::new(self.gutter, 0.0),
+                Size::new((bounds.width - self.gutter).max(0.0), bounds.height),
+                theme
+                    .extended_palette()
+                    .primary
+                    .base
+                    .color
+                    .scale_alpha(0.10),
+            );
+        }
         self.draw_needle(&mut overlay);
         self.draw_alarms(&mut overlay, cursor.position_in(bounds));
         if self.alarm_mode {
@@ -3046,11 +3076,16 @@ impl DayCanvas {
                     Color::from_rgba(0.15, 0.15, 0.15, 0.28),
                 );
                 let mut elapsed = 0;
-                for (i, (_, title, minutes)) in block.tasks.iter().enumerate() {
+                for (i, (id, title, minutes)) in block.tasks.iter().enumerate() {
                     elapsed += minutes;
                     let over = elapsed as f32 > duration;
                     let y = block_bounds.y + i as f32 * 20.0;
                     let x = block_bounds.x + block_bounds.width + 4.0;
+                    // The task in the air leaves its row behind, matching the
+                    // row widget that hides itself while it is dragged.
+                    if self.dragged_task.as_deref() == Some(id.as_str()) {
+                        continue;
+                    }
                     if over {
                         frame.fill_rectangle(
                             Point::new(x, y),
@@ -3110,27 +3145,23 @@ impl DayCanvas {
                 );
             }
             if block.time_block {
-                for (label, bounds) in [
-                    ("View", block_actions(block_bounds).0),
-                    ("Edit", block_actions(block_bounds).1),
-                ] {
-                    frame.fill(
-                        &Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()),
-                        Color::WHITE.scale_alpha(0.27),
-                    );
-                    fill_glyphs(
-                        frame,
-                        Text {
-                            content: label.into(),
-                            position: Point::new(bounds.center_x(), bounds.center_y()),
-                            color: ink,
-                            size: Pixels(10.0),
-                            align_x: iced::alignment::Horizontal::Center.into(),
-                            align_y: iced::alignment::Vertical::Center,
-                            ..Text::default()
-                        },
-                    );
-                }
+                let bounds = block_action(block_bounds);
+                frame.fill(
+                    &Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()),
+                    Color::WHITE.scale_alpha(0.27),
+                );
+                fill_glyphs(
+                    frame,
+                    Text {
+                        content: "Open".into(),
+                        position: Point::new(bounds.center_x(), bounds.center_y()),
+                        color: ink,
+                        size: Pixels(10.0),
+                        align_x: iced::alignment::Horizontal::Center.into(),
+                        align_y: iced::alignment::Vertical::Center,
+                        ..Text::default()
+                    },
+                );
             }
         }
     }
@@ -3734,21 +3765,17 @@ fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color: Color) {
     );
 }
 
-/// View and Edit share the event's top-right corner, in that order.
-fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
+/// The one "Open" chip in the event's top-right corner. It opens the same
+/// editable panel a click anywhere else on the block opens.
+fn block_action(bounds: Rectangle) -> Rectangle {
     let width = 36.0_f32.min(((bounds.width - 6.0) / 2.0).max(1.0));
     let height = 18.0_f32.min((bounds.height - 4.0).max(1.0));
-    let edit = Rectangle {
+    Rectangle {
         x: bounds.x + bounds.width - width - 2.0,
         y: bounds.y + 2.0,
         width,
         height,
-    };
-    let view = Rectangle {
-        x: edit.x - width - 2.0,
-        ..edit
-    };
-    (view, edit)
+    }
 }
 
 /// Blends a color toward white, for the lighter shade an unconfirmed time
@@ -4170,6 +4197,81 @@ mod tests {
     }
 
     #[test]
+    fn an_open_event_is_edited_in_the_pane_without_an_edit_popup() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state.calendar.open_event = Some("standup".into());
+        let event = state.calendar.event("standup").unwrap();
+        state.calendar.edit_draft = Some(calendar::EditDraft::from_event(event));
+        let metrics = Metrics::of(Size::new(300.0, 800.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(300.0, 800.0),
+            details_pane(&state, &metrics),
+        );
+        assert!(ui.find("Title").is_ok());
+        assert!(ui.find("Day and time").is_ok());
+        assert!(ui.find("Save changes").is_ok());
+        assert!(ui.find("Repeat").is_ok());
+        assert!(ui.find("Does not repeat").is_ok());
+        assert!(ui.find("Edit").is_err());
+    }
+
+    #[test]
+    fn a_time_block_panel_edits_its_fields_in_place() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state.timeblocking.block = Some("standup".into());
+        let event = state.calendar.event("standup").unwrap();
+        state.calendar.edit_draft = Some(calendar::EditDraft::from_event(event));
+        let metrics = Metrics::of(Size::new(400.0, 800.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(400.0, 800.0),
+            crate::ui::timeblocking::panel(&state, &metrics),
+        );
+        assert!(ui.find("Save changes").is_ok());
+        assert!(ui.find("Planned Tasks").is_ok());
+        assert!(ui.find("Edit").is_err());
+    }
+
+    #[test]
+    fn the_new_event_popup_shows_the_shared_repeat_controls() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        let start =
+            calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+        state.calendar.draft = Some(calendar::Draft::new(
+            "primary".into(),
+            start,
+            start + chrono::Duration::minutes(45),
+        ));
+        let metrics = Metrics::of(Size::new(800.0, 600.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(800.0, 600.0),
+            draft_overlay(&state, &metrics),
+        );
+        assert!(ui.find("Repeat").is_ok());
+        assert!(ui.find("Does not repeat").is_ok());
+        ui.click("Weekly").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::EventDraftRecurrence(crate::recurrence::Action::Repeat(
+                crate::recurrence::RepeatMode::Weekly
+            ))
+        )));
+    }
+
+    #[test]
     fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
         use crate::timeblocking::{self as tb, Metadata};
         let mut state = State::new(
@@ -4239,45 +4341,28 @@ mod tests {
     }
 
     #[test]
-    fn time_block_view_and_edit_buttons_dispatch_different_actions() {
-        for view in [true, false] {
-            let mut canvas = canvas_with_one_block();
-            canvas.blocks[0].time_block = true;
-            let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
-            let (view_rect, edit_rect) = block_actions(bounds);
-            assert!(view_rect.x < edit_rect.x);
-            let element: Element<'_, Message> =
-                canvas_widget(canvas).width(240).height(1440).into();
-            let mut ui = iced_test::Simulator::with_size(
-                iced_test::core::Settings::default(),
-                Size::new(240.0, 1440.0),
-                element,
-            );
-            ui.point_at(if view {
-                view_rect.center()
-            } else {
-                edit_rect.center()
-            });
-            ui.simulate([
-                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
-                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
-            ]);
-            let messages: Vec<_> = ui.into_messages().collect();
-            if view {
-                assert!(messages.iter().any(|m| matches!(m,Message::TimeBlocking(crate::timeblocking::Action::View(id)) if id == "standup")));
-                assert!(
-                    !messages
-                        .iter()
-                        .any(|m| matches!(m, Message::EventOpened(_)))
-                );
-            } else {
-                assert!(
-                    messages
-                        .iter()
-                        .any(|m| matches!(m,Message::EventOpened(id) if id == "standup"))
-                );
-            }
-        }
+    fn the_time_block_open_chip_opens_the_same_editable_panel_as_the_block() {
+        let mut canvas = canvas_with_one_block();
+        canvas.blocks[0].time_block = true;
+        let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
+        let open_rect = block_action(bounds);
+        let element: Element<'_, Message> = canvas_widget(canvas).width(240).height(1440).into();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(240.0, 1440.0),
+            element,
+        );
+        ui.point_at(open_rect.center());
+        ui.simulate([
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]);
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::EventOpened(id) if id == "standup"))
+        );
     }
 
     #[test]
@@ -4345,7 +4430,7 @@ mod tests {
                 mouse::Button::Left,
             ))]);
             let messages: Vec<_> = ui.into_messages().collect();
-            assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::Drag(id)) if id == "task")));
+            assert!(messages.iter().any(|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::Drag(id, _)) if id == "task")));
             assert!(
                 !messages
                     .iter()
@@ -4453,6 +4538,7 @@ mod tests {
             can_create: true,
             create_color: Color::WHITE,
             external_drag: false,
+            dragged_task: None,
         }
     }
 

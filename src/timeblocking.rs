@@ -48,6 +48,9 @@ pub struct Workspace {
     /// Include tasks that already have a due time or calendar schedule.
     pub available_planned: bool,
     pub dragging: Option<String>,
+    /// Where the pointer is while a task is being dragged, so the floating
+    /// card can follow it. Only meaningful while `dragging` is set.
+    pub drag_pointer: Option<iced::Point>,
     pub busy: std::collections::HashSet<String>,
     /// A task whose project or priority is being saved. Saving those leaves
     /// the details open, since they are picked with a click and the next one
@@ -139,7 +142,10 @@ pub enum Action {
     AvailableAll(bool),
     /// Include planned tasks in the available-tasks list.
     AvailablePlanned(bool),
-    Drag(String),
+    Drag(String, iced::Point),
+    /// The pointer moved while a task is being dragged, so the floating card
+    /// can follow it.
+    DragMoved(iced::Point),
     DropBlock(String),
     DropTask(String),
     DropDay,
@@ -202,9 +208,21 @@ pub fn backlog_order(event: &Event) -> (bool, Option<NaiveDate>, Option<NaiveTim
 }
 
 pub fn close(state: &mut State) -> Task<Message> {
+    // Closing the block's panel drops its inline draft with it.
+    let block = state.timeblocking.block.clone();
+    if state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .zip(block.as_deref())
+        .is_some_and(|(draft, block)| draft.id == block)
+    {
+        state.calendar.edit_draft = None;
+    }
     state.timeblocking.block = None;
     state.timeblocking.focus = None;
     state.timeblocking.dragging = None;
+    state.timeblocking.drag_pointer = None;
     state.timeblocking.available_query.clear();
     state.timeblocking.available_all = false;
     state.timeblocking.available_planned = false;
@@ -254,6 +272,12 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
         state.timeblocking.available_planned = false;
     }
     state.timeblocking.focus = None;
+    // The panel edits the block in place, so it always opens with a live
+    // draft of the block's own fields.
+    state.calendar.edit_draft = state
+        .calendar
+        .event(&id)
+        .map(crate::calendar::EditDraft::from_event);
     state.timeblocking.block = Some(id);
     if state.screen == crate::app::Screen::Calendar && state.weekly {
         return Task::none();
@@ -286,6 +310,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 return Task::none();
             }
             let resize = close(state);
+            // The block's fields are edited in place in the panel, so seed the
+            // draft as the panel opens rather than behind an Edit button.
+            state.calendar.edit_draft = state
+                .calendar
+                .event(&id)
+                .map(crate::calendar::EditDraft::from_event);
             state.timeblocking.focus = Some(id);
             state.timeblocking.history_open = false;
             state.timeblocking.work_now = Some(chrono::Utc::now());
@@ -438,6 +468,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Close => return close(state),
         Action::CancelDrag => {
             state.timeblocking.dragging = None;
+            state.timeblocking.drag_pointer = None;
             return Task::none();
         }
         Action::Details(id) => {
@@ -467,6 +498,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.estimate_task = Some(id);
             state.timeblocking.estimate_error = None;
             state.timeblocking.dragging = None;
+            state.timeblocking.drag_pointer = None;
             return iced::widget::operation::focus(iced::widget::Id::new("task-estimate"));
         }
         Action::CloseEstimate => {
@@ -479,8 +511,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.estimate_error = None;
             return Task::none();
         }
-        Action::Drag(id) => {
+        Action::Drag(id, position) => {
             state.timeblocking.dragging = Some(id);
+            state.timeblocking.drag_pointer = Some(position);
+            return Task::none();
+        }
+        Action::DragMoved(position) => {
+            if state.timeblocking.dragging.is_some() {
+                state.timeblocking.drag_pointer = Some(position);
+            }
             return Task::none();
         }
         Action::DropBlock(block) => {

@@ -31,6 +31,7 @@ pub mod migrate_habits;
 pub mod notify;
 pub mod panel;
 pub mod projects;
+pub mod recurrence;
 pub mod theme;
 pub mod todos;
 pub mod travel;

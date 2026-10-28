@@ -467,12 +467,16 @@ pub enum Message {
     EventDraftTitleChanged(String),
     /// The new event's description was edited.
     EventDraftDescriptionChanged(String),
+    /// The new event's date was edited, as `YYYY-MM-DD`.
+    EventDraftDateChanged(String),
     /// The start field was edited, as `HH:MM`.
     EventDraftStartChanged(String),
     /// The end field was edited, as `HH:MM`.
     EventDraftEndChanged(String),
     /// The new entry's kind was switched between an event and a time block.
     EventDraftKindSelected(calendar::DraftKind),
+    /// A change was made in the new event's shared repeat controls.
+    EventDraftRecurrence(crate::recurrence::Action),
     /// The new event was moved to another calendar.
     EventDraftCalendarSelected(String),
     /// The calendar dropdown in the add-event popup was opened or closed.
@@ -490,10 +494,14 @@ pub enum Message {
     EventEditTitleChanged(String),
     /// The edited event's description was changed.
     EventEditDescriptionChanged(String),
+    /// The edited event's date was changed, as `YYYY-MM-DD`.
+    EventEditDateChanged(String),
     /// The edited event's start field was edited, as `HH:MM`.
     EventEditStartChanged(String),
     /// The edited event's end field was edited, as `HH:MM`.
     EventEditEndChanged(String),
+    /// A change was made in the edited event's shared repeat controls.
+    EventEditRecurrence(crate::recurrence::Action),
     /// The edited event was moved to another calendar.
     EventEditCalendarSelected(String),
     /// The edit-event popup was dismissed without saving.
@@ -1996,12 +2004,28 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventOpened(id) => {
             state.calendar.menu_open = false;
-            if let Some(event) = state.calendar.event(&id) {
-                if crate::timeblocking::is_block(event, &state.config.calendar) {
+            let mut close_block = None;
+            if let Some(event) = state.calendar.event(&id).cloned() {
+                let is_block = crate::timeblocking::is_block(&event, &state.config.calendar);
+                let is_task = event.is_task();
+                let draft = calendar::EditDraft::from_event(&event);
+                if is_block {
                     state.calendar.open_event = None;
+                    state.calendar.edit_draft = Some(draft);
                     return crate::timeblocking::open(state, id);
                 }
-                if event.is_task() {
+                // A block's panel and the event pane are two different
+                // sidebars; opening one closes the other.
+                if state.timeblocking.block.is_some() {
+                    close_block = Some(crate::timeblocking::close(state));
+                }
+                if !is_task {
+                    // Events are edited in place in the details pane, so the
+                    // draft opens with the card rather than behind an Edit
+                    // button.
+                    state.calendar.edit_draft = Some(draft);
+                }
+                if is_task {
                     state.timeblocking.title = event.title.clone();
                     state.timeblocking.title_error = None;
                     state.timeblocking.date =
@@ -2032,11 +2056,12 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // Recorded during this click, before the message is handled.
             state.calendar.details_below = ui::calendar::click_was_in_the_top_half();
             state.inbox.picker = None;
-            Task::none()
+            close_block.unwrap_or_else(Task::none)
         }
 
         Message::EventClosed => {
             state.calendar.open_event = None;
+            state.calendar.edit_draft = None;
             state.inbox.picker = None;
             Task::none()
         }
@@ -2597,6 +2622,27 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDraftDateChanged(text) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.set_date_text(text);
+            }
+            Task::none()
+        }
+
+        Message::EventDraftRecurrence(action) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                if matches!(&action, crate::recurrence::Action::SkipAdd) {
+                    match draft.rule.add_skip() {
+                        Ok(()) => state.calendar.error = None,
+                        Err(error) => state.calendar.error = Some(error),
+                    }
+                } else {
+                    draft.rule.apply_action(action, draft.start.date_naive());
+                }
+            }
+            Task::none()
+        }
+
         Message::EventDraftStartChanged(text) => {
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.set_start_text(text);
@@ -2619,12 +2665,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             };
             let color_id =
                 calendar::colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
-            state.habits.draft = Some(crate::habits::Draft::for_calendar(
+            state.habits.draft = Some(crate::habits::Draft::for_calendar_with_rule(
                 draft.start,
                 draft.end,
                 draft.title,
                 draft.description,
                 color_id,
+                draft.rule.clone(),
             ));
             state.habits.error = None;
             Task::none()
@@ -2709,6 +2756,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 None
             };
+            let recurrence = match draft.recurrence_lines() {
+                Ok(lines) => lines,
+                Err(error) => {
+                    state.calendar.error = Some(error);
+                    return Task::none();
+                }
+            };
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
             state.calendar.error = None;
@@ -2723,6 +2777,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     color_id,
                     draft.start,
                     draft.end,
+                    &recurrence,
                 )?;
 
                 Ok(calendar::Event {
@@ -2740,6 +2795,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     completed: false,
                     details: calendar::Details {
                         description,
+                        recurrence: recurrence.clone(),
                         ..calendar::Details::default()
                     },
                 })
@@ -2775,6 +2831,27 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::EventEditDescriptionChanged(description) => {
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
                 draft.description = description;
+            }
+            Task::none()
+        }
+
+        Message::EventEditDateChanged(text) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.set_date_text(text);
+            }
+            Task::none()
+        }
+
+        Message::EventEditRecurrence(action) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                if matches!(&action, crate::recurrence::Action::SkipAdd) {
+                    match draft.rule.add_skip() {
+                        Ok(()) => state.calendar.error = None,
+                        Err(error) => state.calendar.error = Some(error),
+                    }
+                } else {
+                    draft.rule.apply_action(action, draft.start.date_naive());
+                }
             }
             Task::none()
         }
@@ -2827,6 +2904,20 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 None
             };
+            let recurrence = match draft.recurrence_lines() {
+                Ok(lines) => lines,
+                Err(error) => {
+                    state.calendar.error = Some(error);
+                    return Task::none();
+                }
+            };
+            // An expanded occurrence belongs to a series. Editing it must not
+            // rewrite the series' recurrence, so leave that field untouched.
+            let recurrence = state
+                .calendar
+                .event(&draft.id)
+                .is_some_and(|event| event.details.recurring_event_id.is_none())
+                .then_some(recurrence);
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
             state.calendar.error = None;
@@ -2842,6 +2933,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     color_id,
                     draft.start,
                     draft.end,
+                    recurrence.as_deref(),
                 )?;
                 Ok(())
             })
@@ -2849,7 +2941,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventEditSaved(Ok(())) => {
-            state.calendar.edit_draft = None;
+            // Keep the inline draft as the user left it until the calendar
+            // sync brings the saved event back, so fields do not flicker.
             refresh_week_after_write(state)
         }
 
@@ -2946,6 +3039,18 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         }),
     ];
 
+    // While a task is in the air, every move of the pointer is fed back so the
+    // floating card can follow it. It is only listened for during a drag, so
+    // an idle window still costs nothing.
+    if state.timeblocking.dragging.is_some() {
+        subscriptions.push(iced::event::listen_with(|event, _status, _| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => Some(
+                Message::TimeBlocking(crate::timeblocking::Action::DragMoved(position)),
+            ),
+            _ => None,
+        }));
+    }
+
     // The needle has to move even when the clock is idle, but only while
     // the day view is actually on screen.
     if state.screen == Screen::Calendar {
@@ -3025,6 +3130,18 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 /// looked at without running anything.
 fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
+
+    // A task that is in the air is put back where it started before anything
+    // else looks at the key, so Escape cancels the drag instead of closing the
+    // view underneath it.
+    if state.timeblocking.dragging.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CancelDrag,
+            )),
+            _ => None,
+        };
+    }
 
     // The alarm popup and alarm setting mode are put away with Escape before
     // anything behind them is.
@@ -4211,6 +4328,23 @@ mod tests {
     }
 
     #[test]
+    fn opening_an_event_seeds_the_inline_editor() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+
+        let _ = update(&mut state, Message::EventOpened("standup".into()));
+
+        let draft = state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .expect("the details pane edits the event in place");
+        assert_eq!(draft.id, "standup");
+        assert_eq!(draft.title, "Standup");
+        assert_eq!(draft.rule.repeat, crate::recurrence::RepeatMode::Never);
+    }
+
+    #[test]
     fn opening_an_event_in_the_bottom_half_keeps_the_details_on_top() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         ui::calendar::record_pointer(480.0, 500.0);
@@ -4728,6 +4862,76 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_task_can_be_cancelled_with_escape() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+
+        let position = iced::Point::new(120.0, 240.0);
+        let _ = update(
+            &mut state,
+            Message::TimeBlocking(crate::timeblocking::Action::Drag(
+                "task:deep".into(),
+                position,
+            )),
+        );
+        assert_eq!(state.timeblocking.dragging.as_deref(), Some("task:deep"));
+        assert_eq!(state.timeblocking.drag_pointer, Some(position));
+
+        // While a task is in the air, Escape cancels the drag instead of
+        // closing whatever is underneath it, and other keys are ignored.
+        state.calendar.open_event = Some("deep".into());
+        assert!(
+            key_message(
+                &mut state,
+                Key::Named(keyboard::key::Named::Space),
+                keyboard::Modifiers::default()
+            )
+            .is_none()
+        );
+        let message = key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Escape),
+            keyboard::Modifiers::default(),
+        );
+        assert!(matches!(
+            message,
+            Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CancelDrag
+            ))
+        ));
+        let _ = update(&mut state, message.unwrap());
+        assert!(state.timeblocking.dragging.is_none());
+        assert!(state.timeblocking.drag_pointer.is_none());
+    }
+
+    #[test]
+    fn the_floating_card_follows_the_pointer_only_while_dragging() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = update(
+            &mut state,
+            Message::TimeBlocking(crate::timeblocking::Action::DragMoved(iced::Point::new(
+                10.0, 20.0,
+            ))),
+        );
+        assert!(state.timeblocking.drag_pointer.is_none());
+
+        state.timeblocking.dragging = Some("task:deep".into());
+        let _ = update(
+            &mut state,
+            Message::TimeBlocking(crate::timeblocking::Action::DragMoved(iced::Point::new(
+                30.0, 40.0,
+            ))),
+        );
+        assert_eq!(
+            state.timeblocking.drag_pointer,
+            Some(iced::Point::new(30.0, 40.0))
+        );
+    }
+
+    #[test]
     fn keep_search_does_not_trigger_timer_shortcuts() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.screen = Screen::KeepNotes;
@@ -4791,8 +4995,8 @@ mod tests {
         assert_eq!(habit.date, "2026-10-28");
         assert_eq!(habit.start, "09:00");
         assert_eq!(habit.end, "09:45");
-        assert_eq!(habit.repeat, crate::habits::RepeatMode::Weekly);
-        assert!(habit.weekdays[2], "Wednesday is preselected");
+        assert_eq!(habit.rule.repeat, crate::habits::RepeatMode::Weekly);
+        assert!(habit.rule.weekdays[2], "Wednesday is preselected");
     }
 }
 

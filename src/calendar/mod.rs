@@ -174,10 +174,14 @@ pub struct Draft {
     pub calendar_id: String,
     pub start: DateTime<Local>,
     pub end: DateTime<Local>,
+    /// The `YYYY-MM-DD` text shown in the date field.
+    pub date_text: String,
     /// The `HH:MM` text shown in the start field.
     pub start_text: String,
     /// The `HH:MM` text shown in the end field.
     pub end_text: String,
+    /// The shared repeat controls. Events default to not repeating.
+    pub rule: crate::recurrence::Rule,
     /// Whether the calendar dropdown is open.
     pub calendar_dropdown_open: bool,
 }
@@ -192,10 +196,35 @@ impl Draft {
             calendar_id,
             start,
             end,
+            date_text: start.date_naive().to_string(),
             start_text: clock_label(start),
             end_text: clock_label(end),
+            rule: crate::recurrence::Rule::never(start.date_naive()),
             calendar_dropdown_open: false,
         }
+    }
+
+    /// Applies the date field's text. A value that does not parse keeps the
+    /// real dates alone, the same forgiving rule the clock fields use.
+    pub fn set_date_text(&mut self, text: String) {
+        if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
+            self.start = at_clock(day, self.start.hour(), self.start.minute());
+            self.end = at_clock(day, self.end.hour(), self.end.minute());
+        }
+        self.date_text = text;
+    }
+
+    /// The recurrence lines the editor describes, or the reason it cannot be
+    /// written yet.
+    pub fn recurrence_lines(&self) -> Result<Vec<String>, String> {
+        self.rule
+            .lines_at(self.start.date_naive(), self.start.time())
+    }
+
+    /// Replaces the repeat controls, so the habits editor can take them over
+    /// unchanged when the new-event dialog switches to a habit.
+    pub fn rule(&self) -> &crate::recurrence::Rule {
+        &self.rule
     }
 
     /// Applies the start field's text. A value that does not parse as a clock
@@ -230,10 +259,14 @@ pub struct EditDraft {
     pub calendar_id: String,
     pub start: DateTime<Local>,
     pub end: DateTime<Local>,
+    /// The `YYYY-MM-DD` text shown in the date field.
+    pub date_text: String,
     /// The `HH:MM` text shown in the start field.
     pub start_text: String,
     /// The `HH:MM` text shown in the end field.
     pub end_text: String,
+    /// The shared repeat controls, seeded from the event's own recurrence.
+    pub rule: crate::recurrence::Rule,
 }
 
 impl EditDraft {
@@ -246,9 +279,29 @@ impl EditDraft {
             calendar_id: event.calendar_id.clone(),
             start: event.start,
             end: event.end,
+            date_text: event.start.date_naive().to_string(),
             start_text: clock_label(event.start),
             end_text: clock_label(event.end),
+            rule: crate::recurrence::Rule::from_recurrence(
+                event.start.date_naive(),
+                &crate::recurrence::Recurrence::from_lines(&event.details.recurrence),
+            ),
         }
+    }
+
+    /// Applies the date field's text, keeping the clock times.
+    pub fn set_date_text(&mut self, text: String) {
+        if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
+            self.start = at_clock(day, self.start.hour(), self.start.minute());
+            self.end = at_clock(day, self.end.hour(), self.end.minute());
+        }
+        self.date_text = text;
+    }
+
+    /// The recurrence lines the editor describes.
+    pub fn recurrence_lines(&self) -> Result<Vec<String>, String> {
+        self.rule
+            .lines_at(self.start.date_naive(), self.start.time())
     }
 
     /// Applies the start field's text. A value that does not parse as a clock
@@ -1686,6 +1739,7 @@ pub fn create_event(
     color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
+    recurrence: &[String],
 ) -> Result<String, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1699,6 +1753,7 @@ pub fn create_event(
         color_id,
         start,
         end,
+        recurrence,
     )
     .map_err(describe_event_write_error)
 }
@@ -1715,6 +1770,7 @@ pub fn update_event(
     color_id: Option<&str>,
     start: DateTime<Local>,
     end: DateTime<Local>,
+    recurrence: Option<&[String]>,
 ) -> Result<(), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1729,6 +1785,7 @@ pub fn update_event(
         color_id,
         start,
         end,
+        recurrence,
     )
     .map_err(describe_event_write_error)
 }
@@ -2788,5 +2845,34 @@ mod tests {
         // Coming back paints the old time, not the one Google refused.
         store.set_day(day, day);
         assert_ne!(store.event("standup").unwrap().start, start);
+    }
+    #[test]
+    fn an_events_recurrence_is_loaded_into_the_shared_editor_and_written_back() {
+        let mut event = sample_snapshot().events.remove(1);
+        event.details.recurrence = vec!["RRULE:FREQ=WEEKLY;BYDAY=MO,WE".into()];
+        let draft = EditDraft::from_event(&event);
+        assert_eq!(
+            draft.rule.summary(event.start.date_naive()),
+            "Weekly on Mon, Wed"
+        );
+        assert_eq!(
+            draft.recurrence_lines().unwrap(),
+            vec!["RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_new_event_defaults_to_not_repeating_and_can_turn_repeating_on() {
+        let start = at_clock(NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+        let mut draft = Draft::new("work".into(), start, start + chrono::Duration::minutes(30));
+        assert!(draft.recurrence_lines().unwrap().is_empty());
+        draft.rule.apply_action(
+            crate::recurrence::Action::Repeat(crate::recurrence::RepeatMode::Daily),
+            start.date_naive(),
+        );
+        assert_eq!(
+            draft.recurrence_lines().unwrap(),
+            vec!["RRULE:FREQ=DAILY;INTERVAL=1".to_owned()]
+        );
     }
 }

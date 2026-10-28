@@ -17,6 +17,8 @@ pub mod calendar;
 pub mod config_sync;
 #[path = "../../src/hex.rs"]
 pub mod hex;
+#[path = "../../src/recurrence.rs"]
+pub mod recurrence;
 #[path = "../../src/task_db.rs"]
 pub mod task_db;
 #[path = "../../src/timeblocking/model.rs"]

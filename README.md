@@ -7,7 +7,7 @@ There's currently two implementations:
 - An [Iced](https://iced.rs) desktop application
 - A [Dioxus](https://dioxuslabs.com) mobile and desktop application
 
-## Screenshots
+## Preview
 
 I love docked mode. Your day is always at a glance. You can still hover over, and edit, events and tasks from this mode.
 
@@ -26,7 +26,15 @@ Same for the week. Notice how yesterday can be included in this view.
 - Stays out of your way during work, but is easily accessible when needed.
 	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+Shift+J</kbd>)
 	- Toggle between hiding and showing the app (<kbd>Meta+J</kbd>)
-- Intuitive to use,
+- Intuitive to use (WIP)
+- Manage events and tasks directly within the app
+- Projects (TODO)
+- Directly implement popular productivity methods/ideas within the UI and state like:
+	- Time blocks
+	- Habits
+	- Pomodoro Timers (TODO)
+	- SMART Goals (TODO)
+	- Eisenhower Matrix (TODO)
 - Uses Google Calendar, Tasks, and Drive to store events, tasks, and app data.
 
 - View and manage events
@@ -61,6 +69,7 @@ cargo run -p time-slay-dioxus
 - File attachments
 - Light Zoom/Google Meets integration (link parsing)
 - More integrations (GMail)
+- "Floating habits/tasks". Must do every week not sure exactly when.
 - Actual projects
 	- Controlling windows
 	- List/kanban/calendar
@@ -73,6 +82,7 @@ cargo run -p time-slay-dioxus
 - Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
 - Objects/goals for day/week/mo./quarter/custom
 - Reminders (use Google Calendar)
+- Having the dock take up space on dekstop
 
 ### Stretch
 

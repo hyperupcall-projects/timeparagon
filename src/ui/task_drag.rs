@@ -6,23 +6,36 @@ use iced::{Element, Length, Rectangle, Renderer, Size, Theme, mouse};
 struct Gesture {
     origin: Option<iced::Point>,
     active: bool,
+    /// Set once the app has rebuilt this row knowing it is the one in the air.
+    /// A later rebuild without it means the drag was dropped or cancelled, so
+    /// the row can give up the pointer.
+    acknowledged: bool,
 }
 
+/// Wraps a task card so the whole row can be dragged.
+///
+/// `dragging` is the id of the task currently in the air, if any. This lets a
+/// row tell whether it is the one being lifted (and so should leave its place)
+/// from whether some other row is being dragged (so its buttons hold still).
 pub(super) fn task_drag<'a>(
     content: impl Into<Element<'a, Message>>,
     id: &str,
-    dragging: bool,
+    dragging: Option<&str>,
 ) -> Element<'a, Message> {
     Element::new(DraggableTask {
         content: content.into(),
         id: id.to_owned(),
-        dragging,
+        lifted: dragging == Some(id),
+        dragging: dragging.is_some(),
     })
 }
 
 struct DraggableTask<'a> {
     content: Element<'a, Message>,
     id: String,
+    /// True when this very row is the one being dragged.
+    lifted: bool,
+    /// True while any task is being dragged.
     dragging: bool,
 }
 
@@ -84,6 +97,16 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for DraggableTask<
         viewport: &Rectangle,
     ) {
         let gesture = tree.state.downcast_mut::<Gesture>();
+        // Once the app has rebuilt this row as the one in the air, a later
+        // rebuild without it means the drag was dropped or cancelled, so give
+        // up the pointer and let the next release land as a plain release.
+        if self.lifted {
+            gesture.acknowledged = true;
+        } else if gesture.acknowledged {
+            gesture.acknowledged = false;
+            gesture.active = false;
+            gesture.origin = None;
+        }
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                 if cursor.is_over(layout.bounds()) && cursor.is_over(*viewport) =>
@@ -100,14 +123,17 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for DraggableTask<
                     gesture.active = true;
                     // Clear pressed buttons so releasing a drag cannot also click them.
                     tree.children[0] = iced::advanced::widget::Tree::new(&self.content);
-                    shell.publish(Message::TimeBlocking(Action::Drag(self.id.clone())));
+                    shell.publish(Message::TimeBlocking(Action::Drag(
+                        self.id.clone(),
+                        *position,
+                    )));
                     shell.capture_event();
                     shell.request_redraw();
                     return;
                 }
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                let dragging = self.dragging || gesture.active;
+                let dragging = self.lifted || gesture.active;
                 gesture.origin = None;
                 gesture.active = false;
                 if dragging {
@@ -144,6 +170,12 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for DraggableTask<
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        // The row that is in the air leaves its place, so the drag reads as
+        // picking the task up rather than copying it. The space stays reserved
+        // so the rows around it do not jump.
+        if self.lifted {
+            return;
+        }
         self.content.as_widget().draw(
             &tree.children[0],
             renderer,
@@ -214,7 +246,7 @@ mod tests {
                 let mut ui = iced_test::Simulator::with_size(
                     iced_test::core::Settings::default(),
                     Size::new(300.0, 100.0),
-                    task_drag(content, "task", false),
+                    task_drag(content, "task", None),
                 );
                 ui.point_at(Point::new(x, 20.0));
                 ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(
@@ -231,7 +263,7 @@ mod tests {
                 let messages: Vec<_> = ui.into_messages().collect();
                 assert_eq!(
                     messages.iter().any(
-                        |m| matches!(m, Message::TimeBlocking(Action::Drag(id)) if id == "task")
+                        |m| matches!(m, Message::TimeBlocking(Action::Drag(id, _)) if id == "task")
                     ),
                     drag
                 );
@@ -254,7 +286,7 @@ mod tests {
         let mut ui = iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
             Size::new(300.0, 100.0),
-            task_drag(content, "target", true),
+            task_drag(content, "target", Some("target")),
         );
         ui.point_at(Point::new(50.0, 20.0));
         ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(
