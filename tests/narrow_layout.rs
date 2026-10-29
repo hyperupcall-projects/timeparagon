@@ -445,7 +445,6 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
 
     for label in [
         "Calendars",
-        "Google Tasks",
         "Personal",
         "Work",
         "Tasks",
@@ -645,15 +644,25 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     Ok(())
 }
 
-/// The aggregate Google Tasks swatch offers a shared color and a reset.
+/// Each task list swatch offers its own color and a reset.
 #[test]
-fn google_tasks_can_be_given_a_shared_color() -> Result<(), Error> {
+fn google_task_lists_can_be_given_individual_colors() -> Result<(), Error> {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.calendar =
         time_slay::calendar::Store::with_snapshot(time_slay::calendar::sample_snapshot());
     state.calendar.menu_open = true;
-    state.calendar.color_editor = Some("tasks:".into());
+    state
+        .calendar
+        .calendars
+        .push(time_slay::calendar::Calendar {
+            id: "tasks:errands".into(),
+            name: "Errands".into(),
+            color: time_slay::calendar::colors::TASK,
+            primary: false,
+            selected_by_google: true,
+        });
+    state.calendar.color_editor = Some("tasks:errands".into());
 
     let mut ui = render(&state, Size::new(200.0, 700.0));
 
@@ -667,9 +676,9 @@ fn google_tasks_can_be_given_a_shared_color() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:")),
+        messages.iter().any(
+            |message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:errands")
+        ),
         "expected the reset to be offered, got {messages:?}"
     );
 

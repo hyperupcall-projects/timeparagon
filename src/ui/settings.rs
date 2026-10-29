@@ -584,7 +584,7 @@ fn shortcut_action<'a>(
 fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let sources = state.calendar.display_sources(&state.config.calendar);
     let mut section = column![
-        text("Top to bottom sets left to right when events overlap. Google Tasks includes every task list.")
+        text("Top to bottom sets left to right when events overlap. App-managed task lists are omitted.")
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).width(Fill);
     for (index, source) in sources.iter().enumerate() {

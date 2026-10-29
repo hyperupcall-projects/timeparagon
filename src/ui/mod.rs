@@ -13,6 +13,7 @@ pub mod inbox;
 pub mod keep;
 pub mod layout;
 pub mod links;
+mod meetings;
 pub mod notepad;
 pub mod projects;
 pub mod recurrence;

@@ -35,6 +35,7 @@ Same for the week. Notice how yesterday can be included in this view.
 		- Based on query; omit private event details. (TODO)
 - Manage your time:
 	- Events
+		- Integrates with guest/event/RSVP going/not going feature (TODO)
 		- Integrates with meeting software like Zoom and Google Meet. (TODO)
 		- Uses location data to pad event with travel time. (WIP)
 	- Time blocks

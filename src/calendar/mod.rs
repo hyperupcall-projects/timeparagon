@@ -53,6 +53,28 @@ impl Calendar {
     pub fn is_task_list(&self) -> bool {
         self.id.starts_with("tasks:")
     }
+
+    /// Lists reserved for the app's task workflow are not calendar sources.
+    pub fn is_managed_task_list(&self, settings: &CalendarSettings) -> bool {
+        self.is_task_list()
+            && ([
+                scheduled::DEFAULT_LIST,
+                CalendarSettings::DEFAULT_TRIAGED_LIST,
+                CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
+                CalendarSettings::DEFAULT_BACKLOG_LIST,
+            ]
+            .iter()
+            .any(|name| self.name.trim().eq_ignore_ascii_case(name))
+                || [
+                    &settings.inbox_list,
+                    &settings.triaged_list,
+                    &settings.time_block_list,
+                    &settings.backlog_list,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|id| id.trim_start_matches("tasks:") == self.id.trim_start_matches("tasks:")))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,11 +94,7 @@ pub struct Event {
 impl Event {
     /// Source used for calendar visibility and overlap ordering.
     pub fn source_id(&self) -> &str {
-        if self.is_task() {
-            CalendarSettings::GOOGLE_TASKS_ID
-        } else {
-            &self.calendar_id
-        }
+        &self.calendar_id
     }
 
     /// Whether this came from Google Tasks rather than Google Calendar. Task
@@ -763,27 +781,38 @@ impl Store {
         matches!(self.sync, SyncState::Connecting | SyncState::Syncing)
     }
 
-    /// All real calendars plus one shared Google Tasks entry, including hidden sources.
+    /// Calendars and individual task lists, excluding the app's managed lists.
     pub fn display_sources(&self, settings: &CalendarSettings) -> Vec<Calendar> {
         let mut sources: Vec<_> = self
             .calendars
             .iter()
-            .filter(|calendar| !calendar.is_task_list())
+            .filter(|calendar| !calendar.is_managed_task_list(settings))
             .cloned()
+            .map(|mut calendar| {
+                if calendar.is_task_list() {
+                    calendar.color = task_color(settings, &calendar.id);
+                }
+                calendar
+            })
             .collect();
-        sources.push(Calendar {
-            id: CalendarSettings::GOOGLE_TASKS_ID.into(),
-            name: "Google Tasks".into(),
-            color: task_color(settings, CalendarSettings::GOOGLE_TASKS_ID),
-            primary: false,
-            selected_by_google: true,
-        });
         // Stable sorting appends newly discovered sources in Google's order.
         sources.sort_by_key(|source| {
             settings
                 .source_order
                 .iter()
                 .position(|id| id == &source.id)
+                .or_else(|| {
+                    // Expand the old shared source in place for existing settings.
+                    source
+                        .is_task_list()
+                        .then(|| {
+                            settings
+                                .source_order
+                                .iter()
+                                .position(|id| id == CalendarSettings::GOOGLE_TASKS_ID)
+                        })
+                        .flatten()
+                })
                 .unwrap_or(usize::MAX)
         });
         sources
@@ -791,7 +820,7 @@ impl Store {
 
     pub fn calendar_enabled(&self, id: &str, settings: &CalendarSettings) -> bool {
         if id.starts_with("tasks:") {
-            settings.show_tasks
+            settings.show_tasks && !settings.disabled.iter().any(|hidden| hidden == id)
         } else {
             !settings.disabled.iter().any(|hidden| hidden == id)
         }

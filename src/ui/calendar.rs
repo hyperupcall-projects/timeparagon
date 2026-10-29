@@ -1395,7 +1395,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .width(Fill);
 
     for source in state.calendar.display_sources(&state.config.calendar) {
-        let is_tasks = source.id == crate::config::CalendarSettings::GOOGLE_TASKS_ID;
+        let is_tasks = source.is_task_list();
         let id = source.id;
         let enabled = state.calendar.calendar_enabled(&id, &state.config.calendar);
         let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
@@ -1413,13 +1413,8 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
             row![
                 dot,
                 text(source.name).size(metrics.label()).width(Fill),
-                toggler(enabled).on_toggle(move |value| {
-                    if is_tasks {
-                        Message::ShowTasksToggled(value)
-                    } else {
-                        Message::CalendarToggled(toggle_id.clone(), value)
-                    }
-                }),
+                toggler(enabled)
+                    .on_toggle(move |value| { Message::CalendarToggled(toggle_id.clone(), value) }),
             ]
             .spacing(8.0)
             .align_y(Alignment::Center),
@@ -1960,20 +1955,8 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         buttons.push(super::timeblocking::task_actions(state, event, metrics));
     }
 
-    if !details.meeting.is_empty() {
-        let meeting = details.meeting.clone();
-        buttons.push(
-            button(
-                text("Join meeting")
-                    .size(metrics.label())
-                    .center()
-                    .width(Fill),
-            )
-            .width(Fill)
-            .on_press(Message::OpenEventLink(meeting))
-            .style(button::primary)
-            .into(),
-        );
+    for meeting in super::meetings::links(event) {
+        buttons.push(super::meetings::join_button(meeting, metrics));
     }
     if let Some(source) = crate::integrations::source_in(&details.description) {
         buttons.push(
