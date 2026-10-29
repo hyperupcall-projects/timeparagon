@@ -48,7 +48,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
             .height(Length::Fixed(metrics.icon_button()))
             .padding(0.0)
             .on_press(Message::Alarms(Action::CloseEditor))
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
     ]
     .align_y(Alignment::Center);
 
@@ -71,11 +71,14 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 
     let mut when = column![field(
         "Time",
-        text_input("07:30", &editor.time_text)
-            .on_input(|time| edit(Edit::Time(time)))
-            .size(metrics.label())
-            .width(Fill)
-            .into(),
+        container(super::controls::time(
+            &editor.time_text,
+            true,
+            metrics.label(),
+            |time| edit(Edit::Time(time))
+        ))
+        .width(Fill)
+        .into(),
         metrics,
     )]
     .spacing(2.0);
@@ -116,7 +119,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         Space::new().width(Fill),
         button(text("Done").size(metrics.label()).center())
             .on_press(Message::Alarms(Action::CloseEditor))
-            .style(button::primary),
+            .style(crate::ui::controls::primary),
     ]
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
@@ -246,7 +249,7 @@ fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
         let preview = button(text("Preview").size(metrics.label()).center().width(Fill))
             .width(Fill)
-            .style(button::secondary);
+            .style(crate::ui::controls::secondary);
         let preview = if state.audio.status().is_unavailable() {
             preview
         } else {
@@ -263,7 +266,7 @@ fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 )
                 .width(Fill)
                 .on_press(Message::Alarms(Action::SoundFileRequested))
-                .style(button::secondary),
+                .style(crate::ui::controls::secondary),
                 preview,
             ]
             .spacing(metrics.spacing),

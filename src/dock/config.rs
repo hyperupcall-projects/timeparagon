@@ -21,6 +21,9 @@ pub struct DockConfig {
     /// it is the "Dock width" in the app's settings.
     #[serde(skip)]
     pub width: u32,
+    /// Whether the strip reserves work area; popup space is never included.
+    #[serde(skip)]
+    pub reserve_space: bool,
     /// Space left above and below the strip, in logical pixels. Not read from
     /// `dock.toml`: it is the "Screen margin" in the app's settings, shared
     /// with the side panel.
@@ -63,6 +66,7 @@ impl Default for DockConfig {
         Self {
             side: DockSide::Left,
             width: 10,
+            reserve_space: false,
             screen_margin: 8,
             margin: 0,
             border_outer_width: 1.0,
@@ -85,6 +89,7 @@ impl DockConfig {
     pub fn load(views: &ViewSettings) -> Self {
         let mut config = Self::from_file();
         config.width = views.dock_width().round() as u32;
+        config.reserve_space = views.dock_reserve_space;
         config.screen_margin = views.margin().round() as u32;
         config.margin = views.dock_margin().round() as u32;
         config.side = views.dock_side;
@@ -142,6 +147,17 @@ impl DockConfig {
         wanted.min(((self.width as f32 - 1.0) / 2.0).max(0.0))
     }
 
+    /// Reserve only the visible strip. KWin adds the anchored surface margin
+    /// to the work-area inset itself; adding it here would count it twice.
+    /// Transparent room for hover/task cards never contributes to this zone.
+    pub fn exclusive_zone(&self) -> i32 {
+        if self.reserve_space {
+            self.width.min(i32::MAX as u32) as i32
+        } else {
+            0
+        }
+    }
+
     /// Width of the whole layer surface: the strip plus room for the hover
     /// card beside it. Used when the strip runs along a vertical edge.
     pub fn surface_width(&self) -> u32 {
@@ -167,6 +183,28 @@ pub fn path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reservation_excludes_cards_and_leaves_edge_margins_to_the_compositor() {
+        for side in DockSide::ALL {
+            let mut config = DockConfig {
+                side,
+                reserve_space: true,
+                width: 14,
+                margin: 12,
+                screen_margin: 25,
+                popup_width: 900,
+                popup_gap: 100,
+                ..DockConfig::default()
+            };
+            assert_eq!(config.exclusive_zone(), 14);
+            config.popup_width = 150;
+            config.popup_gap = 0;
+            assert_eq!(config.exclusive_zone(), 14);
+            config.reserve_space = false;
+            assert_eq!(config.exclusive_zone(), 0);
+        }
+    }
 
     #[test]
     fn the_dock_defaults_to_a_ten_pixel_strip_on_the_left() {

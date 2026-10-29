@@ -26,6 +26,7 @@ Same for the week. Notice how yesterday can be included in this view.
 - Stays out of your way during work, but is easily accessible when needed.
 	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+J</kbd>).
 	- Toggle between hiding and showing the app (<kbd>Meta+Shift+J</kbd>).
+- Independently reserve screen space for the dock and side panel on Wayland, using the “Reserve screen space” switch in each Settings section. Popups and tooltips do not increase the reservation.
 - Intuitive to use (WIP).
 - View your time:
 	- Day view
@@ -79,7 +80,6 @@ cargo run -p time-slay-dioxus
 ## Next Up
 
 - Better UI (shadcdn/pure.css)
-- Having the dock take up space on dekstop
 - File attachments/file:// links & notes integration for event/task/habit etc.
 - Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
 - alt+tab proper icon does not show up

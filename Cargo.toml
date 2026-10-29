@@ -27,6 +27,10 @@ iced = { version = "0.14", default-features = false, features = [
     # Decodes the window icon, which is embedded in the binary.
     "image",
 ] }
+iced_layershell = { version = "=0.19.1", default-features = false }
+# This backend's key mapping requires the beta.2 API; beta.4 is incompatible.
+winit-common = "=0.31.0-beta.2"
+iced_runtime = "0.14"
 log = "0.4.34"
 linkify = "0.11"
 url = "2"

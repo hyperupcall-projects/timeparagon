@@ -41,6 +41,16 @@ fn main() -> iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
         .init();
 
+    if mode == Mode::Sidebar && panel::layer::available() {
+        let result = panel::layer::run();
+        time_slay::window_effect::shutdown();
+        if let Err(error) = result {
+            eprintln!("time-slay: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let boot: Boot = if mode == Mode::Sidebar {
         app::boot_sidebar
     } else {

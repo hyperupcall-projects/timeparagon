@@ -174,38 +174,26 @@ toggle_visibility = ["Meta+U"]
 toggle_shape = ["Meta+Shift+U"]
 ```
 
-### Why a KWin window rule
+### Panel placement and space reservation
 
-On Wayland a client cannot position or raise its own window — the compositor
-decides where a window goes and how it stacks, and winit's `set_outer_position`
-is a no-op. So the panel asks for the left edge and the full height, but it is
-**KWin** that enforces it, through a window rule `install.sh` adds to
-`~/.config/kwinrulesrc`:
+On Wayland the side panel is an Iced layer-shell surface, anchored directly
+by the compositor. It needs no KWin position rule. The ordinary application
+window continues to use the standard Iced window backend. On X11 the panel
+uses that backend too, and the installer supplies its legacy KWin rule.
 
-```ini
-[TimeSlay Sidebar]
-Description=TimeSlay Sidebar
-title=TimeSlay Sidebar
-titlematch=2
-position=0,0
-positionrule=2
-above=true
-aboverule=2
-noborder=true
-noborderrule=2
-skiptaskbar=true
-skiptaskbarrule=2
-```
+In Settings, **Dock → Reserve screen space** and **Side panel → Reserve
+screen space** independently choose whether each surface reduces the work
+area available to maximized/tiled windows. Both default to off, preserving
+the overlay behavior. These reservations require Wayland layer-shell support.
 
-The rule matches the panel by its distinctive title, so it never touches the
-main window. `kwriteconfig6` edits the file in place, so any rules you already
-have are kept; `uninstall.sh` removes ours again. It can also be edited by hand
-in **System Settings → Window Management → Window Rules**.
-
-If you would rather not use a window rule, the alternative is a
-`zwlr_layer_shell_v1` surface, which the compositor pins by protocol — but iced
-cannot draw to one without the `iced_layershell` crate, which in turn needs
-`libxkbcommon-dev` at build time.
+Changes apply to a visible panel immediately and to a visible dock after the
+settings file is saved. Hiding a surface releases its reservation; showing it
+again uses its own saved setting. The dock reserves only its visible strip
+and the margin from its anchored edge, never its transparent hover/task-card
+area. The panel reserves its body, including inline panes and screen gutter;
+widget tooltips and popup overlays do not add reserved space. This is desktop
+work-area reservation, not a native shared tiling divider or a guarantee that
+floating/fullscreen windows cannot overlap it.
 
 To run the shortcut daemon without installing it, launch it directly:
 

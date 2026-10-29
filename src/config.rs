@@ -190,6 +190,10 @@ pub struct ViewSettings {
     pub border_radius: f32,
     /// Width of the dock strip, in logical pixels.
     pub dock_width: f32,
+    /// Reserve the visible dock strip in the compositor work area.
+    pub dock_reserve_space: bool,
+    /// Reserve the side panel independently of the dock.
+    pub panel_reserve_space: bool,
     /// Space between the dock and the left and right screen edges, in logical
     /// pixels. A top or bottom dock uses it at both ends; a side dock uses it
     /// as the gap from the edge it hugs.
@@ -316,6 +320,8 @@ impl Default for ViewSettings {
             window_animation: WindowAnimation::DesktopDefault,
             fade_duration_ms: 150,
             dock_hour_lines: true,
+            dock_reserve_space: false,
+            panel_reserve_space: false,
         }
     }
 }

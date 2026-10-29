@@ -10,7 +10,6 @@ use chrono::{DateTime, Local, Utc};
 use iced::widget::canvas::{Frame, Geometry, Path, Stroke, Text};
 use iced::widget::{
     Space, button, canvas, column, container, mouse_area, responsive, row, scrollable, stack, text,
-    text_input,
 };
 use iced::{Color, Element, Fill, Length, Point, Rectangle, Size, Theme, mouse};
 
@@ -255,7 +254,7 @@ fn pomodoro(state: &State) -> Element<'_, Message> {
     body = body.push(text(help).size(11).style(text::secondary));
     container(body)
         .padding(10)
-        .style(container::rounded_box)
+        .style(crate::ui::controls::surface)
         .into()
 }
 
@@ -289,26 +288,31 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         row![
             column![
                 text("Start").size(12).style(text::secondary),
-                text_input("HH:MM", &state.timeblocking.session_start)
-                    .id(iced::widget::Id::new("work-session-start"))
-                    .on_input(|value| msg(Action::SessionStart(value)))
-                    .size(metrics.label()),
+                super::controls::time(
+                    &state.timeblocking.session_start,
+                    true,
+                    metrics.label(),
+                    |value| msg(Action::SessionStart(value))
+                ),
             ]
             .spacing(3)
             .width(Fill),
             column![
                 text("End").size(12).style(text::secondary),
-                text_input("Still working", &state.timeblocking.session_end)
-                    .on_input(|value| msg(Action::SessionEnd(value)))
-                    .size(metrics.label()),
+                container(super::controls::time(
+                    &state.timeblocking.session_end,
+                    true,
+                    metrics.label(),
+                    |value| msg(Action::SessionEnd(value))
+                )),
             ]
             .spacing(3)
             .width(Fill),
         ]
         .spacing(8),
-        text("Leave the end blank while the session is still running.")
-            .size(11)
-            .style(text::secondary),
+        button(text("Still working — clear end time").size(11))
+            .style(button::text)
+            .on_press(msg(Action::SessionEnd(String::new()))),
     ]
     .spacing(10);
     if let Some(error) = &state.timeblocking.session_error {
@@ -318,7 +322,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         row![
             button("Save")
                 .on_press(msg(Action::SaveSession))
-                .style(button::primary)
+                .style(crate::ui::controls::primary)
                 .width(Fill),
             button("Delete")
                 .on_press(msg(Action::DeleteSession))
@@ -736,7 +740,7 @@ fn task_card<'a>(
         .style(if running {
             button::danger
         } else {
-            button::primary
+            crate::ui::controls::primary
         });
         if running || !busy {
             control = control.on_press(msg(if running {

@@ -65,7 +65,7 @@ fn go_back_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
         .width(Fill)
         .height(metrics.icon_button())
         .on_press(Message::ScreenSelected(Screen::Calendar))
-        .style(button::secondary)
+        .style(crate::ui::controls::secondary)
         .into()
 }
 
@@ -89,9 +89,9 @@ fn item<'a>(
     .padding(0.0)
     .on_press(Message::TodoSelected(index))
     .style(if current {
-        button::primary
+        crate::ui::controls::primary
     } else {
-        button::secondary
+        crate::ui::controls::secondary
     });
 
     let input = text_input("todo", &todo.text)
@@ -143,7 +143,7 @@ fn control<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Element<'
         .height(Length::Fixed(metrics.icon_button()))
         .padding(0.0)
         .on_press(message)
-        .style(button::secondary)
+        .style(crate::ui::controls::secondary)
         .into()
 }
 
@@ -152,7 +152,7 @@ fn add_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
         .width(Fill)
         .height(metrics.icon_button())
         .on_press(Message::TodoAdded)
-        .style(button::secondary)
+        .style(crate::ui::controls::secondary)
         .into()
 }
 
@@ -160,6 +160,6 @@ fn add_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
 fn clear_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
     button(text("Clear").size(metrics.label()))
         .on_press(Message::TodosCleared)
-        .style(button::secondary)
+        .style(crate::ui::controls::secondary)
         .into()
 }

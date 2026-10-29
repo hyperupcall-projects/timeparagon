@@ -65,7 +65,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let unplanned = unplanned_task_count(state);
     let mut unplanned_line = text(unplanned_tasks_label(unplanned))
-        .size(metrics.label() + 9.0)
+        .size(metrics.label() + 4.0)
         .width(Fill);
     if unplanned == 0 {
         unplanned_line = unplanned_line.style(text::secondary);
@@ -99,6 +99,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         );
     }
 
+    let status = container(status)
+        .padding([8, 10])
+        .width(Fill)
+        .style(super::controls::summary_surface);
     let mut content = column![header(state, metrics), status, body]
         .spacing(metrics.spacing)
         .padding(metrics.padding)
@@ -159,9 +163,9 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 .padding(2)
                 .on_press(Message::CalendarDayOpened(day))
                 .style(if day == today {
-                    button::primary
+                    crate::ui::controls::primary
                 } else if day == state.calendar.day {
-                    button::secondary
+                    crate::ui::controls::secondary
                 } else {
                     button::text
                 });
@@ -193,7 +197,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                     .padding([3, 4])
                     .on_press(Message::EventOpened(event.id.clone()))
                     .style(move |theme, status| {
-                        let mut style = button::secondary(theme, status);
+                        let mut style = crate::ui::controls::secondary(theme, status);
                         style.border = iced::Border {
                             color,
                             width: 1.0,
@@ -245,15 +249,15 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         .height(Fill);
     let title = button(text(state.week_anchor.format("%B %Y ▾").to_string()).size(metrics.label()))
         .on_press(Message::CalendarMonthToggled)
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     let menu = button(text("Menu").size(metrics.label()))
         .on_press(Message::CalendarMenuToggled)
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     let controls = row![
         nav_button("◀", Message::CalendarViewMonthShift(-1), metrics),
         button(text("Today").size(metrics.label()))
             .on_press(Message::CalendarDaySelected(today))
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
         nav_button("▶", Message::CalendarViewMonthShift(1), metrics),
     ]
     .spacing(metrics.spacing)
@@ -606,9 +610,9 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     )
     .on_press(Message::CalendarMonthToggled)
     .style(if state.calendar.month_open {
-        button::primary
+        crate::ui::controls::primary
     } else {
-        button::secondary
+        crate::ui::controls::secondary
     });
 
     // Alarm setting mode turns the day view into a place to click a time, so
@@ -616,17 +620,17 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let set_alarm = button(text("Set Alarm").size(metrics.label()).center())
         .on_press(Message::Alarms(crate::alarms::Action::ModeToggled))
         .style(if state.alarms.mode {
-            button::primary
+            crate::ui::controls::primary
         } else {
-            button::secondary
+            crate::ui::controls::secondary
         });
 
     let menu = button(text("Menu").size(metrics.label()).center())
         .on_press(Message::CalendarMenuToggled)
         .style(if state.calendar.menu_open {
-            button::primary
+            crate::ui::controls::primary
         } else {
-            button::secondary
+            crate::ui::controls::secondary
         });
 
     // Travel shows how long the trip to each event takes, so the button is lit
@@ -641,14 +645,14 @@ fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .width(if wide { Fill } else { Length::Shrink })
         .on_press(Message::Travel(crate::travel::Action::Toggle))
         .style(if state.travel.show {
-            button::primary
+            crate::ui::controls::primary
         } else {
-            button::secondary
+            crate::ui::controls::secondary
         })
     };
 
     let heading = text(heading)
-        .size(metrics.label() + 1.0)
+        .size(metrics.label() + 3.0)
         .font(Font {
             weight: Weight::Bold,
             ..Font::DEFAULT
@@ -738,7 +742,7 @@ fn nav_button<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Elemen
         .height(Length::Fixed(metrics.icon_button()))
         .padding(0.0)
         .on_press(message)
-        .style(button::secondary)
+        .style(crate::ui::controls::secondary)
         .into()
 }
 
@@ -827,7 +831,7 @@ fn pending_overlay<'a>(
         button(text("Close").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(Message::PendingTasksShown(None))
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
     );
 
     let card = container(scrollable(list).height(Length::Shrink))
@@ -836,18 +840,7 @@ fn pending_overlay<'a>(
         )
         .padding(metrics.padding)
         .width(Length::Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
 
     let aligned = column![
         Space::new().height(header_offset(metrics)),
@@ -1122,7 +1115,7 @@ fn source_color_picker<'a>(
     )
     .width(Fill)
     .on_press(pick(None))
-    .style(button::secondary);
+    .style(crate::ui::controls::secondary);
 
     column![
         text(if is_tasks {
@@ -1450,7 +1443,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let mut sync = button(text(sync_label).size(metrics.label()).center().width(Fill))
         .width(Fill)
-        .style(button::primary);
+        .style(crate::ui::controls::primary);
 
     if state.calendar.is_signed_in() && !state.calendar.is_busy() {
         sync = sync.on_press(Message::CalendarSyncRequested);
@@ -1466,7 +1459,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         )
         .width(Fill)
         .on_press(Message::OpenGoogleCalendar)
-        .style(button::secondary),
+        .style(crate::ui::controls::secondary),
     );
     panel = panel.push(
         button(
@@ -1477,7 +1470,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         )
         .width(Fill)
         .on_press(Message::DockRequested)
-        .style(button::secondary),
+        .style(crate::ui::controls::secondary),
     );
 
     let card = container(scrollable(panel).height(Length::Shrink))
@@ -1486,18 +1479,7 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         )
         .padding(metrics.padding)
         .width(Length::Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
@@ -1571,18 +1553,7 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     let card = container(panel)
         .padding(metrics.padding)
         .width(Length::Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
@@ -1616,17 +1587,23 @@ fn day_cell<'a>(
             .width(Fill),
     )
     .width(Fill)
-    .padding([4.0, 0.0])
+    .height(32)
+    .padding(0)
     .on_press(Message::CalendarDaySelected(date))
     .style(move |theme, status| {
         if is_selected {
-            button::primary(theme, status)
+            crate::ui::controls::primary(theme, status)
         } else if in_preview {
-            button::secondary(theme, status)
-        } else if is_today {
-            button::secondary(theme, status)
+            crate::ui::controls::secondary(theme, status)
         } else {
             let mut style = button::text(theme, status);
+            if is_today {
+                style.border = iced::Border {
+                    color: theme.palette().primary,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                };
+            }
             if !in_month {
                 style.text_color = style.text_color.scale_alpha(0.4);
             }
@@ -1676,43 +1653,42 @@ pub fn event_editor<'a>(
         .size(metrics.label() + 1.0)
         .width(Fill);
 
-    let when: Element<'a, Message> = if metrics.breakpoint.is_compact() {
-        column![
-            text_input("YYYY-MM-DD", &draft.date_text)
-                .on_input(Message::EventEditDateChanged)
-                .size(metrics.label()),
-            row![
-                text_input("HH:MM", &draft.start_text)
-                    .on_input(Message::EventEditStartChanged)
-                    .size(metrics.label()),
-                text("–").size(metrics.label()),
-                text_input("HH:MM", &draft.end_text)
-                    .on_input(Message::EventEditEndChanged)
-                    .size(metrics.label()),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(4)
-        .into()
-    } else {
+    let when = column![
+        super::controls::date(
+            &draft.date_text,
+            false,
+            false,
+            true,
+            metrics.label(),
+            Message::EventEditDateChanged
+        ),
         row![
-            text_input("YYYY-MM-DD", &draft.date_text)
-                .on_input(Message::EventEditDateChanged)
-                .size(metrics.label())
-                .width(Length::FillPortion(2)),
-            text_input("HH:MM", &draft.start_text)
-                .on_input(Message::EventEditStartChanged)
-                .size(metrics.label()),
-            text("–").size(metrics.label()),
-            text_input("HH:MM", &draft.end_text)
-                .on_input(Message::EventEditEndChanged)
-                .size(metrics.label()),
+            column![
+                label("Start"),
+                super::controls::time(
+                    &draft.start_text,
+                    true,
+                    metrics.label(),
+                    Message::EventEditStartChanged
+                )
+            ]
+            .spacing(4)
+            .width(Fill),
+            column![
+                label("End"),
+                super::controls::time(
+                    &draft.end_text,
+                    true,
+                    metrics.label(),
+                    Message::EventEditEndChanged
+                )
+            ]
+            .spacing(4)
+            .width(Fill),
         ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    };
+        .spacing(8),
+    ]
+    .spacing(8);
 
     let mut body = column![
         label("Title"),
@@ -1721,10 +1697,12 @@ pub fn event_editor<'a>(
         when,
         event_projects(state, &draft.projects, metrics, Message::EventEditProjects),
         label("Description"),
-        text_input("Add description", &draft.description)
-            .on_input(Message::EventEditDescriptionChanged)
+        iced::widget::text_editor(&state.form_editors[1])
+            .placeholder("Add description…")
+            .on_action(|a| Message::FormEdited(1, a))
             .size(metrics.label())
-            .width(Fill),
+            .height(100)
+            .padding(8),
         super::recurrence::editor(
             &draft.rule,
             draft.start.date_naive(),
@@ -1749,7 +1727,7 @@ pub fn event_editor<'a>(
         )
         .width(Fill)
         .on_press(Message::EventEditSaveRequested)
-        .style(button::primary),
+        .style(crate::ui::controls::primary),
     );
 
     body.into()
@@ -1810,7 +1788,7 @@ fn event_projects<'a>(
         )
         .width(Fill)
         .on_press(message(Action::Toggle))
-        .style(button::secondary),
+        .style(crate::ui::controls::secondary),
     );
     if selection.open {
         content = content.push(
@@ -1971,7 +1949,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             )
             .width(Fill)
             .on_press(Message::OpenEventLink(source.url))
-            .style(button::secondary)
+            .style(crate::ui::controls::secondary)
             .into(),
         );
     }
@@ -1987,7 +1965,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             )
             .width(Fill)
             .on_press(Message::OpenEventLink(link))
-            .style(button::secondary)
+            .style(crate::ui::controls::secondary)
             .into(),
         );
     }
@@ -1997,7 +1975,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             button(text("Delete").size(metrics.label()).center().width(Fill))
                 .width(Fill)
                 .on_press(Message::EventDeleteRequested(id))
-                .style(button::secondary)
+                .style(crate::ui::controls::secondary)
                 .into(),
         );
     }
@@ -2005,7 +1983,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         button(text("Close").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(Message::EventClosed)
-            .style(button::secondary)
+            .style(crate::ui::controls::secondary)
             .into(),
     );
 
@@ -2035,18 +2013,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     .padding(metrics.padding)
     .width(Fill)
     .height(Fill)
-    .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(palette.background.base.color.into()),
-            border: iced::Border {
-                color: palette.background.strong.color,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        }
-    });
+    .style(crate::ui::controls::surface);
 
     pane.into()
 }
@@ -2088,7 +2055,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
 
     let mut delete = button(text("Delete").size(metrics.label()).center().width(Fill))
         .width(Fill)
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     if state.timeblocking.busy.is_empty() {
         delete = delete.on_press(confirm);
     }
@@ -2096,7 +2063,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
         button(text("Cancel").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(Message::EventDeleteCancelled)
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
         delete,
     ]
     .spacing(metrics.spacing)
@@ -2119,18 +2086,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
         )
         .padding(metrics.padding)
         .width(Length::Fixed(260.0))
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        }),
+        .style(crate::ui::controls::surface),
     )
     .width(Fill)
     .height(Fill)
@@ -2166,7 +2122,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
             .height(Length::Fixed(metrics.icon_button()))
             .padding(0.0)
             .on_press(Message::EventDraftCancelled)
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
     ]
     .align_y(Alignment::Center);
 
@@ -2181,9 +2137,9 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
             .width(Fill)
             .on_press(Message::EventDraftKindSelected(kind))
             .style(if selected {
-                button::primary
+                crate::ui::controls::primary
             } else {
-                button::secondary
+                crate::ui::controls::secondary
             })
     };
     let kinds: Element<'a, Message> = row![
@@ -2197,24 +2153,34 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     let when = column![
         row![
-            text_input("YYYY-MM-DD", &draft.date_text)
-                .on_input(Message::EventDraftDateChanged)
-                .size(metrics.label())
-                .width(Length::Fixed(116.0)),
-            text(draft.start.format("%A, %B %d").to_string()).size(metrics.label()),
+            super::controls::date(
+                &draft.date_text,
+                false,
+                false,
+                true,
+                metrics.label(),
+                Message::EventDraftDateChanged
+            )
+            .width(Fill),
         ]
         .spacing(6.0)
         .align_y(Alignment::Center),
         row![
-            text_input("09:00", &draft.start_text)
-                .on_input(Message::EventDraftStartChanged)
-                .size(metrics.label())
-                .width(Length::Fixed(72.0)),
+            container(super::controls::time(
+                &draft.start_text,
+                true,
+                metrics.label(),
+                Message::EventDraftStartChanged
+            ))
+            .width(Fill),
             text("–").size(metrics.label()),
-            text_input("10:00", &draft.end_text)
-                .on_input(Message::EventDraftEndChanged)
-                .size(metrics.label())
-                .width(Length::Fixed(72.0)),
+            container(super::controls::time(
+                &draft.end_text,
+                true,
+                metrics.label(),
+                Message::EventDraftEndChanged
+            ))
+            .width(Fill),
         ]
         .spacing(6.0)
         .align_y(Alignment::Center),
@@ -2226,11 +2192,12 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         text("Description")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
-        text_input("Add description", &draft.description)
-            .on_input(Message::EventDraftDescriptionChanged)
+        iced::widget::text_editor(&state.form_editors[0])
+            .placeholder("Add description…")
+            .on_action(|a| Message::FormEdited(0, a))
             .size(metrics.label())
-            .width(Fill)
-            .padding(8.0),
+            .height(100)
+            .padding(8),
     ]
     .spacing(2.0)
     .width(Fill);
@@ -2246,10 +2213,10 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         Space::new().width(Fill),
         button(text("Cancel").size(metrics.label()).center())
             .on_press(Message::EventDraftCancelled)
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
         button(text("Save").size(metrics.label()).center())
             .on_press(Message::EventDraftSaveRequested)
-            .style(button::primary),
+            .style(crate::ui::controls::primary),
     ]
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
@@ -2284,18 +2251,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     let card = container(panel)
         .padding(metrics.padding)
         .width(Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
 
     // Swallow presses on the card so a click on its blank area cannot fall
     // through to the dismiss layer and close the draft.
@@ -2416,7 +2372,7 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
             None => control,
         };
 
-        column![caption, control.style(button::secondary)]
+        column![caption, control.style(crate::ui::controls::secondary)]
             .spacing(2.0)
             .width(Fill)
             .into()
@@ -2442,7 +2398,7 @@ fn draft_calendar_picker<'a>(state: &'a State, metrics: &Metrics) -> Element<'a,
         )
         .width(Fill)
         .on_press(Message::EventDraftCalendarDropdownToggled)
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
 
         column![caption, control].spacing(2.0).width(Fill).into()
     }
@@ -2482,7 +2438,7 @@ fn calendar_dropdown_overlay<'a>(
         .on_press(Message::EventDraftCalendarSelected(id.clone()))
         .style(move |theme, status| {
             if is_selected {
-                button::primary(theme, status)
+                crate::ui::controls::primary(theme, status)
             } else {
                 button::text(theme, status)
             }

@@ -2,7 +2,7 @@
 //! a folder for each, and removing.
 
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Color, Element, Fill, Length, Theme};
+use iced::{Alignment, Color, Element, Fill, Length};
 
 use crate::app::{Message, State};
 use crate::calendar::colors;
@@ -23,9 +23,17 @@ fn msg(action: Action) -> Message {
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let mut items = column![add_box(state, metrics)]
-        .spacing(metrics.spacing)
-        .width(Fill);
+    let mut items = column![
+        super::controls::page_heading(
+            "Projects",
+            "Group your tasks and keep related work together",
+            Some(state.config.projects.items.len()),
+            metrics
+        ),
+        add_box(state, metrics)
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
 
     for project in state.config.projects.sorted() {
         items = items.push(project_row(state, project, metrics));
@@ -62,7 +70,7 @@ fn add_box<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let add = button(text("Add").size(metrics.label()).center())
         .on_press(msg(Action::Add))
-        .style(button::primary);
+        .style(crate::ui::controls::primary);
 
     let mut content = column![row![input, add].spacing(6).align_y(Alignment::Center)]
         .spacing(4)
@@ -94,18 +102,7 @@ fn project_row<'a>(
     container(content)
         .padding([6, 8])
         .width(Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..container::Style::default()
-            }
-        })
+        .style(super::controls::card_surface)
         .into()
 }
 
@@ -113,7 +110,14 @@ fn project_row<'a>(
 fn summary<'a>(state: &State, project: &'a Project, metrics: &Metrics) -> Element<'a, Message> {
     let header = row![
         color_circle(project.color().unwrap_or(NO_COLOR)),
-        text(&project.name).size(metrics.label() + 1.0).width(Fill),
+        text(&project.name)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .size(metrics.label() + 1.0)
+            .font(iced::Font {
+                weight: iced::font::Weight::Semibold,
+                ..iced::Font::DEFAULT
+            })
+            .width(Fill),
         button(text("Edit").size(metrics.label()))
             .on_press(msg(Action::Edit(project.id)))
             .padding([2, 6])
@@ -146,7 +150,7 @@ fn summary<'a>(state: &State, project: &'a Project, metrics: &Metrics) -> Elemen
                         .style(button::danger),
                     button(text("Keep").size(metrics.label()).center())
                         .on_press(msg(Action::CancelRemove))
-                        .style(button::secondary),
+                        .style(crate::ui::controls::secondary),
                 ]
                 .spacing(6),
             ]
@@ -192,9 +196,9 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
     .width(Fill)
     .on_press(msg(Action::Color(None)))
     .style(if draft.color.is_none() {
-        button::primary
+        crate::ui::controls::primary
     } else {
-        button::secondary
+        crate::ui::controls::secondary
     });
 
     let directory = row![
@@ -205,7 +209,7 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
             .width(Fill),
         button(text("Browse…").size(metrics.label()).center())
             .on_press(msg(Action::Browse))
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -232,10 +236,10 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
             row![
                 button(text("Save").size(metrics.label()).center())
                     .on_press(msg(Action::Save))
-                    .style(button::primary),
+                    .style(crate::ui::controls::primary),
                 button(text("Cancel").size(metrics.label()).center())
                     .on_press(msg(Action::CancelEdit))
-                    .style(button::secondary),
+                    .style(crate::ui::controls::secondary),
             ]
             .spacing(6),
         )

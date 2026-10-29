@@ -17,7 +17,12 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         connect = connect.on_press(Message::KeepSignin);
     }
     let mut body = column![
-        text("Keep Notes").size(metrics.label() + 3.0),
+        super::controls::page_heading(
+            "Keep Notes",
+            "Browse and search your saved notes",
+            Some(keep.visible().len()),
+            metrics
+        ),
         row![refresh, connect].spacing(metrics.spacing),
         text_input("Search title or description…", &keep.query)
             .on_input(Message::KeepQueryChanged)
@@ -224,7 +229,7 @@ fn card<'a>(note: &'a Note, metrics: &Metrics) -> Element<'a, Message> {
         .padding(metrics.padding)
         .width(Fill)
         .style(move |theme| {
-            let mut style = container::bordered_box(theme);
+            let mut style = crate::ui::controls::surface(theme);
             style.border.radius = 10.0.into();
             style.border.color = iced::Color { a: 0.18, ..ink };
             style.text_color = Some(ink);
@@ -276,9 +281,9 @@ fn scope_button<'a>(
         .padding(4)
         .on_press(Message::KeepScopeChanged(scope))
         .style(if scope == selected {
-            button::primary
+            crate::ui::controls::primary
         } else {
-            button::secondary
+            crate::ui::controls::secondary
         })
         .into()
 }

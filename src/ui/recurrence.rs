@@ -32,9 +32,9 @@ fn choice<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let style: fn(&Theme, button::Status) -> button::Style = if selected {
-        button::primary
+        crate::ui::controls::primary
     } else {
-        button::secondary
+        crate::ui::controls::secondary
     };
     button(text(label.to_owned()).size(metrics.label()).center())
         .padding([3, 7])
@@ -53,7 +53,7 @@ pub fn editor<'a, F>(
     map: F,
 ) -> Element<'a, Message>
 where
-    F: Fn(recurrence::Action) -> Message + Clone + 'a,
+    F: Fn(recurrence::Action) -> Message + Clone + Send + Sync + 'static,
 {
     let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
     let send_map = map.clone();
@@ -90,7 +90,7 @@ where
                 .push(
                     button(text("Use a simple schedule").size(metrics.label()).center())
                         .padding([3, 7])
-                        .style(button::secondary)
+                        .style(crate::ui::controls::secondary)
                         .on_press(send(recurrence::Action::SimpleRepeat)),
                 );
         }
@@ -251,13 +251,15 @@ where
 
             match rule.ends {
                 EndKind::OnDate => {
-                    let mut until = text_input("YYYY-MM-DD", &rule.until)
-                        .size(metrics.label())
-                        .width(120);
-                    if !busy {
-                        let send = map.clone();
-                        until = until.on_input(move |value| send(recurrence::Action::Until(value)));
-                    }
+                    let send = map.clone();
+                    let until = super::controls::date(
+                        &rule.until,
+                        false,
+                        false,
+                        !busy,
+                        metrics.label(),
+                        move |value| send(recurrence::Action::Until(value)),
+                    );
                     body = body.push(
                         row![text("Last day").size(metrics.label()), until,]
                             .spacing(6)
@@ -310,21 +312,22 @@ where
                 }
                 body = body.push(row(chips).spacing(4).wrap().vertical_spacing(4));
             }
-            let mut skip_input = text_input("YYYY-MM-DD", &rule.skip_input)
-                .on_submit(send(recurrence::Action::SkipAdd))
-                .size(metrics.label())
-                .width(120);
-            if !busy {
-                let send = map.clone();
-                skip_input =
-                    skip_input.on_input(move |value| send(recurrence::Action::SkipInput(value)));
-            }
+            let send = map.clone();
+            let skip_input = super::controls::date(
+                &rule.skip_input,
+                false,
+                false,
+                !busy,
+                metrics.label(),
+                move |value| send(recurrence::Action::SkipInput(value)),
+            );
+            let send = map.clone();
             body = body.push(
                 row![
                     skip_input,
                     button(text("Skip this date").size(metrics.label()).center())
                         .padding([3, 7])
-                        .style(button::secondary)
+                        .style(crate::ui::controls::secondary)
                         .on_press(send(recurrence::Action::SkipAdd)),
                 ]
                 .spacing(6)

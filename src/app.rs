@@ -188,6 +188,9 @@ impl Flash {
 }
 
 pub struct State {
+    pub picker: Option<crate::ui::controls::Picker>,
+    /// Persistent cursor and selection state for new events, event edits and habits.
+    pub form_editors: [text_editor::Content; 3],
     pub config: Config,
     pub catalog: Catalog,
 
@@ -281,6 +284,8 @@ pub struct State {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Picker(crate::ui::controls::Action),
+    FormEdited(usize, text_editor::Action),
     TimeBlocking(crate::timeblocking::Action),
     BrainDump(crate::brain_dump::Action),
     Inbox(crate::inbox::Action),
@@ -323,6 +328,8 @@ pub enum Message {
     TimeBlockWidthChanged(f32),
     DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
+    DockReserveSpaceToggled(bool),
+    PanelReserveSpaceToggled(bool),
     DockWidthChanged(f32),
     DockMarginChanged(f32),
     DockSideSelected(config::DockSide),
@@ -550,6 +557,8 @@ impl State {
         let notepad = text_editor::Content::with_text(&config.notepad.text);
 
         Self {
+            picker: None,
+            form_editors: std::array::from_fn(|_| text_editor::Content::new()),
             now: Instant::now(),
             sidebar: None,
             alarms: alarms::Alarms::default(),
@@ -880,6 +889,31 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     // travel reads.
     let ticking = matches!(message, Message::FlashFrame(_));
     let task = dispatch(state, message);
+    let values = [
+        state
+            .calendar
+            .draft
+            .as_ref()
+            .map(|d| d.description.as_str())
+            .unwrap_or(""),
+        state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .map(|d| d.description.as_str())
+            .unwrap_or(""),
+        state
+            .habits
+            .draft
+            .as_ref()
+            .map(|d| d.notes.as_str())
+            .unwrap_or(""),
+    ];
+    for (editor, value) in state.form_editors.iter_mut().zip(values) {
+        if editor.text() != value {
+            *editor = text_editor::Content::with_text(value);
+        }
+    }
     let travel = if ticking {
         Task::none()
     } else {
@@ -1363,6 +1397,14 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([resize, queue_save(state)])
         }
 
+        Message::DockReserveSpaceToggled(enabled) => {
+            state.config.views.dock_reserve_space = enabled;
+            queue_save(state)
+        }
+        Message::PanelReserveSpaceToggled(enabled) => {
+            state.config.views.panel_reserve_space = enabled;
+            queue_save(state)
+        }
         Message::DockWidthChanged(width) => {
             state.view_layout_input = None;
             if !width.is_finite() {
@@ -1937,6 +1979,34 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::KeyPressed(key, modifiers) => on_key(state, key, modifiers),
 
+        Message::Picker(action) => crate::ui::controls::update(state, action),
+        Message::FormEdited(index, action) => {
+            if let Some(editor) = state.form_editors.get_mut(index) {
+                editor.perform(action);
+                let value = editor.text();
+                match index {
+                    0 => {
+                        if let Some(d) = &mut state.calendar.draft {
+                            d.description = value;
+                        }
+                    }
+                    1 => {
+                        if let Some(d) = &mut state.calendar.edit_draft {
+                            d.description = value;
+                        }
+                    }
+                    2 => {
+                        if !state.habits.busy {
+                            if let Some(d) = &mut state.habits.draft {
+                                d.notes = value;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Task::none()
+        }
         Message::Ignored => Task::none(),
 
         Message::PendingTasksShown(day) => {
@@ -3291,6 +3361,18 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 /// looked at without running anything.
 fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
+    if let Some(picker) = &state.picker {
+        use crate::ui::controls::Action;
+        return match key {
+            Key::Named(Named::Escape) => Some(Message::Picker(Action::Close)),
+            Key::Named(Named::ArrowLeft) => Some(Message::Picker(Action::Move(-1))),
+            Key::Named(Named::ArrowRight) => Some(Message::Picker(Action::Move(1))),
+            Key::Named(Named::ArrowUp) => Some(Message::Picker(Action::Move(-7))),
+            Key::Named(Named::ArrowDown) => Some(Message::Picker(Action::Move(7))),
+            Key::Named(Named::Enter) => Some(Message::Picker(Action::Select(picker.focus))),
+            _ => None,
+        };
+    }
 
     // A task that is in the air is put back where it started before anything
     // else looks at the key, so Escape cancels the drag instead of closing the
@@ -3382,6 +3464,15 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(
                 crate::timeblocking::Action::CloseView,
             )),
+            _ => None,
+        };
+    }
+    if state.calendar.draft.is_some() || state.calendar.edit_draft.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) if state.calendar.draft.is_some() => {
+                Some(Message::EventDraftCancelled)
+            }
+            Key::Named(Named::Escape) => Some(Message::EventClosed),
             _ => None,
         };
     }

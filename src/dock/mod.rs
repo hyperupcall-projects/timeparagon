@@ -140,7 +140,7 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     };
     layer.set_anchor(anchor);
     layer.set_margin(margins.0, margins.1, margins.2, margins.3);
-    layer.set_exclusive_zone(0);
+    layer.set_exclusive_zone(dock_config.exclusive_zone());
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     // A zero asks the compositor to stretch between the anchors along that
     // axis, so only the strip's fixed size is set.
@@ -165,6 +165,21 @@ pub fn run(origin: launch::Origin) -> Result<()> {
 
     let mut event_loop: EventLoop<Dock> = EventLoop::try_new()?;
     let handle = event_loop.handle();
+
+    // Settings can be edited in the regular app while the dock is visible.
+    // Watch the directory because saves atomically replace config.toml.
+    let (config_tx, config_rx) = channel::channel::<Config>();
+    let _config_watcher = watch_config(config_tx);
+    handle
+        .insert_source(config_rx, |event, _, dock| {
+            if let channel::Event::Msg(config) = event {
+                dock.config.reserve_space = config.views.dock_reserve_space;
+                dock.layer.set_exclusive_zone(dock.config.exclusive_zone());
+                dock.layer.commit();
+                dock.app_config.views.dock_reserve_space = config.views.dock_reserve_space;
+            }
+        })
+        .map_err(|error| anyhow!("could not watch dock reservation settings: {error}"))?;
 
     // Listening only now means the shortcut daemon can take an answer to mean
     // the strip is really going to appear.
@@ -302,6 +317,41 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn watch_config(sender: channel::Sender<Config>) -> Option<notify::RecommendedWatcher> {
+    use notify::Watcher;
+
+    let path = crate::config::config_path()?;
+    let parent = path.parent()?.to_path_buf();
+    let watched_path = path.clone();
+    let result = (|| {
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if let Ok(event) = event
+                    && event.paths.contains(&watched_path)
+                    && matches!(
+                        event.kind,
+                        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+                    )
+                {
+                    if let Ok(contents) = std::fs::read_to_string(&watched_path)
+                        && let Ok(config) = toml::from_str::<Config>(&contents)
+                    {
+                        let _ = sender.send(config);
+                    }
+                }
+            })?;
+        watcher.watch(&parent, notify::RecursiveMode::NonRecursive)?;
+        Ok::<_, notify::Error>(watcher)
+    })();
+    match result {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            log::warn!("live dock reservation settings unavailable: {error}");
+            None
+        }
+    }
 }
 
 /// Answers the shortcut daemon: `status` says the strip is up, and `hide`

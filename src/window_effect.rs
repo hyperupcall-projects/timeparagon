@@ -1,9 +1,9 @@
-//! Opening animation for the side panel, which is an ordinary xdg-toplevel
-//! window. Layer-shell namespaces (as the dock uses) can't control those, so a
-//! temporary KWin script effect, loaded over D-Bus, takes over instead: it
+//! Opening animation for the side panel. A temporary KWin script effect,
+//! loaded over D-Bus, works with its window application ID or layer-shell
+//! namespace: it
 //! fades the panel in and out or shows it at once, and skips KWin's own pop-in.
 //!
-//! The panel's mode travels in its application ID (`time-slay-instant`,
+//! The panel's mode travels in its application ID or namespace (`time-slay-instant`,
 //! `time-slay-fade-300`), which KWin sees when the window maps, so there is no
 //! race with a later D-Bus message. Anything but KWin just gets the desktop
 //! default.

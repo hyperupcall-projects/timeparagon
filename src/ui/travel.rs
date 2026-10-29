@@ -26,9 +26,19 @@ fn msg(action: Action) -> Message {
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut body = column![
-        text("Locations").size(metrics.label() + 3.0),
+        super::controls::page_heading(
+            "Travel",
+            "Places and routes between your events",
+            None,
+            metrics
+        ),
+        super::controls::section_heading(
+            "Locations",
+            Some(state.config.travel.places.len()),
+            metrics.label() + 3.0
+        ),
         places(state, metrics),
-        text("Day connections").size(metrics.label() + 3.0),
+        super::controls::section_heading("Day connections", None, metrics.label() + 3.0),
         text(state.calendar.day.format("%A, %B %-d").to_string())
             .size(metrics.label() - 1.0)
             .style(text::secondary),
@@ -42,7 +52,11 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         "No trips this day. Back-to-back events with locations show up here.",
         metrics,
     ));
-    body = body.push(text("All connections").size(metrics.label() + 3.0));
+    body = body.push(super::controls::section_heading(
+        "All connections",
+        None,
+        metrics.label() + 3.0,
+    ));
     body = body.push(connections(
         state,
         travel::all_connections(state),
@@ -165,10 +179,10 @@ fn rename_row<'a>(name: &'a str, metrics: &Metrics) -> Element<'a, Message> {
         row![
             button(text("Save").size(metrics.label()).center())
                 .on_press(msg(Action::SaveRename))
-                .style(button::primary),
+                .style(crate::ui::controls::primary),
             button(text("Cancel").size(metrics.label()).center())
                 .on_press(msg(Action::CancelRename))
-                .style(button::secondary),
+                .style(crate::ui::controls::secondary),
         ]
         .spacing(6),
     ]
@@ -259,7 +273,7 @@ fn mode_control<'a>(state: &State, leg: Leg, metrics: &Metrics) -> Element<'a, M
     if metrics.breakpoint.is_compact() {
         button(text(mode.label()).size(metrics.label()).center())
             .on_press(msg(Action::SetMode(leg, mode.next())))
-            .style(button::secondary)
+            .style(crate::ui::controls::secondary)
             .into()
     } else {
         pick_list(TravelMode::ALL, Some(mode), move |mode| {
@@ -310,7 +324,7 @@ pub(super) fn location_control<'a>(
                     row![
                         button(text("Change").size(metrics.label()).center())
                             .on_press(msg(Action::OpenPicker(target.clone())))
-                            .style(button::secondary),
+                            .style(crate::ui::controls::secondary),
                         button(text("Clear").size(metrics.label()).center())
                             .on_press(msg(Action::Clear(target)))
                             .style(button::text),
@@ -322,7 +336,7 @@ pub(super) fn location_control<'a>(
         None => button(text(add_label).size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(msg(Action::OpenPicker(target)))
-            .style(button::secondary)
+            .style(crate::ui::controls::secondary)
             .into(),
     }
 }
@@ -337,7 +351,7 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
         .size(metrics.label())
         .center(),
     )
-    .style(button::primary);
+    .style(crate::ui::controls::primary);
     let search = if picker.searching || picker.query.trim().is_empty() {
         search
     } else {
@@ -387,7 +401,7 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
                 .width(Fill)
                 .padding([4, 6])
                 .on_press(msg(Action::Choose(index)))
-                .style(button::secondary),
+                .style(crate::ui::controls::secondary),
         );
     }
 
@@ -488,7 +502,7 @@ pub fn leg_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         button(text("Close").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(msg(Action::CloseLeg))
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
     );
 
     let card = container(scrollable(body))
@@ -496,18 +510,7 @@ pub fn leg_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         .width(Fill)
         .max_width(420)
         .max_height((metrics.size.height - 32.0).max(80.0))
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                text_color: Some(palette.background.base.text),
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
 
     let backdrop =
         mouse_area(
@@ -587,9 +590,9 @@ fn leg_details<'a>(
         .width(Fill)
         .on_press(msg(Action::SetMode(leg, mode)))
         .style(if mode == current {
-            button::primary
+            crate::ui::controls::primary
         } else {
-            button::secondary
+            crate::ui::controls::secondary
         })
     };
     content = content
@@ -615,7 +618,7 @@ fn leg_details<'a>(
     )
     .width(Fill)
     .on_press(msg(Action::Recalculate(leg)))
-    .style(button::secondary);
+    .style(crate::ui::controls::secondary);
     let maps = button(
         text("Open in Maps")
             .size(metrics.label())
@@ -624,7 +627,7 @@ fn leg_details<'a>(
     )
     .width(Fill)
     .on_press(msg(Action::OpenMaps(leg)))
-    .style(button::secondary);
+    .style(crate::ui::controls::secondary);
 
     // Two buttons side by side need more than a 200px window has to give.
     if metrics.breakpoint.is_compact() {

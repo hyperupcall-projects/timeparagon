@@ -284,33 +284,42 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
             .size(metrics.label())
             .style(text::secondary),
     );
-    body = body.push(
-        text_input(
-            "YYYY-MM-DD or YYYY-MM-DD HH:MM (blank clears deadline)",
-            &state.timeblocking.deadline,
-        )
-        .on_input(|v| msg(Action::Deadline(v)))
-        .size(metrics.label()),
-    );
+    body = body.push(super::controls::date(
+        &state.timeblocking.deadline,
+        true,
+        true,
+        !busy,
+        metrics.label(),
+        |v| msg(Action::Deadline(v)),
+    ));
     body = body.push(save_deadline);
     body = body.push(
         text("Scheduled day and time")
             .size(metrics.label())
             .style(text::secondary),
     );
-    body = body.push(
-        text_input("YYYY-MM-DD", &state.timeblocking.date)
-            .on_input(|v| msg(Action::Date(v)))
-            .size(metrics.label()),
-    );
+    body = body.push(super::controls::date(
+        &state.timeblocking.date,
+        false,
+        false,
+        true,
+        metrics.label(),
+        |v| msg(Action::Date(v)),
+    ));
     body = body.push(
         row![
-            text_input("Start HH:MM", &state.timeblocking.start_time)
-                .on_input(|v| msg(Action::StartTime(v)))
-                .size(metrics.label()),
-            text_input("End HH:MM", &state.timeblocking.end_time)
-                .on_input(|v| msg(Action::EndTime(v)))
-                .size(metrics.label())
+            container(super::controls::time(
+                &state.timeblocking.start_time,
+                true,
+                metrics.label(),
+                |v| msg(Action::StartTime(v))
+            )),
+            container(super::controls::time(
+                &state.timeblocking.end_time,
+                true,
+                metrics.label(),
+                |v| msg(Action::EndTime(v))
+            ))
         ]
         .spacing(6),
     );
@@ -379,7 +388,7 @@ fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Eleme
             .width(Fill),
     )
     .width(Fill)
-    .style(button::secondary);
+    .style(crate::ui::controls::secondary);
     if !busy {
         toggle = toggle.on_press(msg(Action::ProjectPicker(task.id.clone(), !open)));
     }
@@ -471,7 +480,7 @@ fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elemen
     let mut input = text_input("Add a label…", &state.timeblocking.label_draft)
         .size(metrics.label())
         .width(Fill);
-    let mut add = button(text("Add").size(metrics.label())).style(button::primary);
+    let mut add = button(text("Add").size(metrics.label())).style(crate::ui::controls::primary);
     if !busy {
         let typed = state.timeblocking.label_draft.clone();
         input = input
@@ -534,9 +543,9 @@ fn priority_field<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element
         let mut choice = button(text(label).size(metrics.label()).center().width(Fill))
             .width(Fill)
             .style(if priority == current {
-                button::primary
+                crate::ui::controls::primary
             } else {
-                button::secondary
+                crate::ui::controls::secondary
             });
         if !busy {
             choice = choice.on_press(msg(Action::Priority(task.id.clone(), priority)));
@@ -576,7 +585,7 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
     if crate::inbox::untriaged(state, task) {
         let mut triage = button(text("Triage").size(metrics.label()).center().width(Fill))
             .width(Fill)
-            .style(button::primary);
+            .style(crate::ui::controls::primary);
         if state.timeblocking.busy.is_empty() {
             triage = triage.on_press(msg(Action::Triage(task.id.clone())));
         }
@@ -605,9 +614,9 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
         let mut action_button = button(text(label).size(metrics.label()).center().width(Fill))
             .width(Fill)
             .style(if matches!(&action, Message::TaskToggled(_)) {
-                button::primary
+                crate::ui::controls::primary
             } else {
-                button::secondary
+                crate::ui::controls::secondary
             });
         if state.timeblocking.busy.is_empty() {
             action_button = action_button.on_press(action);
@@ -639,23 +648,30 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let delete = button(text("Delete").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .on_press(Message::EventDeleteRequested(block_id.clone()))
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     let close = button(text("Close").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .on_press(msg(Action::Close))
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     let actions: Element<'a, Message> = if compact_weekly {
         column![delete, close].spacing(metrics.spacing).into()
     } else {
         row![delete, close].spacing(metrics.spacing).into()
     };
-    // The block is edited in place: title, day and time, description and
-    // repeat are all fields in this panel, with no Edit popup in between.
+    // Keep planning and drag targets above the longer block-details form.
     let editor = super::calendar::event_editor(state, block, metrics);
     let mut body = column![
-        editor,
+        text(block.title.clone()).size(18),
+        text(format!(
+            "{} · {}–{}",
+            block.start.format("%a, %b %-d"),
+            block.start.format("%H:%M"),
+            block.end.format("%H:%M")
+        ))
+        .size(metrics.label())
+        .style(text::secondary),
         actions,
-        text("Planned Tasks").size(16),
+        super::controls::section_heading("Planned Tasks", Some(tasks.len()), 16.0),
         planned_slot(state, &block_id, metrics),
     ]
     .spacing(10);
@@ -686,7 +702,11 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             card
         });
     }
-    body = body.push(text("Available tasks").size(16));
+    body = body.push(super::controls::section_heading(
+        "Available tasks",
+        None,
+        16.0,
+    ));
     body = body.push(
         row![
             text("All tasks").size(metrics.label()).width(Fill),
@@ -743,6 +763,13 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             body = body.push(row![task_row(state, task, metrics, false), add]);
         }
     }
+    body = body
+        .push(super::controls::section_heading(
+            "Block details",
+            None,
+            16.0,
+        ))
+        .push(editor);
     // A release anywhere on the panel assigns the dragged task, including on the
     // plus box. A release on a task row is captured first and reorders instead.
     mouse_area(
@@ -892,10 +919,12 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         .collect();
 
     let mut body = column![
-        text(list_name.clone()).size(25),
-        text("Google Tasks parked on this list")
-            .size(13)
-            .style(text::secondary),
+        super::controls::page_heading(
+            list_name.clone(),
+            "Google Tasks parked on this list",
+            Some(shown.len()),
+            metrics
+        ),
         text("Search").size(metrics.label()).style(text::secondary),
         text_input("Search tasks…", &state.timeblocking.backlog_query)
             .on_input(|value| msg(Action::BacklogQuery(value)))
@@ -990,18 +1019,7 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         .width(Fill)
         .max_width(420)
         .max_height((metrics.size.height - 32.0).max(80.0))
-        .style(|theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                text_color: Some(palette.background.base.text),
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
     let backdrop =
         mouse_area(
             container(Space::new())

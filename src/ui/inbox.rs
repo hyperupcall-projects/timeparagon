@@ -44,20 +44,15 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         List::Triaged => ("Triaged", "Tasks ready to be scheduled"),
     };
 
-    let title = column![
-        text(heading).size(25),
-        text(subtitle).size(metrics.label()).style(text::secondary),
-    ];
-    let mut header = row![title.width(Fill)]
-        .spacing(metrics.spacing)
-        .align_y(Center);
-    if list == List::Inbox {
-        header = header.push(
-            button(text("New task").size(metrics.label()).center())
-                .on_press(msg(Action::NewTask))
-                .style(button::primary),
-        );
-    }
+    let title = super::controls::page_heading(heading, subtitle, Some(tasks.len()), metrics);
+    let header: Element<'a, Message> = if list == List::Inbox {
+        let add = button(text("New task").size(metrics.label()).center())
+            .on_press(msg(Action::NewTask))
+            .style(crate::ui::controls::primary);
+        super::controls::page_toolbar(title, add.into(), metrics)
+    } else {
+        title.into()
+    };
     let mut body = column![header].spacing(metrics.spacing);
 
     for error in [&state.inbox.error, &state.calendar.error]
@@ -104,11 +99,20 @@ fn task_card<'a>(
     // The title opens the task's details beside the list, where its project,
     // estimate, priority and the rest are edited.
     heading = heading.push(
-        button(text(&task.title).size(metrics.label() + 1.0).width(Fill))
-            .width(Fill)
-            .padding(0)
-            .style(button::text)
-            .on_press(Message::EventOpened(task.id.clone())),
+        button(
+            text(&task.title)
+                .wrapping(text::Wrapping::WordOrGlyph)
+                .size(metrics.label() + 1.0)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Semibold,
+                    ..iced::Font::DEFAULT
+                })
+                .width(Fill),
+        )
+        .width(Fill)
+        .padding(0)
+        .style(button::text)
+        .on_press(Message::EventOpened(task.id.clone())),
     );
 
     let mut card = column![heading].spacing(4);
@@ -135,7 +139,7 @@ fn task_card<'a>(
                     width: 1.0,
                     radius: 5.0.into(),
                 },
-                ..Default::default()
+                ..super::controls::card_surface(theme)
             }
         })
         .into()
@@ -409,9 +413,9 @@ fn actions<'a>(task: &'a Event, metrics: &Metrics, busy: bool) -> Element<'a, Me
         let mut action = button(text(label).size(metrics.label()).center().width(Fill))
             .width(Fill)
             .style(if primary {
-                button::primary
+                crate::ui::controls::primary
             } else {
-                button::secondary
+                crate::ui::controls::secondary
             });
         if !busy {
             action = action.on_press(message);
@@ -445,9 +449,9 @@ pub fn day_picker<'a>(
     )
     .width(Fill)
     .style(if open.is_some() {
-        button::secondary
+        crate::ui::controls::secondary
     } else {
-        button::primary
+        crate::ui::controls::primary
     });
     let toggle = if busy {
         toggle
@@ -528,15 +532,21 @@ fn picker_day<'a>(
             .width(Fill),
     )
     .width(Fill)
-    .padding([3.0, 0.0])
+    .height(32)
+    .padding(0)
     .on_press(msg(Action::ScheduleOn(task.id.clone(), day)))
     .style(move |theme, status| {
         if is_planned {
-            button::primary(theme, status)
-        } else if is_today {
-            button::secondary(theme, status)
+            crate::ui::controls::primary(theme, status)
         } else {
             let mut style = button::text(theme, status);
+            if is_today {
+                style.border = iced::Border {
+                    color: theme.palette().primary,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                };
+            }
             if !in_month {
                 style.text_color = style.text_color.scale_alpha(0.4);
             }
@@ -556,18 +566,7 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         .width(Fill)
         .max_width(420)
         .max_height((metrics.size.height - 32.0).max(80.0))
-        .style(|theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                text_color: Some(palette.background.base.text),
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
     let backdrop =
         mouse_area(
             container(Space::new())
@@ -599,22 +598,20 @@ fn form<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
         .id(iced::widget::Id::new(inbox::TITLE_FIELD))
         .size(metrics.label())
         .width(Fill);
-    let mut deadline =
-        text_input("YYYY-MM-DD or YYYY-MM-DD HH:MM", &draft.deadline).size(metrics.label());
-    let mut due = text_input("YYYY-MM-DD", &draft.due).size(metrics.label());
+    let deadline =
+        super::controls::date(&draft.deadline, true, true, !locked, metrics.label(), |v| {
+            msg(Action::Deadline(v))
+        });
+    let due = super::controls::date(&draft.due, true, false, !locked, metrics.label(), |v| {
+        msg(Action::Due(v))
+    });
     if !locked {
         title = title
             .on_input(|value| msg(Action::Title(value)))
             .on_submit(msg(Action::Create));
-        deadline = deadline
-            .on_input(|value| msg(Action::Deadline(value)))
-            .on_submit(msg(Action::Create));
-        due = due
-            .on_input(|value| msg(Action::Due(value)))
-            .on_submit(msg(Action::Create));
     }
 
-    let mut body = column![text("New task").size(18), title].spacing(8);
+    let mut body = column![text("New task").size(20), label("Task name"), title].spacing(8);
     if let Some(source) = &draft.source {
         let mut chip = row![
             source_icon::logo(source.kind, 16.0),
@@ -640,8 +637,18 @@ fn form<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
     }
     body = body
         .push(label("Deadline (optional)"))
+        .push(
+            text("The last day to finish this task.")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        )
         .push(deadline)
         .push(label("Due date (optional)"))
+        .push(
+            text("The day you plan to work on it.")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        )
         .push(due);
     if let Some(error) = &draft.error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));

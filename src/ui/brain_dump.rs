@@ -27,23 +27,21 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let today = Local::now().date_naive();
     let add = button(text("Add today").size(metrics.label()).center())
         .on_press(msg(Action::Open(today)))
-        .style(button::primary);
-    let title = column![
-        text("Brain dump").size(25),
-        text("One page for every day")
-            .size(metrics.label())
-            .style(text::secondary),
-    ];
+        .style(crate::ui::controls::primary);
+    let entries = state.config.brain_dump.search(&state.brain_dump.query);
+    let title = super::controls::page_heading(
+        "Brain dump",
+        "One page for every day",
+        Some(entries.len()),
+        metrics,
+    );
     let search = text_input("Search every page…", &state.brain_dump.query)
         .on_input(|query| msg(Action::Query(query)))
         .size(metrics.label())
         .width(Fill);
 
-    let entries = state.config.brain_dump.search(&state.brain_dump.query);
     let mut body = column![
-        row![title.width(Fill), add]
-            .spacing(metrics.spacing)
-            .align_y(iced::Center),
+        super::controls::page_toolbar(title, add.into(), metrics),
         search,
     ]
     .spacing(metrics.spacing);
@@ -99,7 +97,7 @@ fn entry_card<'a>(
     };
     let edit = button(text("Edit").size(metrics.label()))
         .on_press(msg(Action::Open(date)))
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     let content = column![
         row![title, edit]
             .spacing(metrics.spacing)
@@ -112,18 +110,7 @@ fn entry_card<'a>(
     container(content)
         .padding([7, 9])
         .width(Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 5.0.into(),
-                },
-                ..Default::default()
-            }
-        })
+        .style(super::controls::card_surface)
         .into()
 }
 

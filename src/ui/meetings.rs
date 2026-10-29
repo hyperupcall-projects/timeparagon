@@ -97,7 +97,7 @@ pub(super) fn join_button<'a>(meeting: Meeting, metrics: &Metrics) -> Element<'a
     )
     .width(Fill)
     .on_press(Message::OpenEventLink(meeting.url))
-    .style(button::secondary)
+    .style(crate::ui::controls::secondary)
     .into()
 }
 

@@ -1,10 +1,9 @@
 //! The settings tab and the timer-hits-zero menu.
 
-use iced::font::Weight;
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };
-use iced::{Center, Element, Fill, Font, Length};
+use iced::{Center, Element, Fill, Length};
 
 use crate::app::{LayoutField, Message, State};
 use crate::calendar;
@@ -67,7 +66,15 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .width(Fill);
 
     column![
-        text("Settings").size(metrics.label() + 3.0),
+        super::controls::section_heading(
+            "Settings",
+            None,
+            if metrics.breakpoint.is_compact() {
+                18.0
+            } else {
+                23.0
+            }
+        ),
         scrollable(content).height(Fill).width(Fill),
     ]
     .spacing(metrics.spacing)
@@ -78,13 +85,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
-    text(label)
-        .size(metrics.label() + 4.0)
-        .font(Font {
-            weight: Weight::Black,
-            ..Font::DEFAULT
-        })
-        .into()
+    super::controls::section_heading(label, None, metrics.label() + 3.0).into()
 }
 
 /// A labelled row that stacks vertically once there is no room for two
@@ -138,7 +139,11 @@ where
             None => control,
         };
 
-        field(label, control.style(button::secondary).into(), metrics)
+        field(
+            label,
+            control.style(crate::ui::controls::secondary).into(),
+            metrics,
+        )
     } else {
         field(
             label,
@@ -236,6 +241,17 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let views = &state.config.views;
 
     column![
+        container(switch(
+            "Reserve screen space",
+            views.dock_reserve_space,
+            Message::DockReserveSpaceToggled,
+            metrics,
+        ))
+        .id("dock-reservation")
+        .width(Fill),
+        text("Keep maximized windows beside the dock. Popups do not reserve space.")
+            .size(metrics.label())
+            .style(text::secondary),
         text("Change the appearance of the dock.")
             .size(metrics.label())
             .style(text::secondary),
@@ -293,6 +309,17 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let views = &state.config.views;
 
     column![
+        container(switch(
+            "Reserve screen space",
+            views.panel_reserve_space,
+            Message::PanelReserveSpaceToggled,
+            metrics,
+        ))
+        .id("panel-reservation")
+        .width(Fill),
+        text("Keep maximized windows beside the panel. Tooltips do not reserve space.")
+            .size(metrics.label())
+            .style(text::secondary),
         text("Update the borders of the dock and panel.")
             .size(metrics.label())
             .style(text::secondary),
@@ -534,7 +561,8 @@ fn shortcut_action<'a>(
         );
     }
     for (index, shortcut) in bound.iter().enumerate() {
-        let mut remove = button(text("Remove").size(metrics.label())).style(button::secondary);
+        let mut remove =
+            button(text("Remove").size(metrics.label())).style(crate::ui::controls::secondary);
         if !editor.busy {
             remove = remove.on_press(Message::ShortcutRemoved(action, index));
         }
@@ -588,8 +616,9 @@ fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
             .size(metrics.label()).style(text::secondary),
     ].spacing(metrics.spacing).width(Fill);
     for (index, source) in sources.iter().enumerate() {
-        let mut up = button(text("Up").size(metrics.label())).style(button::secondary);
-        let mut down = button(text("Down").size(metrics.label())).style(button::secondary);
+        let mut up = button(text("Up").size(metrics.label())).style(crate::ui::controls::secondary);
+        let mut down =
+            button(text("Down").size(metrics.label())).style(crate::ui::controls::secondary);
         if index > 0 {
             up = up.on_press(Message::CalendarSourceMoved(source.id.clone(), true));
         }
@@ -652,7 +681,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .width(Fill),
         )
         .width(Fill)
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
         if !state.calendar.is_busy() {
             disconnect = disconnect.on_press(Message::GoogleDisconnectRequested);
         }
@@ -665,7 +694,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .width(Fill),
         )
         .width(Fill)
-        .style(button::primary);
+        .style(crate::ui::controls::primary);
         if !state.calendar.is_busy() {
             connect = connect.on_press(Message::GoogleConnectRequested);
         }
@@ -700,7 +729,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             .width(Fill),
     )
     .width(Fill)
-    .style(button::secondary);
+    .style(crate::ui::controls::secondary);
     if connected && !state.calendar.is_busy() {
         resync = resync.on_press(Message::CalendarResyncRequested);
     }
@@ -1008,9 +1037,9 @@ fn kind_color_picker<'a>(
         .width(Fill)
         .on_press(pick(None))
         .style(if selected.is_none() {
-            button::primary
+            crate::ui::controls::primary
         } else {
-            button::secondary
+            crate::ui::controls::secondary
         });
     swatches.push(reset).into()
 }
@@ -1037,7 +1066,7 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     }
     for email in &accounts.emails {
         let remove = button(text("Remove").size(metrics.label()))
-            .style(button::secondary)
+            .style(crate::ui::controls::secondary)
             .on_press(Message::Accounts(accounts::Action::Remove(email.clone())));
         let entry: Element<'a, Message> = if metrics.breakpoint.is_compact() {
             column![text(email.as_str()).size(metrics.label()), remove]
@@ -1067,7 +1096,7 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .width(Fill),
     )
     .width(Fill)
-    .style(button::primary);
+    .style(crate::ui::controls::primary);
     if !accounts.connecting {
         add = add.on_press(Message::Accounts(accounts::Action::Add));
     }
@@ -1139,6 +1168,33 @@ pub(super) fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> El
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reservation_switches_are_reachable_and_independent_at_narrow_widths() {
+        use crate::{app, config::Config, theme::Catalog};
+        use iced_test::{Simulator, core::Settings};
+
+        for width in [180.0, 420.0] {
+            let mut state = State::new(Config::default(), Catalog::built_in());
+            let size = iced::Size::new(width, 400.0);
+            let metrics = Metrics::of(size);
+            let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
+            ui.click(iced::widget::Id::from("dock-reservation")).unwrap();
+            for message in ui.into_messages() {
+                let _ = app::update(&mut state, message);
+            }
+            assert!(state.config.views.dock_reserve_space);
+            assert!(!state.config.views.panel_reserve_space);
+
+            let mut ui = Simulator::with_size(Settings::default(), size, panel(&state, &metrics));
+            ui.click(iced::widget::Id::from("panel-reservation")).unwrap();
+            for message in ui.into_messages() {
+                let _ = app::update(&mut state, message);
+            }
+            assert!(state.config.views.dock_reserve_space);
+            assert!(state.config.views.panel_reserve_space);
+        }
+    }
 
     #[test]
     fn layout_number_buttons_step_and_stop_at_the_limits() {

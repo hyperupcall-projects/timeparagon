@@ -4,7 +4,7 @@
 //! typed. The size of it is the size of the text on this page and nothing
 //! else: the rest of the interface is left as it is drawn.
 
-use iced::widget::{Space, button, column, container, row, scrollable, text, text_editor};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor};
 use iced::{Element, Fill, Length};
 
 use crate::app::{Message, State};
@@ -34,22 +34,20 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .size(size)
         .height(Fill);
 
-    // The size control sits under the tabs, where it is next to the text it
-    // changes. In a narrow window the label is left off, as there is no room
-    // for it and the buttons say what they do.
-    let mut controls = row![].spacing(metrics.spacing).align_y(iced::Center);
-
-    if !metrics.breakpoint.is_compact() {
-        controls = controls.push(
-            text("Text size")
-                .size(metrics.label())
-                .style(text::secondary),
-        );
-    }
-
-    let controls = controls
-        .push(Space::new().width(Fill))
-        .push(text_size(state, metrics));
+    let controls = row![
+        super::controls::section_heading(
+            if metrics.breakpoint.is_compact() {
+                "Note"
+            } else {
+                "Notepad"
+            },
+            None,
+            metrics.label() + 4.0
+        ),
+        text_size(state, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(iced::Center);
 
     let mut body = column![controls, editor];
     if let Some(links) = super::links::for_editor(&state.config.notepad.text, metrics.label()) {
@@ -106,7 +104,7 @@ fn size_button<'a>(
         .width(Length::Fixed(metrics.icon_button()))
         .height(Length::Fixed(metrics.icon_button()))
         .padding(0.0)
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
 
     if enabled {
         button.on_press(message).into()

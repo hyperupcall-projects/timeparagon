@@ -7,6 +7,7 @@
 pub mod alarms;
 pub mod brain_dump;
 pub mod calendar;
+pub mod controls;
 pub mod flash;
 pub mod habits;
 pub mod inbox;
@@ -150,12 +151,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
                             .width(Fill)
                             .height(44)
                             .padding(0)
-                            .style(button::secondary)
+                            .style(crate::ui::controls::secondary)
                             .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
                         text("Add task").size(12),
                         tooltip::Position::Top,
                     )
-                    .style(container::rounded_box),
+                    .style(crate::ui::controls::surface),
                 )
                 .id("panel-add-task")
                 .width(Length::Fixed(footer_width))
@@ -227,6 +228,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 iced::Point::new(pointer.x - inset.x, pointer.y - inset.y),
                 size,
             ));
+        }
+        if let Some(picker) = &state.picker {
+            layers.push(controls::overlay(picker, &metrics));
         }
         iced::widget::stack(layers).into()
     });
@@ -612,9 +616,9 @@ fn tab<'a>(
     .padding(Padding::from([0.0, fit.pad]))
     .on_press(message)
     .style(if active {
-        button::primary
+        crate::ui::controls::primary
     } else {
-        button::secondary
+        crate::ui::controls::secondary
     })
     .into()
 }
@@ -636,9 +640,9 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .width(Fill)
                 .on_press(Message::ScreenSelected(screen))
                 .style(if state.screen == screen {
-                    button::primary
+                    crate::ui::controls::primary
                 } else {
-                    button::secondary
+                    crate::ui::controls::secondary
                 }),
         );
     }
@@ -647,18 +651,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let card = container(panel)
         .width(Length::Fixed(width))
         .padding(6.0)
-        .style(|theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        });
+        .style(crate::ui::controls::surface);
 
     let aligned = column![
         Space::new().height(tabs_height(state, metrics) + metrics.spacing),

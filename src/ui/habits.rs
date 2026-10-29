@@ -8,7 +8,7 @@
 use iced::widget::{
     Space, button, column, container, mouse_area, row, scrollable, stack, text, text_input,
 };
-use iced::{Alignment, Color, Element, Fill, Length, Theme};
+use iced::{Alignment, Color, Element, Fill};
 
 use crate::app::{Message, State};
 use crate::calendar::colors;
@@ -29,19 +29,15 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         new = new.on_press(msg(Action::New));
     }
 
-    let mut body = column![
-        row![
-            text("Habits").size(metrics.label() + 3.0).width(Fill),
-            new,
-        ]
+    let title = super::controls::page_heading(
+        "Habits",
+        "Build a rhythm for recurring work",
+        Some(state.habits.habits.len()),
+        metrics,
+    );
+    let mut body = column![super::controls::page_toolbar(title, new.into(), metrics)]
         .spacing(metrics.spacing)
-        .align_y(Alignment::Center),
-        text("Recurring events on the TimeSlay calendar. Open one to change its name, time or repeat schedule.")
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
+        .width(Fill);
 
     if let Some(error) = &state.habits.error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
@@ -79,26 +75,13 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .into()
 }
 
-fn card_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        border: iced::Border {
-            color: palette.background.strong.color,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    }
-}
-
 /// One habit: its color, name, repeat summary and time, with its actions.
 fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a, Message> {
     let color = habit.color(&state.config.calendar);
     let mut edit = button(text("Edit").size(metrics.label())).padding([2, 6]);
     let mut delete = button(text("Delete").size(metrics.label()))
         .padding([2, 6])
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
     if !state.habits.busy {
         edit = edit.on_press(msg(Action::Edit(habit.id.clone())));
         delete = delete.on_press(msg(Action::DeleteRequested(habit.id.clone())));
@@ -106,17 +89,37 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
 
     let actions = row![edit, delete].spacing(6).align_y(Alignment::Center);
 
-    let header = row![
+    let title = row![
         super::calendar::color_circle(color),
-        text(&habit.title).size(metrics.label() + 1.0).width(Fill),
-        actions,
+        text(&habit.title)
+            .size(metrics.label() + 1.0)
+            .font(iced::Font {
+                weight: iced::font::Weight::Semibold,
+                ..iced::Font::DEFAULT
+            })
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .width(Fill),
     ]
     .spacing(6)
-    .align_y(Alignment::Center);
+    .align_y(Alignment::Center)
+    .width(Fill);
+    let header: Element<'a, Message> = if metrics.size.width < 360.0 {
+        column![title, actions].spacing(6).into()
+    } else {
+        row![title, actions]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+    };
 
     let mut details = column![header].spacing(2).width(Fill);
     details = details.push(
         text(habit.recurrence_label())
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    );
+    details = details.push(
+        text(habit.time_label())
             .size(metrics.label() - 1.0)
             .style(text::secondary),
     );
@@ -127,16 +130,11 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
                 .style(text::secondary),
         );
     }
-    details = details.push(
-        text(habit.time_label())
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
-    );
 
     container(details)
         .padding([6, 8])
         .width(Fill)
-        .style(card_style)
+        .style(super::controls::card_surface)
         .into()
 }
 
@@ -145,23 +143,17 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     let Some(draft) = &state.habits.draft else {
         return Space::new().into();
     };
-    let card = container(scrollable(form(draft, state.habits.busy, metrics)))
-        .padding(16)
-        .width(Fill)
-        .max_width(480)
-        .max_height((metrics.size.height - 32.0).max(80.0))
-        .style(|theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.base.color.into()),
-                text_color: Some(palette.background.base.text),
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        });
+    let card = container(scrollable(form(
+        draft,
+        &state.form_editors[2],
+        state.habits.busy,
+        metrics,
+    )))
+    .padding(16)
+    .width(Fill)
+    .max_width(480)
+    .max_height((metrics.size.height - 32.0).max(80.0))
+    .style(crate::ui::controls::surface);
     overlay(card.into(), msg(Action::CancelEdit))
 }
 
@@ -181,7 +173,7 @@ pub fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'
             .width(Fill),
     )
     .width(Fill)
-    .style(button::secondary);
+    .style(crate::ui::controls::secondary);
     if !state.habits.busy {
         delete = delete.on_press(msg(Action::DeleteConfirmed(id.to_owned())));
     }
@@ -189,7 +181,7 @@ pub fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         button(text("Cancel").size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(msg(Action::DeleteCancelled))
-            .style(button::secondary),
+            .style(crate::ui::controls::secondary),
         delete,
     ]
     .spacing(metrics.spacing)
@@ -212,18 +204,7 @@ pub fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     .padding(16)
     .width(Fill)
     .max_width(360)
-    .style(|theme: &iced::Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(palette.background.base.color.into()),
-            text_color: Some(palette.background.base.text),
-            border: iced::Border {
-                radius: 10.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    });
+    .style(crate::ui::controls::surface);
 
     overlay(card.into(), msg(Action::DeleteCancelled))
 }
@@ -253,7 +234,12 @@ fn overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Mess
     stack![backdrop, foreground].into()
 }
 
-fn form<'a>(draft: &'a Draft, busy: bool, metrics: &Metrics) -> Element<'a, Message> {
+fn form<'a>(
+    draft: &'a Draft,
+    notes: &'a iced::widget::text_editor::Content,
+    busy: bool,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
     let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
 
     let mut title = text_input("Habit name", &draft.title)
@@ -274,37 +260,40 @@ fn form<'a>(draft: &'a Draft, busy: bool, metrics: &Metrics) -> Element<'a, Mess
         label("Name"),
         title,
         label("Notes (optional)"),
-        text_input("Notes", &draft.notes)
-            .on_input(|value| msg(Action::Notes(value)))
+        iced::widget::text_editor(notes)
+            .placeholder("Notes…")
+            .on_action(|a| Message::FormEdited(2, a))
             .size(metrics.label())
-            .width(Fill),
+            .height(100)
+            .padding(8),
     ]
     .spacing(6);
 
-    // Date and times: one column when narrow, one row when there is room.
-    let date = text_input("YYYY-MM-DD", &draft.date)
-        .on_input(|value| msg(Action::Date(value)))
-        .size(metrics.label());
-    let start = text_input("HH:MM", &draft.start)
-        .on_input(|value| msg(Action::Start(value)))
-        .size(metrics.label());
-    let end = text_input("HH:MM", &draft.end)
-        .on_input(|value| msg(Action::End(value)))
-        .size(metrics.label());
-    let when: Element<'a, Message> = if metrics.breakpoint.is_compact() {
-        column![
-            date,
-            row![label("From"), start].spacing(6),
-            row![label("To"), end].spacing(6)
+    // Keep the date above the time pair so long dates fit narrow panels.
+    let date = super::controls::date(&draft.date, false, false, true, metrics.label(), |value| {
+        msg(Action::Date(value))
+    });
+    let start = container(super::controls::time(
+        &draft.start,
+        true,
+        metrics.label(),
+        |value| msg(Action::Start(value)),
+    ));
+    let end = container(super::controls::time(
+        &draft.end,
+        true,
+        metrics.label(),
+        |value| msg(Action::End(value)),
+    ));
+    let when = column![
+        date,
+        row![
+            column![label("Start"), start].spacing(4).width(Fill),
+            column![label("End"), end].spacing(4).width(Fill)
         ]
-        .spacing(4)
-        .into()
-    } else {
-        row![date.width(Length::FillPortion(2)), start, end]
-            .spacing(6)
-            .align_y(Alignment::Center)
-            .into()
-    };
+        .spacing(8)
+    ]
+    .spacing(8);
     body = body.push(label("Day and time")).push(when);
 
     // Repeat: the shared controls, so habits read and write their schedule
@@ -339,7 +328,7 @@ fn form<'a>(draft: &'a Draft, busy: bool, metrics: &Metrics) -> Element<'a, Mess
     let cancel = button(text("Cancel").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .on_press(msg(Action::CancelEdit))
-        .style(button::secondary);
+        .style(crate::ui::controls::secondary);
 
     body.push(row![save, cancel].spacing(8).width(Fill)).into()
 }

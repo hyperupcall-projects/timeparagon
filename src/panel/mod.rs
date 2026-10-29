@@ -26,12 +26,13 @@
 //! was (its tab, any open details pane, its width) and nearly instantly. The
 //! dock holds no state worth keeping: hiding it ends the process.
 //!
-//! Where the panel lands is the compositor's business. [`config`] records the
-//! edge and width we ask for; see the packaging README for the one caveat on
-//! Wayland, where a client cannot dictate its own position.
+//! On Wayland, [`layer`] anchors the panel directly and optionally reserves
+//! its width. The standard-window fallback uses a KWin position rule.
+//! [`config`] records the requested edge and width.
 
 mod config;
 mod hotkey;
+pub mod layer;
 
 pub use config::{Action, PanelConfig, Side};
 pub use hotkey::{rebind, same_shortcut, validate};
