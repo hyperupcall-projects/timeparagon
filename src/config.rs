@@ -39,6 +39,7 @@ pub struct Config {
     pub travel: TravelSettings,
     #[serde(default, skip_serializing_if = "crate::task_work::WorkLog::is_empty")]
     pub task_work: crate::task_work::WorkLog,
+    pub pomodoro: crate::pomodoro::Pomodoro,
     /// The temporary todo scratchpad. It is left out of the file while it is
     /// empty, so a config that never used it stays as it was.
     #[serde(default, skip_serializing_if = "TodoList::is_empty")]
@@ -65,6 +66,7 @@ impl Default for Config {
             projects: ProjectsSettings::default(),
             travel: TravelSettings::default(),
             task_work: crate::task_work::WorkLog::default(),
+            pomodoro: crate::pomodoro::Pomodoro::default(),
             todos: TodoList::default(),
             notepad: Notepad::default(),
             brain_dump: crate::brain_dump::Dumps::default(),

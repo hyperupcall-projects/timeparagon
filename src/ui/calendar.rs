@@ -130,6 +130,231 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     stack![content, overlay].into()
 }
 
+/// A month overview with whole Monday–Sunday weeks. Each date opens its
+/// timeline; event and task actions keep the month anchored in place.
+pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let dates = calendar::month_grid(state.week_anchor);
+    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let grid_width = (metrics.size.width - metrics.padding * 2.0).max(840.0);
+    let cell_width = grid_width / 7.0;
+    let cell_height = ((metrics.size.height - 160.0) / (dates.len() / 7) as f32).max(135.0);
+    let cell_metrics = Metrics::of(Size::new(cell_width - 12.0, cell_height));
+    let weekdays = row(
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(|day| {
+            container(text(day).size(cell_metrics.label()).center().width(Fill))
+                .width(Length::Fixed(cell_width))
+                .into()
+        }),
+    );
+    let weeks = dates.chunks(7).map(|week| {
+        row(week.iter().map(|&day| {
+            let in_month = day.month() == state.week_anchor.month();
+            let label = if in_month {
+                day.format("%-d").to_string()
+            } else {
+                day.format("%b %-d").to_string()
+            };
+            let heading = button(text(label).size(cell_metrics.label()).center().width(Fill))
+                .width(Fill)
+                .padding(2)
+                .on_press(Message::CalendarDayOpened(day))
+                .style(if day == today {
+                    button::primary
+                } else if day == state.calendar.day {
+                    button::secondary
+                } else {
+                    button::text
+                });
+            let mut events = column![].spacing(3).width(Fill);
+            for event in state
+                .calendar
+                .all_day_events_on(day, &state.config.calendar)
+            {
+                // Overdue and undated tasks belong in the pending list rather
+                // than appearing in every date of a month.
+                if event.is_task() {
+                    if event.start.date_naive() == day {
+                        events = events.push(weekly_task_chip(state, event, &cell_metrics));
+                    }
+                } else {
+                    events = events.push(all_day_chip(event, &cell_metrics));
+                }
+            }
+            for event in state.calendar.timed_events_on(day, &state.config.calendar) {
+                let label = format!("{} {}", event.start.format("%-I:%M%P"), event.title);
+                let color = event.color;
+                events = events.push(
+                    button(
+                        text(label)
+                            .size(cell_metrics.label())
+                            .wrapping(text::Wrapping::None),
+                    )
+                    .width(Fill)
+                    .padding([3, 4])
+                    .on_press(Message::EventOpened(event.id.clone()))
+                    .style(move |theme, status| {
+                        let mut style = button::secondary(theme, status);
+                        style.border = iced::Border {
+                            color,
+                            width: 1.0,
+                            radius: 3.0.into(),
+                        };
+                        style
+                    }),
+                );
+            }
+            let cell: Element<'a, Message> =
+                container(column![heading, scrollable(events).height(Fill),].spacing(3))
+                    .padding(5)
+                    .width(Length::Fixed(cell_width))
+                    .height(Length::Fixed(cell_height))
+                    .style(move |theme: &Theme| {
+                        let palette = theme.extended_palette();
+                        container::Style {
+                            background: Some(
+                                if in_month {
+                                    palette.background.base.color
+                                } else {
+                                    palette.background.weak.color
+                                }
+                                .into(),
+                            ),
+                            border: iced::Border {
+                                color: palette.background.strong.color,
+                                width: 0.5,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .into();
+            Element::from(
+                mouse_area(cell)
+                    .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay)),
+            )
+            .map(move |message| Message::WeekDayAction(day, Box::new(message)))
+        }))
+        .into()
+    });
+    let grid = scrollable(column![weekdays, column(weeks)].width(Length::Fixed(grid_width)))
+        .direction(scrollable::Direction::Both {
+            vertical: scrollable::Scrollbar::new(),
+            horizontal: scrollable::Scrollbar::new(),
+        })
+        .width(Fill)
+        .height(Fill);
+    let title = button(text(state.week_anchor.format("%B %Y ▾").to_string()).size(metrics.label()))
+        .on_press(Message::CalendarMonthToggled)
+        .style(button::secondary);
+    let menu = button(text("Menu").size(metrics.label()))
+        .on_press(Message::CalendarMenuToggled)
+        .style(button::secondary);
+    let controls = row![
+        nav_button("◀", Message::CalendarViewMonthShift(-1), metrics),
+        button(text("Today").size(metrics.label()))
+            .on_press(Message::CalendarDaySelected(today))
+            .style(button::secondary),
+        nav_button("▶", Message::CalendarViewMonthShift(1), metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
+    let heading: Element<'a, Message> = if metrics.size.width < 500.0 {
+        column![
+            row![title, Space::new().width(Fill), menu].align_y(Alignment::Center),
+            controls
+        ]
+        .spacing(metrics.spacing)
+        .into()
+    } else {
+        row![title, controls, Space::new().width(Fill), menu]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center)
+            .into()
+    };
+    let mut content = column![
+        heading,
+        text(state.calendar.status_line())
+            .size(metrics.label() - 1.0)
+            .style(if state.calendar.error.is_some() {
+                text::danger
+            } else {
+                text::secondary
+            }),
+        pending_button(state, state.calendar.day, metrics.label()),
+        text("Select a date to open its timeline.")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+        grid,
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill);
+    if let Some(dismiss) = dismiss_bar(state, metrics) {
+        content = content.push(dismiss);
+    }
+    let mut layers: Vec<Element<'a, Message>> = vec![content.into()];
+    if state.calendar.open_event.is_some() || state.timeblocking.block.is_some() {
+        let details = state.calendar.open_event.is_some();
+        let dismiss = if details {
+            Message::EventClosed
+        } else {
+            Message::TimeBlocking(crate::timeblocking::Action::Close)
+        };
+        layers.push(
+            mouse_area(container(Space::new()).width(Fill).height(Fill).style(|_| {
+                container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.35).into()),
+                    ..Default::default()
+                }
+            }))
+            .on_press(dismiss)
+            .into(),
+        );
+        let width = (if details {
+            state.config.views.detail_width()
+        } else {
+            state.config.views.time_block_width()
+        })
+        .min(metrics.size.width);
+        let pane_metrics = Metrics::of(Size::new(width, metrics.size.height));
+        let pane = if details {
+            scrollable(details_pane(state, &pane_metrics))
+                .height(Fill)
+                .into()
+        } else {
+            super::timeblocking::panel(state, &pane_metrics)
+        };
+        layers.push(
+            row![
+                Space::new().width(Fill),
+                container(pane)
+                    .width(Length::Fixed(width))
+                    .height(Fill)
+                    .style(|theme: &Theme| container::Style {
+                        background: Some(theme.extended_palette().background.base.color.into()),
+                        ..Default::default()
+                    })
+            ]
+            .height(Fill)
+            .into(),
+        );
+    }
+    let overlay = if state.calendar.draft.is_some() {
+        draft_overlay(state, metrics)
+    } else if let Some(day) = state.calendar.pending_open {
+        pending_overlay(state, metrics, day)
+    } else if state.calendar.month_open {
+        month_overlay(state, metrics)
+    } else if state.calendar.menu_open {
+        menu_overlay(state, metrics)
+    } else {
+        Space::new().width(0).height(0).into()
+    };
+    layers.push(overlay);
+    iced::widget::Stack::with_children(layers).into()
+}
+
 pub(crate) fn weekly_view_width(settings: &crate::config::CalendarSettings) -> f32 {
     let columns = (settings.weekly_days() + 1) as f32 * settings.weekly_day_width() as f32;
     let padding = Metrics::of(Size::new(columns, 0.0)).padding;
@@ -1299,7 +1524,9 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     let month = state.calendar.month;
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
     let weekly = state.weekly && state.screen == crate::app::Screen::Calendar;
-    let selected = if weekly {
+    let selected = if state.monthly {
+        state.week_anchor
+    } else if weekly {
         state.week_hover.unwrap_or(state.week_anchor)
     } else {
         state.calendar.day

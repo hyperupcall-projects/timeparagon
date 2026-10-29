@@ -84,6 +84,9 @@ pub enum Action {
     StartWork(String),
     StopWork(String),
     WorkTick,
+    PomodoroToggle,
+    PomodoroReset,
+    PomodoroMinutes(bool, i32),
     /// Open the editor for the work session at this index in the log.
     EditSession(usize),
     SessionStart(String),
@@ -323,7 +326,7 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
         .event(&id)
         .map(crate::calendar::EditDraft::from_event);
     state.timeblocking.block = Some(id);
-    if state.screen == crate::app::Screen::Calendar && state.weekly {
+    if state.screen == crate::app::Screen::Calendar && (state.weekly || state.monthly) {
         return Task::none();
     }
     if state.timeblocking.original_width.is_none() {
@@ -343,6 +346,22 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
     }
     Task::none()
 }
+fn advance_pomodoro(state: &mut State, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let eligible: std::collections::HashSet<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|e| e.is_task() && task_status(e) == TaskStatus::Active)
+        .map(task_key)
+        .collect();
+    state
+        .config
+        .pomodoro
+        .advance(&mut state.config.task_work, now, |key| {
+            eligible.contains(key)
+        })
+}
+
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     // Triaging is a review step: the task cannot leave the Inbox until every
     // required field is filled in. Nothing is sent to Google when it is not.
@@ -389,7 +408,64 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::WorkTick => {
-            state.timeblocking.work_now = Some(chrono::Utc::now());
+            let now = chrono::Utc::now();
+            state.timeblocking.work_now = Some(now);
+            if advance_pomodoro(state, now) {
+                return crate::app::queue_save(state);
+            }
+            return Task::none();
+        }
+        Action::PomodoroToggle => {
+            let now = chrono::Utc::now();
+            advance_pomodoro(state, now);
+            let timer = &mut state.config.pomodoro;
+            if timer.running() {
+                timer.running_since = None;
+            } else {
+                timer.running_since = Some(now);
+                if timer.phase == crate::pomodoro::Phase::Work {
+                    // Existing manual tracking takes precedence on resume.
+                    if let Some(active) = state.config.task_work.active() {
+                        timer.target = Some(active.clone());
+                    }
+                    let eligible: std::collections::HashSet<_> = state
+                        .calendar
+                        .events
+                        .iter()
+                        .filter(|e| e.is_task() && task_status(e) == TaskStatus::Active)
+                        .map(task_key)
+                        .collect();
+                    timer.resume_task(&mut state.config.task_work, now, |key| {
+                        eligible.contains(key)
+                    });
+                } else {
+                    if let Some(active) = state.config.task_work.active() {
+                        timer.target = Some(active.clone());
+                    }
+                    state.config.task_work.stop_all(now);
+                }
+            }
+            state.timeblocking.work_now = Some(now);
+            return crate::app::queue_save(state);
+        }
+        Action::PomodoroReset => {
+            let now = chrono::Utc::now();
+            advance_pomodoro(state, now);
+            state.config.pomodoro.reset();
+            return crate::app::queue_save(state);
+        }
+        Action::PomodoroMinutes(work, delta) => {
+            let timer = &mut state.config.pomodoro;
+            if timer.fresh() {
+                let minutes = if work {
+                    &mut timer.work_minutes
+                } else {
+                    &mut timer.break_minutes
+                };
+                *minutes = (i64::from(*minutes) + i64::from(delta)).clamp(1, 180) as u32;
+                timer.remaining = timer.duration();
+                return crate::app::queue_save(state);
+            }
             return Task::none();
         }
         Action::EditSession(index) => {
@@ -497,6 +573,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::StartWork(id) => {
+            let now = chrono::Utc::now();
+            advance_pomodoro(state, now);
             let Some(task) = state
                 .calendar
                 .event(&id)
@@ -504,23 +582,44 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             else {
                 return Task::none();
             };
-            let now = chrono::Utc::now();
+            if state.config.pomodoro.running()
+                && state.config.pomodoro.phase == crate::pomodoro::Phase::Break
+            {
+                state.config.pomodoro.target = Some(crate::task_work::Session {
+                    task_key: task_key(task),
+                    task_title: task.title.clone(),
+                    block_key: metadata(task).block,
+                    started_at: now,
+                    stopped_at: Some(now),
+                });
+                return crate::app::queue_save(state);
+            }
             state.config.task_work.start(
                 task_key(task),
                 task.title.clone(),
                 metadata(task).block,
                 now,
             );
+            state.config.pomodoro.target = state.config.task_work.active().cloned();
             state.timeblocking.work_now = Some(now);
             return crate::app::queue_save(state);
         }
         Action::StopWork(id) => {
+            let now = chrono::Utc::now();
+            advance_pomodoro(state, now);
             if let Some(task) = state.calendar.event(&id) {
-                state
+                let key = task_key(task);
+                state.config.task_work.stop(&key, now);
+                if state
                     .config
-                    .task_work
-                    .stop(&task_key(task), chrono::Utc::now());
-                state.timeblocking.work_now = Some(chrono::Utc::now());
+                    .pomodoro
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.task_key == key)
+                {
+                    state.config.pomodoro.target = None;
+                }
+                state.timeblocking.work_now = Some(now);
                 return crate::app::queue_save(state);
             }
             return Task::none();
@@ -797,7 +896,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         .calendar
                         .events
                         .retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
-                    if state.screen == crate::app::Screen::Calendar && state.weekly {
+                    if state.screen == crate::app::Screen::Calendar
+                        && (state.weekly || state.monthly)
+                    {
                         state.calendar.replace_cached_task(&id, &event);
                         refresh_week = true;
                     }
@@ -2286,6 +2387,44 @@ mod tests {
         });
         state.timeblocking.focus = Some("standup".into());
         state
+    }
+
+    #[test]
+    fn pomodoro_controls_leave_manual_tracking_independent_and_select_tasks_on_break() {
+        let mut state = estimate_state();
+        let _ = update(&mut state, Action::StartWork("task:deep".into()));
+        assert!(state.config.task_work.active().is_some());
+        assert!(!state.config.pomodoro.running());
+        let _ = update(&mut state, Action::PomodoroMinutes(true, -24));
+        assert_eq!(state.config.pomodoro.remaining, 60);
+        let _ = update(&mut state, Action::PomodoroToggle);
+        assert!(state.config.pomodoro.running());
+        let _ = update(&mut state, Action::PomodoroToggle);
+        assert!(!state.config.pomodoro.running());
+        assert!(state.config.task_work.active().is_some());
+        let _ = update(&mut state, Action::PomodoroReset);
+        assert!(state.config.task_work.active().is_some());
+        let now = chrono::Utc::now();
+        state.config.pomodoro.running_since = Some(now);
+        assert!(advance_pomodoro(
+            &mut state,
+            now + chrono::Duration::seconds(60)
+        ));
+        assert!(state.config.task_work.active().is_none());
+        assert_eq!(state.config.pomodoro.phase, crate::pomodoro::Phase::Break);
+        let _ = update(&mut state, Action::StartWork("task:deep".into()));
+        assert!(state.config.task_work.active().is_none());
+        assert_eq!(
+            state.config.pomodoro.target.as_ref().unwrap().task_key,
+            "100"
+        );
+        assert!(advance_pomodoro(
+            &mut state,
+            now + chrono::Duration::seconds(360)
+        ));
+        assert!(state.config.task_work.active().is_some());
+        let _ = update(&mut state, Action::CloseView);
+        assert!(state.config.pomodoro.running());
     }
 
     #[test]

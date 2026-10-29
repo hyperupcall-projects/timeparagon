@@ -41,6 +41,7 @@ pub mod window_effect;
 
 pub mod timeblocking;
 
+pub mod pomodoro;
 pub mod task_work;
 
 pub mod task_db;

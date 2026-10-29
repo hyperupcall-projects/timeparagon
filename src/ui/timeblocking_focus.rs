@@ -84,7 +84,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             ],
         ]
         .spacing(5);
-        let mut body = column![header].spacing(10);
+        let mut body = column![header, pomodoro(state)].spacing(10);
         if let Some(error) = &state.calendar.error {
             body = body.push(text(error).size(12).style(text::danger));
         }
@@ -191,6 +191,72 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .center_x(Fill)
     .center_y(Fill);
     stack![backdrop, foreground].into()
+}
+
+/// One app-wide clock: changing blocks does not create competing timers.
+fn pomodoro(state: &State) -> Element<'_, Message> {
+    let timer = &state.config.pomodoro;
+    let phase = match timer.phase {
+        crate::pomodoro::Phase::Work => "Work",
+        crate::pomodoro::Phase::Break => "Break",
+    };
+    let mut controls = row![
+        text(format!(
+            "Pomodoro · {phase} · {}",
+            task_work::clock(timer.remaining)
+        ))
+        .size(18),
+        button(if timer.running() {
+            "Pause"
+        } else if timer.fresh() {
+            "Start Pomodoro"
+        } else {
+            "Resume"
+        })
+        .on_press(msg(Action::PomodoroToggle)),
+        button("Reset")
+            .on_press(msg(Action::PomodoroReset))
+            .style(button::text),
+    ]
+    .spacing(8)
+    .align_y(iced::Center);
+    for (work, minutes, label) in [
+        (true, timer.work_minutes, "Work"),
+        (false, timer.break_minutes, "Break"),
+    ] {
+        let mut minus = button("−").style(button::text);
+        let mut plus = button("+").style(button::text);
+        if timer.fresh() {
+            minus = minus.on_press(msg(Action::PomodoroMinutes(work, -1)));
+            plus = plus.on_press(msg(Action::PomodoroMinutes(work, 1)));
+        }
+        controls = controls.push(
+            row![text(format!("{label}: {minutes}m")).size(12), minus, plus].align_y(iced::Center),
+        );
+    }
+    let mut body = column![
+        controls.wrap(),
+        text(format!(
+            "Pomodoro totals · Work {} · Break {}",
+            task_work::clock(timer.work_seconds),
+            task_work::clock(timer.break_seconds)
+        ))
+        .size(12),
+    ]
+    .spacing(4);
+    let help = if timer.running() && timer.phase == crate::pomodoro::Phase::Break {
+        match &timer.target {
+            Some(target) => format!("On break · Next task: {}. Choose another task with ‘Use after break’.", target.task_title),
+            None => "On break · Choose a task with ‘Use after break’ to resume it in the next work session.".into(),
+        }
+    } else {
+        "One timer across all blocks. Task Start/Stop also works independently. Breaks stop task work; work sessions resume it. Pause/Reset affects only the Pomodoro clock.".into()
+    };
+    body = body.push(text(help).size(11).style(text::secondary));
+    container(body)
+        .padding(10)
+        .style(container::rounded_box)
+        .into()
 }
 
 /// Edit the exact start and end of a work session. A blank end keeps the
@@ -655,12 +721,23 @@ fn task_card<'a>(
     ]
     .spacing(4);
     if !task.completed {
-        let mut control =
-            button(text(if running { "Stop" } else { "Start" }).size(13)).style(if running {
-                button::danger
+        let mut control = button(
+            text(if running {
+                "Stop"
+            } else if state.config.pomodoro.running()
+                && state.config.pomodoro.phase == crate::pomodoro::Phase::Break
+            {
+                "Use after break"
             } else {
-                button::primary
-            });
+                "Start"
+            })
+            .size(13),
+        )
+        .style(if running {
+            button::danger
+        } else {
+            button::primary
+        });
         if running || !busy {
             control = control.on_press(msg(if running {
                 Action::StopWork(task.id.clone())

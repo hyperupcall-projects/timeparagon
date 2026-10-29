@@ -30,22 +30,25 @@ Same for the week. Notice how yesterday can be included in this view.
 - View your time:
 	- Day view
 	- Week view
-	- Month view (TODO)
-	- Custom views for week and month view (TODO)
-		- Based on query; omit private event details (TODO)
+	- Month view
+	- Custom views for week and month view. (TODO)
+		- Based on query; omit private event details. (TODO)
 - Manage your time:
 	- Events
-		- Integrates with meeting software like Zoom and Google Meet (todo)
+		- Integrates with meeting software like Zoom and Google Meet. (TODO)
+		- Uses location data to pad event with travel time. (WIP)
 	- Time blocks
 		- Assign tasks to time blocks.
 		- Brain dump.
-		- Pomodoro timers (TODO)
+		- Pomodoro timer in the time block view: configurable work/break lengths, separate elapsed totals, and automatic task stop/resume at phase boundaries. Task tracking also works independently. Pause freezes only the Pomodoro clock; Reset clears its totals. The shared timer continues across blocks and while the popup is closed.
 	- Habits
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
 	
 - Manage tasks:
-	- Create tasks with Todoist-like syntax and voice input (TODO)
-	- Create tasks from URLs and within other apps (Gmail, Slack) (WIP)
+	- Create tasks:
+		- With Todoist-like syntax and voice input. (TODO)
+		- From Gmail URLs
+		- Within Slack (WIP)
 	- Triage tasks so they're discoverable later.
 	- Workflow to manage tasks not done in days prior (TODO)
 	- Send low-priority tasks to a backlog.
@@ -74,7 +77,6 @@ cargo run -p time-slay-dioxus
 
 ## Next Up
 
-- Go back to being able to toggle colors of the google tasks lists. But, ignore the ones that are managead by the app.
 - Better UI (shadcdn/pure.css)
 - Having the dock take up space on dekstop
 - File attachments/file:// links & notes integration for event/task/habit etc.

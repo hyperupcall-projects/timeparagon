@@ -503,10 +503,8 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
     let mut legs: Vec<Leg> = Vec::new();
 
     if state.travel.show {
-        if state.screen == crate::app::Screen::Calendar && state.weekly {
-            for day in
-                crate::calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days())
-            {
+        if state.screen == crate::app::Screen::Calendar && (state.weekly || state.monthly) {
+            for day in state.calendar_dates() {
                 legs.extend(day_hops(state, day).into_iter().map(|hop| hop.leg));
             }
         } else {

@@ -204,6 +204,7 @@ pub struct State {
 
     pub screen: Screen,
     pub weekly: bool,
+    pub monthly: bool,
     /// Whether the More menu under the right-hand navigation group is open.
     pub more_menu_open: bool,
     pub week_anchor: chrono::NaiveDate,
@@ -296,6 +297,9 @@ pub enum Message {
     ScreenSelected(Screen),
     MoreMenuToggled,
     CalendarModeSelected(bool),
+    CalendarMonthViewSelected,
+    CalendarViewMonthShift(i32),
+    CalendarDayOpened(chrono::NaiveDate),
     WeekDayAction(chrono::NaiveDate, Box<Message>),
     WeekHover(Option<chrono::NaiveDate>),
     WeekScrolled(f32),
@@ -376,10 +380,9 @@ pub enum Message {
     CalendarResyncRequested,
     CalendarSynced(Result<calendar::Snapshot, String>),
     CalendarSyncedAt(u64, Result<calendar::Snapshot, String>),
-    CalendarWeekSynced(
+    CalendarRangeSynced(
         u64,
-        chrono::NaiveDate,
-        u32,
+        Vec<chrono::NaiveDate>,
         Result<calendar::Snapshot, String>,
     ),
     CalendarTick,
@@ -550,6 +553,7 @@ impl State {
             alarms: alarms::Alarms::default(),
             screen: Screen::Calendar,
             weekly: false,
+            monthly: false,
             more_menu_open: false,
             week_anchor: calendar::day_at(Local::now(), day_end_hour),
             week_hover: None,
@@ -619,13 +623,26 @@ impl State {
         }
     }
 
-    fn weekly_active(&self) -> bool {
-        self.screen == Screen::Calendar && self.weekly
+    fn range_view_active(&self) -> bool {
+        self.screen == Screen::Calendar && (self.weekly || self.monthly)
+    }
+
+    pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
+        if self.monthly {
+            calendar::month_grid(self.week_anchor)
+        } else {
+            calendar::week_dates(self.week_anchor, self.config.calendar.weekly_days())
+        }
     }
 
     fn weekly_window_width(&self) -> f32 {
-        let width = (ui::calendar::weekly_view_width(&self.config.calendar) + self.screen_margin())
-            .max(self.calendar_width() + self.screen_margin());
+        let view_width = if self.monthly {
+            1050.0
+        } else {
+            ui::calendar::weekly_view_width(&self.config.calendar)
+        };
+        let width =
+            (view_width + self.screen_margin()).max(self.calendar_width() + self.screen_margin());
         match self.monitor_size {
             Some(size) if size.width.is_finite() && size.width > 0.0 => width.min(size.width),
             _ => width,
@@ -636,7 +653,7 @@ impl State {
 /// Resize the panes together, keeping the panel's transparent screen inset
 /// outside the calendar's configured width.
 fn apply_view_sizes(state: &mut State) -> Task<Message> {
-    let weekly = state.weekly_active();
+    let weekly = state.range_view_active();
     let base = if weekly {
         state.weekly_window_width()
     } else {
@@ -880,7 +897,7 @@ fn reconcile_detail_pane(state: &mut State) -> Task<Message> {
 }
 
 fn detail_pane_visible(state: &State) -> bool {
-    state.calendar.open_event.is_some() && shows_details(state.screen) && !state.weekly_active()
+    state.calendar.open_event.is_some() && shows_details(state.screen) && !state.range_view_active()
 }
 
 fn resize_for_week_transition(
@@ -888,7 +905,7 @@ fn resize_for_week_transition(
     was_weekly: bool,
     close: Task<Message>,
 ) -> Task<Message> {
-    if was_weekly == state.weekly_active() {
+    if was_weekly == state.range_view_active() {
         return close;
     }
 
@@ -906,7 +923,7 @@ fn resize_for_week_transition(
     state.weekly_width_restoring = restoring.then_some((restored_width, Instant::now()));
     state.weekly_resize_pending = false;
     let resize = close.chain(apply_view_sizes(state));
-    if state.weekly_active() {
+    if state.range_view_active() {
         if let Some(id) = state.main_window {
             return resize.chain(
                 window::monitor_size(id).map(move |size| Message::WeekMonitorSized(id, size)),
@@ -969,9 +986,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::ScreenSelected(screen) => {
-            let was_weekly = state.weekly_active();
-            let returning_to_week =
-                screen == Screen::Calendar && state.screen != Screen::Calendar && state.weekly;
+            let was_weekly = state.range_view_active();
+            let returning_to_week = screen == Screen::Calendar
+                && state.screen != Screen::Calendar
+                && (state.weekly || state.monthly);
             state.view_layout_input = None;
             // Choosing a destination puts the More menu away.
             state.more_menu_open = false;
@@ -1012,8 +1030,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CalendarModeSelected(weekly) => {
-            let was_weekly = state.weekly_active();
-            let changed = state.weekly != weekly || state.screen != Screen::Calendar;
+            let was_weekly = state.range_view_active();
+            let changed =
+                state.monthly || state.weekly != weekly || state.screen != Screen::Calendar;
             let close = crate::timeblocking::close(state);
             state.calendar.open_event = None;
             state.calendar.month_open = false;
@@ -1022,7 +1041,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.week_hover = None;
             state.screen = Screen::Calendar;
             state.weekly = weekly;
+            state.monthly = false;
             let close = resize_for_week_transition(state, was_weekly, close);
+            let close = if was_weekly && weekly {
+                Task::batch([close, apply_view_sizes(state)])
+            } else {
+                close
+            };
             if changed {
                 state.week_anchor = state.calendar.day;
                 state.week_scroll_x = 0.0;
@@ -1038,6 +1063,50 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 close
             }
+        }
+
+        Message::CalendarMonthViewSelected => {
+            let was_wide = state.range_view_active();
+            let changed = !state.monthly || state.screen != Screen::Calendar;
+            let close = crate::timeblocking::close(state);
+            state.calendar.open_event = None;
+            state.calendar.month_open = false;
+            state.calendar.menu_open = false;
+            state.more_menu_open = false;
+            state.alarms.mode = false;
+            state.alarms.editor = None;
+            state.week_hover = None;
+            state.screen = Screen::Calendar;
+            state.weekly = false;
+            state.monthly = true;
+            if changed {
+                state.week_anchor = state.calendar.day;
+            }
+            let resize = resize_for_week_transition(state, was_wide, close);
+            let resize = if was_wide {
+                Task::batch([resize, apply_view_sizes(state)])
+            } else {
+                resize
+            };
+            Task::batch([resize, sync_calendar(state)])
+        }
+        Message::CalendarViewMonthShift(months) => {
+            let first = calendar::first_of_month(state.week_anchor);
+            let step = chrono::Months::new(months.unsigned_abs());
+            let day = if months >= 0 {
+                first.checked_add_months(step)
+            } else {
+                first.checked_sub_months(step)
+            };
+            if let Some(day) = day {
+                return dispatch(state, Message::CalendarDaySelected(day));
+            }
+            Task::none()
+        }
+        Message::CalendarDayOpened(day) => {
+            let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+            state.calendar.set_day(day, today);
+            dispatch(state, Message::CalendarModeSelected(false))
         }
 
         Message::WeekHover(day) => {
@@ -1553,7 +1622,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 || previous.views.detail_width != state.config.views.detail_width;
             let views_changed = pane_widths_changed
                 || (state.sidebar.is_some() && previous.views.margin != state.config.views.margin);
-            let weekly_size_changed = state.weekly_active()
+            let weekly_size_changed = state.range_view_active()
                 && (previous.calendar.weekly_days() != state.config.calendar.weekly_days()
                     || previous.calendar.weekly_day_width()
                         != state.config.calendar.weekly_day_width());
@@ -1641,7 +1710,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                         return Task::none();
                     };
                     let mut settings = sidebar_settings(panel, &state.config.views);
-                    if state.weekly_active() {
+                    if state.range_view_active() {
                         let width = state.weekly_window_width();
                         settings.size = Size::new(width, PANEL_FILL);
                         settings.min_size = Some(Size::new(
@@ -1704,7 +1773,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
 
             state.monitor_size = size;
-            if state.weekly_active() {
+            if state.range_view_active() {
                 if state.sidebar.is_some() {
                     if let Some(size) =
                         size.filter(|size| size.height.is_finite() && size.height > 0.0)
@@ -1756,7 +1825,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::WeekMonitorSized(id, size) => {
-            if state.main_window != Some(id) || !state.weekly_active() {
+            if state.main_window != Some(id) || !state.range_view_active() {
                 return Task::none();
             }
             state.monitor_size = size;
@@ -1771,7 +1840,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.main_size = size;
             log::debug!("window is now {}x{}", size.width, size.height);
 
-            if state.weekly_active() {
+            if state.range_view_active() {
                 state.weekly_resize_pending = false;
                 if state.sidebar.is_none() {
                     state.config.window.height = size.height;
@@ -1926,19 +1995,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::CalendarSyncedAt(revision, result) => {
             if revision != state.timeblocking.revision
-                || (state.screen == Screen::Calendar && state.weekly)
+                || (state.screen == Screen::Calendar && (state.weekly || state.monthly))
             {
                 state.calendar.sync = SyncState::Idle;
                 return sync_calendar(state);
             }
             Task::done(Message::CalendarSynced(result))
         }
-        Message::CalendarWeekSynced(revision, anchor, days, result) => {
+        Message::CalendarRangeSynced(revision, dates, result) => {
             if revision != state.timeblocking.revision
                 || state.screen != Screen::Calendar
-                || !state.weekly
-                || anchor != state.week_anchor
-                || days != state.config.calendar.weekly_days()
+                || !(state.weekly || state.monthly)
+                || dates != state.calendar_dates()
             {
                 state.calendar.sync = SyncState::Idle;
                 return sync_calendar(state);
@@ -1951,7 +2019,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                             None => notice,
                         });
                     }
-                    let dates = calendar::week_dates(anchor, days);
                     let remember = remember_app_calendar(state, &snapshot);
                     state.calendar.apply_week_snapshot(snapshot, &dates);
                     state.calendar.apply_task_colors(&state.config.calendar);
@@ -2207,7 +2274,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.pending_delete = None;
             // The event is gone on Google's side, so drop it from the day in
             // view. The next sync reconciles the cache.
-            if state.screen == Screen::Calendar && state.weekly {
+            if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
                 state.calendar.forget_event_everywhere(&id);
             } else {
                 state.calendar.events.retain(|event| event.id != id);
@@ -2296,7 +2363,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // showing it, including a stale copy on the list it was moved
             // from and the calendar block that held its time.
             state.calendar.forget_task(&id);
-            if state.screen == Screen::Calendar && state.weekly {
+            if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
                 state.calendar.clear_disk_cache();
             } else {
                 state.calendar.invalidate_other_days();
@@ -2376,7 +2443,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             state.timeblocking.busy.remove(&id);
             state.timeblocking.revision += 1;
-            if state.screen == Screen::Calendar && state.weekly {
+            if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
                 state.calendar.replace_cached_task(&id, &task);
             } else {
                 state.calendar.invalidate_other_days();
@@ -2510,7 +2577,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::CalendarWeeklyDaysChanged(days) => {
             state.config.calendar.weekly_days = days.clamp(7, 8);
             let save = queue_save(state);
-            let resize = if state.weekly_active() {
+            let resize = if state.range_view_active() {
                 apply_view_sizes(state)
             } else {
                 Task::none()
@@ -2521,7 +2588,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::CalendarWeeklyWidthChanged(width) => {
             state.config.calendar.weekly_day_width = width.clamp(100, 400);
             let save = queue_save(state);
-            let resize = if state.weekly_active() {
+            let resize = if state.range_view_active() {
                 apply_view_sizes(state)
             } else {
                 Task::none()
@@ -2547,26 +2614,26 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::CalendarDayShift(days) => {
             let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            let origin = if state.weekly {
+            let origin = if state.weekly || state.monthly {
                 state.week_anchor
             } else {
                 state.calendar.day
             };
             let day = origin + chrono::Duration::days(days);
-            let close = if state.weekly {
+            let close = if state.weekly || state.monthly {
                 state.calendar.open_event = None;
                 crate::timeblocking::close(state)
             } else {
                 Task::none()
             };
             state.calendar.set_day(day, today);
-            if state.weekly {
+            if state.weekly || state.monthly {
                 state.week_anchor = day;
                 state.week_scroll_x = 0.0;
             }
             state.calendar.menu_open = false;
             state.calendar.month_open = false;
-            let scroll = if state.weekly {
+            let scroll = if state.weekly || state.monthly {
                 ui::calendar::scroll_week_to_start()
             } else {
                 Task::none()
@@ -2576,20 +2643,20 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::CalendarDaySelected(day) => {
             let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            let close = if state.weekly {
+            let close = if state.weekly || state.monthly {
                 state.calendar.open_event = None;
                 crate::timeblocking::close(state)
             } else {
                 Task::none()
             };
             state.calendar.set_day(day, today);
-            if state.weekly {
+            if state.weekly || state.monthly {
                 state.week_anchor = day;
                 state.week_hover = None;
                 state.week_scroll_x = 0.0;
             }
             state.calendar.month_open = false;
-            let scroll = if state.weekly {
+            let scroll = if state.weekly || state.monthly {
                 ui::calendar::scroll_week_to_start()
             } else {
                 Task::none()
@@ -2602,7 +2669,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // The picker opens on the month of the day in view, and the menu
             // gets out of its way.
             if state.calendar.month_open {
-                state.calendar.month = calendar::first_of_month(if state.weekly {
+                state.calendar.month = calendar::first_of_month(if state.weekly || state.monthly {
                     state.week_anchor
                 } else {
                     state.calendar.day
@@ -3130,7 +3197,10 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
-    if state.timeblocking.focus.is_some() || state.config.task_work.active().is_some() {
+    if state.timeblocking.focus.is_some()
+        || state.config.task_work.active().is_some()
+        || state.config.pomodoro.running()
+    {
         subscriptions.push(
             iced::time::every(Duration::from_secs(1))
                 .map(|_| Message::TimeBlocking(crate::timeblocking::Action::WorkTick)),
@@ -3475,14 +3545,14 @@ fn refresh_day(state: &mut State) -> Task<Message> {
     }
 
     let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    let displayed = if state.weekly && state.screen == Screen::Calendar {
+    let displayed = if (state.weekly || state.monthly) && state.screen == Screen::Calendar {
         state.week_anchor
     } else {
         state.calendar.day
     };
     if day != displayed {
         state.calendar.set_day(day, day);
-        if state.weekly {
+        if state.weekly || state.monthly {
             state.week_anchor = day;
         }
         return sync_calendar(state);
@@ -3491,7 +3561,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
-    if state.screen == Screen::Calendar && state.weekly {
+    if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
         state.timeblocking.revision += 1;
         state.calendar.clear_disk_cache();
         Task::done(Message::CalendarSyncRequested)
@@ -3552,9 +3622,11 @@ fn remember_app_calendar(state: &mut State, snapshot: &calendar::Snapshot) -> bo
 }
 
 fn sync_calendar(state: &mut State) -> Task<Message> {
-    if state.screen == Screen::Calendar && state.weekly {
-        let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
+    if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
+        let days = state.calendar_dates();
         state.calendar.load_cached_days(&days);
+    } else {
+        state.calendar.load_cached_days(&[]);
     }
     if !state.calendar.is_signed_in()
         || state.calendar.is_busy()
@@ -3574,21 +3646,22 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
 
     let revision = state.timeblocking.revision;
     let app_calendar = state.config.calendar.app_calendar.clone();
-    if state.screen == Screen::Calendar && state.weekly {
+    if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
         let anchor = state.week_anchor;
-        let days = state.config.calendar.weekly_days();
+        let dates = state.calendar_dates();
+        let fetched_dates = dates.clone();
         return blocking::run(move || {
-            calendar::sync_week(
+            calendar::sync_range(
                 &client_id,
                 &client_secret,
                 &disabled,
                 anchor,
-                days,
+                &fetched_dates,
                 day_end_hour,
                 app_calendar.as_deref(),
             )
         })
-        .map(move |result| Message::CalendarWeekSynced(revision, anchor, days, result));
+        .map(move |result| Message::CalendarRangeSynced(revision, dates.clone(), result));
     }
     blocking::run(move || {
         calendar::sync_day(

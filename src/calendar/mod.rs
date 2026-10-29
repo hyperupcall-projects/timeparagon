@@ -501,6 +501,8 @@ pub struct Store {
     /// Events for the days already visited, so stepping back to one paints it
     /// at once while the fresh sync runs. The day in view lives in `events`.
     cache: HashMap<NaiveDate, Vec<Event>>,
+    /// Dates currently displayed by a range view must survive cache pruning.
+    visible_days: Vec<NaiveDate>,
     /// The directory those days are also written to, so they survive a
     /// restart. `None` until [`Store::cache_days_in`] is called, which only
     /// `boot` and a reconnect do: a store built by hand must not read or
@@ -560,6 +562,7 @@ impl Store {
             calendars: Vec::new(),
             events: Vec::new(),
             cache: HashMap::new(),
+            visible_days: Vec::new(),
             day_cache: None,
             day_end_hour,
             day,
@@ -593,6 +596,7 @@ impl Store {
             calendars: snapshot.calendars,
             events: snapshot.events,
             cache: HashMap::new(),
+            visible_days: Vec::new(),
             day_cache: None,
             day_end_hour: 0,
             day: snapshot.day,
@@ -708,7 +712,13 @@ impl Store {
     fn trim_cache(&mut self) {
         let current = self.day;
 
-        for day in days_to_drop(self.cache.keys().copied(), current) {
+        for day in days_to_drop(
+            self.cache
+                .keys()
+                .copied()
+                .filter(|day| !self.visible_days.contains(day)),
+            current,
+        ) {
             self.cache.remove(&day);
         }
 
@@ -846,6 +856,7 @@ impl Store {
     /// Install a range fetch as ordinary per-day snapshots, retaining all tasks
     /// on each day just as a day fetch does.
     pub fn apply_week_snapshot(&mut self, mut snapshot: Snapshot, days: &[NaiveDate]) {
+        self.visible_days = days.to_vec();
         let current = self.day;
         for event in &mut snapshot.events {
             if let Some(pending) = self.pending.get(&event.id) {
@@ -917,6 +928,7 @@ impl Store {
     }
 
     pub fn load_cached_days(&mut self, days: &[NaiveDate]) {
+        self.visible_days = days.to_vec();
         for &day in days {
             if day != self.day && !self.cache.contains_key(&day) {
                 if let Some(events) = self.read_day(day) {
@@ -1423,16 +1435,38 @@ pub fn sync_week(
     day_end_hour: u32,
     app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
+    sync_range(
+        client_id,
+        client_secret,
+        disabled,
+        anchor,
+        &week_dates(anchor, days),
+        day_end_hour,
+        app_calendar,
+    )
+}
+
+/// Fetch the complete visible range for a week or month in a single request.
+pub fn sync_range(
+    client_id: &str,
+    client_secret: &str,
+    disabled: &[String],
+    anchor: NaiveDate,
+    dates: &[NaiveDate],
+    day_end_hour: u32,
+    app_calendar: Option<&str>,
+) -> Result<Snapshot, String> {
+    let first = *dates.first().ok_or("Calendar range is empty")?;
+    let last = *dates.last().ok_or("Calendar range is empty")?;
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let dates = week_dates(anchor, days);
     api::fetch_range(
         &tokens.access_token,
         disabled,
         anchor,
-        dates[0],
-        *dates.last().unwrap(),
+        first,
+        last,
         day_end_hour,
         app_calendar,
     )

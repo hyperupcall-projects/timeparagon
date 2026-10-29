@@ -39,7 +39,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         // so the metrics for the main content are measured over that width.
         let details_open = state.calendar.open_event.is_some()
             && crate::app::shows_details(state.screen)
-            && !(state.screen == Screen::Calendar && state.weekly);
+            && !(state.screen == Screen::Calendar && (state.weekly || state.monthly));
         let detail = if details_open {
             state.config.views.detail_width()
         } else {
@@ -74,7 +74,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Travel, _) => travel::view(state, &main_metrics),
             (Screen::Habits, _) => habits::view(state, &main_metrics),
             (Screen::Calendar, _) => {
-                if state.weekly {
+                if state.monthly {
+                    calendar::monthly_view(state, &main_metrics)
+                } else if state.weekly {
                     calendar::weekly_view(state, &main_metrics)
                 } else {
                     // Keep the calendar at the same place in the widget tree when
@@ -322,17 +324,18 @@ fn drag_ghost<'a>(
         .into()
 }
 
-/// How many top-level navigation items there are: Day/Week, Tasks/Projects,
+/// How many top-level navigation items there are: Day/Week/Month, Tasks/Projects,
 /// then Note/More/Settings.
-const TAB_COUNT: usize = 7;
+const TAB_COUNT: usize = 8;
 
 /// The visible top-level names, in the order they appear.
 const TAB_LABELS: [&str; TAB_COUNT] = [
-    "Day", "Week", "Tasks", "Projects", "Note", "More", "Settings",
+    "Day", "Week", "Month", "Tasks", "Projects", "Note", "More", "Settings",
 ];
 
 /// Short names for windows too narrow to fit the full ones legibly.
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Week", "Tasks", "Proj", "Note", "More", "Set"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] =
+    ["Day", "Week", "Mon", "Tasks", "Proj", "Note", "More", "Set"];
 
 /// The tabs that live inside Tasks, shown beneath the top menu while any of
 /// them is open.
@@ -385,8 +388,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
             .map(|label| label.chars().count())
             .sum::<usize>()
             + 6;
-        // Seven tabs, gaps within the three groups, and two gaps between them.
-        let fixed = 14.0 * pad + 4.0 * gap + 2.0 * (gap * 2.0).max(4.0);
+        // Eight tabs, gaps within the three groups, and two gaps between them.
+        let fixed = 16.0 * pad + 5.0 * gap + 2.0 * (gap * 2.0).max(4.0);
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_LABELS);
@@ -408,7 +411,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Day/Week, then Tasks/Projects, then Note/More/Settings. Labels shrink
+/// Day/Week/Month, then Tasks/Projects, then Note/More/Settings. Labels shrink
 /// (and shorten, when very narrow) rather than wrapping.
 ///
 /// While a Tasks screen is open, a second row with the Inbox and Backlog tabs
@@ -432,7 +435,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
     let day = tab(
         labels[0],
-        state.screen == Screen::Calendar && !state.weekly,
+        state.screen == Screen::Calendar && !state.weekly && !state.monthly,
         Message::CalendarModeSelected(false),
         metrics,
         fit,
@@ -444,8 +447,15 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         metrics,
         fit,
     );
-    let tasks = tab(
+    let month = tab(
         labels[2],
+        state.screen == Screen::Calendar && state.monthly,
+        Message::CalendarMonthViewSelected,
+        metrics,
+        fit,
+    );
+    let tasks = tab(
+        labels[3],
         tasks_open,
         match state.screen {
             // Within the section, Tasks keeps the tab that is open.
@@ -457,28 +467,28 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         fit,
     );
     let projects = tab(
-        labels[3],
+        labels[4],
         state.screen == Screen::Projects,
         Message::ScreenSelected(Screen::Projects),
         metrics,
         fit,
     );
     let note = tab(
-        labels[4],
+        labels[5],
         state.screen == Screen::Notepad,
         Message::ScreenSelected(Screen::Notepad),
         metrics,
         fit,
     );
     let more = tab(
-        labels[5],
+        labels[6],
         more_active,
         Message::MoreMenuToggled,
         metrics,
         fit,
     );
     let settings = tab(
-        labels[6],
+        labels[7],
         state.screen == Screen::Settings,
         Message::ScreenSelected(Screen::Settings),
         metrics,
@@ -488,7 +498,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let group_gap = (fit.gap * 2.0).max(4.0);
     let bar = container(
         row![
-            row![day, week].spacing(fit.gap),
+            row![day, week, month].spacing(fit.gap),
             Space::new().width(Fill),
             row![tasks, projects].spacing(fit.gap),
             Space::new().width(Fill),
