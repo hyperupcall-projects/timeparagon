@@ -1,6 +1,6 @@
 //! The settings tab and the timer-hits-zero menu.
 
-use iced::font::Weight::{self, Black};
+use iced::font::Weight;
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };

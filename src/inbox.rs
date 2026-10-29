@@ -305,14 +305,14 @@ fn fetched(state: &mut State, lookup: u64, result: Result<integrations::Details,
 
 /// What the popup asks for, checked and ready to send.
 #[derive(Debug)]
-struct NewTask {
+pub(crate) struct NewTask {
     title: String,
     deadline: Option<Deadline>,
     due: Option<NaiveDate>,
     source: Option<Source>,
 }
 
-fn validate(draft: &Draft) -> Result<NewTask, String> {
+pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
     let title = draft.title.trim().to_owned();
     if title.is_empty() {
         return Err("A task needs a name".into());
@@ -368,7 +368,10 @@ fn create(state: &mut State) -> Task<Message> {
 
 /// Creates the task on Google. A link whose title was never read gets one more
 /// try here, so a task made quickly still arrives with a proper name.
-fn write(settings: &crate::config::CalendarSettings, task: NewTask) -> Result<Event, String> {
+pub(crate) fn write(
+    settings: &crate::config::CalendarSettings,
+    task: NewTask,
+) -> Result<Event, String> {
     let token = tb::access(settings)?;
     let mut title = task.title;
     if let Some(source) = task.source.as_ref().filter(|source| source.url == title) {

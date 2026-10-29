@@ -1211,6 +1211,8 @@ pub fn patch_event(
     start: DateTime<Local>,
     end: DateTime<Local>,
     recurrence: Option<&[String]>,
+    projects: &[u64],
+    all_day: bool,
 ) -> Result<(), String> {
     let url = format!(
         "{EVENTS}/{}/events/{}",
@@ -1222,11 +1224,14 @@ pub fn patch_event(
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
         "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
     });
-    if !description.is_empty() {
-        body["description"] = serde_json::Value::String(description.to_owned());
-    }
+    body["description"] = serde_json::Value::String(description.to_owned());
+    super::projects::write(&mut body, projects)?;
     if let Some(color_id) = color_id {
         body["colorId"] = serde_json::Value::String(color_id.to_owned());
+    }
+    if all_day {
+        body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
+        body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
     }
     // Always send the array when the caller owns the recurrence, even when
     // empty: omitting it on a PATCH would leave an earlier recurrence in
@@ -1258,6 +1263,7 @@ pub fn insert_event(
     start: DateTime<Local>,
     end: DateTime<Local>,
     recurrence: &[String],
+    projects: &[u64],
 ) -> Result<String, String> {
     let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
     let mut body = serde_json::json!({
@@ -1265,9 +1271,8 @@ pub fn insert_event(
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
         "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
     });
-    if !description.is_empty() {
-        body["description"] = serde_json::Value::String(description.to_owned());
-    }
+    body["description"] = serde_json::Value::String(description.to_owned());
+    super::projects::write(&mut body, projects)?;
     if let Some(color_id) = color_id {
         body["colorId"] = serde_json::Value::String(color_id.to_owned());
     }
@@ -1448,6 +1453,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
     };
 
     crate::calendar::Details {
+        projects: super::projects::read(&entry.extended_properties),
         task_data: None,
         scheduled: None,
         location: entry.location.trim().to_owned(),
@@ -1837,6 +1843,24 @@ mod tests {
         let event = parse_event(entry, &calendar, day).unwrap();
         assert!(!event.all_day);
         assert_eq!(event.color, colors::event("11").unwrap());
+    }
+
+    #[test]
+    fn event_projects_survive_sync_cache_and_reopening_the_editor() {
+        let entry: EventEntry = serde_json::from_value(serde_json::json!({
+            "extendedProperties": { "private": { "ttProjects": "[7,3]", "ttKind": "habit" } }
+        }))
+        .unwrap();
+        let details = details_of(&entry);
+        assert_eq!(details.projects, vec![3, 7]);
+        assert!(details.habit);
+        let cached = serde_json::to_string(&details).unwrap();
+        let mut event = super::super::sample_snapshot().events.remove(0);
+        event.details = serde_json::from_str(&cached).unwrap();
+        let draft = super::super::EditDraft::from_event(&event);
+        assert_eq!(draft.projects.ids, vec![3, 7]);
+        let old: super::super::Details = serde_json::from_str("{}").unwrap();
+        assert!(old.projects.is_empty());
     }
 
     #[test]

@@ -44,9 +44,9 @@ urlencoding = "2.1.3"
 # KGlobalAccel (KDE's global-shortcut broker) is spoken over D-Bus.
 zbus = { version = "5", features = ["blocking-api"] }
 rusqlite = { version = "0.41.0", features = ["bundled"] }
-# The dock strip is a zwlr_layer_shell_v1 surface drawn in software. sctk is
-# used without xkbcommon: the strip only needs the pointer.
-smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
+# The dock strip is a zwlr_layer_shell_v1 surface drawn in software.
+# Keyboard input is used by the dock task popover.
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
 cosmic-text = "0.15"
 

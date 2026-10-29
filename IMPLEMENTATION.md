@@ -548,11 +548,12 @@ fn hide(&mut self) {
 
 SCTK's default feature set includes `xkbcommon`, which links against
 `libxkbcommon`. On a stock machine without the `-dev` package the build fails
-with a missing `libxkbcommon.pc`. Since the MVP does not read keyboard input, we
-turn the default features off and keep only what we use:
+with a missing `libxkbcommon.pc`. The dock task popover now reads keyboard
+input, so `libxkbcommon-dev` is required at build time. We enable only the
+features used by the dock:
 
 ```toml
-smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 ```
 
 ### 2.9 Pitfall — drawing before `configure`

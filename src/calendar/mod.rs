@@ -8,6 +8,7 @@ pub mod deadline;
 pub mod layout;
 pub mod notes;
 pub mod oauth;
+pub mod projects;
 pub mod scheduled;
 
 use std::collections::HashMap;
@@ -166,6 +167,7 @@ pub enum DraftKind {
 /// throw away the last valid time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
+    pub projects: projects::Selection,
     /// Whether this is an ordinary event or a time block.
     pub kind: DraftKind,
     pub title: String,
@@ -191,6 +193,7 @@ impl Draft {
     pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
         Self {
             kind: DraftKind::Event,
+            projects: projects::Selection::default(),
             title: String::new(),
             description: String::new(),
             calendar_id,
@@ -252,6 +255,8 @@ impl Draft {
 /// want to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditDraft {
+    pub projects: projects::Selection,
+    pub all_day: bool,
     pub id: String,
     pub title: String,
     pub description: String,
@@ -273,6 +278,11 @@ impl EditDraft {
     /// Build an edit draft from an existing event.
     pub fn from_event(event: &Event) -> Self {
         Self {
+            projects: projects::Selection {
+                ids: event.details.projects.clone(),
+                ..Default::default()
+            },
+            all_day: event.all_day,
             id: event.id.clone(),
             title: event.title.clone(),
             description: description_notes(&event.details.description).to_owned(),
@@ -350,6 +360,9 @@ pub(crate) fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Details {
+    /// Project IDs assigned to this calendar event (tasks use their task metadata).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<u64>,
     pub scheduled: Option<scheduled::Link>,
     pub task_data: Option<crate::task_db::TaskData>,
     pub location: String,
@@ -1740,6 +1753,7 @@ pub fn create_event(
     start: DateTime<Local>,
     end: DateTime<Local>,
     recurrence: &[String],
+    projects: &[u64],
 ) -> Result<String, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1754,6 +1768,7 @@ pub fn create_event(
         start,
         end,
         recurrence,
+        projects,
     )
     .map_err(describe_event_write_error)
 }
@@ -1771,6 +1786,8 @@ pub fn update_event(
     start: DateTime<Local>,
     end: DateTime<Local>,
     recurrence: Option<&[String]>,
+    projects: &[u64],
+    all_day: bool,
 ) -> Result<(), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1786,6 +1803,8 @@ pub fn update_event(
         start,
         end,
         recurrence,
+        projects,
+        all_day,
     )
     .map_err(describe_event_write_error)
 }

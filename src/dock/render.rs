@@ -195,7 +195,7 @@ impl Layout {
     fn along_of(&self, minute: f32) -> f32 {
         let start = self.axis_start();
         let header = self.header();
-        start + header + minute / DAY_MINUTES as f32 * (self.day_length() - header).max(1.0)
+        start + header + minute / DAY_MINUTES as f32 * (self.day_length() - 2.0 * header).max(1.0)
     }
 
     /// The back button: a square at the start of the strip.
@@ -206,6 +206,30 @@ impl Layout {
         } else {
             (self.content_x, self.content_y, size, self.content_height)
         }
+    }
+
+    /// The task button at the opposite end of the strip.
+    pub fn add_rect(&self) -> (f32, f32, f32, f32) {
+        let size = self.button_size();
+        if self.vertical() {
+            (
+                self.content_x,
+                self.content_y + self.content_height - size,
+                size,
+                size,
+            )
+        } else {
+            (
+                self.content_x + self.content_width - size,
+                self.content_y,
+                size,
+                size,
+            )
+        }
+    }
+
+    pub fn hit_add(&self, x: f64, y: f64) -> bool {
+        super::compose::contains(self.add_rect(), x, y)
     }
 
     pub fn hit_button(&self, x: f64, y: f64) -> bool {
@@ -288,7 +312,7 @@ impl Layout {
         } else {
             x - self.content_x
         };
-        if along < self.header() {
+        if along < self.header() || along >= self.day_length() - self.header() {
             return None;
         }
 
@@ -323,6 +347,8 @@ pub struct Scene<'a> {
     pub hour_lines: bool,
     /// Whether the pointer is on the back button.
     pub button_hovered: bool,
+    pub add_hovered: bool,
+    pub compose: Option<&'a super::compose::Compose>,
     /// What the back button says when hovered.
     pub back_label: &'a str,
     /// Which way the back button's chevron points: toward the screen.
@@ -544,7 +570,24 @@ impl Renderer {
 
         paint_button(pixmap, layout, scene);
 
-        let card = if scene.button_hovered {
+        paint_add(pixmap, layout, scene);
+        let card = if let Some(compose) = scene.compose {
+            let rect = self.paint_compose(layout, palette, compose, pixmap);
+            Some(PixelRect::from_logical(layout, rect, 2.0))
+        } else if scene.add_hovered {
+            let card = Card {
+                title: "New inbox task".into(),
+                when: "Click to add".into(),
+                lines: Vec::new(),
+            };
+            Some(self.paint_card(
+                layout,
+                palette,
+                &card,
+                layout.axis_start() + layout.day_length(),
+                pixmap,
+            ))
+        } else if scene.button_hovered {
             let card = Card {
                 title: scene.back_label.to_owned(),
                 when: "Click to switch".to_owned(),
@@ -578,6 +621,148 @@ impl Renderer {
             *rect = rect.clamped(surface_width, surface_height);
         }
         damage
+    }
+
+    fn paint_compose(
+        &mut self,
+        layout: &Layout,
+        palette: &Palette,
+        compose: &super::compose::Compose,
+        pixmap: &mut Pixmap,
+    ) -> (f32, f32, f32, f32) {
+        let rect = super::compose::rect(layout);
+        let (x, y, w, _) = rect;
+        fill_rounded(pixmap, layout, rect, CARD_RADIUS, palette.card, 1.0);
+        stroke_rounded(pixmap, layout, rect, CARD_RADIUS, palette.border, 1.0);
+        let (fonts, swash) = text_system(&mut self.text, &mut self.warmup);
+        let mut label = |value: &str, x: f32, y: f32, color: Color| {
+            let block = text_block(
+                fonts,
+                layout,
+                value,
+                BODY_SIZE,
+                Weight::NORMAL,
+                text_color(color),
+                w - 24.0,
+            );
+            draw_block(pixmap, layout, fonts, swash, &block, x, y);
+        };
+        label("New inbox task", x + 12.0, y + 12.0, palette.text);
+        drop(label);
+        for (index, name) in [
+            "Task name or link",
+            "Deadline · YYYY-MM-DD [HH:MM]",
+            "Due date · YYYY-MM-DD",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let field = super::compose::field_rect(layout, index);
+            let (fx, fy, fw, fh) = field;
+            fill_rounded(pixmap, layout, field, 3.0, palette.background, 1.0);
+            stroke_rounded(
+                pixmap,
+                layout,
+                field,
+                3.0,
+                if compose.focus == index {
+                    palette.accent
+                } else {
+                    palette.border
+                },
+                1.0,
+            );
+            let heading = text_block(
+                fonts,
+                layout,
+                name,
+                BODY_SIZE,
+                Weight::NORMAL,
+                text_color(palette.muted),
+                fw,
+            );
+            draw_block(pixmap, layout, fonts, swash, &heading, fx, fy - 19.0);
+            let value = compose.display(index, ((fw - 16.0) / 8.0).max(1.0) as usize);
+            let block = text_block(
+                fonts,
+                layout,
+                &value,
+                BODY_SIZE,
+                Weight::NORMAL,
+                text_color(palette.text),
+                fw - 12.0,
+            );
+            draw_block(
+                pixmap,
+                layout,
+                fonts,
+                swash,
+                &block,
+                fx + 6.0,
+                fy + (fh - 16.0) / 2.0,
+            );
+        }
+        for (index, name) in [
+            if compose.draft.saving {
+                "Adding…"
+            } else {
+                "Add task"
+            },
+            "Cancel",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let button = super::compose::action_rect(layout, index);
+            fill_rounded(
+                pixmap,
+                layout,
+                button,
+                4.0,
+                if index == 0 {
+                    palette.accent
+                } else {
+                    palette.border
+                },
+                1.0,
+            );
+            let block = text_block(
+                fonts,
+                layout,
+                name,
+                BODY_SIZE,
+                Weight::NORMAL,
+                text_color(if index == 0 {
+                    palette.background
+                } else {
+                    palette.text
+                }),
+                button.2 - 12.0,
+            );
+            draw_block(
+                pixmap,
+                layout,
+                fonts,
+                swash,
+                &block,
+                button.0 + 6.0,
+                button.1 + 8.0,
+            );
+        }
+        if let Some(error) = &compose.draft.error {
+            let short: String = error.chars().take(72).collect();
+            let block = text_block(
+                fonts,
+                layout,
+                &short,
+                BODY_SIZE,
+                Weight::NORMAL,
+                text_color(palette.now),
+                w - 24.0,
+            );
+            draw_block(pixmap, layout, fonts, swash, &block, x + 12.0, y + 260.0);
+        }
+        rect
     }
 
     /// Paints a card beside the strip, aligned with `anchor` along the strip,
@@ -681,6 +866,45 @@ fn clear_rect(pixmap: &mut Pixmap, patch: PixelRect) {
         };
         pixmap.fill_rect(rect, &paint, Transform::identity(), None);
     }
+}
+
+fn paint_add(pixmap: &mut Pixmap, layout: &Layout, scene: &Scene) {
+    let rect = layout.add_rect();
+    let active = scene.add_hovered || scene.compose.is_some();
+    let palette = scene.palette;
+    fill_rounded(
+        pixmap,
+        layout,
+        rect,
+        2.0,
+        if active {
+            palette.accent
+        } else {
+            palette.border
+        },
+        1.0,
+    );
+    let (x, y, w, h) = rect;
+    let ink = if active {
+        palette.background
+    } else {
+        palette.text
+    };
+    let line = (w / 8.0).max(1.0);
+    fill_rect(
+        pixmap,
+        layout,
+        (x + w * 0.25, y + h / 2.0 - line / 2.0, w * 0.5, line),
+        ink,
+        1.0,
+    );
+    fill_rect(
+        pixmap,
+        layout,
+        (x + w / 2.0 - line / 2.0, y + h * 0.25, line, h * 0.5),
+        ink,
+        1.0,
+    );
 }
 
 /// The back button: a rounded square with a chevron pointing into the screen.
@@ -986,6 +1210,72 @@ mod tests {
     }
 
     #[test]
+    fn task_button_and_popover_fit_every_edge_and_scale() {
+        for side in [
+            DockSide::Left,
+            DockSide::Right,
+            DockSide::Top,
+            DockSide::Bottom,
+        ] {
+            let config = DockConfig {
+                side,
+                ..DockConfig::default()
+            };
+            let (w, h) = if side.is_vertical() {
+                (316, 800)
+            } else {
+                (800, 316)
+            };
+            for scale in [1, 2] {
+                let layout = Layout::new(&config, w, h, scale);
+                let (x, y, bw, bh) = layout.add_rect();
+                assert!(layout.hit_add((x + bw / 2.0) as f64, (y + bh / 2.0) as f64));
+                assert_eq!(
+                    layout.hit(
+                        &[segment(0, 1440)],
+                        (x + bw / 2.0) as f64,
+                        (y + bh / 2.0) as f64
+                    ),
+                    None
+                );
+                let (cx, cy, cw, ch) = super::super::compose::rect(&layout);
+                assert!(cx >= 0.0 && cy >= 0.0 && cx + cw <= w as f32 && cy + ch <= h as f32);
+                for i in 0..2 {
+                    let (ax, ay, aw, ah) = super::super::compose::action_rect(&layout, i);
+                    assert!(ax >= cx && ay >= cy && ax + aw <= cx + cw && ay + ah <= cy + ch);
+                }
+                let form = super::super::compose::Compose::default();
+                let mut scene = Scene {
+                    segments: &[],
+                    now_minute: None,
+                    hovered: None,
+                    pinned: None,
+                    day_offset_min: 0,
+                    hour_lines: false,
+                    button_hovered: false,
+                    add_hovered: false,
+                    compose: Some(&form),
+                    back_label: "",
+                    side,
+                    palette: palette(),
+                };
+                let (pw, ph) = layout.pixel_size();
+                let mut pixmap = Pixmap::new(pw, ph).unwrap();
+                let mut renderer = Renderer::default();
+                renderer.paint(&layout, &scene, &mut pixmap);
+                let sample = (
+                    ((cx + cw / 2.0) * scale as f32) as u32,
+                    ((cy + 5.0) * scale as f32) as u32,
+                );
+                assert_eq!(pixmap.pixel(sample.0, sample.1).unwrap().alpha(), 255);
+                scene.compose = None;
+                renderer.paint(&layout, &scene, &mut pixmap);
+                assert_eq!(pixmap.pixel(sample.0, sample.1).unwrap().alpha(), 0);
+            }
+        }
+    }
+
+    #[test]
     fn hour_lines_cross_the_strip_only_when_asked() {
         let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
         let (width, height) = layout.pixel_size();
@@ -997,6 +1287,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines,
             button_hovered: false,
+            add_hovered: false,
+            compose: None,
             back_label: "",
             side: DockSide::Left,
             palette: palette(),
@@ -1009,7 +1301,9 @@ mod tests {
         let mut on = Pixmap::new(width, height).unwrap();
         Renderer::default().paint(&layout, &scene(true), &mut on);
 
-        assert_ne!(on.pixel(5, y), off.pixel(5, y));
+        // The reserved footer changes the fractional position; a one-pixel
+        // hour line may rasterize to either neighbouring pixel.
+        assert!((y.saturating_sub(1)..=y + 1).any(|row| on.pixel(5, row) != off.pixel(5, row)));
         assert_eq!(on.pixel(5, y + 10), off.pixel(5, y + 10));
         assert_eq!(on.pixel(150, y).unwrap().alpha(), 0);
     }
@@ -1027,6 +1321,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
+            add_hovered: false,
+            compose: None,
             back_label: "",
             side: DockSide::Left,
             palette: palette(),
@@ -1112,6 +1408,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
+            add_hovered: false,
+            compose: None,
             back_label: "",
             side: DockSide::Left,
             palette: palette(),
@@ -1194,6 +1492,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: true,
+            add_hovered: false,
+            compose: None,
             back_label: "Open the full window",
             side: DockSide::Left,
             palette: palette(),
@@ -1231,6 +1531,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
+            add_hovered: false,
+            compose: None,
             back_label: "Open the full window",
             side: DockSide::Left,
             palette: palette(),
@@ -1271,6 +1573,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
+            add_hovered: false,
+            compose: None,
             back_label: "Open the full window",
             side: DockSide::Left,
             palette: palette(),
@@ -1296,6 +1600,8 @@ mod tests {
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
+            add_hovered: false,
+            compose: None,
             back_label: "Open the full window",
             side: DockSide::Left,
             palette: palette(),
@@ -1339,6 +1645,8 @@ mod tests {
                 day_offset_min: 0,
                 hour_lines: false,
                 button_hovered: false,
+                add_hovered: false,
+                compose: None,
                 back_label: "Open the full window",
                 side: DockSide::Left,
                 palette: palette(),

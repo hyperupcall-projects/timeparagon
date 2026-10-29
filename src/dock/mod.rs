@@ -7,17 +7,20 @@
 //! background, with a red line for "right now". Hovering a span opens a card
 //! beside the strip, level with the span.
 //!
-//! A small button at the start of the strip, no wider than the strip, brings
-//! back the window the dock replaced (see [`launch`]).
+//! A small button at the start of the strip brings back the window the dock
+//! replaced (see [`launch`]). The plus at the opposite end opens an interactive
+//! task card that saves to Inbox.
 //!
 //! The surface is wider than the strip, to leave room for that card. Only the
-//! strip is opaque and only the strip takes pointer input, so the rest of the
-//! surface neither hides nor blocks what is underneath.
+//! strip is opaque. The task card takes input while open; hover cards leave
+//! the rest of the surface click-through.
 //!
 //! Layer shell is supported by KDE Plasma, Sway, Hyprland, niri and COSMIC. It
 //! is not available on GNOME.
 
 pub mod animation;
+mod clipboard;
+mod compose;
 pub mod config;
 pub mod launch;
 pub mod model;
@@ -31,14 +34,17 @@ use chrono::{Local, NaiveDate};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay_client_toolkit::reexports::calloop::{EventLoop, channel};
+use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle, channel};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 use smithay_client_toolkit::reexports::client::protocol::{
-    wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
 };
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::keyboard::{
+    KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
+};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -49,8 +55,8 @@ use smithay_client_toolkit::shell::wlr_layer::{
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, registry_handlers,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
 };
 
 use crate::calendar::{self, Snapshot, Store};
@@ -177,9 +183,52 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         .is_signed_in()
         .then(|| spawn_sync(&app_config, snapshots_tx));
 
+    let (paste_tx, paste_rx) = channel::channel::<(u64, usize, String)>();
+    handle
+        .insert_source(paste_rx, |event, _, dock| {
+            if let channel::Event::Msg((generation, focus, text)) = event {
+                if generation == dock.compose_generation {
+                    if let Some(form) = &mut dock.compose {
+                        if form.focus == focus {
+                            form.insert(&text);
+                            dock.draw();
+                        }
+                    }
+                }
+            }
+        })
+        .map_err(|error| anyhow!("could not listen for clipboard: {error}"))?;
+    let (created_tx, created_rx) = channel::channel::<Result<calendar::Event, String>>();
+    handle
+        .insert_source(created_rx, |event, _, dock| {
+            if let channel::Event::Msg(result) = event {
+                match result {
+                    Ok(event) => {
+                        dock.store.add_event(event);
+                        if let Some(form) = &mut dock.compose {
+                            form.draft.saving = false;
+                        }
+                        dock.close_compose();
+                        if let Some(wake) = &dock.wake {
+                            let _ = wake.send(());
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(form) = &mut dock.compose {
+                            form.draft.saving = false;
+                            form.draft.error = Some(error);
+                        }
+                    }
+                }
+                dock.draw();
+            }
+        })
+        .map_err(|error| anyhow!("could not listen for new tasks: {error}"))?;
+
     let pool = SlotPool::new(4096, &shm).context("could not allocate shared memory")?;
     let opening = animation::Opening::new(dock_config.animation, dock_config.fade_duration_ms);
     let mut dock = Dock {
+        loop_handle: handle.clone(),
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
@@ -188,6 +237,14 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         layer,
         pool,
         pointer: None,
+        keyboard: None,
+        clipboard: clipboard::Clipboard::new(&globals, &qh),
+        paste_tx,
+        compose_generation: 0,
+        modifiers: Modifiers::default(),
+        compose: None,
+        add_hovered: false,
+        created_tx,
         config: dock_config,
         app_config,
         palette: Palette::from_theme(&theme),
@@ -327,6 +384,7 @@ struct Frame {
 const MAX_STALE_PATCHES: usize = 16;
 
 struct Dock {
+    loop_handle: LoopHandle<'static, Dock>,
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
@@ -335,6 +393,14 @@ struct Dock {
     layer: LayerSurface,
     pool: SlotPool,
     pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    clipboard: clipboard::Clipboard,
+    paste_tx: channel::Sender<(u64, usize, String)>,
+    compose_generation: u64,
+    modifiers: Modifiers,
+    compose: Option<compose::Compose>,
+    add_hovered: bool,
+    created_tx: channel::Sender<Result<calendar::Event, String>>,
 
     config: config::DockConfig,
     app_config: Config,
@@ -466,6 +532,8 @@ impl Dock {
             day_offset_min: self.app_config.calendar.day_end_minutes(),
             hour_lines: self.config.hour_lines,
             button_hovered: self.button_hovered,
+            add_hovered: self.add_hovered,
+            compose: self.compose.as_ref(),
             back_label: self.origin.back_label(),
             side: self.config.side,
             palette: self.palette,
@@ -542,13 +610,25 @@ impl Dock {
             }
         }
 
-        // The strip alone is opaque and clickable.
-        if self.regions_for != Some(layout) {
+        // The task card accepts input only while it is open.
+        if self.regions_for != Some(layout) || self.compose.is_some() {
             let (x, y, w, h) = layout.strip_rect();
             if let Ok(region) = Region::new(&self.compositor) {
                 region.add(x as i32, y as i32, w as i32, h as i32);
+                if self.compose.is_some() {
+                    let (x, y, w, h) = compose::rect(&layout);
+                    region.add(
+                        x.floor() as i32,
+                        y.floor() as i32,
+                        w.ceil() as i32,
+                        h.ceil() as i32,
+                    );
+                }
                 self.layer.set_input_region(Some(region.wl_region()));
-                self.layer.set_opaque_region(Some(region.wl_region()));
+                if let Ok(opaque) = Region::new(&self.compositor) {
+                    opaque.add(x as i32, y as i32, w as i32, h as i32);
+                    self.layer.set_opaque_region(Some(opaque.wl_region()));
+                }
                 self.regions_for = Some(layout);
             }
         }
@@ -559,18 +639,82 @@ impl Dock {
         self.layer.commit();
     }
 
+    fn compose_key(&mut self, event: KeyEvent) {
+        if self.modifiers.ctrl && event.keysym == Keysym::v {
+            if let Some(form) = &self.compose {
+                if !form.draft.saving {
+                    self.clipboard.paste(
+                        self.paste_tx.clone(),
+                        self.compose_generation,
+                        form.focus,
+                    );
+                }
+            }
+            return;
+        }
+        match event.keysym {
+            Keysym::Escape => self.close_compose(),
+            Keysym::Return | Keysym::KP_Enter => self.submit_compose(),
+            _ => {
+                if let Some(form) = &mut self.compose {
+                    form.key(&event, self.modifiers);
+                }
+            }
+        }
+        self.draw();
+    }
+
+    fn close_compose(&mut self) {
+        if self.compose.as_ref().is_some_and(|form| form.draft.saving) {
+            return;
+        }
+        self.compose = None;
+        self.compose_generation += 1;
+        self.regions_for = None;
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+    }
+
+    fn submit_compose(&mut self) {
+        let Some(form) = &mut self.compose else {
+            return;
+        };
+        if form.draft.saving {
+            return;
+        }
+        let task = match crate::inbox::validate(&form.draft) {
+            Ok(task) => task,
+            Err(error) => {
+                form.draft.error = Some(error);
+                return;
+            }
+        };
+        form.draft.saving = true;
+        form.draft.error = None;
+        let settings = self.app_config.calendar.clone();
+        let sender = self.created_tx.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::inbox::write(&settings, task));
+        });
+    }
+
     /// Follows the pointer, and says whether that changed what is drawn.
     fn pointer_moved(&mut self, position: Option<(f64, f64)>) -> bool {
         self.pointer_position = position;
-        let (hovered, button_hovered) = match (self.layout(), position) {
-            (Some(layout), Some((x, y))) => {
-                (layout.hit(&self.segments, x, y), layout.hit_button(x, y))
-            }
-            _ => (None, false),
+        let (hovered, button_hovered, add_hovered) = match (self.layout(), position) {
+            (Some(layout), Some((x, y))) => (
+                layout.hit(&self.segments, x, y),
+                layout.hit_button(x, y),
+                layout.hit_add(x, y),
+            ),
+            _ => (None, false, false),
         };
-        let changed = hovered != self.hovered || button_hovered != self.button_hovered;
+        let changed = hovered != self.hovered
+            || button_hovered != self.button_hovered
+            || add_hovered != self.add_hovered;
         self.hovered = hovered;
         self.button_hovered = button_hovered;
+        self.add_hovered = add_hovered;
         changed
     }
 }
@@ -684,6 +828,21 @@ impl SeatHandler for Dock {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        if capability == Capability::Keyboard {
+            self.clipboard.seat(qh, &seat);
+        }
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            match self.seat_state.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.loop_handle.clone(),
+                Box::new(|dock, _, event| dock.compose_key(event)),
+            ) {
+                Ok(keyboard) => self.keyboard = Some(keyboard),
+                Err(error) => log::warn!("could not use the keyboard: {error}"),
+            }
+        }
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seat_state.get_pointer(qh, &seat) {
                 Ok(pointer) => self.pointer = Some(pointer),
@@ -699,6 +858,11 @@ impl SeatHandler for Dock {
         _: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        if capability == Capability::Keyboard
+            && let Some(keyboard) = self.keyboard.take()
+        {
+            keyboard.release();
+        }
         if capability == Capability::Pointer
             && let Some(pointer) = self.pointer.take()
         {
@@ -731,10 +895,46 @@ impl PointerHandler for Dock {
                 PointerEventKind::Press { button, .. }
                     if button == BTN_LEFT && self.button_hovered =>
                 {
-                    self.go_back();
+                    if !self.compose.as_ref().is_some_and(|form| form.draft.saving) {
+                        self.go_back();
+                    }
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
-                    if let Some(hovered) = self.hovered {
+                    if self.add_hovered {
+                        if self.compose.is_some() {
+                            self.close_compose();
+                        } else {
+                            self.compose = Some(compose::Compose::default());
+                            self.pinned = None;
+                            self.layer
+                                .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+                        }
+                        changed = true;
+                    } else if self.compose.is_some() {
+                        if let Some(layout) = self.layout() {
+                            let (x, y) = event.position;
+                            if compose::contains(compose::action_rect(&layout, 0), x, y) {
+                                self.submit_compose();
+                            } else if compose::contains(compose::action_rect(&layout, 1), x, y)
+                                || !compose::contains(compose::rect(&layout), x, y)
+                            {
+                                self.close_compose();
+                            } else if let Some(form) = &mut self.compose {
+                                if !form.draft.saving {
+                                    for index in 0..3 {
+                                        if compose::contains(
+                                            compose::field_rect(&layout, index),
+                                            x,
+                                            y,
+                                        ) {
+                                            form.focus(index);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        changed = true;
+                    } else if let Some(hovered) = self.hovered {
                         self.pinned = (self.pinned != Some(hovered)).then_some(hovered);
                         changed = true;
                     }
@@ -759,6 +959,7 @@ delegate_output!(Dock);
 delegate_shm!(Dock);
 delegate_seat!(Dock);
 delegate_pointer!(Dock);
+delegate_keyboard!(Dock);
 delegate_layer!(Dock);
 delegate_registry!(Dock);
 
@@ -767,4 +968,76 @@ impl ProvidesRegistryState for Dock {
         &mut self.registry_state
     }
     registry_handlers![OutputState, SeatState];
+}
+
+impl KeyboardHandler for Dock {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+        // Acquire focus when opened, then let other windows take it normally.
+        if self.compose.is_some() {
+            self.layer
+                .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            self.layer.commit();
+        }
+    }
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        self.close_compose();
+        self.draw();
+    }
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.compose_key(event);
+    }
+    fn repeat_key(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        keyboard: &wl_keyboard::WlKeyboard,
+        serial: u32,
+        event: KeyEvent,
+    ) {
+        self.press_key(conn, qh, keyboard, serial, event);
+    }
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+        self.modifiers = modifiers;
+    }
 }

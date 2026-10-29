@@ -145,7 +145,7 @@ impl DockConfig {
     /// Width of the whole layer surface: the strip plus room for the hover
     /// card beside it. Used when the strip runs along a vertical edge.
     pub fn surface_width(&self) -> u32 {
-        self.width + self.popup_gap + self.popup_width
+        self.width + self.popup_gap + self.popup_width.max(300)
     }
 
     /// Height of the whole layer surface: the strip plus room for the hover

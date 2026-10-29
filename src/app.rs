@@ -472,6 +472,7 @@ pub enum Message {
     },
     /// The new event's title was edited.
     EventDraftTitleChanged(String),
+    EventDraftProjects(calendar::projects::Action),
     /// The new event's description was edited.
     EventDraftDescriptionChanged(String),
     /// The new event's date was edited, as `YYYY-MM-DD`.
@@ -499,6 +500,7 @@ pub enum Message {
     EventEditRequested(String),
     /// The edited event's title was changed.
     EventEditTitleChanged(String),
+    EventEditProjects(calendar::projects::Action),
     /// The edited event's description was changed.
     EventEditDescriptionChanged(String),
     /// The edited event's date was changed, as `YYYY-MM-DD`.
@@ -2636,6 +2638,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDraftProjects(action) => {
+            if let calendar::projects::Action::Add(id) = &action {
+                if state.config.projects.get(*id).is_none() {
+                    return Task::none();
+                }
+            }
+            if let Some(draft) = &mut state.calendar.draft {
+                draft.projects.update(action);
+            }
+            Task::none()
+        }
+
         Message::EventDraftTitleChanged(title) => {
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.title = title;
@@ -2806,6 +2820,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     draft.start,
                     draft.end,
                     &recurrence,
+                    &draft.projects.ids,
                 )?;
 
                 Ok(calendar::Event {
@@ -2822,6 +2837,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     color,
                     completed: false,
                     details: calendar::Details {
+                        projects: draft.projects.ids.clone(),
                         description,
                         recurrence: recurrence.clone(),
                         ..calendar::Details::default()
@@ -2846,6 +2862,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventEditRequested(id) => {
             state.calendar.begin_edit(&id);
+            Task::none()
+        }
+
+        Message::EventEditProjects(action) => {
+            if let calendar::projects::Action::Add(id) = &action {
+                if state.config.projects.get(*id).is_none() {
+                    return Task::none();
+                }
+            }
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.projects.update(action);
+            }
             Task::none()
         }
 
@@ -2962,6 +2990,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     draft.start,
                     draft.end,
                     recurrence.as_deref(),
+                    &draft.projects.ids,
+                    draft.all_day,
                 )?;
                 Ok(())
             })
@@ -4387,6 +4417,69 @@ mod tests {
         assert_eq!(draft.id, "standup");
         assert_eq!(draft.title, "Standup");
         assert_eq!(draft.rule.repeat, crate::recurrence::RepeatMode::Never);
+    }
+
+    #[test]
+    fn event_project_changes_are_staged_and_cancelled_without_changing_the_event() {
+        use calendar::projects::Action;
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let ids: Vec<_> = state
+            .config
+            .projects
+            .items
+            .iter()
+            .take(2)
+            .map(|p| p.id)
+            .collect();
+        let _ = update(&mut state, Message::EventOpened("standup".into()));
+        for id in [ids[0], ids[1], ids[0], u64::MAX] {
+            let _ = update(&mut state, Message::EventEditProjects(Action::Add(id)));
+        }
+        let mut expected = ids.clone();
+        expected.sort_unstable();
+        assert_eq!(
+            state.calendar.edit_draft.as_ref().unwrap().projects.ids,
+            expected
+        );
+        assert!(
+            state
+                .calendar
+                .event("standup")
+                .unwrap()
+                .details
+                .projects
+                .is_empty()
+        );
+        let _ = update(
+            &mut state,
+            Message::EventEditProjects(Action::Remove(ids[0])),
+        );
+        assert_eq!(
+            state.calendar.edit_draft.as_ref().unwrap().projects.ids,
+            vec![ids[1]]
+        );
+        let _ = update(&mut state, Message::EventEditCancelled);
+        assert!(state.calendar.edit_draft.is_none());
+        assert!(
+            state
+                .calendar
+                .event("standup")
+                .unwrap()
+                .details
+                .projects
+                .is_empty()
+        );
+
+        let event = state.calendar.event("standup").unwrap();
+        state.calendar.draft = Some(calendar::Draft::new(
+            "primary".into(),
+            event.start,
+            event.end,
+        ));
+        let _ = update(&mut state, Message::EventDraftProjects(Action::Add(ids[0])));
+        let _ = update(&mut state, Message::EventDraftProjects(Action::Add(ids[1])));
+        assert_eq!(state.calendar.draft.as_ref().unwrap().projects.ids.len(), 2);
     }
 
     #[test]

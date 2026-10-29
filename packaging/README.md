@@ -235,7 +235,11 @@ Hyprland, niri and COSMIC provide that protocol; GNOME does not.
   in (with a duration in ms), or instantly. The dock does this itself; the side
   panel loads a temporary KWin script effect (so it needs KDE) and carries the
   mode in its application ID, which means it loses its desktop-file icon.
-- Only the strip takes the pointer; the card area is transparent and click-through.
+- The **+** at the end of the strip opens a task form beside it. Add a title
+  and optional deadline or due date, then click **Add task** (or press Enter)
+  to save to Inbox. Escape or Cancel dismisses the form.
+- Hover cards are click-through. The task form accepts pointer and keyboard
+  input while open, including Tab to move between fields and Ctrl+V to paste.
 
 Switching modes: in the regular window or the side panel, open the calendar
 **Menu** and press **Dock to screen edge**. That starts the dock and puts the

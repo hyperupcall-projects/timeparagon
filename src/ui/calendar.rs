@@ -1494,6 +1494,7 @@ pub fn event_editor<'a>(
         title,
         label("Day and time"),
         when,
+        event_projects(state, &draft.projects, metrics, Message::EventEditProjects),
         label("Description"),
         text_input("Add description", &draft.description)
             .on_input(Message::EventEditDescriptionChanged)
@@ -1527,6 +1528,116 @@ pub fn event_editor<'a>(
     );
 
     body.into()
+}
+
+/// The same add/search/remove flow used for task projects, staged until Save.
+fn event_projects<'a>(
+    state: &'a State,
+    selection: &'a calendar::projects::Selection,
+    metrics: &Metrics,
+    message: fn(calendar::projects::Action) -> Message,
+) -> Element<'a, Message> {
+    use calendar::projects::Action;
+    let mut content = column![
+        text("Projects")
+            .size(metrics.label())
+            .style(text::secondary)
+    ]
+    .spacing(6)
+    .width(Fill);
+    if selection.ids.is_empty() {
+        content = content.push(
+            text("No projects")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
+    }
+    for id in &selection.ids {
+        let project = state.config.projects.get(*id);
+        let name = project
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("Removed project ({id})"));
+        let color = project
+            .and_then(|p| p.color())
+            .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e));
+        content = content.push(
+            row![
+                color_circle(color),
+                text(name).size(metrics.label()).width(Fill),
+                button(text("×").size(metrics.label()))
+                    .on_press(message(Action::Remove(*id)))
+                    .style(button::text),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        );
+    }
+    content = content.push(
+        button(
+            text(if selection.open {
+                "Done"
+            } else {
+                "+ Add project"
+            })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+        )
+        .width(Fill)
+        .on_press(message(Action::Toggle))
+        .style(button::secondary),
+    );
+    if selection.open {
+        content = content.push(
+            text_input("Search projects…", &selection.query)
+                .on_input(move |query| message(Action::Query(query)))
+                .size(metrics.label())
+                .width(Fill),
+        );
+        let query = selection.query.trim().to_lowercase();
+        let available: Vec<_> = state
+            .config
+            .projects
+            .sorted()
+            .into_iter()
+            .filter(|p| !selection.ids.contains(&p.id))
+            .filter(|p| p.name.to_lowercase().contains(&query))
+            .collect();
+        if available.is_empty() {
+            content = content.push(
+                text(if state.config.projects.items.is_empty() {
+                    "Create a project in Projects first"
+                } else if query.is_empty() {
+                    "Every project is already added"
+                } else {
+                    "No matching projects"
+                })
+                .size(metrics.label())
+                .style(text::secondary),
+            );
+        }
+        let mut choices = column![].spacing(4);
+        for project in available {
+            choices = choices.push(
+                row![
+                    color_circle(
+                        project
+                            .color()
+                            .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e))
+                    ),
+                    button(text(&project.name).size(metrics.label()).width(Fill))
+                        .width(Fill)
+                        .on_press(message(Action::Add(project.id)))
+                        .style(button::text),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            );
+        }
+        content =
+            content.push(container(scrollable(choices).height(Length::Shrink)).max_height(160));
+    }
+    content.into()
 }
 
 /// The details card as a full-height pane, drawn to the right of the view.
@@ -1930,12 +2041,12 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
 
-    let panel = column![
-        header,
+    let fields = column![
         title,
         kinds,
         when,
         draft_calendar_picker(state, metrics),
+        event_projects(state, &draft.projects, metrics, Message::EventDraftProjects),
         description,
         super::recurrence::editor(
             &draft.rule,
@@ -1944,6 +2055,14 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
             false,
             Message::EventDraftRecurrence,
         ),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let panel = column![
+        header,
+        container(scrollable(fields).height(Length::Shrink))
+            .max_height((metrics.size.height - 150.0).max(80.0)),
         actions,
     ]
     .spacing(metrics.spacing)
@@ -4220,6 +4339,37 @@ mod tests {
             message,
             Message::EventDraftKindSelected(calendar::DraftKind::Habit)
         )));
+    }
+
+    #[test]
+    fn event_project_picker_searches_and_emits_assignment_actions() {
+        let state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        let metrics = Metrics::of(Size::new(300.0, 800.0));
+        let selection = calendar::projects::Selection {
+            open: true,
+            query: "work".into(),
+            ..Default::default()
+        };
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(300.0, 800.0),
+            event_projects(&state, &selection, &metrics, Message::EventEditProjects),
+        );
+        assert!(ui.find("Personal").is_err());
+        ui.click("Work").unwrap();
+        let id = state
+            .config
+            .projects
+            .items
+            .iter()
+            .find(|p| p.name == "Work")
+            .unwrap()
+            .id;
+        assert!(ui.into_messages().any(|m| matches!(m,
+            Message::EventEditProjects(calendar::projects::Action::Add(value)) if value == id)));
     }
 
     #[test]
