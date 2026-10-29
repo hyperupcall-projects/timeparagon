@@ -421,10 +421,12 @@ pub enum Message {
     ),
     /// Show or hide Google Tasks in the day view.
     ShowTasksToggled(bool),
-    /// Open or close the color picker for a Google Tasks list.
-    TaskColorEditorToggled(String),
+    /// Open or close the color picker for a calendar or Google Tasks list.
+    SourceColorEditorToggled(String),
     /// Give a Google Tasks list a custom color, or `None` to reset it.
     TaskColorPicked(String, Option<iced::Color>),
+    /// Give a regular calendar a local color override, or reset to Google's color.
+    CalendarColorPicked(String, Option<iced::Color>),
     /// Color time-block events on the TimeSlay calendar; `None` resets it.
     TimeBlockColorPicked(Option<iced::Color>),
     /// Color scheduled task events on the TimeSlay calendar; `None` resets it.
@@ -832,6 +834,7 @@ fn boot_state() -> State {
     // restart opens on what the last run saw rather than an empty grid. This
     // is deliberately not part of `State::new`: a state built by hand in a
     // test must not read or rewrite the user's cache.
+    state.calendar.apply_task_colors(&state.config.calendar);
     state.calendar.cache_days_in(config::cache_days_dir());
     state.keep.cache_in(config::cache_keep_path());
     state.travel.cache_in(config::cache_travel_path());
@@ -2480,7 +2483,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
-        Message::TaskColorEditorToggled(id) => {
+        Message::SourceColorEditorToggled(id) => {
             state.calendar.color_editor =
                 (state.calendar.color_editor.as_deref() != Some(id.as_str())).then_some(id);
             Task::none()
@@ -2489,6 +2492,23 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::TaskColorPicked(id, color) => {
             state.config.calendar.set_task_color(&id, color);
             state.calendar.apply_task_colors(&state.config.calendar);
+            state.calendar.color_editor = None;
+            queue_save(state)
+        }
+
+        Message::CalendarColorPicked(id, color) => {
+            match color {
+                Some(color) => {
+                    state
+                        .config
+                        .calendar
+                        .calendar_colors
+                        .insert(id, crate::hex::HexColor(color));
+                }
+                None => {
+                    state.config.calendar.calendar_colors.remove(&id);
+                }
+            }
             state.calendar.color_editor = None;
             queue_save(state)
         }
@@ -2557,6 +2577,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar = calendar::Store::new(state.config.calendar.day_start_hour());
             // The reset takes the store with it, so the directory is put
             // straight back: days keep being written across a disconnect.
+            state.calendar.apply_task_colors(&state.config.calendar);
             state.calendar.cache_days_in(config::cache_days_dir());
             state.calendar.connection = Connection::SignedOut;
             Task::none()
@@ -4147,13 +4168,13 @@ mod tests {
 
         let _ = update(
             &mut state,
-            Message::TaskColorEditorToggled("tasks:list".into()),
+            Message::SourceColorEditorToggled("tasks:list".into()),
         );
         assert_eq!(state.calendar.color_editor.as_deref(), Some("tasks:list"));
 
         let _ = update(
             &mut state,
-            Message::TaskColorEditorToggled("tasks:list".into()),
+            Message::SourceColorEditorToggled("tasks:list".into()),
         );
         assert_eq!(state.calendar.color_editor, None);
     }

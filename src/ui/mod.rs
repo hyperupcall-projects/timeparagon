@@ -24,7 +24,7 @@ pub mod timeblocking;
 mod timeblocking_focus;
 pub mod travel;
 
-use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text};
+use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text, tooltip};
 use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
 
 use crate::app::{Message, Screen, State};
@@ -130,12 +130,38 @@ pub fn view(state: &State) -> Element<'_, Message> {
         // The tabs are the window's navigation, so they sit above whatever is
         // on show rather than inside it. Constraining the bar to `nav_width`
         // keeps it the size it was before a pane widened the window.
-        let base = column![
+        let mut base = column![
             container(tabs(state, &nav_metrics)).width(Length::Fixed(nav_width)),
             content
         ]
         .width(Fill)
         .height(Fill);
+        if state.sidebar.is_some() {
+            // Like the tabs, the add-task bar belongs to the original panel.
+            // Editors may widen the window, but must not stretch this control.
+            let borders = 2.0
+                * (state.config.views.panel_border_outer_width()
+                    + state.config.views.panel_border_inner_width());
+            let footer_width = (state.calendar_width() - borders).max(1.0).min(size.width);
+            base = base.push(
+                container(
+                    tooltip(
+                        button(text("+").size(28).center().width(Fill))
+                            .width(Fill)
+                            .height(44)
+                            .padding(0)
+                            .style(button::secondary)
+                            .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
+                        text("Add task").size(12),
+                        tooltip::Position::Top,
+                    )
+                    .style(container::rounded_box),
+                )
+                .id("panel-add-task")
+                .width(Length::Fixed(footer_width))
+                .height(44),
+            );
+        }
         // Adding/removing a wrapper resets the state of all its descendants.
         // Keep one stack with the calendar first, and append active dialogs.
         let mut layers = vec![base.into()];

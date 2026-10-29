@@ -48,15 +48,17 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         text(heading).size(25),
         text(subtitle).size(metrics.label()).style(text::secondary),
     ];
-    let new_task = button(text("New task").size(metrics.label()).center())
-        .on_press(msg(Action::NewTask))
-        .style(button::primary);
-    let mut body = column![
-        row![title.width(Fill), new_task]
-            .spacing(metrics.spacing)
-            .align_y(Center)
-    ]
-    .spacing(metrics.spacing);
+    let mut header = row![title.width(Fill)]
+        .spacing(metrics.spacing)
+        .align_y(Center);
+    if list == List::Inbox {
+        header = header.push(
+            button(text("New task").size(metrics.label()).center())
+                .on_press(msg(Action::NewTask))
+                .style(button::primary),
+        );
+    }
+    let mut body = column![header].spacing(metrics.spacing);
 
     for error in [&state.inbox.error, &state.calendar.error]
         .into_iter()
@@ -85,8 +87,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         .into()
 }
 
-/// One task, showing the metadata the Inbox is meant to collect and the
-/// actions that take it out of the Inbox.
+/// One task and its metadata. Inbox actions live in the task's details pane.
 fn task_card<'a>(
     state: &'a State,
     task: &'a Event,
@@ -114,7 +115,9 @@ fn task_card<'a>(
     for row in metadata_rows(state, task, metrics, list == List::Inbox) {
         card = card.push(row);
     }
-    card = card.push(actions(state, task, metrics, list, busy));
+    if list == List::Triaged {
+        card = card.push(actions(task, metrics, busy));
+    }
 
     container(card)
         .padding([6, 8])
@@ -368,24 +371,10 @@ fn location_pin(size: f32) -> Element<'static, Message> {
         .into()
 }
 
-/// The Inbox actions, in their set order: Triage leads, then parking the task,
-/// then finishing or discarding it.
-fn actions<'a>(
-    _state: &'a State,
-    task: &'a Event,
-    metrics: &Metrics,
-    list: List,
-    busy: bool,
-) -> Element<'a, Message> {
+/// The actions still shown on Triaged cards.
+fn actions<'a>(task: &'a Event, metrics: &Metrics, busy: bool) -> Element<'a, Message> {
     let status = tb::task_status(task);
     let mut entries: Vec<(&'static str, Message, bool)> = Vec::new();
-    if list == List::Inbox {
-        entries.push((
-            "Triage",
-            Message::TimeBlocking(tb::Action::Triage(task.id.clone())),
-            true,
-        ));
-    }
     entries.push((
         "Move to backlog",
         Message::TimeBlocking(tb::Action::Backlog(task.id.clone())),
@@ -728,31 +717,51 @@ mod tests {
     }
 
     #[test]
-    fn an_untriaged_task_shows_its_metadata_and_inbox_actions() {
+    fn an_untriaged_task_shows_metadata_without_inline_actions() {
         for width in [320.0, 900.0] {
             let state = state_with_task("");
             let mut ui = simulator(&state, width);
             assert!(ui.find("Reply to Sam").is_ok());
             assert!(ui.find("New task").is_ok());
+            for label in ["Project", "Priority", "Estimate"] {
+                assert!(ui.find(label).is_ok(), "{label}");
+            }
             for label in [
-                "Project",
-                "Priority",
-                "Estimate",
                 "Triage",
                 "Move to backlog",
                 "Complete task",
                 "Ignore Task",
                 "Delete Task",
             ] {
-                assert!(ui.find(label).is_ok(), "{label}");
+                assert!(ui.find(label).is_err(), "{label}");
             }
-            ui.click("Triage").unwrap();
-            let messages: Vec<_> = ui.into_messages().collect();
-            assert!(messages.iter().any(|m| matches!(
-                m,
-                Message::TimeBlocking(tb::Action::Triage(id)) if id == "task:one"
-            )));
         }
+    }
+
+    #[test]
+    fn opening_an_inbox_task_exposes_its_actions_in_the_details_pane() {
+        let mut state = state_with_task("");
+        let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
+        let metrics = Metrics::of(Size::new(320.0, 1800.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(320.0, 1800.0),
+            crate::ui::calendar::details_pane(&state, &metrics),
+        );
+        for label in [
+            "Triage",
+            "Move to backlog",
+            "Complete task",
+            "Ignore Task",
+            "Delete task",
+        ] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        ui.click("Triage").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::TimeBlocking(tb::Action::Triage(id)) if id == "task:one"
+        )));
     }
 
     #[test]
@@ -815,6 +824,7 @@ mod tests {
         assert!(ui.find("Reply to Sam").is_ok());
         assert!(ui.find("Move to backlog").is_ok());
         assert!(ui.find("Triage").is_err());
+        assert!(ui.find("New task").is_err());
     }
 
     #[test]

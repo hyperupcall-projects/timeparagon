@@ -573,6 +573,15 @@ fn location_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elem
 pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let status = tb::task_status(task);
     let mut actions = column![].spacing(metrics.spacing).width(Fill);
+    if crate::inbox::untriaged(state, task) {
+        let mut triage = button(text("Triage").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .style(button::primary);
+        if state.timeblocking.busy.is_empty() {
+            triage = triage.on_press(msg(Action::Triage(task.id.clone())));
+        }
+        actions = actions.push(triage);
+    }
     for (label, action) in [
         (
             if status == tb::TaskStatus::Completed {

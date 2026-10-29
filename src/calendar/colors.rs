@@ -164,6 +164,14 @@ pub fn palette() -> Vec<Color> {
         .collect()
 }
 
+/// All colors offered for regular calendars.
+pub fn calendar_palette() -> Vec<Color> {
+    CALENDAR
+        .iter()
+        .filter_map(|(_, hex)| hex::parse(hex).ok())
+        .collect()
+}
+
 /// Picks a readable label color for a Google Calendar chip.
 ///
 /// Google itself uses near-black on the pastel event colors and white on the

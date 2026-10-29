@@ -42,6 +42,8 @@ pub struct CalendarSettings {
     pub day_end_hour: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub calendar_colors: BTreeMap<String, HexColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_block_color: Option<HexColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +67,7 @@ impl Default for CalendarSettings {
             backlog_list: None,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),
+            calendar_colors: BTreeMap::new(),
             time_block_color: None,
             task_event_color: None,
             default_calendar: None,

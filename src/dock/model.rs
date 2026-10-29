@@ -81,7 +81,7 @@ pub fn segments(store: &Store, settings: &CalendarSettings, day: NaiveDate) -> V
             Segment {
                 start_min: span.start_min,
                 end_min: span.end_min,
-                color: event.color,
+                color: event.display_color(settings),
                 completed: event.is_task() && event.completed,
                 card: card(event, &assigned, false),
                 full: card(event, &assigned, true),

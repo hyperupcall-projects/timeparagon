@@ -177,12 +177,12 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                         events = events.push(weekly_task_chip(state, event, &cell_metrics));
                     }
                 } else {
-                    events = events.push(all_day_chip(event, &cell_metrics));
+                    events = events.push(all_day_chip(state, event, &cell_metrics));
                 }
             }
             for event in state.calendar.timed_events_on(day, &state.config.calendar) {
                 let label = format!("{} {}", event.start.format("%-I:%M%P"), event.title);
-                let color = event.color;
+                let color = event.display_color(&state.config.calendar);
                 events = events.push(
                     button(
                         text(label)
@@ -928,7 +928,7 @@ fn all_day_row_on<'a>(
                     super::timeblocking::task_row(state, event, metrics, false)
                 }
             } else {
-                all_day_chip(event, metrics)
+                all_day_chip(state, event, metrics)
             }
         })
         .collect();
@@ -1008,8 +1008,8 @@ pub(super) fn weekly_task_chip<'a>(
     )
 }
 
-fn all_day_chip<'a>(event: &Event, metrics: &Metrics) -> Element<'a, Message> {
-    let color = event.color;
+fn all_day_chip<'a>(state: &State, event: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let color = event.display_color(&state.config.calendar);
     let ink = on_color(color);
 
     let title = if event.completed {
@@ -1051,20 +1051,6 @@ fn lift(color: Color) -> Color {
     }
 }
 
-/// The little square that shows a calendar's color in the menu.
-fn static_swatch<'a>(color: Color) -> Element<'a, Message> {
-    container(iced::widget::Space::new().width(10.0).height(10.0))
-        .style(move |_theme| container::Style {
-            background: Some(color.into()),
-            border: iced::Border {
-                radius: 2.0.into(),
-                ..iced::Border::default()
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
 /// A swatch that can be tapped, used for a task list's color and in the
 /// picker itself. `selected` draws a brighter ring so the current color reads.
 pub(super) fn swatch_button<'a>(
@@ -1099,24 +1085,31 @@ fn swatch_style(color: Color, selected: bool, status: button::Status) -> button:
     }
 }
 
-/// The palette shown under a task list whose color is being changed. Six
+/// The palette shown under a source whose color is being changed. Six
 /// swatches per row keeps it inside the sheet even at 200px.
-fn task_color_picker<'a>(
+fn source_color_picker<'a>(
     id: &str,
     current: Option<Color>,
+    is_tasks: bool,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let mut rows: Vec<Element<'a, Message>> = Vec::new();
-    for chunk in colors::palette().chunks(6) {
+    let palette = if is_tasks {
+        colors::palette()
+    } else {
+        colors::calendar_palette()
+    };
+    let pick = |color| {
+        if is_tasks {
+            Message::TaskColorPicked(id.to_owned(), color)
+        } else {
+            Message::CalendarColorPicked(id.to_owned(), color)
+        }
+    };
+    for chunk in palette.chunks(6) {
         let swatches: Vec<Element<'a, Message>> = chunk
             .iter()
-            .map(|&color| {
-                swatch_button(
-                    color,
-                    current == Some(color),
-                    Message::TaskColorPicked(id.to_owned(), Some(color)),
-                )
-            })
+            .map(|&color| swatch_button(color, current == Some(color), pick(Some(color))))
             .collect();
         rows.push(row(swatches).spacing(6.0).into());
     }
@@ -1128,13 +1121,17 @@ fn task_color_picker<'a>(
             .width(Fill),
     )
     .width(Fill)
-    .on_press(Message::TaskColorPicked(id.to_owned(), None))
+    .on_press(pick(None))
     .style(button::secondary);
 
     column![
-        text("Task color")
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
+        text(if is_tasks {
+            "Task color"
+        } else {
+            "Calendar color in TimeSlay"
+        })
+        .size(metrics.label() - 1.0)
+        .style(text::secondary),
         column(rows).spacing(6.0),
         reset,
     ]
@@ -1211,7 +1208,7 @@ fn day_canvas<'a>(
             end_min: span.end_min,
             column: slot.column,
             columns: slot.columns,
-            color: event.color,
+            color: event.display_color(&state.config.calendar),
             editable: !event.is_task() || event.details.scheduled.is_some(),
             pending: state.calendar.pending_time(&event.id).is_some()
                 || state.timeblocking.busy.contains(&event.id),
@@ -1399,15 +1396,11 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         let id = source.id;
         let enabled = state.calendar.calendar_enabled(&id, &state.config.calendar);
         let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
-        let dot = if is_tasks {
-            swatch_button(
-                source.color,
-                editing,
-                Message::TaskColorEditorToggled(id.clone()),
-            )
-        } else {
-            static_swatch(source.color)
-        };
+        let dot = swatch_button(
+            source.color,
+            editing,
+            Message::SourceColorEditorToggled(id.clone()),
+        );
         let toggle_id = id.clone();
         panel = panel.push(
             row![
@@ -1419,10 +1412,20 @@ fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
             .spacing(8.0)
             .align_y(Alignment::Center),
         );
-        if is_tasks && editing {
-            panel = panel.push(task_color_picker(
+        if editing {
+            panel = panel.push(source_color_picker(
                 &id,
-                state.config.calendar.task_color(&id),
+                if is_tasks {
+                    state.config.calendar.task_color(&id)
+                } else {
+                    state
+                        .config
+                        .calendar
+                        .calendar_colors
+                        .get(&id)
+                        .map(|color| color.0)
+                },
+                is_tasks,
                 metrics,
             ));
         }

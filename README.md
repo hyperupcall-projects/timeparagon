@@ -35,16 +35,15 @@ Same for the week. Notice how yesterday can be included in this view.
 		- Based on query; omit private event details. (TODO)
 - Manage your time:
 	- Events
+		- Integrates with meeting software like Zoom and Google Meet.
 		- Integrates with guest/event/RSVP going/not going feature (TODO)
-		- Integrates with meeting software like Zoom and Google Meet. (TODO)
-		- Uses location data to pad event with travel time. (WIP)
+		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP)
 	- Time blocks
 		- Assign tasks to time blocks.
 		- Brain dump.
 		- Pomodoro timer in the time block view: configurable work/break lengths, separate elapsed totals, and automatic task stop/resume at phase boundaries. Task tracking also works independently. Pause freezes only the Pomodoro clock; Reset clears its totals. The shared timer continues across blocks and while the popup is closed.
 	- Habits
-		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
-	
+		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)a
 - Manage tasks:
 	- Create tasks:
 		- With Todoist-like syntax and voice input. (TODO)
@@ -52,6 +51,7 @@ Same for the week. Notice how yesterday can be included in this view.
 		- Within Slack (WIP)
 	- Triage tasks so they're discoverable later.
 	- Workflow to manage tasks not done in days prior (TODO)
+	- Workflow to organize/manage pending tasks (TODO)
 	- Send low-priority tasks to a backlog.
 - Projects (TODO)
 	- View the events, tasks, and notes for any project. (TODO)

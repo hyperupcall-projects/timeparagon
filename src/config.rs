@@ -840,6 +840,9 @@ pub struct CalendarSettings {
     /// shared task blue.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
+    /// Local calendar color overrides, keyed by Google Calendar ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub calendar_colors: BTreeMap<String, HexColor>,
     /// Color of time-block events on the TimeSlay calendar. None uses the
     /// built-in block color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -879,6 +882,7 @@ impl Default for CalendarSettings {
             weekly_days: 8,
             weekly_day_width: 150,
             task_colors: BTreeMap::new(),
+            calendar_colors: BTreeMap::new(),
             time_block_color: None,
             task_event_color: None,
             habit_color: None,

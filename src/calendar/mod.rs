@@ -92,6 +92,24 @@ pub struct Event {
 }
 
 impl Event {
+    /// Apply a local calendar color while preserving explicit event colors and
+    /// the separate TimeSlay task, habit and time-block color settings.
+    pub fn display_color(&self, settings: &CalendarSettings) -> Color {
+        if !self.is_task()
+            && self.details.scheduled.is_none()
+            && !self.details.habit
+            && (self.all_day || settings.app_calendar.as_deref() != Some(self.calendar_id.as_str()))
+            && self.details.color_id.is_none()
+        {
+            settings
+                .calendar_colors
+                .get(&self.calendar_id)
+                .map_or(self.color, |color| color.0)
+        } else {
+            self.color
+        }
+    }
+
     /// Source used for calendar visibility and overlap ordering.
     pub fn source_id(&self) -> &str {
         &self.calendar_id
@@ -526,6 +544,8 @@ pub struct Store {
     /// `boot` and a reconnect do: a store built by hand must not read or
     /// rewrite the cache the user's own days live in.
     day_cache: Option<PathBuf>,
+    /// Preferences used to recolor days restored from disk before display.
+    color_settings: Option<CalendarSettings>,
     /// The hour the calendar day ends, used to decide which day an event
     /// belongs to when reading from or writing to the month cache on disk.
     day_end_hour: u32,
@@ -582,6 +602,7 @@ impl Store {
             cache: HashMap::new(),
             visible_days: Vec::new(),
             day_cache: None,
+            color_settings: None,
             day_end_hour,
             day,
             last_sync: None,
@@ -616,6 +637,7 @@ impl Store {
             cache: HashMap::new(),
             visible_days: Vec::new(),
             day_cache: None,
+            color_settings: None,
             day_end_hour: 0,
             day: snapshot.day,
             last_sync: Some(snapshot.fetched_at),
@@ -750,7 +772,13 @@ impl Store {
 
     /// The day's events as an earlier run left them, if it left them.
     fn read_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
-        day_cache::load(self.day_cache.as_ref()?, day, self.day_end_hour)
+        let mut events = day_cache::load(self.day_cache.as_ref()?, day, self.day_end_hour)?;
+        if let Some(settings) = &self.color_settings {
+            for event in &mut events {
+                recolor_event(event, settings);
+            }
+        }
+        Some(events)
     }
 
     /// Writes one day out, so the run after this one paints it at once.
@@ -791,6 +819,8 @@ impl Store {
             .map(|mut calendar| {
                 if calendar.is_task_list() {
                     calendar.color = task_color(settings, &calendar.id);
+                } else if let Some(color) = settings.calendar_colors.get(&calendar.id) {
+                    calendar.color = color.0;
                 }
                 calendar
             })
@@ -832,6 +862,10 @@ impl Store {
     /// this keeps a customized list its own color across syncs. Every other
     /// calendar's events are left exactly as Google returned them.
     pub fn apply_task_colors(&mut self, settings: &CalendarSettings) {
+        // Snapshots are cached with Google's colors, and old cache files may
+        // predate a preference change. Future disk reads need these settings
+        // too, even when no sync is available to correct their colors later.
+        self.color_settings = Some(settings.clone());
         for calendar in &mut self.calendars {
             if calendar.is_task_list() {
                 calendar.color = task_color(settings, &calendar.id);
@@ -2749,6 +2783,74 @@ mod tests {
 
         second.set_day(today, today);
         assert_eq!(second.events, parked, "the day should come back from disk");
+    }
+
+    /// Startup and navigation recolor stale disk entries without a network fetch.
+    #[test]
+    fn disk_cached_tasks_use_saved_colors_before_the_first_sync() {
+        let scratch = day_cache::Scratch::new("saved-colors");
+        let mut snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let flamingo = colors::event("4").unwrap();
+        let purple = colors::event("3").unwrap();
+        let task = snapshot.events.iter_mut().find(|e| e.id == "deep").unwrap();
+        task.calendar_id = "tasks:list".into();
+        task.color = flamingo;
+        let mut scheduled = task.clone();
+        scheduled.id = "scheduled-task".into();
+        scheduled.details.scheduled =
+            Some(scheduled::Link::new("app-calendar".into(), task).unwrap());
+        snapshot.events.push(scheduled);
+        let ordinary_color = snapshot
+            .events
+            .iter()
+            .find(|e| e.id == "standup")
+            .unwrap()
+            .color;
+
+        // Sync persists the raw snapshot before applying display preferences.
+        let mut previous = Store::with_snapshot(empty_snapshot(day));
+        previous.cache_days_in(Some(scratch.path().to_path_buf()));
+        previous.apply_snapshot(snapshot);
+
+        let mut settings = CalendarSettings::default();
+        settings.set_task_color("tasks:list", Some(purple));
+        settings.set_task_event_color(Some(purple));
+        let mut store = Store::with_snapshot(empty_snapshot(day));
+        store.apply_task_colors(&settings);
+        store.cache_days_in(Some(scratch.path().to_path_buf()));
+        let check_colors = |store: &Store| {
+            for id in ["deep", "scheduled-task"] {
+                assert_eq!(store.event(id).unwrap().color, purple);
+            }
+            assert_eq!(store.event("standup").unwrap().color, ordinary_color);
+        };
+        check_colors(&store);
+
+        // A later disk read, including a range view, uses current preferences.
+        let tomorrow = day.succ_opt().unwrap();
+        store.set_day(tomorrow, day);
+        store.cache.clear();
+        store.load_cached_days(&[day, tomorrow]);
+        assert_eq!(
+            store
+                .events_on(day)
+                .iter()
+                .find(|e| e.id == "deep")
+                .unwrap()
+                .color,
+            purple
+        );
+        store.set_day(day, day);
+        check_colors(&store);
+
+        // Updating preferences must also affect days that are still on disk.
+        store.set_day(tomorrow, day);
+        store.cache.clear();
+        settings.set_task_color("tasks:list", Some(colors::TASK));
+        store.apply_task_colors(&settings);
+        store.set_day(day, day);
+        assert_eq!(store.event("deep").unwrap().color, colors::TASK);
     }
 
     /// The months on disk are trimmed by the same rule as the memory cache.

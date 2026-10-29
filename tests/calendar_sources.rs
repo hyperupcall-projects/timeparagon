@@ -28,6 +28,94 @@ fn state() -> State {
 }
 
 #[test]
+fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors() {
+    let mut state = state();
+    let original = state.calendar.event("standup").unwrap().color;
+    let color = calendar::colors::calendar("24").unwrap();
+    let _ = app::update(
+        &mut state,
+        Message::CalendarColorPicked("work".into(), Some(color)),
+    );
+    let check = |state: &State| {
+        assert_eq!(
+            state
+                .calendar
+                .event("standup")
+                .unwrap()
+                .display_color(&state.config.calendar),
+            color
+        );
+        assert_eq!(
+            state
+                .calendar
+                .display_sources(&state.config.calendar)
+                .iter()
+                .find(|c| c.id == "work")
+                .unwrap()
+                .color,
+            color
+        );
+    };
+    check(&state);
+    // Preferences persist, while raw event colors remain available for reset.
+    state.config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
+    let snapshot = calendar::sample_snapshot();
+    state.calendar.day = snapshot.day;
+    let _ = app::update(&mut state, Message::CalendarSynced(Ok(snapshot)));
+    check(&state);
+    let mut explicit = state.calendar.event("standup").unwrap().clone();
+    explicit.details.color_id = Some("4".into());
+    explicit.color = calendar::colors::event("4").unwrap();
+    assert_eq!(
+        explicit.display_color(&state.config.calendar),
+        explicit.color
+    );
+    state.config.calendar.app_calendar = Some("work".into());
+    assert_eq!(
+        state
+            .calendar
+            .event("standup")
+            .unwrap()
+            .display_color(&state.config.calendar),
+        original
+    );
+    state.config.calendar.app_calendar = None;
+    let _ = app::update(
+        &mut state,
+        Message::CalendarColorPicked("work".into(), None),
+    );
+    assert_eq!(
+        state
+            .calendar
+            .event("standup")
+            .unwrap()
+            .display_color(&state.config.calendar),
+        original
+    );
+    assert!(!state.config.calendar.calendar_colors.contains_key("work"));
+}
+
+#[test]
+fn regular_calendar_menu_shows_a_picker_at_narrow_widths() {
+    let mut state = state();
+    state.calendar.menu_open = true;
+    let _ = app::update(&mut state, Message::SourceColorEditorToggled("work".into()));
+    for width in [180.0, 200.0, 420.0] {
+        state.main_size = Size::new(width, 4000.0);
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            Size::new(width, 4000.0),
+            app::view(&state, window::Id::unique()),
+        );
+        assert!(ui.find("Calendar color in TimeSlay").is_ok());
+        ui.click("Reset to default").unwrap();
+        assert!(ui.into_messages().any(
+            |message| matches!(message, Message::CalendarColorPicked(id, None) if id == "work")
+        ));
+    }
+}
+
+#[test]
 fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_sync() {
     let mut state = state();
     state.config.calendar.disabled = vec!["work".into()];
