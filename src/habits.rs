@@ -303,19 +303,38 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.habits.confirm_delete = None;
             let day = Local::now().date_naive();
             let color_id = colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
-            state.habits.draft = Some(Draft::new(day, color_id));
-            state.habits.error = None;
-            Task::none()
+            open_new(state, Draft::new(day, color_id))
         }
 
         Action::Edit(id) => {
             let Some(habit) = state.habits.habits.iter().find(|habit| habit.id == id) else {
                 return Task::none();
             };
-            state.habits.draft = Some(Draft::from_habit(habit));
+            let event = calendar::Event {
+                id: habit.id.clone(),
+                calendar_id: habit.calendar_id.clone(),
+                title: habit.title.clone(),
+                start: habit.start,
+                end: habit.end,
+                all_day: false,
+                color: habit.color(&state.config.calendar),
+                completed: false,
+                details: calendar::Details {
+                    habit: true,
+                    description: habit.notes.clone(),
+                    recurrence: habit.recurrence.lines().to_vec(),
+                    // Load the full master, including projects and location,
+                    // through the same path as a calendar occurrence.
+                    recurring_event_id: Some(habit.id.clone()),
+                    color_id: habit.color_id.clone(),
+                    ..Default::default()
+                },
+            };
+            state.habits.draft = None;
             state.habits.confirm_delete = None;
             state.habits.error = None;
-            Task::none()
+            state.calendar.detail_event = Some(event);
+            crate::app::update(state, Message::EventOpened(id))
         }
 
         Action::CancelEdit => {
@@ -415,6 +434,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     let habit = Habit::from_event(event);
                     state.habits.draft = None;
                     state.habits.error = None;
+                    if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
+                        state.calendar.open_event = None;
+                        state.calendar.edit_draft = None;
+                        state.calendar.detail_event = None;
+                    }
                     if let Some(existing) = state
                         .habits
                         .habits
@@ -430,7 +454,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     Task::done(Message::CalendarSyncRequested)
                 }
                 Err(error) => {
-                    if let Some(draft) = state.habits.draft.as_mut() {
+                    if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
+                        state.calendar.error = Some(error);
+                    } else if let Some(draft) = state.habits.draft.as_mut() {
                         draft.error = Some(error);
                     } else {
                         state.habits.error = Some(error);
@@ -472,6 +498,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             match result {
                 Ok(id) => {
                     state.habits.habits.retain(|habit| habit.id != id);
+                    if state.calendar.open_event.as_deref() == Some(id.as_str()) {
+                        state.calendar.open_event = None;
+                        state.calendar.edit_draft = None;
+                        state.calendar.detail_event = None;
+                    }
                     state.habits.error = None;
                     Task::done(Message::CalendarSyncRequested)
                 }
@@ -482,6 +513,53 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
         }
     }
+}
+
+/// Unsaved habits never enter the calendar grid or its disk cache.
+pub const NEW_HABIT_ID: &str = "timeslay:new-habit";
+
+pub fn open_new(state: &mut State, draft: Draft) -> Task<Message> {
+    let day = draft
+        .anchor_date()
+        .unwrap_or_else(|| Local::now().date_naive());
+    let start =
+        deadline::parse_time(&draft.start).unwrap_or(NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+    let end =
+        deadline::parse_time(&draft.end).unwrap_or(NaiveTime::from_hms_opt(9, 30, 0).unwrap());
+    let event = calendar::Event {
+        id: NEW_HABIT_ID.into(),
+        calendar_id: state
+            .config
+            .calendar
+            .app_calendar
+            .clone()
+            .unwrap_or_default(),
+        title: draft.title,
+        start: calendar::at_clock(day, start.hour(), start.minute()),
+        end: calendar::at_clock(day, end.hour(), end.minute()),
+        all_day: false,
+        color: state.config.calendar.habit_color(),
+        completed: false,
+        details: calendar::Details {
+            habit: true,
+            description: draft.notes,
+            color_id: draft.color_id,
+            ..Default::default()
+        },
+    };
+    state.habits.draft = None;
+    state.habits.error = None;
+    state.calendar.error = None;
+    state.calendar.detail_event = Some(event);
+    let task = crate::app::update(state, Message::EventOpened(NEW_HABIT_ID.into()));
+    if let Some(edit) = state.calendar.edit_draft.as_mut() {
+        edit.rule = draft.rule;
+        edit.editing_title = true;
+    }
+    Task::batch([
+        task,
+        iced::widget::operation::focus(iced::widget::Id::new("event-title")),
+    ])
 }
 
 fn refresh(state: &mut State) -> Task<Message> {

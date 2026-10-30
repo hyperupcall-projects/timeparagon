@@ -1250,6 +1250,24 @@ pub fn patch_event_location(
 
 /// Updates an existing event on Google: title, description, start and end.
 /// Blocking: call it from [`crate::blocking::run`].
+pub fn fetch_event(access_token: &str, original: &Event, id: &str) -> Result<Event, String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(&original.calendar_id),
+        urlencoding::encode(id)
+    );
+    let entry: EventEntry = get(&url, access_token)?;
+    let calendar = Calendar {
+        id: original.calendar_id.clone(),
+        name: String::new(),
+        color: original.color,
+        primary: false,
+        selected_by_google: true,
+    };
+    parse_event(entry, &calendar, original.start.date_naive())
+        .ok_or_else(|| "Could not read habit series".into())
+}
+
 pub fn patch_event(
     access_token: &str,
     calendar_id: &str,
@@ -1262,6 +1280,7 @@ pub fn patch_event(
     recurrence: Option<&[String]>,
     projects: &[u64],
     all_day: bool,
+    labels: &[String],
 ) -> Result<(), String> {
     let url = format!(
         "{EVENTS}/{}/events/{}",
@@ -1275,6 +1294,9 @@ pub fn patch_event(
     });
     body["description"] = serde_json::Value::String(description.to_owned());
     super::projects::write(&mut body, projects)?;
+    body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
+        .map_err(|e| e.to_string())?
+        .into();
     if let Some(color_id) = color_id {
         body["colorId"] = serde_json::Value::String(color_id.to_owned());
     }
@@ -1524,6 +1546,10 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .map(|person| person_label(Some(person), true))
             .filter(|label| !label.is_empty())
             .collect(),
+        labels: entry.extended_properties["private"]["ttLabels"]
+            .as_str()
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or_default(),
         habit: entry.extended_properties["private"]["ttKind"].as_str() == Some("habit"),
         recurring_event_id: entry.recurring_event_id.clone(),
         recurrence: entry.recurrence.clone(),
@@ -1911,7 +1937,7 @@ mod tests {
     #[test]
     fn event_projects_survive_sync_cache_and_reopening_the_editor() {
         let entry: EventEntry = serde_json::from_value(serde_json::json!({
-            "extendedProperties": { "private": { "ttProjects": "[7,3]", "ttKind": "habit" } }
+            "extendedProperties": { "private": { "ttProjects": "[7,3]", "ttKind": "habit", "ttLabels": "[\"work\",\"meeting\"]" } }
         }))
         .unwrap();
         let details = details_of(&entry);
@@ -1922,6 +1948,7 @@ mod tests {
         event.details = serde_json::from_str(&cached).unwrap();
         let draft = super::super::EditDraft::from_event(&event);
         assert_eq!(draft.projects.ids, vec![3, 7]);
+        assert_eq!(draft.labels, ["work", "meeting"]);
         let old: super::super::Details = serde_json::from_str("{}").unwrap();
         assert!(old.projects.is_empty());
     }

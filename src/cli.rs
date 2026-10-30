@@ -1,18 +1,14 @@
 //! The command line of the one `timeslay` binary.
 //!
-//! The window, the side panel, the dock and the shortcut daemon are all this
-//! binary; the flag picks which one runs. With no flags it is the window.
-
-use crate::dock::launch::Origin;
+//! The side panel, dock and shortcut daemon share this binary.
+//! With no flags it opens the side panel.
 
 /// What the binary was asked to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
-    /// The regular window.
-    #[default]
-    Window,
     NewTask,
-    /// The wide side panel.
+    /// The wide side panel (the default launch mode).
+    #[default]
     Sidebar,
     /// The thin dock strip.
     Dock,
@@ -25,7 +21,7 @@ pub enum Mode {
 /// What to do with the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    Run { mode: Mode, origin: Origin },
+    Run { mode: Mode },
     Help,
     Version,
 }
@@ -35,7 +31,7 @@ TimeSlay: slay the day with TimeSlay.
 
 Usage: timeslay [OPTIONS]
 
-With no options, TimeSlay opens its regular window.
+With no options, TimeSlay opens its side panel.
 
 Options:
       --new-task       Open the full task creation editor\n      --sidebar        Open the side panel: the full app in a wide strip
@@ -50,25 +46,22 @@ Options:
       --webextension   Run the browser native-messaging host: read one
                        message from the extension on stdin, add its link to
                        the inbox through the running app, and answer on stdout
-      --from <ORIGIN>  With --dock, what the dock's back button returns to:
-                       \"window\" (default) or \"sidebar\"
   -h, --help           Print this help
   -V, --version        Print the version
 
-Only one of --sidebar, --dock, --daemon and --webextension can be given.
+Only one of --new-task, --sidebar, --dock, --daemon and --webextension can be given.
 ";
 
 /// Parses the arguments that follow the program name.
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
-    let mut args = args.into_iter();
+    let args = args.into_iter();
     let mut mode: Option<Mode> = None;
-    let mut origin: Option<Origin> = None;
     // Browsers launch a native-messaging host with the caller's origin as an
     // extra argument, so `--webextension` tolerates arguments it does not
     // recognize instead of failing the way every other mode does.
     let mut unexpected: Vec<String> = Vec::new();
 
-    while let Some(arg) = args.next() {
+    for arg in args {
         let requested = match arg.as_str() {
             "-h" | "--help" => return Ok(Action::Help),
             "-V" | "--version" => return Ok(Action::Version),
@@ -84,7 +77,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
             match mode {
                 Some(existing) if existing != requested => {
                     return Err(
-                        "only one of --sidebar, --dock, --daemon and --webextension can be given"
+                        "only one of --new-task, --sidebar, --dock, --daemon and --webextension can be given"
                             .into(),
                     );
                 }
@@ -93,38 +86,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
             continue;
         }
 
-        let value = if arg == "--from" {
-            Some(
-                args.next()
-                    .ok_or_else(|| "--from needs a value: window or sidebar".to_owned())?,
-            )
-        } else {
-            arg.strip_prefix("--from=").map(str::to_owned)
-        };
-        match value {
-            Some(value) => {
-                origin = Some(Origin::parse(&value).ok_or_else(|| {
-                    format!("unknown --from value '{value}': use window or sidebar")
-                })?);
-            }
-            None => unexpected.push(arg),
-        }
+        unexpected.push(arg);
     }
 
     let mode = mode.unwrap_or_default();
-    if origin.is_some() && mode != Mode::Dock {
-        return Err("--from only applies with --dock".into());
-    }
     if mode != Mode::WebExtension {
         if let Some(arg) = unexpected.first() {
             return Err(format!("unknown option '{arg}'"));
         }
     }
 
-    Ok(Action::Run {
-        mode,
-        origin: origin.unwrap_or_default(),
-    })
+    Ok(Action::Run { mode })
 }
 
 #[cfg(test)]
@@ -136,19 +108,17 @@ mod tests {
     }
 
     fn run(mode: Mode) -> Action {
-        Action::Run {
-            mode,
-            origin: Origin::Window,
-        }
+        Action::Run { mode }
     }
 
     #[test]
-    fn no_arguments_open_the_window() {
-        assert_eq!(parse_all(&[]), Ok(run(Mode::Window)));
+    fn no_arguments_open_the_panel() {
+        assert_eq!(parse_all(&[]), Ok(run(Mode::Sidebar)));
     }
 
     #[test]
     fn each_mode_has_its_own_flag() {
+        assert_eq!(parse_all(&["--new-task"]), Ok(run(Mode::NewTask)));
         assert_eq!(parse_all(&["--sidebar"]), Ok(run(Mode::Sidebar)));
         assert_eq!(parse_all(&["--dock"]), Ok(run(Mode::Dock)));
         assert_eq!(parse_all(&["--daemon"]), Ok(run(Mode::Daemon)));
@@ -163,13 +133,11 @@ mod tests {
     }
 
     #[test]
-    fn the_dock_origin_is_read_in_both_spellings() {
-        let sidebar = Action::Run {
-            mode: Mode::Dock,
-            origin: Origin::Sidebar,
-        };
-        assert_eq!(parse_all(&["--dock", "--from", "sidebar"]), Ok(sidebar));
-        assert_eq!(parse_all(&["--dock", "--from=sidebar"]), Ok(sidebar));
+    fn removed_window_origins_are_rejected() {
+        for origin in ["window", "sidebar"] {
+            assert!(parse_all(&["--dock", "--from", origin]).is_err());
+            assert!(parse_all(&["--dock", &format!("--from={origin}")]).is_err());
+        }
     }
 
     #[test]

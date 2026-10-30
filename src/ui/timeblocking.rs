@@ -328,19 +328,21 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         if !draft.saving {
             input = input.on_action(|a| Message::Inbox(crate::inbox::Action::Description(a)));
         }
-        input.into()
+        column![field_label("Description", metrics), input]
+            .spacing(6)
+            .into()
     } else {
-        super::links::text(tb::description(&task.details.description), metrics.label())
+        super::description::preview(
+            &task.id,
+            &crate::calendar::notes::Notes::new(&tb::description(&task.details.description))
+                .without(&["DUE:", "DEADLINE:"]),
+            metrics,
+        )
     };
-    column![
-        title,
-        editor(state, task, metrics),
-        field_label("Description", metrics),
-        description
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill)
-    .into()
+    column![title, description, editor(state, task, metrics)]
+        .spacing(metrics.spacing)
+        .width(Fill)
+        .into()
 }
 
 pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {

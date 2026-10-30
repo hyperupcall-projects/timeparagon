@@ -8,6 +8,7 @@ pub mod alarms;
 pub mod brain_dump;
 pub mod calendar;
 pub mod controls;
+mod description;
 pub mod flash;
 pub mod habits;
 pub mod inbox;
@@ -32,10 +33,92 @@ use crate::app::{Message, Screen, State};
 
 use layout::Metrics;
 
+/// Match the editor's previous position below the navigation.
+pub fn editor_window_top(state: &State) -> f32 {
+    let width = state.main_size.width - state.screen_margin_width();
+    state.screen_margin()
+        + tabs_height(
+            state,
+            &Metrics::of(Size::new(width, state.main_size.height)),
+        )
+}
+
+pub fn editor_window(state: &State) -> Element<'_, Message> {
+    responsive(move |size| {
+        if state.travel.map.active {
+            return crate::travel::map::view(state);
+        }
+        let mut panes = row![];
+        if state.timeblocking.block.is_some() {
+            let width = state.config.views.time_block_width().min(size.width);
+            let metrics = Metrics::of(Size::new(width, size.height));
+            panes = panes.push(container(timeblocking::panel(state, &metrics)).width(width));
+        }
+        if state.calendar.open_event.is_some() {
+            let block = if state.timeblocking.block.is_some() {
+                state.config.views.time_block_width()
+            } else {
+                0.0
+            };
+            let width = state
+                .config
+                .views
+                .detail_width()
+                .min((size.width - block).max(1.0));
+            let metrics = Metrics::of(Size::new(width, size.height));
+            panes = panes.push(container(calendar::details_pane(state, &metrics)).width(width));
+        }
+        let metrics = Metrics::of(size);
+        let mut layers = vec![panes.height(Fill).into()];
+        if state.inbox.draft.is_some() {
+            layers.push(inbox::new_task_overlay(state, &metrics));
+        }
+        if state.timeblocking.focus.is_some() {
+            layers.push(timeblocking::focus_overlay(state, &metrics));
+        }
+        if state.timeblocking.session_edit.is_some() {
+            layers.push(timeblocking::session_editor(state, &metrics));
+        }
+        if state.calendar.pending_delete.is_some() {
+            layers.push(calendar::delete_confirmation(state, &metrics));
+        }
+        if state.description_popup.is_some() {
+            layers.push(description::overlay(state, &metrics));
+        }
+        if state.timeblocking.estimate_task.is_some() {
+            layers.push(timeblocking::estimate_overlay(state, &metrics));
+        }
+        if let Some(picker) = &state.picker {
+            layers.push(controls::overlay(
+                picker,
+                &metrics,
+                state.config.appearance.use_24_hour,
+            ));
+        }
+        container(iced::widget::stack(layers))
+            .width(Fill)
+            .height(Fill)
+            .style(controls::surface)
+            .into()
+    })
+    .into()
+}
+
 pub fn view(state: &State) -> Element<'_, Message> {
     let content = responsive(move |size| {
         if state.travel.map.active {
-            return crate::travel::map::view(state);
+            let map = crate::travel::map::view(state);
+            if state.task_creation_window {
+                // The dock normally accepts input only over its bottom-aligned
+                // task card. The map replaces it and fills the entire surface.
+                let bounds =
+                    |size: Size| Message::TaskPopoverBounds(iced::Rectangle::with_size(size));
+                return iced::widget::sensor(map)
+                    .on_show(bounds)
+                    .on_resize(bounds)
+                    .into();
+            }
+            return map;
         }
         let metrics = Metrics::of(size);
 
@@ -54,33 +137,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
             return iced::widget::stack(layers).into();
         }
 
-        // The event details pane is a column of its own to the right of the
-        // view. The view keeps its width and the window is widened to match,
-        // so the metrics for the main content are measured over that width.
-        let details_open = state.calendar.open_event.is_some()
-            && crate::app::shows_details(state.screen)
-            && !(state.screen == Screen::Calendar && (state.weekly || state.monthly));
-        let detail = if details_open {
-            state.config.views.detail_width()
-        } else {
-            0.0
-        };
-        let main_width = (size.width - detail).max(1.0);
-        let main_metrics = Metrics::of(Size::new(main_width, size.height));
-
-        // The menu keeps the width the window had before a pane widened it.
-        // The details pane and block editor grow out of the view underneath,
-        // not out of the navigation above it.
-        let nav_width = if let Some(original) = state.timeblocking.original_width {
-            (original - state.screen_margin_width())
-                .max(1.0)
-                .min(size.width)
-        } else if details_open {
-            main_width
-        } else {
-            size.width
-        };
-        let nav_metrics = Metrics::of(Size::new(nav_width, size.height));
+        let main_metrics = metrics;
+        let nav_width = size.width;
+        let nav_metrics = Metrics::of(size);
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
             (Screen::Settings, _) => settings::view(state, &metrics),
@@ -102,56 +161,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 } else if state.weekly {
                     calendar::weekly_view(state, &main_metrics)
                 } else {
-                    // Keep the calendar at the same place in the widget tree when
-                    // the block editor opens or closes, preserving its scroll state.
-                    match state
-                        .timeblocking
-                        .block
-                        .is_some()
-                        .then_some(state.timeblocking.original_width)
-                        .flatten()
-                    {
-                        // The calendar keeps the width it had before the editor
-                        // opened, and the editor takes whatever the window gained.
-                        Some(base) => {
-                            let pane = (base - state.screen_margin_width()).min(main_width);
-                            let calendar_metrics = Metrics::of(Size::new(pane, size.height));
-                            row![
-                                container(calendar::view(state, &calendar_metrics))
-                                    .width(Length::Fixed(pane)),
-                                container(timeblocking::panel(state, &main_metrics)).width(Fill),
-                            ]
-                            .into()
-                        }
-                        None => {
-                            row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
-                        }
-                    }
+                    row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
                 }
             }
         };
 
-        // The details pane is drawn last, so on the calendar it sits to the
-        // right of the time-block editor rather than over it.
-        let content: Element<'_, Message> = if details_open {
-            // The pane sits below the tabs, so it only has what they leave.
-            let detail_metrics = Metrics::of(Size::new(
-                detail,
-                (size.height - tabs_height(state, &nav_metrics)).max(1.0),
-            ));
-            row![
-                container(content).width(Fill),
-                container(calendar::details_pane(state, &detail_metrics))
-                    .width(Length::Fixed(detail)),
-            ]
-            .into()
-        } else {
-            content
-        };
-
-        // The tabs are the window's navigation, so they sit above whatever is
-        // on show rather than inside it. Constraining the bar to `nav_width`
-        // keeps it the size it was before a pane widened the window.
         let mut base = column![
             container(tabs(state, &nav_metrics)).width(Length::Fixed(nav_width)),
             content
@@ -159,8 +173,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .width(Fill)
         .height(Fill);
         if state.sidebar.is_some() {
-            // Like the tabs, the add-task bar belongs to the original panel.
-            // Editors may widen the window, but must not stretch this control.
+            // The add-task bar belongs to the main panel; floating editors
+            // never participate in its layout.
             let borders = 2.0
                 * (state.config.views.panel_border_outer_width()
                     + state.config.views.panel_border_inner_width());
@@ -214,8 +228,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.travel.open.is_some() {
             layers.push(travel::leg_overlay(state, &metrics));
         }
-        if state.habits.draft.is_some() {
-            layers.push(habits::editor_overlay(state, &metrics));
+        if state.description_popup.is_some() {
+            layers.push(description::overlay(state, &metrics));
         }
         if state.habits.confirm_delete.is_some() {
             layers.push(habits::delete_confirmation(state, &metrics));
@@ -264,7 +278,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         state.config.views.border_radius()
     };
     let content = container(content).width(Fill).height(Fill).clip(true);
-    let body: Element<'_, Message> = if state.sidebar.is_some() {
+    let body: Element<'_, Message> = {
         let outer_width = state.config.views.panel_border_outer_width();
         let inner_width = state.config.views.panel_border_inner_width();
         let outer_color = state.config.views.panel_border_outer_color.0;
@@ -299,28 +313,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
             });
 
         container(inner)
-            .id("sidebar-body")
+            .id(if state.sidebar.is_some() {
+                "sidebar-body"
+            } else {
+                "application-body"
+            })
             .width(Fill)
             .height(Fill)
             .clip(true)
             .padding(outer_width)
             .style(move |_: &iced::Theme| container::Style {
                 background: Some(outer_color.into()),
-                border: iced::Border {
-                    radius: radius.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()
-    } else {
-        container(content)
-            .id("application-body")
-            .width(Fill)
-            .height(Fill)
-            .clip(true)
-            .style(move |theme: &iced::Theme| container::Style {
-                background: Some(theme.palette().background.into()),
                 border: iced::Border {
                     radius: radius.into(),
                     ..Default::default()

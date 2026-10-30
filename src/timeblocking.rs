@@ -6,7 +6,7 @@ use crate::{
     config::CalendarSettings,
 };
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone};
-use iced::{Size, Task, window};
+use iced::Task;
 
 mod model;
 pub use model::*;
@@ -30,7 +30,6 @@ pub struct Workspace {
     pub session_end: String,
     pub session_error: Option<String>,
     pub revision: u64,
-    pub original_width: Option<f32>,
     pub date: String,
     pub deadline: String,
     pub sync_notice: Option<String>,
@@ -149,6 +148,7 @@ pub enum Action {
     Title(String),
     /// Save the edited name of this task.
     SaveTitle(String),
+    SaveDescription(String, String),
     /// Add a project to this task.
     ProjectAdd(String, u64),
     /// Remove a project from this task.
@@ -289,33 +289,7 @@ pub fn close(state: &mut State) -> Task<Message> {
         state.timeblocking.todo_draft.clear();
         state.timeblocking.todo_error = None;
     }
-    match (state.main_window, state.timeblocking.original_width.take()) {
-        (Some(id), Some(width)) => {
-            let width = width
-                + if state.details_pane_open {
-                    state.config.views.detail_width()
-                } else {
-                    0.0
-                };
-            let resize = window::resize(id, Size::new(width, state.main_size.height));
-            if state.sidebar.is_some() && !state.details_pane_open {
-                resize.chain(window::set_max_size(id, Some(Size::new(width, 100_000.0))))
-            } else {
-                resize
-            }
-        }
-        _ => Task::none(),
-    }
-}
-pub(crate) fn editor_width(state: &State, base_width: f32) -> f32 {
-    let pane_width = state.config.views.time_block_width();
-    state
-        .config
-        .window
-        .time_block_width
-        .filter(|width| width.is_finite())
-        .unwrap_or(base_width + pane_width)
-        .max(base_width + pane_width)
+    Task::none()
 }
 pub fn open(state: &mut State, id: String) -> Task<Message> {
     if state.timeblocking.block.as_deref() != Some(id.as_str())
@@ -333,26 +307,9 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
     // draft of the block's own fields.
     state.calendar.edit_draft = event(state, &id).map(crate::calendar::EditDraft::from_event);
     state.timeblocking.block = Some(id);
-    if state.screen == crate::app::Screen::Calendar && (state.weekly || state.monthly) {
-        return Task::none();
-    }
-    if state.timeblocking.original_width.is_none() {
-        let width = state.main_size.width;
-        state.timeblocking.original_width = Some(width);
-        if let Some(id) = state.main_window {
-            let resize = window::resize(
-                id,
-                Size::new(editor_width(state, width), state.main_size.height),
-            );
-            return if state.sidebar.is_some() {
-                window::set_max_size(id, None).chain(resize)
-            } else {
-                resize
-            };
-        }
-    }
     Task::none()
 }
+
 fn advance_pomodoro(state: &mut State, now: chrono::DateTime<chrono::Utc>) -> bool {
     let eligible: std::collections::HashSet<_> = state
         .calendar
@@ -1059,6 +1016,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.timeblocking.title_error = None;
             return Task::none();
         }
+        Action::SaveDescription(id, value) => (id, Change::Description(value)),
         Action::SaveTitle(id) => {
             let title = state.timeblocking.title.trim().to_owned();
             if title.is_empty() {
@@ -1265,7 +1223,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     }
     if matches!(
         change,
-        Change::Projects(_)
+        Change::Description(_)
+            | Change::Projects(_)
             | Change::Labels(_)
             | Change::BacklogSection(_)
             | Change::Priority(_)
@@ -1467,6 +1426,7 @@ fn clean_label(input: &str) -> Result<String, &'static str> {
 }
 
 enum Change {
+    Description(String),
     Title(String),
     Estimate(u32),
     Projects(Vec<u64>),
@@ -1623,6 +1583,12 @@ fn save(
                     .map_err(|error| error.message)?;
                 }
             }
+        }
+        Change::Description(value) => {
+            let deadline = calendar::deadline::read_deadline(&task.details.description)?;
+            task.details.description = calendar::deadline::write(&value, deadline);
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
+            database.save(&task, &data)?;
         }
         Change::Estimate(minutes) => {
             data.metadata.minutes = minutes;

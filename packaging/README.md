@@ -23,7 +23,7 @@ them):
 
 | Command | What it runs |
 | --- | --- |
-| `timeslay` | The regular window |
+| `timeslay` | The side panel (same as `--sidebar`) |
 | `timeslay --sidebar` | The side panel: the full app in a wide strip down a screen edge |
 | `timeslay --dock` | The dock: a very thin strip of today along a screen edge |
 | `timeslay --daemon` | The background process that owns the global shortcuts |
@@ -143,11 +143,11 @@ detail_width = 360.0
 margin = 8.0
 ```
 
-Widths are in logical pixels. If `calendar_width` is omitted, the main window
-keeps its saved width and the side panel uses the `[panel]` width. The margin defaults
+Widths are in logical pixels. If `calendar_width` is omitted, the side panel
+uses the `[panel]` width. The margin defaults
 to 8 and leaves transparent space along the panel's screen edge, top and bottom
 (mirrored for a right-side panel). It also applies while the time block pane is
-open. The regular desktop window keeps its normal window placement.
+open.
 
 In Weekly, the panel temporarily widens to fit the configured day columns
 and restores its usual width when you leave the view. If the columns exceed
@@ -265,12 +265,9 @@ Hyprland, niri and COSMIC provide that protocol; GNOME does not.
 - Hover cards are click-through. The task form accepts pointer and keyboard
   input while open, including Tab to move between fields and Ctrl+V to paste.
 
-Switching modes: in the regular window or the side panel, open the calendar
-**Menu** and press **Dock to screen edge**. That starts the dock and puts the
-window away (the window quits; the side panel just hides). The small square at
-the very top of the dock, as wide as the strip, brings back whatever you came
-from and closes the dock. The dock is told where it came from with
-`--from window|sidebar`, which defaults to `window`.
+Switching modes: in the side panel, open the calendar **Menu** and press
+**Dock to screen edge**. That starts the dock and hides the panel. The small
+square at the very top of the dock brings back the panel and closes the dock.
 
 ```sh
 timeslay --dock

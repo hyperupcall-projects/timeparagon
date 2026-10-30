@@ -35,23 +35,9 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
             // Task details, the block editor, then details beside the editor.
             for event in ["all-day", "standup", "lunch"] {
                 let _ = app::update(&mut state, Message::EventOpened(event.into()));
-                let base = state
-                    .timeblocking
-                    .original_width
-                    .unwrap_or(width + state.screen_margin_width());
-                let editor = if state.timeblocking.block.is_some() {
-                    400.0
-                } else {
-                    0.0
-                };
-                let detail = if state.calendar.open_event.is_some() {
-                    state.config.views.detail_width()
-                } else {
-                    0.0
-                };
                 let mut ui = Simulator::with_size(
                     Settings::default(),
-                    Size::new(base + editor + detail, 700.0),
+                    state.main_size,
                     timeslay::ui::view(&state),
                 );
                 assert_eq!(
@@ -163,6 +149,37 @@ fn dock_task_card_bottom_matches_the_dock_surface_at_short_and_tall_heights() {
         assert!((card.y + card.height - height).abs() < 1.0, "{card:?}");
         if height == 1600.0 {
             assert!(card.y > 0.0);
+        }
+    }
+}
+
+#[test]
+fn dock_map_input_region_covers_the_surface_and_returns_to_the_task_card() {
+    let mut state = State::new(Config::default(), Catalog::built_in());
+    state.task_creation_window = true;
+    let _ = app::update(&mut state, Message::Inbox(inbox::Action::NewTask));
+    for height in [700.0, 1600.0] {
+        let size = Size::new(440.0, height);
+        for map_open in [false, true, false] {
+            // No browser is needed: this tests the Wayland input region
+            // reported by the actual popover view, before events reach CEF.
+            state.travel.map.active = map_open;
+            let mut ui =
+                Simulator::with_size(Settings::default(), size, timeslay::ui::view(&state));
+            let expected = if map_open {
+                iced::Rectangle::with_size(size)
+            } else {
+                ui.find(Id::new("dock-task-card")).unwrap().bounds()
+            };
+            ui.simulate([iced::Event::Window(iced::window::Event::RedrawRequested(
+                iced::time::Instant::now(),
+            ))]);
+            assert!(
+                ui.into_messages().any(|message| matches!(
+                    message, Message::TaskPopoverBounds(bounds) if bounds == expected
+                )),
+                "missing input bounds {expected:?} (map open: {map_open})"
+            );
         }
     }
 }

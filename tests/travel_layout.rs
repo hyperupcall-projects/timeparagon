@@ -363,7 +363,7 @@ fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
         }
         state.calendar.open_event = Some("standup".into());
 
-        let mut ui = render(&state, Size::new(width, 900.0));
+        let mut ui = at(Size::new(width, 900.0), timeslay::ui::editor_window(&state));
         let _ = ui
             .click("Add location")
             .unwrap_or_else(|_| panic!("no button at {width}px"));
@@ -381,7 +381,7 @@ fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
             .travel
             .event_places
             .insert("standup".into(), office);
-        let mut ui = render(&state, Size::new(width, 900.0));
+        let mut ui = at(Size::new(width, 900.0), timeslay::ui::editor_window(&state));
         assert!(ui.find("Office").is_ok() && ui.find("Change").is_ok() && ui.find("Clear").is_ok());
         assert!(ui.find("Add location").is_err());
     }

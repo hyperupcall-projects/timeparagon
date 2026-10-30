@@ -5,14 +5,11 @@
 //! use — daily, every weekday, weekly on Monday and Wednesday, monthly on the
 //! fourth Wednesday, and so on — rather than asking for RFC 5545 parts.
 
-use iced::widget::{
-    Space, button, column, container, mouse_area, row, scrollable, stack, text, text_input,
-};
+use iced::widget::{Space, button, column, container, mouse_area, row, scrollable, stack, text};
 use iced::{Alignment, Color, Element, Fill};
 
 use crate::app::{Message, State};
-use crate::calendar::colors;
-use crate::habits::{self, Action, Draft, Habit};
+use crate::habits::{Action, Habit};
 
 use super::layout::Metrics;
 
@@ -142,26 +139,6 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
         .into()
 }
 
-/// The add/edit popup, drawn over everything including the tabs.
-pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let Some(draft) = &state.habits.draft else {
-        return Space::new().into();
-    };
-    let card = container(scrollable(form(
-        draft,
-        &state.form_editors[2],
-        state.habits.busy,
-        metrics,
-        state.config.appearance.use_24_hour,
-    )))
-    .padding(16)
-    .width(Fill)
-    .max_width(480)
-    .max_height((metrics.size.height - 32.0).max(80.0))
-    .style(crate::ui::controls::surface);
-    overlay(card.into(), msg(Action::CancelEdit))
-}
-
 /// The "are you sure" prompt for deleting a habit and its whole series.
 pub fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(id) = state.habits.confirm_delete.as_deref() else {
@@ -239,140 +216,11 @@ fn overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Mess
     stack![backdrop, foreground].into()
 }
 
-fn form<'a>(
-    draft: &'a Draft,
-    notes: &'a iced::widget::text_editor::Content,
-    busy: bool,
-    metrics: &Metrics,
-    use_24_hour: bool,
-) -> Element<'a, Message> {
-    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
-
-    let mut title = text_input("Habit name", &draft.title)
-        .id(iced::widget::Id::new(habits::TITLE_FIELD))
-        .size(metrics.label())
-        .width(Fill);
-    title = title
-        .on_input(|value| msg(Action::Title(value)))
-        .on_submit(msg(Action::Save));
-
-    let mut body = column![
-        text(if draft.id.is_some() {
-            "Edit habit"
-        } else {
-            "New habit"
-        })
-        .size(18),
-        label("Name"),
-        title,
-        label("Notes (optional)"),
-        iced::widget::text_editor(notes)
-            .placeholder("Notes…")
-            .on_action(|a| Message::FormEdited(2, a))
-            .size(metrics.label())
-            .height(100)
-            .padding(8),
-    ]
-    .spacing(6);
-
-    // Keep the date above the time pair so long dates fit narrow panels.
-    let date = super::controls::date(
-        use_24_hour,
-        &draft.date,
-        false,
-        false,
-        true,
-        metrics.label(),
-        |value| msg(Action::Date(value)),
-    );
-    let start = container(super::controls::time(
-        use_24_hour,
-        &draft.start,
-        true,
-        metrics.label(),
-        |value| msg(Action::Start(value)),
-    ));
-    let end = container(super::controls::time(
-        use_24_hour,
-        &draft.end,
-        true,
-        metrics.label(),
-        |value| msg(Action::End(value)),
-    ));
-    let when = column![
-        date,
-        row![
-            column![label("Start"), start].spacing(4).width(Fill),
-            column![label("End"), end].spacing(4).width(Fill)
-        ]
-        .spacing(8)
-    ]
-    .spacing(8);
-    body = body.push(label("Day and time")).push(when);
-
-    // Repeat: the shared controls, so habits read and write their schedule
-    // exactly as events and time blocks do.
-    let anchor = draft
-        .anchor_date()
-        .unwrap_or_else(|| chrono::Local::now().date_naive());
-    body = body.push(super::recurrence::editor(
-        &draft.rule,
-        anchor,
-        metrics,
-        busy,
-        |action| msg(Action::Recurrence(action)),
-    ));
-
-    body = body.push(label("Color")).push(color_picker(draft, metrics));
-
-    if let Some(error) = &draft.error {
-        body = body.push(text(error).size(metrics.label()).style(text::danger));
-    }
-
-    let mut save = button(
-        text(if busy { "Saving…" } else { "Save" })
-            .size(metrics.label())
-            .center()
-            .width(Fill),
-    )
-    .width(Fill);
-    if !busy {
-        save = save.on_press(msg(Action::Save));
-    }
-    let cancel = button(text("Cancel").size(metrics.label()).center().width(Fill))
-        .width(Fill)
-        .on_press(msg(Action::CancelEdit))
-        .style(crate::ui::controls::secondary);
-
-    body.push(row![save, cancel].spacing(8).width(Fill)).into()
-}
-
-/// The habit's own Google color. "Default" clears it, so the habit follows
-/// the color picked in Settings.
-fn color_picker<'a>(draft: &Draft, _metrics: &Metrics) -> Element<'a, Message> {
-    let selected = draft.color_id.as_deref().and_then(colors::event);
-    let mut swatches = row![].spacing(4);
-    for color in colors::palette() {
-        swatches = swatches.push(super::calendar::swatch_button(
-            color,
-            selected == Some(color),
-            msg(Action::Color(Some(color))),
-        ));
-    }
-    swatches = swatches.push(
-        button(text("Default").size(11.0))
-            .padding([1, 4])
-            .style(button::text)
-            .on_press(msg(Action::Color(None))),
-    );
-    swatches.into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::Screen;
-    use crate::habits::RepeatMode;
+    use crate::habits::{self, Draft, RepeatMode};
 
     fn state() -> State {
         let mut state = State::new(
@@ -439,15 +287,21 @@ mod tests {
     #[test]
     fn the_editor_offers_a_simple_schedule_without_rfc_text() {
         let mut state = state();
-        state.habits.draft = Some(Draft::new(
-            chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
-            None,
-        ));
+        let _ = habits::open_new(
+            &mut state,
+            Draft::new(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), None),
+        );
         let mut ui = iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
             iced::Size::new(800.0, 700.0),
-            crate::ui::view(&state),
+            crate::ui::editor_window(&state),
         );
+        let start_day = ui.find("Start day").unwrap().bounds();
+        assert!(
+            start_day.x >= 0.0 && start_day.x < state.config.views.detail_width(),
+            "habit fields belong to the independent editor"
+        );
+        assert!(ui.find("Delete").is_err());
         assert!(ui.find("Repeat").is_ok());
         assert!(ui.find("Weekly").is_ok());
         assert!(ui.find("Does not repeat").is_ok());
@@ -464,11 +318,11 @@ mod tests {
         let mut draft = Draft::new(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), None);
         draft.rule.repeat = RepeatMode::Monthly;
         draft.rule.monthly = habits::MonthlyMode::NthWeekday;
-        state.habits.draft = Some(draft);
+        let _ = habits::open_new(&mut state, draft);
         let mut ui = iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
             iced::Size::new(800.0, 700.0),
-            crate::ui::view(&state),
+            crate::ui::editor_window(&state),
         );
         assert!(ui.find("Weekday").is_ok());
         assert!(ui.find("Fourth").is_ok());

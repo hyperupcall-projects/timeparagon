@@ -1,13 +1,63 @@
 //! Display-backed regression check for the CEF renderer. No Mapbox token needed.
 //! Run with: cargo run --example map_render_probe
 use iced_webview::{Cef, Engine, PageType};
+use std::io::{BufRead, Write};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn main() {
     if iced_webview::cef_subprocess_check() {
         return;
     }
+    if std::env::args().any(|arg| arg == "--concurrent") {
+        // Keep one browser alive while a second renders on the dock editor's
+        // worker-thread topology. A shared root_cache_path fails this check.
+        let exe = std::env::current_exe().unwrap();
+        let mut first = Command::new(&exe)
+            .arg("--hold-profile")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(first.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        if ready.trim() != "PROFILE_READY" {
+            let _ = first.kill();
+            let _ = first.wait();
+            panic!("first CEF instance failed to start: {ready}");
+        }
+        let second = Command::new(exe).arg("--worker-thread").status().unwrap();
+        // Release and reap the first child even if the second failed.
+        drop(first.stdin.take());
+        let first_status = first.wait().unwrap();
+        assert!(second.success(), "concurrent dock-thread renderer failed");
+        assert!(first_status.success(), "first CEF instance failed");
+        println!("Concurrent CEF instances passed");
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--worker-thread") {
+        std::thread::Builder::new()
+            .name("dock-task-editor".into())
+            .spawn(probe)
+            .unwrap()
+            .join()
+            .unwrap();
+    } else {
+        probe();
+    }
+}
+
+fn probe() {
     let mut engine = Cef::try_new().expect("CEF initialization");
+    if std::env::args().any(|arg| arg == "--hold-profile") {
+        println!("PROFILE_READY");
+        std::io::stdout().flush().unwrap();
+        let mut release = String::new();
+        std::io::stdin().read_line(&mut release).unwrap();
+        return;
+    }
     engine.set_scale_factor(2.0);
     let html = r#"<style>body{margin:0;background:black}</style><canvas id="c"></canvas><script>
 const gl=document.getElementById('c').getContext('webgl2');

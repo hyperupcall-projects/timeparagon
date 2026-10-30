@@ -4,7 +4,7 @@
 //! exercised by tests without a compositor. A flag picks what it runs (see
 //! [`cli`]):
 //!
-//! * no flag — the main window (this crate's [`app`]);
+//! * no flag — the side panel (the same as `--sidebar`);
 //! * `--sidebar` — the side panel, the full app in a wide edge strip;
 //! * `--dock` — the dock (see [`dock`]), a very thin strip of today;
 //! * `--daemon` — the shortcut daemon (see [`panel`]), which shows, hides and

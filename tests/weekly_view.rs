@@ -178,7 +178,7 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
     assert_eq!(state.week_anchor, date(15));
     assert_eq!(state.calendar.day, date(14));
     assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
-    assert_eq!(state.timeblocking.original_width, None);
+    assert!(state.editor_window.is_none());
     assert!(!state.details_pane_open);
     let mut ui = render(&state, Size::new(1500.0, 700.0));
     let selected = ui.find("Wed Oct 14").unwrap().bounds();

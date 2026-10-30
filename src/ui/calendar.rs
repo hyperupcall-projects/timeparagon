@@ -1484,14 +1484,48 @@ pub fn event_editor<'a>(
         .into();
     };
 
+    if draft.loading {
+        let mut loading = column![text("Loading habit…").size(metrics.label())].spacing(6);
+        if let Some(error) = &state.calendar.error {
+            loading = loading
+                .push(text(error).style(text::danger))
+                .push(button("Retry").on_press(Message::EventOpened(event.id.clone())));
+        }
+        return loading.into();
+    }
     let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
 
-    let title = text_input("Title", &draft.title)
-        .on_input(Message::EventEditTitleChanged)
-        .size(metrics.label() + 1.0)
-        .width(Fill);
-
-    let when = column![
+    let title: Element<'a, Message> = if draft.editing_title {
+        column![
+            text_input("Title", &draft.title)
+                .id(iced::widget::Id::new("event-title"))
+                .on_input(Message::EventEditTitleChanged)
+                .on_submit(Message::EventEditSaveRequested)
+                .size(metrics.label() + 6.0)
+                .width(Fill),
+            text("Press Enter to save")
+                .size(metrics.label() - 2.0)
+                .style(text::secondary),
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        button(text(&draft.title).size(metrics.label() + 6.0).font(Font {
+            weight: Weight::Bold,
+            ..Font::DEFAULT
+        }))
+        .padding(0)
+        .width(Fill)
+        .style(button::text)
+        .on_press(Message::EventTitleEdit)
+        .into()
+    };
+    let start = column![
+        label(if event.details.habit {
+            "Start day"
+        } else {
+            "Start Time"
+        }),
         super::controls::date(
             state.config.appearance.use_24_hour,
             &draft.date_text,
@@ -1501,76 +1535,98 @@ pub fn event_editor<'a>(
             metrics.label(),
             Message::EventEditDateChanged
         ),
-        row![
+        super::controls::time(
+            state.config.appearance.use_24_hour,
+            &draft.start_text,
+            true,
+            metrics.label(),
+            Message::EventEditStartChanged
+        ),
+    ]
+    .spacing(6)
+    .width(Fill);
+    let mut body = column![
+        title,
+        super::description::preview(&event.id, &draft.description, metrics),
+        event_projects(state, &draft.projects, metrics, Message::EventEditProjects),
+        start,
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+    if event.details.habit {
+        body = body.push(super::recurrence::editor(
+            &draft.rule,
+            draft.start.date_naive(),
+            metrics,
+            false,
+            Message::EventEditRecurrence,
+        ));
+    } else {
+        body = body.push(
             column![
-                label("Start"),
-                super::controls::time(
+                label("End Time"),
+                super::controls::date(
                     state.config.appearance.use_24_hour,
-                    &draft.start_text,
+                    &draft.end_date_text,
+                    false,
+                    false,
                     true,
                     metrics.label(),
-                    Message::EventEditStartChanged
-                )
-            ]
-            .spacing(4)
-            .width(Fill),
-            column![
-                label("End"),
+                    Message::EventEndDateChanged
+                ),
                 super::controls::time(
                     state.config.appearance.use_24_hour,
                     &draft.end_text,
                     true,
                     metrics.label(),
                     Message::EventEditEndChanged
-                )
+                ),
             ]
-            .spacing(4)
+            .spacing(6)
             .width(Fill),
-        ]
-        .spacing(8),
-    ]
-    .spacing(8);
-
-    let mut body = column![
-        label("Title"),
-        title,
-        label("Day and time"),
-        when,
-        event_projects(state, &draft.projects, metrics, Message::EventEditProjects),
-        label("Description"),
-        iced::widget::text_editor(&state.form_editors[1])
-            .placeholder("Add description…")
-            .on_action(|a| Message::FormEdited(1, a))
-            .size(metrics.label())
-            .height(100)
-            .padding(8),
-        super::recurrence::editor(
-            &draft.rule,
-            draft.start.date_naive(),
-            metrics,
-            false,
-            Message::EventEditRecurrence,
-        ),
-    ]
-    .spacing(6)
-    .width(Fill);
+        );
+        let mut labels = column![label("Labels")].spacing(6).width(Fill);
+        for value in &draft.labels {
+            labels = labels.push(
+                row![
+                    text(value).size(metrics.label()).width(Fill),
+                    button("×")
+                        .on_press(Message::EventLabelRemove(value.clone()))
+                        .style(button::text)
+                ]
+                .spacing(6),
+            );
+        }
+        labels = labels.push(
+            row![
+                text_input("Add a label…", &draft.label_draft)
+                    .on_input(Message::EventLabelDraft)
+                    .on_submit(Message::EventLabelAdd)
+                    .size(metrics.label()),
+                button("Add").on_press(Message::EventLabelAdd),
+            ]
+            .spacing(8),
+        );
+        body = body.push(labels);
+    }
 
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
 
-    body = body.push(
-        button(
-            text("Save changes")
-                .size(metrics.label())
-                .center()
-                .width(Fill),
-        )
-        .width(Fill)
-        .on_press(Message::EventEditSaveRequested)
-        .style(crate::ui::controls::primary),
-    );
-
+    if state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
+        body = body.push(
+            button(
+                text("Save changes")
+                    .size(metrics.label())
+                    .center()
+                    .width(Fill),
+            )
+            .width(Fill)
+            .on_press(Message::EventEditSaveRequested)
+            .style(super::controls::primary),
+        );
+    }
     body.into()
 }
 
@@ -1699,30 +1755,18 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         return iced::widget::Space::new().width(0.0).height(0.0).into();
     };
 
-    let calendar_name = state
-        .calendar
-        .calendars
-        .iter()
-        .find(|calendar| calendar.id == event.calendar_id)
-        .map(|calendar| calendar.name.as_str())
-        .unwrap_or("Calendar");
-
     let mut body = column![].spacing(metrics.spacing).width(Fill);
     if is_task(event) {
         body = body.push(super::timeblocking::fields(state, event, metrics));
     } else {
         // An event is edited right here. There is no separate Edit button and
         // no popup: every field the app can write is in the pane.
-        body = body
-            .push(event_editor(state, event, metrics))
-            .push(detail_line("Calendar", calendar_name.to_owned(), metrics));
+        body = body.push(event_editor(state, event, metrics));
     }
 
     let details = &event.details;
-    if !is_task(event) && !details.status.is_empty() {
-        body = body.push(detail_line("Status", details.status.clone(), metrics));
-    }
-    if !is_task(event) {
+    let new_habit = event.id == crate::habits::NEW_HABIT_ID;
+    if !is_task(event) && !new_habit {
         // A calendar event gets a place to search for and choose, the same as
         // a task does. Where Google holds a location no saved place matches,
         // that text stays above the button.
@@ -1731,6 +1775,11 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         if place.is_none() && !details.location.is_empty() {
             body = body.push(detail_line("Location", details.location.clone(), metrics));
         }
+        body = body.push(
+            text("Location")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
         body = body.push(super::travel::location_control(
             state,
             crate::travel::PickTarget::Event(event.id.clone()),
@@ -1738,6 +1787,36 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             "Add location",
             metrics,
         ));
+    }
+    if !is_task(event) && !event.details.habit {
+        if let Some(draft) = &state.calendar.edit_draft {
+            body = body.push(super::recurrence::editor(
+                &draft.rule,
+                draft.start.date_naive(),
+                metrics,
+                false,
+                Message::EventEditRecurrence,
+            ));
+        }
+    }
+    if !is_task(event) {
+        body = body.push(
+            button(
+                text(if new_habit && state.habits.busy {
+                    "Saving…"
+                } else {
+                    "Save changes"
+                })
+                .size(metrics.label())
+                .center()
+                .width(Fill),
+            )
+            .width(Fill)
+            .on_press_maybe(
+                (!new_habit || !state.habits.busy).then_some(Message::EventEditSaveRequested),
+            )
+            .style(super::controls::primary),
+        );
     }
     if !details.organizer.is_empty() {
         body = body.push(detail_line("Organizer", details.organizer.clone(), metrics));
@@ -1788,7 +1867,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .into(),
         );
     }
-    if !is_task(event) {
+    if !is_task(event) && !new_habit {
         let id = event.id.clone();
         buttons.push(
             button(text("Delete").size(metrics.label()).center().width(Fill))
@@ -4387,12 +4466,76 @@ mod tests {
             Size::new(300.0, 800.0),
             details_pane(&state, &metrics),
         );
-        assert!(ui.find("Title").is_ok());
-        assert!(ui.find("Day and time").is_ok());
+        assert!(ui.find("Start Time").is_ok());
+        assert!(ui.find("End Time").is_ok());
         assert!(ui.find("Save changes").is_ok());
-        assert!(ui.find("Repeat").is_ok());
-        assert!(ui.find("Does not repeat").is_ok());
+        assert!(ui.find("Labels").is_ok());
+        assert!(ui.find("View / edit description").is_ok() || ui.find("Add description").is_ok());
         assert!(ui.find("Edit").is_err());
+    }
+
+    #[test]
+    fn event_title_click_enters_rename_and_enter_saves() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let _ = crate::app::update(&mut state, Message::EventOpened("standup".into()));
+        let metrics = Metrics::of(Size::new(400.0, 1000.0));
+        let title = state.calendar.event("standup").unwrap().title.clone();
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            details_pane(&state, &metrics),
+        );
+        ui.click(title.as_str()).unwrap();
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::EventTitleEdit))
+        );
+        let _ = crate::app::update(&mut state, Message::EventTitleEdit);
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            details_pane(&state, &metrics),
+        );
+        ui.click(title.as_str()).unwrap();
+        ui.typewrite(" renamed");
+        ui.tap_key(iced::keyboard::key::Named::Enter);
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::EventEditSaveRequested))
+        );
+    }
+
+    #[test]
+    fn habit_details_show_start_day_repeat_projects_and_location() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        let mut snapshot = calendar::sample_snapshot();
+        let event = snapshot
+            .events
+            .iter_mut()
+            .find(|e| e.id == "standup")
+            .unwrap();
+        event.details.habit = true;
+        event.details.recurrence = vec!["RRULE:FREQ=DAILY".into()];
+        state.calendar = calendar::Store::with_snapshot(snapshot);
+        let _ = crate::app::update(&mut state, Message::EventOpened("standup".into()));
+        let metrics = Metrics::of(Size::new(440.0, 1800.0));
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            details_pane(&state, &metrics),
+        );
+        for label in ["Projects", "Start day", "Repeat", "Location"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        assert!(ui.find("End Time").is_err());
+        assert!(ui.find("Calendar").is_err());
     }
 
     #[test]

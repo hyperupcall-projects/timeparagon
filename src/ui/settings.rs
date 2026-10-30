@@ -35,14 +35,28 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // There is one settings page rather than one per tab: everything is set
     // from the same place.
     let content = column![
+        heading("Preferences", metrics),
+        preferences(state, metrics),
         heading("Appearance", metrics),
         appearance(state, metrics),
-        heading("View layout", metrics),
-        view_layout(state, metrics),
         heading("Dock", metrics),
         dock(state, metrics),
         heading("Side panel", metrics),
         panel(state, metrics),
+        heading("Event/Habit/Task overlay", metrics),
+        layout_number(
+            "Event/Habit/Task details width (px)",
+            LayoutField::DetailWidth,
+            state,
+            metrics
+        ),
+        heading("Time block overlay", metrics),
+        layout_number(
+            "Time block panel width (px)",
+            LayoutField::TimeBlockWidth,
+            state,
+            metrics
+        ),
         heading("Windowing", metrics),
         windowing(state, metrics),
         heading("Application", metrics),
@@ -169,68 +183,73 @@ fn next_option<T: PartialEq + Clone>(options: &[T], selected: Option<&T>) -> Opt
     options.get(index).cloned()
 }
 
-fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let theme = choice(
-        "Theme",
-        state.catalog.names(),
-        Some(state.config.appearance.theme.clone()),
-        Message::ThemeSelected,
+fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    container(switch(
+        "Use 24-hour time",
+        state.config.appearance.use_24_hour,
+        Message::Use24HourToggled,
         metrics,
-    );
+    ))
+    .id("time-format")
+    .width(Fill)
+    .into()
+}
 
+fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let views = &state.config.views;
     column![
-        theme,
-        container(switch(
-            "Use 24-hour time",
-            state.config.appearance.use_24_hour,
-            Message::Use24HourToggled,
+        choice(
+            "Theme",
+            state.catalog.names(),
+            Some(state.config.appearance.theme.clone()),
+            Message::ThemeSelected,
             metrics,
-        ))
-        .id("time-format")
-        .width(Fill),
+        ),
         switch(
             "Follow system light/dark",
             state.config.appearance.follow_system,
             Message::FollowSystemToggled,
             metrics,
         ),
-        switch(
-            "Always on top",
-            state.config.window.always_on_top,
-            Message::AlwaysOnTopToggled,
-            metrics,
+        layout_number(
+            "Outer border depth (px, 0–5)",
+            LayoutField::PanelBorderOuterWidth,
+            state,
+            metrics
+        ),
+        panel_color_input(
+            "Outer border color",
+            0,
+            views.panel_border_outer_color,
+            state,
+            metrics
+        ),
+        layout_number(
+            "Inner border depth (px, 0–5)",
+            LayoutField::PanelBorderInnerWidth,
+            state,
+            metrics
+        ),
+        panel_color_input(
+            "Inner border color",
+            1,
+            views.panel_border_inner_color,
+            state,
+            metrics
         ),
     ]
     .spacing(metrics.spacing)
     .into()
 }
 
-fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    column![
-        text("Change the appearance of the application and its panels.")
-            .size(metrics.label())
-            .style(text::secondary),
-        layout_number(
-            "Calendar day width (px)",
-            LayoutField::CalendarWidth,
-            state,
-            metrics
-        ),
-        layout_number(
-            "Time block panel width (px)",
-            LayoutField::TimeBlockWidth,
-            state,
-            metrics
-        ),
-        layout_number(
-            "Task details width (px)",
-            LayoutField::DetailWidth,
-            state,
-            metrics
-        ),
-    ]
-    .spacing(metrics.spacing)
-    .into()
+fn subsection<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
+    text(label)
+        .size(metrics.label() + 1.0)
+        .font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        })
+        .into()
 }
 
 fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -282,32 +301,6 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             state,
             metrics,
         ),
-        layout_number(
-            "Outer border (first layer, px, 0–5)",
-            LayoutField::DockBorderOuterWidth,
-            state,
-            metrics,
-        ),
-        dock_color_input(
-            "Outer border color",
-            0,
-            views.dock_border_outer_color,
-            state,
-            metrics,
-        ),
-        layout_number(
-            "Inner border (second layer, px, 0–5)",
-            LayoutField::DockBorderInnerWidth,
-            state,
-            metrics,
-        ),
-        dock_color_input(
-            "Inner border color",
-            1,
-            views.dock_border_inner_color,
-            state,
-            metrics,
-        )
     ]
     .spacing(metrics.spacing)
     .into()
@@ -340,58 +333,30 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             state,
             metrics
         ),
-        text("Update the borders of the dock and panel.")
-            .size(metrics.label())
-            .style(text::secondary),
+        subsection("Day", metrics),
         layout_number(
-            "Outer border (first layer, px, 0–5)",
-            LayoutField::PanelBorderOuterWidth,
+            "Calendar day width (px)",
+            LayoutField::CalendarWidth,
             state,
-            metrics,
+            metrics
         ),
-        panel_color_input(
-            "Outer border color",
-            0,
-            views.panel_border_outer_color,
-            state,
-            metrics,
-        ),
+        subsection("Week", metrics),
         layout_number(
-            "Inner border (second layer, px, 0–5)",
-            LayoutField::PanelBorderInnerWidth,
+            "Calendar week width (px)",
+            LayoutField::CalendarWeekWidth,
             state,
-            metrics,
+            metrics
         ),
-        panel_color_input(
-            "Inner border color",
-            1,
-            views.panel_border_inner_color,
+        subsection("Month", metrics),
+        layout_number(
+            "Calendar month width (px)",
+            LayoutField::CalendarMonthWidth,
             state,
-            metrics,
-        )
+            metrics
+        ),
     ]
     .spacing(metrics.spacing)
     .into()
-}
-
-fn dock_color_input<'a>(
-    label: &str,
-    layer: usize,
-    current: crate::hex::HexColor,
-    state: &'a State,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
-    let input = state.dock_border_input.as_ref();
-    border_color_input(
-        label,
-        "dock-border-color",
-        layer,
-        current,
-        input,
-        Message::DockBorderColorInput,
-        Message::DockBorderColorSubmitted,
-        metrics,
-    )
 }
 
 fn panel_color_input<'a>(
@@ -474,6 +439,12 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     section
         .push(switch(
+            "Always on top",
+            state.config.window.always_on_top,
+            Message::AlwaysOnTopToggled,
+            metrics,
+        ))
+        .push(switch(
             "Dock hour lines",
             views.dock_hour_lines,
             Message::DockHourLinesToggled,
@@ -495,7 +466,11 @@ fn layout_number<'a>(
 ) -> Element<'a, Message> {
     let value = kind.value(state);
     let step = match kind {
-        LayoutField::CalendarWidth | LayoutField::TimeBlockWidth | LayoutField::DetailWidth => 10.0,
+        LayoutField::CalendarWidth
+        | LayoutField::CalendarWeekWidth
+        | LayoutField::CalendarMonthWidth
+        | LayoutField::TimeBlockWidth
+        | LayoutField::DetailWidth => 10.0,
         LayoutField::ScreenMargin
         | LayoutField::BorderRadius
         | LayoutField::DockBorderRadius
@@ -1241,7 +1216,7 @@ mod tests {
         let state = State::new(Config::default(), Catalog::built_in());
         let size = iced::Size::new(420.0, 1800.0);
         let metrics = Metrics::of(size);
-        let mut ui = Simulator::with_size(Settings::default(), size, view_layout(&state, &metrics));
+        let mut ui = Simulator::with_size(Settings::default(), size, appearance(&state, &metrics));
         assert!(ui.find("Screen margin (px, 0–30)").is_err());
         assert!(ui.find("Border radius (px, 0–30)").is_err());
         let mut ui = Simulator::with_size(Settings::default(), size, panel(&state, &metrics));
@@ -1261,6 +1236,8 @@ mod tests {
         state.config.views.dock_right_margin = Some(20.0);
         for (kind, step) in [
             (LayoutField::CalendarWidth, 10.0),
+            (LayoutField::CalendarWeekWidth, 10.0),
+            (LayoutField::CalendarMonthWidth, 10.0),
             (LayoutField::TimeBlockWidth, 10.0),
             (LayoutField::DetailWidth, 10.0),
             (LayoutField::ScreenMargin, 1.0),
@@ -1331,7 +1308,7 @@ mod tests {
                 let mut ui = Simulator::with_size(
                     Settings::default(),
                     size,
-                    appearance(&state, &Metrics::of(size)),
+                    preferences(&state, &Metrics::of(size)),
                 );
                 ui.click(iced::widget::Id::from("time-format")).unwrap();
                 for message in ui.into_messages() {
@@ -1343,6 +1320,56 @@ mod tests {
                 assert_eq!(restored.appearance.use_24_hour, expected);
             }
         }
+    }
+
+    #[test]
+    fn calendar_widths_are_independent_and_persist() {
+        use crate::{app, config::Config, theme::Catalog};
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        for (field, value) in [
+            (LayoutField::CalendarWidth, 300.0),
+            (LayoutField::CalendarWeekWidth, 900.0),
+            (LayoutField::CalendarMonthWidth, 1100.0),
+        ] {
+            let _ = app::update(&mut state, field.changed(value));
+        }
+        let restored: Config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
+        assert_eq!(restored.views.calendar_width(200.0), 300.0);
+        assert_eq!(restored.views.calendar_week_width(200.0), 900.0);
+        assert_eq!(restored.views.calendar_month_width(), 1100.0);
+    }
+
+    #[test]
+    fn appearance_border_edits_are_shared_with_the_dock() {
+        use crate::{app, config::Config, theme::Catalog};
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let _ = app::update(&mut state, Message::PanelBorderOuterWidthChanged(3.0));
+        let _ = app::update(&mut state, Message::PanelBorderInnerWidthChanged(2.0));
+        let _ = app::update(
+            &mut state,
+            Message::PanelBorderColorInput(0, "#123456".into()),
+        );
+        let _ = app::update(
+            &mut state,
+            Message::PanelBorderColorInput(1, "#ABCDEF".into()),
+        );
+        let dock = crate::dock::config::DockConfig::load(&state.config.views);
+        assert_eq!(
+            dock.border_outer_width,
+            state.config.views.panel_border_outer_width()
+        );
+        assert_eq!(
+            dock.border_inner_width,
+            state.config.views.panel_border_inner_width()
+        );
+        assert_eq!(
+            dock.border_outer_color,
+            state.config.views.panel_border_outer_color
+        );
+        assert_eq!(
+            dock.border_inner_color,
+            state.config.views.panel_border_inner_color
+        );
     }
 
     #[test]

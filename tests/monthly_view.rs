@@ -103,7 +103,11 @@ fn month_event_click_selects_its_day_and_opens_details() {
     let mut state = state();
     let day = date(2026, 7, 27);
     let mut ui = render(&state, Size::new(1100.0, 1100.0));
-    ui.click("9:00am Meeting on 2026-07-27").unwrap();
+    let clock = calendar::time_format::clock(
+        chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        state.config.appearance.use_24_hour,
+    );
+    ui.click(format!("{clock} Meeting on {day}")).unwrap();
     let action = ui.into_messages().find(|m| matches!(m, Message::WeekDayAction(d, inner) if *d == day && matches!(inner.as_ref(), Message::EventOpened(_)))).unwrap();
     let _ = app::update(&mut state, action);
     assert_eq!(state.calendar.day, day);

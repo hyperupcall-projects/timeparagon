@@ -3,7 +3,6 @@
 
 pub mod api;
 pub mod colors;
-pub mod time_format;
 mod day_cache;
 pub mod deadline;
 pub mod layout;
@@ -13,6 +12,7 @@ pub mod projects;
 pub mod scheduled;
 pub mod task_metadata;
 pub mod task_sort;
+pub mod time_format;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -285,6 +285,12 @@ impl Draft {
 /// want to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditDraft {
+    pub loading: bool,
+    pub series_id: Option<String>,
+    pub editing_title: bool,
+    pub labels: Vec<String>,
+    pub label_draft: String,
+    pub end_date_text: String,
     pub projects: projects::Selection,
     pub all_day: bool,
     pub id: String,
@@ -308,6 +314,12 @@ impl EditDraft {
     /// Build an edit draft from an existing event.
     pub fn from_event(event: &Event) -> Self {
         Self {
+            loading: false,
+            series_id: None,
+            editing_title: false,
+            labels: event.details.labels.clone(),
+            label_draft: String::new(),
+            end_date_text: event.end.date_naive().to_string(),
             projects: projects::Selection {
                 ids: event.details.projects.clone(),
                 ..Default::default()
@@ -333,9 +345,15 @@ impl EditDraft {
     pub fn set_date_text(&mut self, text: String) {
         if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
             self.start = at_clock(day, self.start.hour(), self.start.minute());
-            self.end = at_clock(day, self.end.hour(), self.end.minute());
         }
         self.date_text = text;
+    }
+
+    pub fn set_end_date_text(&mut self, text: String) {
+        if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
+            self.end = at_clock(day, self.end.hour(), self.end.minute());
+        }
+        self.end_date_text = text;
     }
 
     /// The recurrence lines the editor describes.
@@ -396,6 +414,8 @@ pub struct Details {
     /// Project IDs assigned to this calendar event (tasks use their task metadata).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     pub scheduled: Option<scheduled::Link>,
     pub task_data: Option<crate::task_db::TaskData>,
     pub location: String,
@@ -568,6 +588,8 @@ pub struct Store {
     pub hour_height: f32,
     /// The event whose details are open, by id.
     pub open_event: Option<String>,
+    /// An off-day habit master or unsaved habit shown only in the details pane.
+    pub detail_event: Option<Event>,
     /// The details card sits at the bottom when the click was in the top half.
     pub details_below: bool,
     /// The task list whose color picker is open, by calendar id.
@@ -619,6 +641,7 @@ impl Store {
             error: None,
             hour_height: DEFAULT_HOUR_HEIGHT,
             open_event: None,
+            detail_event: None,
             details_below: false,
             color_editor: None,
             month_open: false,
@@ -653,6 +676,7 @@ impl Store {
             error: None,
             hour_height: DEFAULT_HOUR_HEIGHT,
             open_event: None,
+            detail_event: None,
             details_below: false,
             color_editor: None,
             month_open: false,
@@ -921,7 +945,7 @@ impl Store {
         if self
             .open_event
             .as_ref()
-            .is_some_and(|id| self.events.iter().all(|event| &event.id != id))
+            .is_some_and(|id| self.event(id).is_none())
         {
             self.open_event = None;
         }
@@ -1109,11 +1133,21 @@ impl Store {
 
     /// The event with this id, if it is still loaded.
     pub fn event(&self, id: &str) -> Option<&Event> {
-        self.events.iter().find(|event| event.id == id)
+        self.detail_event
+            .as_ref()
+            .filter(|event| event.id == id)
+            .or_else(|| self.events.iter().find(|event| event.id == id))
     }
 
     /// A mutable handle to the event with this id.
     pub fn event_mut(&mut self, id: &str) -> Option<&mut Event> {
+        if self
+            .detail_event
+            .as_ref()
+            .is_some_and(|event| event.id == id)
+        {
+            return self.detail_event.as_mut();
+        }
         self.events.iter_mut().find(|event| event.id == id)
     }
 
@@ -1128,6 +1162,13 @@ impl Store {
     /// A mutable handle to an event, whether it is on the day in view or parked
     /// in the cache. A write can land while the user is looking at another day.
     fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
+        if self
+            .detail_event
+            .as_ref()
+            .is_some_and(|event| event.id == id)
+        {
+            return self.detail_event.as_mut();
+        }
         if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
             return Some(event);
         }
@@ -1605,6 +1646,31 @@ pub fn sync_habits(
     api::fetch_habits(&tokens.access_token, app_calendar)
 }
 
+/// Load the series behind a habit occurrence so its start day and repeat
+/// controls describe the actual habit rather than an expanded instance.
+pub fn habit_edit_draft(
+    client_id: &str,
+    client_secret: &str,
+    event: &Event,
+) -> Result<EditDraft, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let master = api::fetch_event(
+        &tokens.access_token,
+        event,
+        event
+            .details
+            .recurring_event_id
+            .as_deref()
+            .unwrap_or(&event.id),
+    )?;
+    let mut draft = EditDraft::from_event(&master);
+    draft.series_id = Some(master.id);
+    draft.id = event.id.clone();
+    Ok(draft)
+}
+
 /// The fields a habit is written with. `id` is `None` for a new habit.
 pub struct HabitWrite<'a> {
     pub id: Option<&'a str>,
@@ -1654,6 +1720,35 @@ pub fn write_habit(
         }
         None => api::insert_habit(&tokens.access_token, write.calendar_id, &body),
     }
+}
+
+/// Creates a habit using the shared details editor's fields.
+pub fn create_habit(
+    client_id: &str,
+    client_secret: &str,
+    draft: &EditDraft,
+    color_id: Option<&str>,
+) -> Result<api::HabitEvent, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let mut body = api::habit_body(
+        &draft.title,
+        &draft.description,
+        draft.start,
+        draft.end,
+        &draft.recurrence_lines()?,
+        color_id,
+    );
+    projects::write(&mut body, &draft.projects.ids)?;
+    body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(&draft.labels)
+        .map_err(|error| error.to_string())?
+        .into();
+    api::insert_habit(
+        &tokens.access_token,
+        (!draft.calendar_id.is_empty()).then_some(draft.calendar_id.as_str()),
+        &body,
+    )
 }
 
 /// Deletes a habit master and every occurrence in its series.
@@ -1940,6 +2035,7 @@ pub fn update_event(
     recurrence: Option<&[String]>,
     projects: &[u64],
     all_day: bool,
+    labels: &[String],
 ) -> Result<(), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -1957,6 +2053,7 @@ pub fn update_event(
         recurrence,
         projects,
         all_day,
+        labels,
     )
     .map_err(describe_event_write_error)
 }
@@ -3146,6 +3243,23 @@ mod tests {
         store.set_day(day, day);
         assert_ne!(store.event("standup").unwrap().start, start);
     }
+    #[test]
+    fn editing_event_dates_keeps_the_other_endpoint_and_clock_times() {
+        let mut event = sample_snapshot().events.remove(1);
+        event.start = at_clock(NaiveDate::from_ymd_opt(2026, 10, 29).unwrap(), 22, 0);
+        event.end = at_clock(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap(), 7, 30);
+        let mut draft = EditDraft::from_event(&event);
+        assert_eq!(draft.end_date_text, "2026-10-30");
+        draft.set_date_text("2026-10-28".into());
+        assert_eq!(draft.end, event.end);
+        assert_eq!(draft.start.time(), event.start.time());
+        let start = draft.start;
+        draft.set_end_date_text("2026-11-01".into());
+        assert_eq!(draft.start, start);
+        assert_eq!(draft.end.date_naive().to_string(), "2026-11-01");
+        assert_eq!(draft.end.time(), event.end.time());
+    }
+
     #[test]
     fn an_events_recurrence_is_loaded_into_the_shared_editor_and_written_back() {
         let mut event = sample_snapshot().events.remove(1);

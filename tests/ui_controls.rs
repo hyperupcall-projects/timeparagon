@@ -63,8 +63,15 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
         &mut state,
         Message::EventDraftKindSelected(timeslay::calendar::DraftKind::Habit),
     );
-    assert_eq!(state.form_editors[2].text(), expected);
-    assert_eq!(state.habits.draft.as_ref().unwrap().notes, expected);
+    assert!(state.habits.draft.is_none());
+    assert_eq!(state.form_editors[1].text(), expected);
+    assert_eq!(
+        state.calendar.edit_draft.as_ref().unwrap().description,
+        expected
+    );
+    let id = state.calendar.open_event.clone().unwrap();
+    let _ = app::update(&mut state, Message::DescriptionOpen(id));
+    assert_eq!(state.description_editor.text(), expected);
 }
 
 #[test]

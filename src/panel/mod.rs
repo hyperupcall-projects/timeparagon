@@ -43,13 +43,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::dock::launch::{self, Origin};
+use crate::dock::launch;
 use crate::ipc;
 
 /// How long a freshly started shape gets to announce itself.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The two forms TimeSlay takes on screen besides its regular window.
+/// The two forms TimeSlay takes on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Panel,
@@ -85,7 +85,7 @@ impl Shape {
             // A hidden panel is still running, and only has to be asked.
             Self::Panel if ipc::request(ipc::SIDEBAR, "show").is_ok() => Ok(()),
             Self::Panel => start(launch::open_sidebar()?, self),
-            Self::Dock => start(launch::open_dock(Origin::Sidebar)?, self),
+            Self::Dock => start(launch::open_dock()?, self),
         }
     }
 }

@@ -29,7 +29,13 @@ fn state() -> State {
 type Simulator<'a> = Sim<'a, Message>;
 
 fn render(state: &State, size: Size) -> Simulator<'_> {
-    at(size, app::view(state, iced::window::Id::unique()))
+    if state.floating_editors()
+        && (state.calendar.open_event.is_some() || state.timeblocking.block.is_some())
+    {
+        at(size, timeslay::ui::editor_window(state))
+    } else {
+        at(size, app::view(state, iced::window::Id::unique()))
+    }
 }
 
 fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
@@ -190,11 +196,11 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
         "Add shortcut",
         "Calendar day width (px)",
         "Time block panel width (px)",
-        "Task details width (px)",
+        "Event/Habit/Task details width (px)",
         "Screen margin (px, 0–30)",
         // Google Calendar.
         "OAuth client ID",
-        "Sync every 15 minutes",
+        "Sync every hour",
     ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
@@ -499,37 +505,19 @@ fn the_tabs_are_one_row_in_three_groups() {
     }
 }
 
-/// Opening the details pane or the block editor widens the window, but the
-/// menu must keep the width it had before: the panes grow out of the view
-/// underneath, not out of the navigation.
+/// Editors are drawn by a separate window; navigation keeps its normal width.
 #[test]
-fn the_menu_does_not_grow_when_a_pane_widens_the_window() {
+fn the_menu_keeps_its_width_when_editors_open() {
     let mut state = state();
-    state.calendar =
-        timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
     let base = state.calendar_width();
-    let detail = state.config.views.detail_width();
-
     let labels = timeslay::ui::tab_labels(base);
-
-    // The details pane alone.
     state.calendar.open_event = Some("all-day".into());
-    let mut ui = render(&state, Size::new(base + detail, 600.0));
-    let settings = ui.find(labels[5]).expect("Settings tab").bounds();
-    assert!(
-        settings.x + settings.width <= base + 0.5,
-        "the menu grew with the details pane: {settings:?} outside {base}px"
-    );
-    drop(ui);
-
-    // The block editor, with the details pane beside it.
-    state.timeblocking.original_width = Some(base);
-    let mut ui = render(&state, Size::new(base + detail + 400.0, 600.0));
-    let settings = ui.find(labels[5]).expect("Settings tab").bounds();
-    assert!(
-        settings.x + settings.width <= base + 0.5,
-        "the menu grew with the editor: {settings:?} outside {base}px"
-    );
+    for block in [false, true] {
+        state.timeblocking.block = block.then(|| "standup".into());
+        let mut ui = at(Size::new(base, 600.0), timeslay::ui::view(&state));
+        let settings = ui.find(labels[5]).expect("Settings tab").bounds();
+        assert!(settings.x + settings.width <= base + 0.5);
+    }
 }
 
 /// Tasks is a single top-level item; its Inbox and Backlog tabs only appear
@@ -733,17 +721,15 @@ fn opening_an_event_shows_its_google_details() {
     for label in [
         "Standup",
         "Room 4",
-        "Title",
-        "Day and time",
+        "Start Time",
+        "End Time",
         "Save changes",
-        "Repeat",
-        "Confirmed",
+        "Does not repeat",
         "Ada",
         "Grace (accepted)",
         "Open in Google Meet",
         "Open in Google Calendar",
         "Close",
-        "Work",
     ] {
         assert!(
             ui.find(label).is_ok(),
@@ -775,8 +761,8 @@ fn a_task_details_card_has_no_google_tasks_link_or_status() {
 
     assert!(ui.find("Open in Google Tasks").is_err());
     assert!(ui.find("Complete task").is_ok());
-    assert!(ui.find("Name").is_ok());
-    assert!(ui.find("Rename").is_ok());
+    assert!(ui.find("Team offsite").is_ok());
+    assert!(ui.find("Estimate").is_ok());
     assert!(ui.find("Bring the form").is_ok());
     assert!(ui.find("Needs action").is_err());
     assert!(ui.find("Status").is_err());
@@ -951,7 +937,7 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
     state.calendar.open_event = Some("all-day".into());
     state.calendar.details_below = true;
 
-    let mut ui = render(&state, Size::new(320.0 + 360.0, 700.0));
+    let mut ui = at(Size::new(320.0, 700.0), timeslay::ui::view(&state));
     let _ = ui.click("Second thing")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
@@ -978,7 +964,7 @@ fn the_settings_pane_includes_calendar_sync_controls() {
         "Google Calendar",
         "OAuth client ID",
         "Resync calendar and tasks data",
-        "Sync every 15 minutes",
+        "Sync every hour",
         "Day ends at midnight",
     ] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from settings");
@@ -1229,12 +1215,12 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     let mut state = timeblocking_state();
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
     assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
-    assert_eq!(state.timeblocking.original_width, Some(260.0));
+    assert!(state.floating_editors());
     assert!(state.calendar.open_event.is_none());
     let mut ui = render(&state, Size::new(660.0, 720.0));
     for label in [
         "Save changes",
-        "Repeat",
+        "Start Time",
         "Delete",
         "Close",
         "Planned Tasks",
@@ -1271,7 +1257,6 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
     let _ = app::update(&mut state, Message::ScreenSelected(Screen::Backlog));
     assert!(state.timeblocking.block.is_none());
-    assert_eq!(state.timeblocking.original_width, None);
     Ok(())
 }
 
@@ -1329,15 +1314,10 @@ fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error
     assert!(state.timeblocking.block.is_some());
     assert!(state.calendar.open_event.is_some());
 
-    let mut ui = render(&state, Size::new(260.0 + 400.0 + 360.0, 900.0));
-    let calendar = ui.find("Menu")?.bounds();
+    let mut ui = render(&state, Size::new(400.0 + 360.0, 900.0));
     let block = ui.find("Save changes")?.bounds();
     let details = ui.find("Complete task")?.bounds();
 
-    assert!(
-        calendar.x < block.x,
-        "the calendar should be left of the editor: {calendar:?} {block:?}"
-    );
     assert!(
         block.x < details.x,
         "the editor should be left of the details: {block:?} {details:?}"
@@ -1555,8 +1535,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
             state.screen = screen;
             let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
             let size = Size::new(width, 800.0);
-            // The details pane sits to the right of the view, so render the
-            // window at the width it would be widened to.
+            // Render the independent details editor at its configured width.
             let render_size = Size::new(width + 360.0, 800.0);
             let mut ui = render(&state, render_size);
             let mut bottom = 0.0;
@@ -1917,13 +1896,11 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
     assert_eq!(state.timeblocking.title, "Research outline");
     let mut ui = render(&state, Size::new(420.0, 720.0));
     for label in [
-        "Inbox",
-        "Name",
-        "Rename",
+        "Research outline",
+        "Estimate",
         "Deadline",
-        "Save deadline",
-        "Scheduled day and time",
-        "Schedule time",
+        "Due Date",
+        "Schedule Time",
         "Move to backlog",
     ] {
         assert!(ui.find(label).is_ok());
@@ -1931,14 +1908,18 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
     drop(ui);
     let _ = app::update(
         &mut state,
+        Message::TimeBlocking(timeslay::timeblocking::Action::EditTitle),
+    );
+    let _ = app::update(
+        &mut state,
         Message::TimeBlocking(timeslay::timeblocking::Action::Title(
             "Revised outline".into(),
         )),
     );
     let mut ui = render(&state, Size::new(420.0, 720.0));
-    let _ = ui.click("Rename")?;
-    assert!(ui.into_messages().any(|message| matches!(
-        message,
+    ui.click(iced::widget::Id::new("task-title"))?;
+    ui.tap_key(iced::keyboard::key::Named::Enter);
+    assert!(ui.into_messages().any(|message| matches!(message,
         Message::TimeBlocking(timeslay::timeblocking::Action::SaveTitle(id)) if id == "task:backlog"
     )));
     Ok(())
@@ -2217,7 +2198,6 @@ fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
     let mut state = focus_state();
     assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
     assert!(state.timeblocking.block.is_none());
-    assert!(state.timeblocking.original_width.is_none());
     let mut ui = render(&state, Size::new(900.0, 720.0));
     for label in [
         "FOCUS · TIME BLOCK",
@@ -2414,13 +2394,13 @@ fn keep_edit_opens_the_selected_note() -> Result<(), Error> {
 fn switching_to_keep_closes_time_block_views_and_starts_refresh() {
     let mut state = focus_state();
     state.timeblocking.block = Some("standup".into());
-    state.timeblocking.original_width = Some(260.0);
+
     state.timeblocking.dragging = Some("task:planned".into());
     let _ = app::update(&mut state, Message::ScreenSelected(Screen::KeepNotes));
     assert_eq!(state.screen, Screen::KeepNotes);
     assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.focus.is_none());
-    assert!(state.timeblocking.original_width.is_none());
+    assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.dragging.is_none());
     assert!(state.keep.loading);
     assert!(state.config.task_work.active().is_some());
@@ -2463,9 +2443,9 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
         assert_eq!(state.timeblocking.deadline, "2026-12-31");
         let mut ui = render(&state, Size::new(width, 720.0));
         for label in [
-            "Rename",
-            "Save deadline",
-            "Schedule time",
+            "Research outline",
+            "Deadline",
+            "Schedule Time",
             "Move to backlog",
         ] {
             let bounds = ui.find(label)?.bounds();

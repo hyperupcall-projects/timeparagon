@@ -48,19 +48,23 @@ There's week and month views, just like any other calendar app:
 	- Habits
 		- These are standard calendar events that are colored differently.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
+	- Sleep (TODO)
+		- These are standard calendar events that are automatically calculated from the next day's first event.
+		- Automatic shutdown.
 - Manage tasks:
+	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
 	- Create tasks:
 		- With Todoist-like syntax (TODO).
 		- With voice input (TODO).
 		- From Gmail URLs
 		- From a web page with the browser extension
 		- From a Slack message with the Slack app
-	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
-	- Inbox section for new tasks that are yet to be triaged.
+	- Inbox section for new tasks that have yet to be triaged.
 	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled (WIP).
 	- Segmented backlog section for deferring tasks to next week, next month, and so on (WIP).
-	- Manually assign tasks to time blocks.
-	- Flexibly group and order tasks without anchoring to any particular start time; automatically project these tasks onto available time blocks (TODO).
+	- Schedule tasks:
+		- Manually assign tasks to time blocks.
+		- Automatically project tasks from an grouped, ordered, time-independent list of tasks to the day's available time blocks (TODO).
 		- "Do immediately" etc. No need to categorize other than project.
 	- Handle long-running or multi-step/subtasks (TODO).
 		- Tasks that may be done over multiple days/time blocks (TODO).
@@ -114,10 +118,10 @@ cargo run -p timeslay-dioxus
 
 ## Roadmap
 
+- when editing tasks/calendar events, edit current/current + future/all events
 - meal planning/grocery list
 	- lists in general
 - meeting agenda
-- alt+tab proper icon does not show up (remove this mode entirely)
 - Reminders (use Google Calendar)
 - Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
 - People/contacts

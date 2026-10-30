@@ -12,8 +12,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-/// The regular window's socket: `status` and JSON inbox requests.
-pub const WINDOW: &str = "timeslay-window.sock";
 /// The side panel's socket: `show`, `hide`, `status` and JSON inbox requests.
 pub const SIDEBAR: &str = "timeslay-sidebar.sock";
 /// The dock's socket: `hide`, `status` and JSON inbox requests.

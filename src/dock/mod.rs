@@ -74,9 +74,7 @@ const FADE_STEP: Duration = Duration::from_millis(16);
 const TICK: Duration = Duration::from_secs(30);
 
 /// Runs the dock until its surface is closed or it is told to hide.
-///
-/// `origin` is what the dock replaced, which its back button returns to.
-pub fn run(origin: launch::Origin) -> Result<()> {
+pub fn run() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
         .init();
 
@@ -207,7 +205,6 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         store,
         segments: Vec::new(),
         day: today,
-        origin,
         hovered: None,
         pinned: None,
         opening,
@@ -460,8 +457,6 @@ struct Dock {
     segments: Vec<model::Segment>,
     day: NaiveDate,
 
-    /// What the dock replaced, which its back button returns to.
-    origin: launch::Origin,
     hovered: Option<usize>,
     /// The segment whose full card a click left open.
     pinned: Option<usize>,
@@ -529,9 +524,9 @@ impl Dock {
         self.fading = true;
     }
 
-    /// Hands over to what the dock replaced, then quits.
+    /// Shows the side panel, then quits.
     fn go_back(&mut self) {
-        match launch::close_dock(self.origin) {
+        match launch::close_dock() {
             Ok(()) => self.request_exit(),
             Err(error) => log::error!("could not leave the dock: {error:#}"),
         }
@@ -589,7 +584,7 @@ impl Dock {
             hour_lines: self.config.hour_lines,
             button_hovered: self.button_hovered,
             add_hovered: self.add_hovered,
-            back_label: self.origin.back_label(),
+            back_label: "Open the side panel",
             side: self.config.side,
             palette: self.palette,
         };

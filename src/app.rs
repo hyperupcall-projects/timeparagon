@@ -65,6 +65,8 @@ pub enum Screen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutField {
     CalendarWidth,
+    CalendarWeekWidth,
+    CalendarMonthWidth,
     TimeBlockWidth,
     DetailWidth,
     ScreenMargin,
@@ -85,6 +87,11 @@ impl LayoutField {
     pub fn value(self, state: &State) -> f32 {
         match self {
             Self::CalendarWidth => state.calendar_width(),
+            Self::CalendarWeekWidth => state
+                .config
+                .views
+                .calendar_week_width(ui::calendar::weekly_view_width(&state.config.calendar)),
+            Self::CalendarMonthWidth => state.config.views.calendar_month_width(),
             Self::TimeBlockWidth => state.config.views.time_block_width(),
             Self::DetailWidth => state.config.views.detail_width(),
             Self::ScreenMargin => state.config.views.margin(),
@@ -94,8 +101,8 @@ impl LayoutField {
             Self::DockWidth => state.config.views.dock_width(),
             Self::DockLeftMargin => state.config.views.dock_left_margin(),
             Self::DockRightMargin => state.config.views.dock_right_margin(),
-            Self::DockBorderOuterWidth => state.config.views.dock_border_outer_width(),
-            Self::DockBorderInnerWidth => state.config.views.dock_border_inner_width(),
+            Self::DockBorderOuterWidth => state.config.views.panel_border_outer_width(),
+            Self::DockBorderInnerWidth => state.config.views.panel_border_inner_width(),
             Self::PanelBorderOuterWidth => state.config.views.panel_border_outer_width(),
             Self::PanelBorderInnerWidth => state.config.views.panel_border_inner_width(),
             Self::FadeDuration => state.config.views.fade_duration_ms() as f32,
@@ -130,6 +137,8 @@ impl LayoutField {
     pub fn changed(self, value: f32) -> Message {
         match self {
             Self::CalendarWidth => Message::CalendarWidthChanged(value),
+            Self::CalendarWeekWidth => Message::CalendarWeekWidthChanged(value),
+            Self::CalendarMonthWidth => Message::CalendarMonthWidthChanged(value),
             Self::TimeBlockWidth => Message::TimeBlockWidthChanged(value),
             Self::DetailWidth => Message::DetailWidthChanged(value),
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
@@ -155,7 +164,7 @@ pub struct Flash {
     pub settings: config::Flash,
 }
 
-/// Set when this process is the side panel rather than the main window.
+/// Geometry for the side panel; absent for a task popover.
 pub struct Sidebar {
     /// Width the panel is pinned to, in logical pixels.
     pub width: f32,
@@ -208,6 +217,8 @@ pub struct State {
     /// Persistent cursor and selection state for new events, event edits and habits.
     pub task_description: text_editor::Content,
     pub task_creation_window: bool,
+    pub description_popup: Option<String>,
+    pub description_editor: text_editor::Content,
     pub form_editors: [text_editor::Content; 3],
     pub config: Config,
     pub catalog: Catalog,
@@ -215,7 +226,7 @@ pub struct State {
     /// The clock reading used for this frame, so every widget agrees.
     pub now: Instant,
 
-    /// Set when this process is the side panel rather than the main window.
+    /// Geometry for the side panel; absent for a task popover.
     /// It pins the window to its configured width and edge, and keeps the panel
     /// from writing its own geometry back over the user's saved window.
     pub sidebar: Option<Sidebar>,
@@ -276,9 +287,11 @@ pub struct State {
     /// The panel border colour box being typed into: 0 for the outer border,
     /// 1 for the inner one, and the text as it currently reads.
     pub panel_border_input: Option<(usize, String)>,
-    /// Whether the window has been widened for the event details pane. Kept so
-    /// the pane can be opened and closed from anywhere without resizing twice.
+    /// Whether the shared details editor is visible.
     pub details_pane_open: bool,
+    /// Shared floating editor window, independent of the main view geometry.
+    pub editor_window: Option<window::Id>,
+    editor_window_size: Size,
 
     /// Set while a config write is already queued, so a slider drag does not
     /// schedule one save per pixel.
@@ -308,6 +321,16 @@ pub struct State {
 #[derive(Debug, Clone)]
 pub enum Message {
     Picker(crate::ui::controls::Action),
+    DescriptionOpen(String),
+    DescriptionEdited(text_editor::Action),
+    DescriptionClose,
+    DescriptionSave,
+    EventTitleEdit,
+    HabitDetailsLoaded(String, Result<calendar::EditDraft, String>),
+    EventEndDateChanged(String),
+    EventLabelDraft(String),
+    EventLabelAdd,
+    EventLabelRemove(String),
     FormEdited(usize, text_editor::Action),
     TimeBlocking(crate::timeblocking::Action),
     BrainDump(crate::brain_dump::Action),
@@ -351,6 +374,8 @@ pub enum Message {
     Use24HourToggled(bool),
     AlwaysOnTopToggled(bool),
     CalendarWidthChanged(f32),
+    CalendarWeekWidthChanged(f32),
+    CalendarMonthWidthChanged(f32),
     TimeBlockWidthChanged(f32),
     DetailWidthChanged(f32),
     ScreenMarginChanged(f32),
@@ -393,6 +418,7 @@ pub enum Message {
     AudioStatusPolled,
 
     WindowOpened(window::Id),
+    EditorWindowOpened(window::Id),
     /// The monitor size came back, so the window can open at its default width.
     MonitorSized(window::Id, Option<Size>),
     WeekMonitorSized(window::Id, Option<Size>),
@@ -590,6 +616,8 @@ impl State {
             picker: None,
             task_description: text_editor::Content::new(),
             task_creation_window: false,
+            description_popup: None,
+            description_editor: text_editor::Content::new(),
             form_editors: std::array::from_fn(|_| text_editor::Content::new()),
             now: Instant::now(),
             sidebar: None,
@@ -626,6 +654,8 @@ impl State {
             dock_border_input: None,
             panel_border_input: None,
             details_pane_open: false,
+            editor_window: None,
+            editor_window_size: Size::ZERO,
             save_queued: false,
             disk_config: config.clone(),
             catalog,
@@ -672,6 +702,10 @@ impl State {
         self.screen_margin() * 2.0
     }
 
+    pub fn floating_editors(&self) -> bool {
+        !self.task_creation_window && shows_details(self.screen) && !self.range_view_active()
+    }
+
     fn range_view_active(&self) -> bool {
         self.screen == Screen::Calendar && (self.weekly || self.monthly)
     }
@@ -686,12 +720,24 @@ impl State {
 
     fn weekly_window_width(&self) -> f32 {
         let view_width = if self.monthly {
-            1050.0
+            self.config.views.calendar_month_width()
         } else {
-            ui::calendar::weekly_view_width(&self.config.calendar)
+            self.config
+                .views
+                .calendar_week_width(ui::calendar::weekly_view_width(&self.config.calendar))
         };
-        let width = (view_width + self.screen_margin_width())
-            .max(self.calendar_width() + self.screen_margin_width());
+        let configured = if self.monthly {
+            self.config.views.calendar_month_width
+        } else {
+            self.config.views.calendar_week_width
+        };
+        // Preserve the previous automatic sizing until a width is chosen.
+        let view_width = if configured.is_some() {
+            view_width
+        } else {
+            view_width.max(self.calendar_width())
+        };
+        let width = view_width + self.screen_margin_width();
         match self.monitor_size {
             Some(size) if size.width.is_finite() && size.width > 0.0 => width.min(size.width),
             _ => width,
@@ -711,17 +757,7 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
     } else {
         state.calendar_width() + state.screen_margin_width()
     };
-    let block_open = state.timeblocking.original_width.is_some();
-    let mut width = if block_open {
-        state.timeblocking.original_width = Some(base);
-        crate::timeblocking::editor_width(state, base)
-    } else {
-        base
-    };
-    if state.details_pane_open {
-        width += state.config.views.detail_width();
-    }
-    let widened = block_open || state.details_pane_open;
+    let width = base;
     let Some(id) = state.main_window else {
         return Task::none();
     };
@@ -744,66 +780,25 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
                 )),
             ))
             .chain(resize)
-            .chain(window::set_max_size(
-                id,
-                (!widened).then_some(Size::new(base, 100_000.0)),
-            ))
+            .chain(window::set_max_size(id, Some(Size::new(base, 100_000.0))))
     } else {
         resize
     }
 }
 
+/// Opens the task editor as a layer-shell popover.
 pub fn boot_new_task() -> (State, Task<Message>) {
-    boot_window(true)
-}
-
-pub fn boot() -> (State, Task<Message>) {
-    boot_window(false)
-}
-
-fn boot_window(task_creation_window: bool) -> (State, Task<Message>) {
     let mut state = boot_state();
-    state.task_creation_window = task_creation_window;
-    let edit = if task_creation_window {
-        state.main_size = Size::new(480.0, 800.0);
-        crate::inbox::update(&mut state, crate::inbox::Action::NewTask)
-    } else {
-        Task::none()
-    };
-
-    // The browser extension and the Slack app look for a running app here.
-    // The panel has its own socket; this one covers the regular window.
-    if !task_creation_window {
-        let (inbox_tx, inbox_rx) = mpsc::channel();
-        state.inbox_added_rx = Some(inbox_rx);
-        match crate::ipc::bind(crate::ipc::WINDOW) {
-            Ok(listener) => {
-                std::thread::Builder::new()
-                    .name("window-ipc".into())
-                    .spawn(move || {
-                        if let Err(error) = window_ipc_listener(listener, inbox_tx) {
-                            log::error!("window IPC listener stopped: {error:#}");
-                        }
-                    })
-                    .expect("failed to spawn the window IPC listener");
-            }
-            Err(error) => log::error!("window IPC is unavailable: {error:#}"),
-        }
-    }
-
-    // A daemon opens no window by itself, which is what lets the flash
-    // overlay be a peer window rather than a child of the clock.
+    state.task_creation_window = true;
+    state.main_size = Size::new(480.0, 800.0);
+    let edit = crate::inbox::update(&mut state, crate::inbox::Action::NewTask);
     let (_id, open) = window::open(window::Settings {
         size: state.main_size,
         transparent: true,
         min_size: Some(MIN_SIZE),
-        level: level(state.config.window.always_on_top),
         exit_on_close_request: true,
-        icon: window_icon(),
-        platform_specific: window_platform(),
         ..Default::default()
     });
-
     (state, Task::batch([open.map(Message::WindowOpened), edit]))
 }
 
@@ -894,7 +889,7 @@ fn sidebar_platform(views: &config::ViewSettings) -> window::settings::PlatformS
 
 /// Builds the state that is read from disk at startup.
 ///
-/// Shared by the main window and the side panel, so both open on the same
+/// Shared by the task popover and the side panel, so both open on the same
 /// config, the same cached days and the same running track. It deliberately
 /// opens no window: the two callers want different ones.
 fn boot_state() -> State {
@@ -984,18 +979,61 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     } else {
         crate::travel::reconcile(state)
     };
-    Task::batch([task, reconcile_detail_pane(state), travel])
+    state.details_pane_open = detail_pane_visible(state);
+    let editor = reconcile_editor_window(state);
+    Task::batch([task, editor, travel])
 }
 
-/// Opens or closes the event details pane by widening or narrowing the window
-/// to match, whatever code changed which event is open.
-fn reconcile_detail_pane(state: &mut State) -> Task<Message> {
-    let open = detail_pane_visible(state);
-    if open == state.details_pane_open {
+/// Keep editor lifetime separate from the panel's geometry and reservation.
+fn reconcile_editor_window(state: &mut State) -> Task<Message> {
+    let visible =
+        state.floating_editors() && state.main_window.is_some() && !state.panel_expected_close;
+    let width = if visible {
+        (if state.timeblocking.block.is_some() {
+            state.config.views.time_block_width()
+        } else {
+            0.0
+        }) + if state.details_pane_open {
+            state.config.views.detail_width()
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    if width == 0.0 {
+        return state
+            .editor_window
+            .take()
+            .map(window::close)
+            .unwrap_or_else(Task::none);
+    }
+    let size = Size::new(
+        width,
+        (state.main_size.height - ui::editor_window_top(state)).max(1.0),
+    );
+    if let Some(id) = state.editor_window {
+        if state.editor_window_size != size {
+            state.editor_window_size = size;
+            return window::resize(id, size);
+        }
         return Task::none();
     }
-    state.details_pane_open = open;
-    apply_view_sizes(state)
+    let (id, task) = window::open(window::Settings {
+        size,
+        decorations: false,
+        resizable: false,
+        level: window::Level::AlwaysOnTop,
+        exit_on_close_request: false,
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: "timeslay-editor".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    state.editor_window = Some(id);
+    state.editor_window_size = size;
+    task.map(Message::EditorWindowOpened)
 }
 
 fn detail_pane_visible(state: &State) -> bool {
@@ -1012,13 +1050,7 @@ fn resize_for_week_transition(
     }
 
     state.details_pane_open = detail_pane_visible(state);
-    let restored_width = state.calendar_width()
-        + state.screen_margin_width()
-        + if state.details_pane_open {
-            state.config.views.detail_width()
-        } else {
-            0.0
-        };
+    let restored_width = state.calendar_width() + state.screen_margin_width();
     let restoring = was_weekly
         && state.main_window.is_some()
         && (state.weekly_resize_pending || (state.main_size.width - restored_width).abs() > 0.5);
@@ -1035,17 +1067,29 @@ fn resize_for_week_transition(
     resize
 }
 
-/// The screens that show the event details pane beside their content.
+/// Destinations that support the shared details editor.
 pub(crate) fn shows_details(screen: Screen) -> bool {
     matches!(
         screen,
-        Screen::Calendar | Screen::Backlog | Screen::Overdue | Screen::Inbox | Screen::Triaged
+        Screen::Calendar
+            | Screen::Backlog
+            | Screen::Overdue
+            | Screen::Inbox
+            | Screen::Triaged
+            | Screen::Habits
     )
 }
 
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::TaskPopoverBounds(_) => Task::none(),
+        Message::EditorWindowOpened(id) => {
+            if state.editor_window == Some(id) {
+                Task::none()
+            } else {
+                window::close(id)
+            }
+        }
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::BrainDump(action) => crate::brain_dump::update(state, action),
         Message::Inbox(action) => {
@@ -1419,21 +1463,33 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             update(state, field.changed(value))
         }
 
+        Message::CalendarWeekWidthChanged(width) | Message::CalendarMonthWidthChanged(width) => {
+            state.view_layout_input = None;
+            if !width.is_finite() {
+                return Task::none();
+            }
+            let width = Some(width.clamp(
+                config::ViewSettings::MIN_WIDTH,
+                config::ViewSettings::MAX_WIDTH,
+            ));
+            if matches!(message, Message::CalendarWeekWidthChanged(_)) {
+                state.config.views.calendar_week_width = width;
+            } else {
+                state.config.views.calendar_month_width = width;
+            }
+            let resize = apply_view_sizes(state);
+            Task::batch([resize, queue_save(state)])
+        }
+
         Message::CalendarWidthChanged(width) => {
             state.view_layout_input = None;
             if !width.is_finite() {
                 return Task::none();
             }
-            let pane = state.config.views.time_block_width();
             state.config.views.calendar_width = Some(width.clamp(
                 config::ViewSettings::MIN_WIDTH,
                 config::ViewSettings::MAX_WIDTH,
             ));
-            // A remembered total must not override a newly chosen pane size.
-            state.config.window.time_block_width = state
-                .timeblocking
-                .original_width
-                .map(|_| state.calendar_width() + state.screen_margin_width() + pane);
             let resize = apply_view_sizes(state);
             Task::batch([resize, queue_save(state)])
         }
@@ -1447,9 +1503,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 config::ViewSettings::MIN_WIDTH,
                 config::ViewSettings::MAX_WIDTH,
             );
-            state.config.window.time_block_width = None;
-            let resize = apply_view_sizes(state);
-            Task::batch([resize, queue_save(state)])
+            queue_save(state)
         }
 
         Message::DetailWidthChanged(width) => {
@@ -1461,8 +1515,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 config::ViewSettings::MIN_WIDTH,
                 config::ViewSettings::MAX_WIDTH,
             );
-            let resize = apply_view_sizes(state);
-            Task::batch([resize, queue_save(state)])
+            queue_save(state)
         }
 
         Message::ScreenMarginChanged(margin) => {
@@ -1470,12 +1523,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             if !margin.is_finite() {
                 return Task::none();
             }
-            let before = state.screen_margin_width();
             state.config.views.margin = margin.clamp(0.0, config::ViewSettings::MAX_MARGIN);
-            let delta = state.screen_margin_width() - before;
-            if let Some(width) = &mut state.config.window.time_block_width {
-                *width += delta;
-            }
             let resize = if state.sidebar.is_some() {
                 apply_view_sizes(state)
             } else {
@@ -1535,44 +1583,16 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::DockBorderOuterWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.dock_border_outer_width =
-                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
-            queue_save(state)
+            update(state, Message::PanelBorderOuterWidthChanged(width))
         }
-
         Message::DockBorderInnerWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.dock_border_inner_width =
-                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
-            queue_save(state)
+            update(state, Message::PanelBorderInnerWidthChanged(width))
         }
-
         Message::DockBorderColorInput(layer, input) => {
-            let digits = input.trim().trim_start_matches('#');
-            if digits.len() > 8 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Task::none();
-            }
-            state.dock_border_input = Some((layer, input.clone()));
-            let Ok(color) = crate::hex::parse(&input) else {
-                return Task::none();
-            };
-            match layer {
-                0 => state.config.views.dock_border_outer_color = color.into(),
-                _ => state.config.views.dock_border_inner_color = color.into(),
-            }
-            queue_save(state)
+            update(state, Message::PanelBorderColorInput(layer, input))
         }
-
-        Message::DockBorderColorSubmitted(_) => {
-            state.dock_border_input = None;
-            Task::none()
+        Message::DockBorderColorSubmitted(layer) => {
+            update(state, Message::PanelBorderColorSubmitted(layer))
         }
 
         Message::PanelBorderOuterWidthChanged(width) => {
@@ -1582,6 +1602,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             state.config.views.panel_border_outer_width =
                 width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
+            state.config.views.dock_border_outer_width =
+                state.config.views.panel_border_outer_width;
             queue_save(state)
         }
 
@@ -1592,6 +1614,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             state.config.views.panel_border_inner_width =
                 width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
+            state.config.views.dock_border_inner_width =
+                state.config.views.panel_border_inner_width;
             queue_save(state)
         }
 
@@ -1608,6 +1632,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 0 => state.config.views.panel_border_outer_color = color.into(),
                 _ => state.config.views.panel_border_inner_color = color.into(),
             }
+            state.config.views.dock_border_outer_color =
+                state.config.views.panel_border_outer_color;
+            state.config.views.dock_border_inner_color =
+                state.config.views.panel_border_inner_color;
             queue_save(state)
         }
 
@@ -1770,26 +1798,14 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let mut tasks = Vec::new();
             let pane_widths_changed = previous.views.calendar_width
                 != state.config.views.calendar_width
-                || previous.views.time_block_width != state.config.views.time_block_width
-                || previous.views.detail_width != state.config.views.detail_width;
+                || previous.views.calendar_week_width != state.config.views.calendar_week_width
+                || previous.views.calendar_month_width != state.config.views.calendar_month_width;
             let views_changed = pane_widths_changed
                 || (state.sidebar.is_some() && previous.views.margin != state.config.views.margin);
             let weekly_size_changed = state.range_view_active()
                 && (previous.calendar.weekly_days() != state.config.calendar.weekly_days()
                     || previous.calendar.weekly_day_width()
                         != state.config.calendar.weekly_day_width());
-            if pane_widths_changed
-                && previous.window.time_block_width == state.config.window.time_block_width
-            {
-                state.config.window.time_block_width = None;
-            } else if state.sidebar.is_some()
-                && previous.views.margin != state.config.views.margin
-                && previous.window.time_block_width == state.config.window.time_block_width
-            {
-                if let Some(width) = &mut state.config.window.time_block_width {
-                    *width += (state.config.views.margin() - previous.views.margin()) * 2.0;
-                }
-            }
             if views_changed || weekly_size_changed {
                 if state.sidebar.is_none() {
                     state.main_size.height = state.config.window.height;
@@ -1807,10 +1823,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     if !views_changed
                         && !weekly_size_changed
                         && (previous.window.width != state.config.window.width
-                            || previous.window.height != state.config.window.height
-                            || (state.timeblocking.original_width.is_some()
-                                && previous.window.time_block_width
-                                    != state.config.window.time_block_width))
+                            || previous.window.height != state.config.window.height)
                     {
                         state.main_size.height = state.config.window.height;
                         tasks.push(apply_view_sizes(state));
@@ -1875,17 +1888,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                             MIN_SIZE.height,
                         ));
                         settings.max_size = Some(Size::new(width, 100_000.0));
-                    } else {
-                        // The editor and details pane can stay open while hidden.
-                        if let Some(base) = state.timeblocking.original_width {
-                            let width = crate::timeblocking::editor_width(state, base);
-                            settings.size = Size::new(width, PANEL_FILL);
-                            settings.max_size = None;
-                        }
-                        if state.details_pane_open {
-                            settings.size.width += state.config.views.detail_width();
-                            settings.max_size = None;
-                        }
                     }
                     let (_id, open) = window::open(settings);
                     open.map(Message::WindowOpened)
@@ -1920,6 +1922,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::WindowOpened(id) => {
+            if state.editor_window == Some(id) {
+                return Task::none();
+            }
             state.main_window = Some(id);
 
             // The window opens at whatever size we last saved; once the
@@ -1970,16 +1975,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // The panel is pinned to its configured width and the full height
             // of the monitor, and never widens to the default fraction.
             if let Some(sidebar) = &state.sidebar {
-                let mut width = match state.timeblocking.original_width {
-                    Some(base) => crate::timeblocking::editor_width(state, base),
-                    None => {
-                        state.config.views.calendar_width(sidebar.width)
-                            + state.screen_margin_width()
-                    }
-                };
-                if state.details_pane_open {
-                    width += state.config.views.detail_width();
-                }
+                let width =
+                    state.config.views.calendar_width(sidebar.width) + state.screen_margin_width();
                 log::debug!("panel filling {}x{}", width, size.height);
                 return window::resize(id, Size::new(width, size.height));
             }
@@ -1989,7 +1986,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // editor open, must survive a relaunch.
             if state.config.window.width != Config::default().window.width
                 || state.config.views.calendar_width.is_some()
-                || state.timeblocking.original_width.is_some()
             {
                 return Task::none();
             }
@@ -2045,33 +2041,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 state.weekly_width_restoring = None;
             }
 
-            // The expanded editor has its own saved width. Keep the width to
-            // restore on close, including in the side-panel companion. The
-            // details pane, when open beside it, is not part of that width.
-            if state.timeblocking.original_width.is_some() {
-                let detail = if state.details_pane_open {
-                    state.config.views.detail_width()
-                } else {
-                    0.0
-                };
-                state.config.window.time_block_width = Some((size.width - detail).max(0.0));
-                if state.sidebar.is_none() {
-                    state.config.window.height = size.height;
-                }
-                return queue_save(state);
-            }
-
-            // The details pane widens the window on its own. The width the user
-            // drags out is the pane's, not the window's, so it is not saved as
-            // the normal window size.
-            if state.details_pane_open {
-                if state.sidebar.is_some() {
-                    return Task::none();
-                }
-                state.config.window.height = size.height;
-                return queue_save(state);
-            }
-
             // The panel's geometry is not the user's saved window, so it must
             // not be written back over it.
             if state.sidebar.is_some() {
@@ -2085,6 +2054,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::WindowClosed(id) => {
+            if state.editor_window == Some(id) {
+                state.editor_window = None;
+                state.calendar.open_event = None;
+                state.calendar.edit_draft = None;
+                state.calendar.detail_event = None;
+                return crate::timeblocking::close(state);
+            }
             if state.main_window == Some(id) {
                 if state.panel_expected_close {
                     state.panel_expected_close = false;
@@ -2118,6 +2094,93 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::KeyPressed(key, modifiers) => on_key(state, key, modifiers),
 
         Message::Picker(action) => crate::ui::controls::update(state, action),
+        Message::DescriptionOpen(id) => {
+            let value =
+                if let Some(draft) = state.calendar.edit_draft.as_ref().filter(|d| d.id == id) {
+                    draft.description.clone()
+                } else if let Some(event) = state.calendar.event(&id) {
+                    calendar::notes::Notes::new(&crate::timeblocking::description(
+                        &event.details.description,
+                    ))
+                    .without(&["DUE:", "DEADLINE:"])
+                } else {
+                    return Task::none();
+                };
+            state.description_editor = text_editor::Content::with_text(&value);
+            state.description_popup = Some(id);
+            Task::none()
+        }
+        Message::DescriptionEdited(action) => {
+            state.description_editor.perform(action);
+            Task::none()
+        }
+        Message::DescriptionClose => {
+            state.description_popup = None;
+            Task::none()
+        }
+        Message::DescriptionSave => {
+            let Some(id) = state.description_popup.take() else {
+                return Task::none();
+            };
+            let value = state.description_editor.text();
+            if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
+                draft.description = value;
+                update(state, Message::EventEditSaveRequested)
+            } else {
+                crate::timeblocking::update(
+                    state,
+                    crate::timeblocking::Action::SaveDescription(id, value),
+                )
+            }
+        }
+        Message::HabitDetailsLoaded(id, result) => {
+            if state.calendar.open_event.as_deref() == Some(id.as_str()) {
+                match result {
+                    Ok(draft) => {
+                        state.calendar.edit_draft = Some(draft);
+                        state.calendar.error = None;
+                    }
+                    Err(error) => {
+                        state.calendar.error = Some(error);
+                    }
+                }
+            }
+            Task::none()
+        }
+        Message::EventTitleEdit => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.editing_title = true;
+            }
+            iced::widget::operation::focus(iced::widget::Id::new("event-title"))
+        }
+        Message::EventEndDateChanged(value) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.set_end_date_text(value);
+            }
+            Task::none()
+        }
+        Message::EventLabelDraft(value) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.label_draft = value;
+            }
+            Task::none()
+        }
+        Message::EventLabelAdd => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                let label = draft.label_draft.trim().trim_start_matches('#').to_owned();
+                if !label.is_empty() && !draft.labels.contains(&label) {
+                    draft.labels.push(label);
+                }
+                draft.label_draft.clear();
+            }
+            Task::none()
+        }
+        Message::EventLabelRemove(label) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.labels.retain(|l| l != &label);
+            }
+            Task::none()
+        }
         Message::FormEdited(index, action) => {
             if let Some(editor) = state.form_editors.get_mut(index) {
                 editor.perform(action);
@@ -2285,12 +2348,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::DockRequested => {
-            let origin = if state.sidebar.is_some() {
-                crate::dock::launch::Origin::Sidebar
-            } else {
-                crate::dock::launch::Origin::Window
-            };
-            if let Err(error) = crate::dock::launch::open_dock(origin) {
+            if let Err(error) = crate::dock::launch::open_dock() {
                 state.calendar.error = Some(format!("Could not open the dock: {error:#}"));
                 return Task::none();
             }
@@ -2300,19 +2358,29 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             };
             // The panel process stays up with its window hidden, so it can be
-            // brought back; the regular window just quits.
+            // brought back by the dock.
             state.panel_expected_close = state.sidebar.is_some();
             state.panel_visible.store(false, Ordering::Relaxed);
             window::close(id)
         }
 
         Message::EventOpened(id) => {
+            if state
+                .calendar
+                .detail_event
+                .as_ref()
+                .is_some_and(|event| event.id != id)
+            {
+                state.calendar.detail_event = None;
+            }
+            state.calendar.error = None;
             state.calendar.menu_open = false;
             let mut close_block = None;
             if let Some(event) = state.calendar.event(&id).cloned() {
                 let is_block = crate::timeblocking::is_block(&event, &state.config.calendar);
                 let is_task = event.is_task();
-                let draft = calendar::EditDraft::from_event(&event);
+                let mut draft = calendar::EditDraft::from_event(&event);
+                draft.loading = event.details.habit && event.details.recurring_event_id.is_some();
                 if is_block {
                     state.calendar.open_event = None;
                     state.calendar.edit_draft = Some(draft);
@@ -2365,16 +2433,34 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     state.timeblocking.label_error = None;
                 }
             }
+            let habit_load = state
+                .calendar
+                .event(&id)
+                .filter(|event| event.details.habit && event.details.recurring_event_id.is_some())
+                .cloned()
+                .map(|event| {
+                    let settings = state.config.calendar.clone();
+                    let id = id.clone();
+                    blocking::run(move || {
+                        calendar::habit_edit_draft(
+                            &settings.client_id,
+                            &settings.client_secret,
+                            &event,
+                        )
+                    })
+                    .map(move |result| Message::HabitDetailsLoaded(id.clone(), result))
+                });
             state.calendar.open_event = Some(id);
             // Recorded during this click, before the message is handled.
             state.calendar.details_below = ui::calendar::click_was_in_the_top_half();
             state.inbox.picker = None;
-            close_block.unwrap_or_else(Task::none)
+            Task::batch(close_block.into_iter().chain(habit_load))
         }
 
         Message::EventClosed => {
             state.calendar.open_event = None;
             state.calendar.edit_draft = None;
+            state.calendar.detail_event = None;
             state.inbox.picker = None;
             Task::none()
         }
@@ -2498,18 +2584,17 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let closing_details = state.calendar.open_event.as_deref() == Some(id.as_str());
             if closing_details {
                 state.calendar.open_event = None;
+                state.calendar.edit_draft = None;
+                state.calendar.detail_event = None;
             }
             let close = if state.timeblocking.block.as_deref() == Some(id.as_str()) {
-                let close = crate::timeblocking::close(state);
-                if closing_details && state.details_pane_open {
-                    // Detail-pane reconciliation will resize both panes together.
-                    Task::none()
-                } else {
-                    close
-                }
+                crate::timeblocking::close(state)
             } else {
                 Task::none()
             };
+            if state.screen == Screen::Habits {
+                state.habits.habits.retain(|habit| habit.id != id);
+            }
             Task::batch([close, refresh_week_after_write(state)])
         }
 
@@ -2992,23 +3077,21 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventDraftKindSelected(calendar::DraftKind::Habit) => {
-            // A habit is edited by the Habits tab's own popup, so hand the
-            // fields over and close the calendar's.
+            // Creation and editing share the habit details pane.
             let Some(draft) = state.calendar.draft.take() else {
                 return Task::none();
             };
             let color_id =
                 calendar::colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
-            state.habits.draft = Some(crate::habits::Draft::for_calendar_with_rule(
+            let habit = crate::habits::Draft::for_calendar_with_rule(
                 draft.start,
                 draft.end,
                 draft.title,
                 draft.description,
                 color_id,
                 draft.rule.clone(),
-            ));
-            state.habits.error = None;
-            Task::none()
+            );
+            crate::habits::open_new(state, habit)
         }
 
         Message::EventDraftKindSelected(kind) => {
@@ -3184,8 +3267,19 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventEditDateChanged(text) => {
+            let habit = state
+                .calendar
+                .open_event
+                .as_deref()
+                .and_then(|id| state.calendar.event(id))
+                .is_some_and(|event| event.details.habit);
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                let duration = draft.end - draft.start;
                 draft.set_date_text(text);
+                if habit {
+                    draft.end = draft.start + duration;
+                    draft.end_date_text = draft.end.date_naive().to_string();
+                }
             }
             Task::none()
         }
@@ -3205,8 +3299,21 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventEditStartChanged(text) => {
+            let habit = state
+                .calendar
+                .open_event
+                .as_deref()
+                .and_then(|id| state.calendar.event(id))
+                .is_some_and(|event| event.details.habit);
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                let duration = draft.end - draft.start;
                 draft.set_start_text(text);
+                draft.all_day = false;
+                if habit {
+                    draft.end = draft.start + duration;
+                    draft.end_text = calendar::clock_label(draft.end);
+                    draft.end_date_text = draft.end.date_naive().to_string();
+                }
             }
             Task::none()
         }
@@ -3214,6 +3321,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::EventEditEndChanged(text) => {
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
                 draft.set_end_text(text);
+                draft.all_day = false;
             }
             Task::none()
         }
@@ -3235,13 +3343,48 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             };
 
+            if draft.loading {
+                return Task::none();
+            }
+            if draft.title.trim().is_empty() {
+                state.calendar.error = Some("Enter a title".into());
+                return Task::none();
+            }
             if draft.end <= draft.start {
                 state.calendar.error = Some("The end time has to be after the start".to_owned());
                 return Task::none();
             }
 
-            let is_block =
-                state.config.calendar.app_calendar.as_deref() == Some(draft.calendar_id.as_str());
+            if draft.id == crate::habits::NEW_HABIT_ID {
+                if state.habits.busy {
+                    return Task::none();
+                }
+                if let Err(error) = draft.recurrence_lines() {
+                    state.calendar.error = Some(error);
+                    return Task::none();
+                }
+                let settings = state.config.calendar.clone();
+                let color_id = state
+                    .calendar
+                    .event(&draft.id)
+                    .and_then(|event| event.details.color_id.clone());
+                state.habits.busy = true;
+                state.calendar.error = None;
+                return blocking::run(move || {
+                    calendar::create_habit(
+                        &settings.client_id,
+                        &settings.client_secret,
+                        &draft,
+                        color_id.as_deref(),
+                    )
+                })
+                .map(|result| Message::Habits(crate::habits::Action::Saved(result)));
+            }
+
+            let is_block = state
+                .calendar
+                .event(&draft.id)
+                .is_some_and(|event| crate::timeblocking::is_block(event, &state.config.calendar));
             let description = if is_block {
                 calendar::event_description(&draft.description, "Time Block", &[])
             } else {
@@ -3264,7 +3407,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let recurrence = state
                 .calendar
                 .event(&draft.id)
-                .is_some_and(|event| event.details.recurring_event_id.is_none())
+                .is_some_and(|event| {
+                    draft.series_id.is_some() || event.details.recurring_event_id.is_none()
+                })
                 .then_some(recurrence);
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
@@ -3275,7 +3420,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     &client_id,
                     &client_secret,
                     &draft.calendar_id,
-                    &draft.id,
+                    draft.series_id.as_deref().unwrap_or(&draft.id),
                     &draft.title,
                     &description,
                     color_id,
@@ -3284,6 +3429,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     recurrence.as_deref(),
                     &draft.projects.ids,
                     draft.all_day,
+                    &draft.labels,
                 )?;
                 Ok(())
             })
@@ -3291,9 +3437,16 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventEditSaved(Ok(())) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.editing_title = false;
+            }
             // Keep the inline draft as the user left it until the calendar
             // sync brings the saved event back, so fields do not flicker.
-            refresh_week_after_write(state)
+            if state.screen == Screen::Habits {
+                Task::done(Message::Habits(crate::habits::Action::Refresh))
+            } else {
+                refresh_week_after_write(state)
+            }
         }
 
         Message::EventEditSaved(Err(error)) => {
@@ -3319,6 +3472,9 @@ pub fn view(state: &State, window: window::Id) -> Element<'_, Message> {
         return ui::flash::view(state);
     }
 
+    if state.editor_window == Some(window) {
+        return ui::editor_window(state);
+    }
     ui::view(state)
 }
 
@@ -3480,6 +3636,13 @@ fn map_key(event: keyboard::Event) -> Message {
 }
 
 fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<Message> {
+    if state.description_popup.is_some() {
+        return if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
+            update(state, Message::DescriptionClose)
+        } else {
+            Task::none()
+        };
+    }
     match key_message(state, key, modifiers) {
         Some(message) => Task::done(message),
         None => Task::none(),
@@ -3611,6 +3774,13 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             )),
             _ => None,
         };
+    }
+    if state.floating_editors()
+        && state.calendar.open_event.is_none()
+        && state.timeblocking.block.is_some()
+        && key == Key::Named(Named::Escape)
+    {
+        return Some(Message::TimeBlocking(crate::timeblocking::Action::Close));
     }
     if state.calendar.draft.is_some() || state.calendar.edit_draft.is_some() {
         return match key.as_ref() {
@@ -4020,32 +4190,6 @@ fn panel_ipc_listener(
             "status" => crate::ipc::HIDDEN.to_owned(),
             other => {
                 log::warn!("unknown panel IPC command: {other:?}");
-                String::new()
-            }
-        }
-    })
-}
-
-/// Answers the browser extension and the Slack app on the regular window's
-/// socket. The panel has the same JSON branch in [`panel_ipc_listener`].
-fn window_ipc_listener(
-    listener: UnixListener,
-    inbox: mpsc::Sender<calendar::Event>,
-) -> AnyhowResult<()> {
-    log::info!("window IPC socket listening");
-
-    crate::ipc::serve(listener, |command| {
-        if command.starts_with('{') {
-            let handled = crate::webextension::handle_ipc(command);
-            if let Some(event) = handled.event {
-                let _ = inbox.send(event);
-            }
-            return handled.reply;
-        }
-        match command {
-            "status" => crate::ipc::VISIBLE.to_owned(),
-            other => {
-                log::warn!("unknown window IPC command: {other:?}");
                 String::new()
             }
         }
@@ -4529,6 +4673,19 @@ mod tests {
     }
 
     #[test]
+    fn explicit_range_widths_are_independent_of_day_width() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.config.views.calendar_width = Some(1500.0);
+        state.config.views.calendar_week_width = Some(900.0);
+        state.config.views.calendar_month_width = Some(1100.0);
+        state.weekly = true;
+        assert_eq!(state.weekly_window_width(), 900.0);
+        state.monthly = true;
+        assert_eq!(state.weekly_window_width(), 1100.0);
+        assert_eq!(state.calendar_width(), 1500.0);
+    }
+
+    #[test]
     fn weekly_sidebar_relaxes_constraints_and_restores_daily_width() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.main_window = Some(window::Id::unique());
@@ -4712,7 +4869,7 @@ mod tests {
             width: 200.0,
             side: panel::Side::Left,
         });
-        state.timeblocking.original_width = Some(216.0);
+        state.timeblocking.block = Some("block".into());
         state.details_pane_open = true;
         state.calendar.open_event = Some("event".into());
         let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
@@ -4725,7 +4882,7 @@ mod tests {
             .collect();
         assert_eq!(widths.last(), Some(&1394.0));
         assert!(!state.details_pane_open);
-        assert_eq!(state.timeblocking.original_width, None);
+        assert!(state.timeblocking.block.is_none());
     }
 
     #[test]
@@ -4886,6 +5043,67 @@ mod tests {
 
         assert_eq!(state.calendar.open_event.as_deref(), Some("lunch"));
         assert!(!state.calendar.details_below);
+    }
+
+    #[test]
+    fn editors_leave_the_main_window_geometry_unchanged_on_every_destination() {
+        for screen in [
+            Screen::Calendar,
+            Screen::Inbox,
+            Screen::Overdue,
+            Screen::Triaged,
+            Screen::Backlog,
+            Screen::Habits,
+        ] {
+            for sidebar in [false, true] {
+                for block in [false, true] {
+                    let mut state = State::new(Config::default(), Catalog::built_in());
+                    state.screen = screen;
+                    state.sidebar = sidebar.then_some(Sidebar {
+                        width: 200.0,
+                        side: panel::Side::Left,
+                    });
+                    let main = window::Id::unique();
+                    state.main_window = Some(main);
+                    state.main_size = Size::new(216.0, 900.0);
+                    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+                    let task = if block {
+                        assert!(
+                            geometry_actions(crate::timeblocking::open(
+                                &mut state,
+                                "standup".into()
+                            ))
+                            .is_empty()
+                        );
+                        update(&mut state, Message::CalendarTick)
+                    } else {
+                        update(&mut state, Message::EventOpened("standup".into()))
+                    };
+                    let actions = geometry_actions(task);
+                    assert!(
+                        matches!(actions.as_slice(), [GeometryAction::Open(settings)]
+                if settings.level == window::Level::AlwaysOnTop && !settings.decorations)
+                    );
+                    let editor = state.editor_window.expect("an independent editor window");
+                    assert_ne!(editor, main);
+                    assert_eq!(state.main_window, Some(main));
+                    assert_eq!(state.main_size, Size::new(216.0, 900.0));
+                    let escape = key_message(
+                        &mut state,
+                        Key::Named(keyboard::key::Named::Escape),
+                        keyboard::Modifiers::default(),
+                    )
+                    .unwrap();
+                    assert!(geometry_actions(update(&mut state, escape)).is_empty());
+                    assert!(state.editor_window.is_none());
+                    assert!(state.calendar.open_event.is_none());
+                    assert!(state.timeblocking.block.is_none());
+                    // A delayed opened notification cannot replace the main window.
+                    let _ = update(&mut state, Message::EditorWindowOpened(editor));
+                    assert_eq!(state.main_window, Some(main));
+                }
+            }
+        }
     }
 
     #[test]
@@ -5549,7 +5767,7 @@ mod tests {
     }
 
     #[test]
-    fn choosing_habit_hands_the_calendar_draft_to_the_habits_editor() {
+    fn choosing_habit_opens_the_shared_details_editor() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         let start =
             calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
@@ -5568,12 +5786,18 @@ mod tests {
         );
 
         assert!(state.calendar.draft.is_none());
-        let habit = state.habits.draft.as_ref().expect("the habit editor opens");
+        assert!(state.habits.draft.is_none());
+        assert!(state.details_pane_open);
+        let habit = state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .expect("the shared editor opens");
         assert_eq!(habit.title, "Stretch");
-        assert_eq!(habit.notes, "Slow and steady");
-        assert_eq!(habit.date, "2026-10-28");
-        assert_eq!(habit.start, "09:00");
-        assert_eq!(habit.end, "09:45");
+        assert_eq!(habit.description, "Slow and steady");
+        assert_eq!(habit.date_text, "2026-10-28");
+        assert_eq!(habit.start_text, "09:00");
+        assert_eq!(habit.end_text, "09:45");
         assert_eq!(habit.rule.repeat, crate::habits::RepeatMode::Weekly);
         assert!(habit.rule.weekdays[2], "Wednesday is preselected");
     }

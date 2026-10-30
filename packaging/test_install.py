@@ -107,6 +107,13 @@ class InstallTest(unittest.TestCase):
     def test_no_enable(self):
         self.run_script("install.sh", "--no-build", "--no-enable")
         self.assertTrue(self.unit.exists())
+        binary = self.prefix / "bin/timeslay"
+        desktop = (self.data / "applications/timeslay.desktop").read_text()
+        service = (self.config / "systemd/user/timeslay.service").read_text()
+        shortcuts = (self.config / "systemd/user/timeslay-shortcuts.service").read_text()
+        self.assertIn(f"Exec={binary} --sidebar\n", desktop)
+        self.assertIn(f"ExecStart={binary} --sidebar\n", service)
+        self.assertIn(f"ExecStart={binary} --daemon\n", shortcuts)
         commands = self.log.read_text()
         self.assertNotIn("systemctl --user enable ", commands)
         self.assertNotIn("systemctl --user restart ", commands)

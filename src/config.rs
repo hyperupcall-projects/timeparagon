@@ -160,7 +160,8 @@ pub struct Window {
     pub width: f32,
     pub height: f32,
     pub always_on_top: bool,
-    /// Width with the time-block editor open, independent of the normal window.
+    /// Legacy combined window width. Retained for config compatibility; floating
+    /// editors use `views.time_block_width` instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_block_width: Option<f32>,
 }
@@ -183,9 +184,14 @@ pub struct ViewSettings {
     /// None preserves the saved main-window width and the `[panel]` width.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calendar_width: Option<f32>,
+    /// Independent total widths for the week and month calendars.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_week_width: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_month_width: Option<f32>,
     /// Width added alongside the calendar when editing a time block.
     pub time_block_width: f32,
-    /// Width of the event/task details pane shown to the right of the view.
+    /// Width of the shared event/habit/task details pane.
     pub detail_width: f32,
     /// Visible inset from the side panel's screen edge, top and bottom.
     pub margin: f32,
@@ -218,15 +224,14 @@ pub struct ViewSettings {
     pub dock_border_inner_width: f32,
     /// Colour of the dock's inner border.
     pub dock_border_inner_color: HexColor,
-    /// Thickness of the side panel's outer border, in logical pixels. Zero
-    /// hides it.
+    /// Shared outer border depth for the dock and application windows.
+    /// The panel-prefixed keys are retained for saved-config compatibility.
     pub panel_border_outer_width: f32,
-    /// Colour of the side panel's outer border.
+    /// Shared outer border color.
     pub panel_border_outer_color: HexColor,
-    /// Thickness of the side panel's inner border, in logical pixels. Zero
-    /// hides it.
+    /// Shared inner border depth. Zero hides it.
     pub panel_border_inner_width: f32,
-    /// Colour of the side panel's inner border.
+    /// Shared inner border color.
     pub panel_border_inner_color: HexColor,
     /// How the dock appears on screen.
     pub window_animation: WindowAnimation,
@@ -312,6 +317,8 @@ impl Default for ViewSettings {
     fn default() -> Self {
         Self {
             calendar_width: None,
+            calendar_week_width: None,
+            calendar_month_width: None,
             time_block_width: 400.0,
             detail_width: 360.0,
             margin: 8.0,
@@ -353,6 +360,14 @@ impl ViewSettings {
 
     pub fn fade_duration_ms(&self) -> u32 {
         self.fade_duration_ms.min(Self::MAX_FADE_DURATION_MS)
+    }
+
+    pub fn calendar_week_width(&self, fallback: f32) -> f32 {
+        Self::width(self.calendar_week_width.unwrap_or(fallback), fallback)
+    }
+
+    pub fn calendar_month_width(&self) -> f32 {
+        Self::width(self.calendar_month_width.unwrap_or(1050.0), 1050.0)
     }
 
     pub fn calendar_width(&self, fallback: f32) -> f32 {

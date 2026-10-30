@@ -266,6 +266,8 @@ pub struct Cef {
     views: ViewManager<CefView>,
     scale_factor: f32,
     initialized: bool,
+    // Keep the private Chromium profile until shutdown has released its locks.
+    _profile: tempfile::TempDir,
     mouse_modifiers: u32,
     mouse_buttons: u32,
     mouse_position: Point,
@@ -312,14 +314,22 @@ impl Cef {
         let _ = api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
         let args = Args::new();
 
-        // Use XDG cache dir or /tmp as root_cache_path to avoid the
-        // "unintended process singleton behavior" warning.
-        let cache_dir = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            format!("{home}/.cache")
-        });
-        let cef_cache = format!("{cache_dir}/iced_webview_cef");
-        let _ = std::fs::create_dir_all(&cef_cache);
+        // CEF 120+ enforces a process singleton per root_cache_path. A shared
+        // directory hands startup to another TimeSlay window (or an old build)
+        // and initialize returns 0. Maps need no persistent browser profile.
+        let profile = tempfile::Builder::new()
+            .prefix("timeslay-cef-")
+            .tempdir()
+            .and_then(|dir| {
+                // CEF requires an absolute path even if TMPDIR is relative.
+                let path = dir.path().canonicalize()?;
+                Ok((dir, path))
+            })
+            .map_err(|error| {
+                CEF_STATE.store(CEF_NEVER, Ordering::Release);
+                format!("Could not create a private CEF profile: {error}")
+            })?;
+        let (profile, profile_path) = profile;
 
         // Point CEF to its distribution directory so subprocesses can find
         // libEGL.so, libGLESv2.so, .pak resources, etc. Without this, the
@@ -337,7 +347,7 @@ impl Cef {
             windowless_rendering_enabled: 1,
             external_message_pump: 1,
             no_sandbox: 1,
-            root_cache_path: CefString::from(cef_cache.as_str()),
+            root_cache_path: CefString::from(profile_path.to_string_lossy().as_ref()),
             framework_dir_path: CefString::from(cef_dir_str.as_ref()),
             resources_dir_path: CefString::from(cef_dir_str.as_ref()),
             locales_dir_path: CefString::from(locales_str.as_ref()),
@@ -358,7 +368,8 @@ impl Cef {
             CEF_STATE.store(CEF_SHUT_DOWN, Ordering::Release);
             return Err(format!(
                 "CEF initialization failed (cef_initialize returned {result}); \
-                 CEF resources (.pak files, icudtl.dat, locales) may be missing from {cef_dir_str}"
+                 runtime: {cef_dir_str}; profile: {}. See Chromium's stderr output for details",
+                profile_path.display()
             ));
         }
 
@@ -366,6 +377,7 @@ impl Cef {
             views: ViewManager::default(),
             scale_factor: 1.0,
             initialized: result == 1,
+            _profile: profile,
             mouse_modifiers: 0,
             mouse_buttons: 0,
             mouse_position: Point::ORIGIN,

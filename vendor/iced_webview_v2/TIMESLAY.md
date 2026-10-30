@@ -13,3 +13,9 @@ pixels at native DSF 1 and apply matching Chromium page zoom for CSS layout,
 text and Mapbox canvas density. Scale pointer coordinates to match. Screen
 rectangles now describe the full surface. See examples/map_render_probe.rs for
 checks at 1x, 1.25x and 2x, including pointer alignment and actual painted frames.
+
+Give each engine a private temporary root_cache_path, retained until CEF
+shutdown, so Chromium's process singleton does not redirect map startup to a
+different TimeSlay process. Startup errors no longer assume missing resources.
+Run `cargo run --example map_render_probe -- --concurrent` to check overlapping
+CEF lifetimes, including rendering on the dock task editor's worker thread.

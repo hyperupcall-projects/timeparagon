@@ -3352,6 +3352,7 @@ dependencies = [
  "cef",
  "iced",
  "log",
+ "tempfile",
  "url",
  "urlencoding",
 ]

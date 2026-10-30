@@ -182,6 +182,22 @@ fn task_popover(views: &ViewSettings) -> (Anchor, (u32, u32), (i32, i32, i32, i3
     }
 }
 
+fn editor_window_margin(panel: &Panel) -> (i32, i32, i32, i32) {
+    let inset = panel.app.screen_margin().round() as i32;
+    let top = crate::ui::editor_window_top(&panel.app).round() as i32;
+    // Zone 0 respects desktop panels and our own reservation. Only add
+    // the strip width when it has not already been reserved.
+    let offset = if panel.app.config.views.panel_reserve_space {
+        -inset
+    } else {
+        panel.width as i32 - inset
+    };
+    match panel.app.sidebar.as_ref().map_or(Side::Left, |s| s.side) {
+        Side::Left => (top, 0, inset, offset),
+        Side::Right => (top, offset, inset, 0),
+    }
+}
+
 fn exclusive_zone(views: &ViewSettings, width: u32) -> i32 {
     if views.panel_reserve_space {
         width.min(i32::MAX as u32) as i32
@@ -216,6 +232,7 @@ fn adapt(task: Task<app::Message>) -> Task<Message> {
 fn update_app(panel: &mut Panel, message: app::Message) -> Task<Message> {
     let previous = panel.app.config.views.panel_reserve_space;
     let previous_width = panel.width;
+    let previous_top = crate::ui::editor_window_top(&panel.app);
     if let app::Message::WindowResized(id, size) = &message
         && Some(*id) == panel.id
     {
@@ -275,7 +292,19 @@ fn update_app(panel: &mut Panel, message: app::Message) -> Task<Message> {
     } else {
         Task::none()
     };
-    Task::batch([adapt(task), reservation, hide])
+    let placement = if previous != panel.app.config.views.panel_reserve_space
+        || previous_width != panel.width
+        || previous_top != crate::ui::editor_window_top(&panel.app)
+    {
+        panel
+            .app
+            .editor_window
+            .map(|id| layer(id, LayerAction::MarginChange(editor_window_margin(panel))))
+            .unwrap_or_else(Task::none)
+    } else {
+        Task::none()
+    };
+    Task::batch([adapt(task), reservation, hide, placement])
 }
 
 fn update(panel: &mut Panel, message: Message) -> Task<Message> {
@@ -313,7 +342,12 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
             Task::batch(tasks)
         }
         Message::Focused(id) => {
-            if panel.app.task_creation_window && Some(id) == panel.id {
+            // Use Exclusive only to acquire initial focus. Keeping the grab
+            // prevents other windows (including the screenshot UI) from taking
+            // focus. Match the dock editor by yielding once focus arrives.
+            if (panel.app.task_creation_window && Some(id) == panel.id)
+                || panel.app.editor_window == Some(id)
+            {
                 layer(
                     id,
                     LayerAction::KeyboardInteractivityChange(KeyboardInteractivity::OnDemand),
@@ -363,8 +397,13 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                 let flash = settings.fullscreen;
                 let width = settings.size.width.round().max(1.0) as u32;
                 let popover = panel.app.task_creation_window && !flash;
+                let editor_window = settings.platform_specific.application_id == "timeslay-editor";
                 let mut margin = (0, 0, 0, 0);
-                let (anchor, size, zone, namespace) = if popover {
+                let (anchor, size, zone, namespace) = if editor_window {
+                    let side = panel.app.sidebar.as_ref().map_or(Side::Left, |s| s.side);
+                    margin = editor_window_margin(panel);
+                    (anchor(side), (width, 0), 0, "timeslay-editor".to_owned())
+                } else if popover {
                     panel.id = Some(id);
                     let (anchor, size, margins) = task_popover(&panel.app.config.views);
                     margin = margins;
@@ -399,6 +438,8 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                         id,
                         settings: NewLayerShellSettings {
                             size: Some(size),
+                            // Ordinary editors stay above apps, below system UI
+                            // such as the screenshot selector and its dimming.
                             layer: if flash || popover {
                                 Layer::Overlay
                             } else {
@@ -409,7 +450,8 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                             margin: Some(margin),
                             keyboard_interactivity: if flash {
                                 KeyboardInteractivity::None
-                            } else if popover && panel.app.inbox.draft.is_some() {
+                            } else if editor_window || (popover && panel.app.inbox.draft.is_some())
+                            {
                                 KeyboardInteractivity::Exclusive
                             } else {
                                 if popover {
@@ -429,6 +471,11 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                         },
                     },
                 )
+            }
+            WindowAction::Resize(id, size) if panel.app.editor_window == Some(id) => {
+                let margin = editor_window_margin(panel);
+                layer(id, LayerAction::SizeChange((size.width.ceil() as u32, 0)))
+                    .chain(layer(id, LayerAction::MarginChange(margin)))
             }
             WindowAction::Resize(id, size) if Some(id) == panel.id => {
                 if panel.app.task_creation_window {
@@ -766,6 +813,74 @@ mod tests {
             if side == crate::config::DockSide::Left {
                 assert!(expected.0.contains(Anchor::Left));
                 assert!(expected.2.3 > panel.app.config.views.dock_width() as i32);
+            }
+        }
+    }
+
+    #[test]
+    fn editor_window_yields_keyboard_focus_like_the_dock_popover() {
+        let mut panel = panel();
+        let main = panel.id;
+        let editor = window::Id::unique();
+        panel.app.editor_window = Some(editor);
+        for _ in 0..2 {
+            let messages = outputs(update(&mut panel, Message::Focused(editor)));
+            assert!(matches!(messages.as_slice(),
+                [Message::Layer(LayerShellCustomActionWithId(Some(target),
+                    LayerAction::KeyboardInteractivityChange(KeyboardInteractivity::OnDemand)))]
+                if *target == editor));
+            // Switching to another app or the screenshot tool leaves the
+            // editor open, without taking focus back or changing geometry.
+            assert!(outputs(update(&mut panel, Message::Unfocused(editor))).is_empty());
+            assert_eq!(panel.app.editor_window, Some(editor));
+            assert_eq!(panel.id, main);
+            assert_eq!(panel.width, 216);
+        }
+        assert!(outputs(update(&mut panel, Message::Focused(main.unwrap()))).is_empty());
+        panel.app.editor_window = None;
+        assert!(outputs(update(&mut panel, Message::Focused(editor))).is_empty());
+    }
+
+    #[test]
+    fn editor_window_floats_beside_the_panel_without_changing_its_reservation() {
+        for side in [Side::Left, Side::Right] {
+            for reserved in [false, true] {
+                let mut panel = panel();
+                panel.app.sidebar.as_mut().unwrap().side = side;
+                panel.app.config.views.panel_reserve_space = reserved;
+                let main = panel.id;
+                let id = window::Id::unique();
+                panel.app.editor_window = Some(id);
+                let (sender, _receiver) = oneshot::channel();
+                let messages = outputs(update(
+                    &mut panel,
+                    Message::Runtime(Action::Window(WindowAction::Open(
+                        id,
+                        window::Settings {
+                            size: iced::Size::new(360.0, 800.0),
+                            platform_specific: window::settings::PlatformSpecific {
+                                application_id: "timeslay-editor".into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        sender,
+                    ))),
+                ));
+                assert_eq!(panel.id, main);
+                assert_eq!(panel.width, 216);
+                assert!(matches!(messages.as_slice(),
+                    [Message::Layer(LayerShellCustomActionWithId(None, LayerAction::NewLayerShell { id: target, settings }))]
+                    if *target == id && settings.layer == Layer::Top
+                        && settings.exclusive_zone == Some(0)
+                        && settings.anchor == anchor(side)
+                        && settings.size == Some((360, 0))
+                        && settings.keyboard_interactivity == KeyboardInteractivity::Exclusive
+                        && settings.margin.is_some_and(|m| match side {
+                            Side::Left => m.3 == (if reserved { -8 } else { 208 }) && m.1 == 0,
+                            Side::Right => m.1 == (if reserved { -8 } else { 208 }) && m.3 == 0,
+                        })
+                ));
             }
         }
     }

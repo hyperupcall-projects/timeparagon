@@ -7,7 +7,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=@EXEC@
+ExecStart=@EXEC@ --sidebar
 Restart=on-failure
 RestartSec=2
 

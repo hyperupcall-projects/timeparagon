@@ -105,10 +105,10 @@ impl DockConfig {
         config.left_margin = views.dock_left_margin().round() as u32;
         config.right_margin = views.dock_right_margin().round() as u32;
         config.side = views.dock_side;
-        config.border_outer_width = views.dock_border_outer_width();
-        config.border_outer_color = views.dock_border_outer_color;
-        config.border_inner_width = views.dock_border_inner_width();
-        config.border_inner_color = views.dock_border_inner_color;
+        config.border_outer_width = views.panel_border_outer_width();
+        config.border_outer_color = views.panel_border_outer_color;
+        config.border_inner_width = views.panel_border_inner_width();
+        config.border_inner_color = views.panel_border_inner_color;
         config.animation = views.window_animation;
         config.fade_duration_ms = views.fade_duration_ms();
         config.hour_lines = views.dock_hour_lines;
@@ -255,10 +255,10 @@ mod tests {
             dock_margin: 12.0,
             margin: 20.0,
             dock_side: DockSide::Top,
-            dock_border_outer_width: 2.0,
-            dock_border_outer_color: crate::hex::HexColor(iced::Color::WHITE),
-            dock_border_inner_width: 3.0,
-            dock_border_inner_color: crate::hex::HexColor(iced::Color::BLACK),
+            panel_border_outer_width: 2.0,
+            panel_border_outer_color: crate::hex::HexColor(iced::Color::WHITE),
+            panel_border_inner_width: 3.0,
+            panel_border_inner_color: crate::hex::HexColor(iced::Color::BLACK),
             ..ViewSettings::default()
         };
         let config = DockConfig::load(&views);

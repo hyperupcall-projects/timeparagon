@@ -8,7 +8,7 @@
 //!
 //! The host prepares the task (a Gmail link is read for its subject, exactly
 //! as a pasted link is in the app), then hands it to a running TimeSlay
-//! process over [`crate::ipc`]. If no window, panel or dock is listening it
+//! process over [`crate::ipc`]. If no panel or dock is listening it
 //! writes to Google Tasks itself, so the extension still works when the app is
 //! closed. The same [`Prepared`] request is what the Slack app sends.
 
@@ -343,9 +343,9 @@ pub fn handle_request(request: Request) -> Reply {
         }
     };
 
-    // A running window, panel or dock owns the Google session and the local
+    // A running panel or dock owns the Google session and the local
     // task database, so ask it first. Only one can be listening on each socket.
-    for socket in [ipc::WINDOW, ipc::SIDEBAR, ipc::DOCK] {
+    for socket in [ipc::SIDEBAR, ipc::DOCK] {
         trace.step(format!("asking {socket}"));
         match ipc::request_with_timeout(socket, &payload, IPC_TIMEOUT) {
             Ok(reply) if reply.starts_with('{') => match serde_json::from_str::<Reply>(&reply) {

@@ -853,7 +853,11 @@ mod tests {
         assert!(state.details_pane_open);
         assert!(state.timeblocking.date.is_empty());
 
-        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(360.0, 2400.0),
+            crate::ui::editor_window(&state),
+        );
         assert!(ui.find("Name").is_err());
         assert!(ui.find("Rename").is_err());
         assert!(ui.find("Scheduled day and time").is_err());
@@ -867,14 +871,22 @@ mod tests {
             .expect("date picker opens");
         assert!(picker.optional);
         let _ = crate::ui::controls::update(&mut state, crate::ui::controls::Action::Open(picker));
-        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(360.0, 2400.0),
+            crate::ui::editor_window(&state),
+        );
         assert!(ui.find("Clear").is_ok());
         ui.click("15").unwrap();
         assert!(ui.into_messages().any(|m| matches!(m, Message::Picker(crate::ui::controls::Action::Select(day)) if day.day() == 15)));
 
         state.picker = None;
         let _ = tb::update(&mut state, tb::Action::Date("2026-10-15".into()));
-        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(360.0, 2400.0),
+            crate::ui::editor_window(&state),
+        );
         ui.click("Schedule Day").unwrap();
         assert!(ui.into_messages().any(
             |m| matches!(m, Message::TimeBlocking(tb::Action::Reschedule(id)) if id == "task:one")

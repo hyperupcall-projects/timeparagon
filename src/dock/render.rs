@@ -1332,7 +1332,7 @@ mod tests {
             hour_lines: false,
             button_hovered: true,
             add_hovered: false,
-            back_label: "Open the full window",
+            back_label: "Open the side panel",
             side: DockSide::Left,
             palette: palette(),
         };
@@ -1370,7 +1370,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             add_hovered: false,
-            back_label: "Open the full window",
+            back_label: "Open the side panel",
             side: DockSide::Left,
             palette: palette(),
         };
@@ -1411,7 +1411,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             add_hovered: false,
-            back_label: "Open the full window",
+            back_label: "Open the side panel",
             side: DockSide::Left,
             palette: palette(),
         };
@@ -1437,7 +1437,7 @@ mod tests {
             hour_lines: false,
             button_hovered: false,
             add_hovered: false,
-            back_label: "Open the full window",
+            back_label: "Open the side panel",
             side: DockSide::Left,
             palette: palette(),
         };
@@ -1481,7 +1481,7 @@ mod tests {
                 hour_lines: false,
                 button_hovered: false,
                 add_hovered: false,
-                back_label: "Open the full window",
+                back_label: "Open the side panel",
                 side: DockSide::Left,
                 palette: palette(),
             };
