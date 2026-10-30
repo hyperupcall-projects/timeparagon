@@ -147,9 +147,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
             base = base.push(
                 container(
                     tooltip(
-                        button(text("+").size(28).center().width(Fill))
+                        button(text("+").size(14).center().width(Fill))
                             .width(Fill)
-                            .height(44)
+                            .height(22)
                             .padding(0)
                             .style(crate::ui::controls::secondary)
                             .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
@@ -160,12 +160,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 )
                 .id("panel-add-task")
                 .width(Length::Fixed(footer_width))
-                .height(44),
+                .height(22),
             );
         }
         // Adding/removing a wrapper resets the state of all its descendants.
         // Keep one stack with the calendar first, and append active dialogs.
         let mut layers = vec![base.into()];
+        if state.view_menu_open {
+            layers.push(view_menu(state, &nav_metrics));
+        }
         if state.more_menu_open {
             layers.push(more_menu(state, &nav_metrics));
         }
@@ -359,18 +362,34 @@ fn drag_ghost<'a>(
         .into()
 }
 
-/// How many top-level navigation items there are: Day/Week/Month, Tasks/Projects,
-/// then Note/More/Settings.
-const TAB_COUNT: usize = 8;
+/// How many top-level navigation items there are: the Day/Week/Month switcher,
+/// Tasks/Projects, then Note/More/Settings.
+const TAB_COUNT: usize = 6;
 
-/// The visible top-level names, in the order they appear.
-const TAB_LABELS: [&str; TAB_COUNT] = [
-    "Day", "Week", "Month", "Tasks", "Projects", "Note", "More", "Settings",
-];
+/// The visible top-level names, in the order they appear. The first item is the
+/// calendar view switcher, which shows the current view rather than a fixed name.
+const TAB_LABELS: [&str; TAB_COUNT] = ["Day", "Tasks", "Projects", "Note", "More", "Settings"];
 
 /// Short names for windows too narrow to fit the full ones legibly.
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] =
-    ["Day", "Week", "Mon", "Tasks", "Proj", "Note", "More", "Set"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Tasks", "Proj", "Note", "More", "Set"];
+
+/// The longest labels the menu can show, used to reserve room for the switcher
+/// whatever view it is currently displaying.
+const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
+    ["Month ▾", "Tasks", "Projects", "Note", "More", "Settings"];
+const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
+    ["Month ▾", "Tasks", "Proj", "Note", "More", "Set"];
+
+/// The label for the calendar view switcher: the view currently on show.
+pub fn calendar_view_label(state: &State) -> &'static str {
+    if state.monthly {
+        "Month"
+    } else if state.weekly {
+        "Week"
+    } else {
+        "Day"
+    }
+}
 
 /// The tabs that live inside Tasks, shown beneath the top menu while any of
 /// them is open.
@@ -427,7 +446,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
         let fixed = 16.0 * pad + 5.0 * gap + 2.0 * (gap * 2.0).max(4.0);
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
-    let full = size_for(&TAB_LABELS);
+    let full = size_for(&TAB_WIDEST_LABELS);
     if full >= TAB_FULL_MIN_SIZE.min(max_size) {
         TabFit {
             short: false,
@@ -438,7 +457,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
     } else {
         TabFit {
             short: true,
-            size: size_for(&TAB_SHORT_LABELS).max(TAB_MIN_SIZE),
+            size: size_for(&TAB_WIDEST_SHORT_LABELS).max(TAB_MIN_SIZE),
             pad,
             gap,
         }
@@ -446,8 +465,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Day/Week/Month, then Tasks/Projects, then Note/More/Settings. Labels shrink
-/// (and shorten, when very narrow) rather than wrapping.
+/// the Day/Week/Month switcher, then Tasks/Projects, then Note/More/Settings.
+/// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
 /// While a Tasks screen is open, a second row with the Inbox and Backlog tabs
 /// is placed beneath the menu.
@@ -468,29 +487,14 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             Screen::Travel | Screen::Habits | Screen::KeepNotes | Screen::BrainDump
         );
 
-    let day = tab(
-        labels[0],
-        state.screen == Screen::Calendar && !state.weekly && !state.monthly,
-        Message::CalendarModeSelected(false),
-        metrics,
-        fit,
-    );
-    let week = tab(
-        labels[1],
-        state.screen == Screen::Calendar && state.weekly,
-        Message::CalendarModeSelected(true),
-        metrics,
-        fit,
-    );
-    let month = tab(
-        labels[2],
-        state.screen == Screen::Calendar && state.monthly,
-        Message::CalendarMonthViewSelected,
+    let view = view_tab(
+        calendar_view_label(state),
+        state.screen == Screen::Calendar || state.view_menu_open,
         metrics,
         fit,
     );
     let tasks = tab(
-        labels[3],
+        labels[1],
         tasks_open,
         match state.screen {
             // Within the section, Tasks keeps the tab that is open.
@@ -502,28 +506,28 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         fit,
     );
     let projects = tab(
-        labels[4],
+        labels[2],
         state.screen == Screen::Projects,
         Message::ScreenSelected(Screen::Projects),
         metrics,
         fit,
     );
     let note = tab(
-        labels[5],
+        labels[3],
         state.screen == Screen::Notepad,
         Message::ScreenSelected(Screen::Notepad),
         metrics,
         fit,
     );
     let more = tab(
-        labels[6],
+        labels[4],
         more_active,
         Message::MoreMenuToggled,
         metrics,
         fit,
     );
     let settings = tab(
-        labels[7],
+        labels[5],
         state.screen == Screen::Settings,
         Message::ScreenSelected(Screen::Settings),
         metrics,
@@ -533,7 +537,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let group_gap = (fit.gap * 2.0).max(4.0);
     let bar = container(
         row![
-            row![day, week, month].spacing(fit.gap),
+            row![view].spacing(fit.gap),
             Space::new().width(Fill),
             row![tasks, projects].spacing(fit.gap),
             Space::new().width(Fill),
@@ -625,6 +629,86 @@ fn tab<'a>(
         crate::ui::controls::secondary
     })
     .into()
+}
+
+/// The single Day/Week/Month switcher: the current view's name with a chevron
+/// showing that it opens a dropdown.
+fn view_tab<'a>(
+    label: &'a str,
+    active: bool,
+    metrics: &Metrics,
+    fit: TabFit,
+) -> Element<'a, Message> {
+    button(
+        row![
+            text(label)
+                .size(fit.size)
+                .wrapping(text::Wrapping::None)
+                .center(),
+            text("▾").size(fit.size).center(),
+        ]
+        .spacing(2.0)
+        .align_y(Center),
+    )
+    .height(tab_height(metrics))
+    .padding(Padding::from([0.0, fit.pad]))
+    .on_press(Message::ViewMenuToggled)
+    .style(if active {
+        crate::ui::controls::primary
+    } else {
+        crate::ui::controls::secondary
+    })
+    .into()
+}
+
+/// The calendar view switcher's menu: Day, Week and Month, in a card below the
+/// left-hand navigation group.
+fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+        .on_press(Message::ViewMenuToggled);
+
+    let mut panel = column![].spacing(4.0).width(Fill);
+    for (label, selected, message) in [
+        (
+            "Day",
+            !state.weekly && !state.monthly,
+            Message::CalendarModeSelected(false),
+        ),
+        ("Week", state.weekly, Message::CalendarModeSelected(true)),
+        ("Month", state.monthly, Message::CalendarMonthViewSelected),
+    ] {
+        panel = panel.push(
+            button(text(label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(message)
+                .style(if selected {
+                    crate::ui::controls::primary
+                } else {
+                    crate::ui::controls::secondary
+                }),
+        );
+    }
+
+    let width = (metrics.size.width - metrics.padding * 2.0).clamp(96.0, 180.0);
+    let card = container(panel)
+        .width(Length::Fixed(width))
+        .padding(6.0)
+        .style(crate::ui::controls::surface);
+
+    let aligned = column![
+        Space::new().height(tabs_height(state, metrics) + metrics.spacing),
+        container(row![card, Space::new().width(Fill)])
+            .padding(Padding {
+                left: metrics.padding,
+                ..Default::default()
+            })
+            .width(Fill),
+    ]
+    .width(Fill)
+    .align_x(Alignment::Start);
+
+    let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
+    iced::widget::stack(layers).into()
 }
 
 /// The More menu: Travel, Habits and Keep, in a card below the menu bar.

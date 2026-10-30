@@ -16,6 +16,9 @@ const LEGACY_ID: &str = "ttid:";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
+    /// Creation instant recorded by TimeSlay; absent for tasks created elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub block: Option<String>,
     pub minutes: u32,
     #[serde(default)]

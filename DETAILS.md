@@ -12,6 +12,16 @@ the current page or a Slack message to the inbox.
 When a TimeSlay window, panel or dock is running it writes the task and shows it
 immediately; otherwise the host writes straight to Google Tasks.
 
+## Inbox timestamps and sorting
+
+New tasks created through TimeSlay (including browser and Slack additions) store
+an immutable UTC creation timestamp as `tt-created_at` in their Google Tasks
+metadata. Google supplies the last-modified timestamp on sync. The Inbox shows
+both in local time and offers oldest/newest-first sorting for each, plus manual
+order. The selected sort is saved in settings. Unknown timestamps sort last in
+both directions; tasks created outside TimeSlay and older tasks have no recorded
+creation time, because Google Tasks does not expose one.
+
 ## Remote metadata and migration
 
 SQLite remains local (`tasks.sqlite3`), caching task metadata and allocating IDs.

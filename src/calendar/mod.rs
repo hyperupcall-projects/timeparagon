@@ -11,11 +11,12 @@ pub mod oauth;
 pub mod projects;
 pub mod scheduled;
 pub mod task_metadata;
+pub mod task_sort;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Local, Months, NaiveDate, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, Months, NaiveDate, TimeZone, Timelike, Utc};
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
@@ -388,6 +389,9 @@ pub(crate) fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Details {
+    /// Last modification instant reported by Google Tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_updated_at: Option<DateTime<Utc>>,
     /// Project IDs assigned to this calendar event (tasks use their task metadata).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<u64>,

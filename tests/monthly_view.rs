@@ -131,7 +131,7 @@ fn month_navigation_remains_reachable_at_small_widths() {
     for width in [180.0, 260.0, 420.0, 1100.0] {
         let mut ui = render(&state, Size::new(width, 900.0));
         for label in [
-            timeslay::ui::tab_labels(width)[2],
+            timeslay::ui::calendar_view_label(&state),
             "Today",
             "Menu",
             "August 2026 ▾",

@@ -456,14 +456,14 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
     }
 }
 
-/// The tab label at `index` (Day, Week, Month, Tasks, Projects, Note, More,
-/// Settings) for a window of `width`.
+/// The tab label at `index` (Day, Tasks, Projects, Note, More, Settings) for a
+/// window of `width`.
 fn tab_label(width: f32, index: usize) -> &'static str {
     timeslay::ui::tab_labels(width)[index]
 }
 
 /// Navigation is one row in three groups at every width, never overflowing:
-/// Day/Week/Month, then Tasks/Projects, then Note/More/Settings.
+/// the Day/Week/Month switcher, then Tasks/Projects, then Note/More/Settings.
 #[test]
 fn the_tabs_are_one_row_in_three_groups() {
     let state = state();
@@ -479,7 +479,7 @@ fn the_tabs_are_one_row_in_three_groups() {
             );
             bounds.push(found);
         }
-        // Order: Day, Week, Month, Tasks, Projects, Note, More, Settings.
+        // Order: Day, Tasks, Projects, Note, More, Settings.
         for pair in bounds.windows(2) {
             assert!(pair[0].x + pair[0].width <= pair[1].x, "order at {width}px");
             assert!(
@@ -494,9 +494,9 @@ fn the_tabs_are_one_row_in_three_groups() {
         );
         // Space separates the groups more than it separates tabs within one.
         let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
-        assert!(gap(2, 3) > gap(0, 1), "first group at {width}px");
-        assert!(gap(4, 5) > gap(3, 4), "middle group at {width}px");
-        assert!(gap(5, 6) < gap(4, 5), "right group at {width}px");
+        assert!(gap(0, 1) > gap(1, 2), "first group at {width}px");
+        assert!(gap(2, 3) > gap(3, 4), "middle group at {width}px");
+        assert!(gap(4, 5) < gap(2, 3), "right group at {width}px");
     }
 }
 
@@ -516,7 +516,7 @@ fn the_menu_does_not_grow_when_a_pane_widens_the_window() {
     // The details pane alone.
     state.calendar.open_event = Some("all-day".into());
     let mut ui = render(&state, Size::new(base + detail, 600.0));
-    let settings = ui.find(labels[7]).expect("Settings tab").bounds();
+    let settings = ui.find(labels[5]).expect("Settings tab").bounds();
     assert!(
         settings.x + settings.width <= base + 0.5,
         "the menu grew with the details pane: {settings:?} outside {base}px"
@@ -526,7 +526,7 @@ fn the_menu_does_not_grow_when_a_pane_widens_the_window() {
     // The block editor, with the details pane beside it.
     state.timeblocking.original_width = Some(base);
     let mut ui = render(&state, Size::new(base + detail + 400.0, 600.0));
-    let settings = ui.find(labels[7]).expect("Settings tab").bounds();
+    let settings = ui.find(labels[5]).expect("Settings tab").bounds();
     assert!(
         settings.x + settings.width <= base + 0.5,
         "the menu grew with the editor: {settings:?} outside {base}px"
@@ -582,7 +582,7 @@ fn tasks_has_its_own_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(200.0, 500.0));
-    ui.click(tab_label(200.0, 4))?;
+    ui.click(tab_label(200.0, 2))?;
     let message = ui
         .into_messages()
         .find(|message| matches!(message, Message::ScreenSelected(Screen::Projects)))
@@ -630,7 +630,7 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(420.0, 600.0));
 
-    let _ = ui.click(tab_label(420.0, 7))?;
+    let _ = ui.click(tab_label(420.0, 5))?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -652,16 +652,13 @@ fn google_task_lists_can_be_given_individual_colors() -> Result<(), Error> {
     state.calendar =
         timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
     state.calendar.menu_open = true;
-    state
-        .calendar
-        .calendars
-        .push(timeslay::calendar::Calendar {
-            id: "tasks:errands".into(),
-            name: "Errands".into(),
-            color: timeslay::calendar::colors::TASK,
-            primary: false,
-            selected_by_google: true,
-        });
+    state.calendar.calendars.push(timeslay::calendar::Calendar {
+        id: "tasks:errands".into(),
+        name: "Errands".into(),
+        color: timeslay::calendar::colors::TASK,
+        primary: false,
+        selected_by_google: true,
+    });
     state.calendar.color_editor = Some("tasks:errands".into());
 
     let mut ui = render(&state, Size::new(200.0, 700.0));
@@ -1002,7 +999,7 @@ fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
 
         let mut ui = render(&state, Size::new(width, HEIGHT));
 
-        let notepad = tab_label(width, 5);
+        let notepad = tab_label(width, 3);
         assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
 
         let calendar = tab_label(width, 0);
@@ -1043,7 +1040,7 @@ fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
     let state = state();
     let mut ui = render(&state, Size::new(420.0, 600.0));
 
-    let _ = ui.click(tab_label(420.0, 5))?;
+    let _ = ui.click(tab_label(420.0, 3))?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -1066,7 +1063,7 @@ fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 600.0));
 
-    for label in [tab_label(200.0, 5), tab_label(200.0, 0), "A-", "A+", "100%"] {
+    for label in [tab_label(200.0, 3), tab_label(200.0, 0), "A-", "A+", "100%"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -1936,16 +1933,13 @@ fn backlog_shows_only_the_parked_list_and_filters_by_search() -> Result<(), Erro
     use timeslay::timeblocking::{Action, Metadata};
     let mut state = timeblocking_state();
     state.screen = Screen::Backlog;
-    state
-        .calendar
-        .calendars
-        .push(timeslay::calendar::Calendar {
-            id: "tasks:errands".into(),
-            name: "Errands".into(),
-            color: iced::Color::from_rgb8(52, 168, 83),
-            primary: false,
-            selected_by_google: true,
-        });
+    state.calendar.calendars.push(timeslay::calendar::Calendar {
+        id: "tasks:errands".into(),
+        name: "Errands".into(),
+        color: iced::Color::from_rgb8(52, 168, 83),
+        primary: false,
+        selected_by_google: true,
+    });
     let mut errand = state.calendar.event("task:backlog").unwrap().clone();
     errand.id = "task:errand".into();
     errand.calendar_id = "tasks:errands".into();
@@ -2076,7 +2070,7 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     assert!(ui.find("Todos").is_err());
     assert!(ui.find("0 tasks not planned").is_ok());
     // Tasks opens the section; Backlog is one of its two tabs.
-    let _ = ui.click(tab_label(260.0, 3))?;
+    let _ = ui.click(tab_label(260.0, 1))?;
     let message = ui
         .into_messages()
         .find(|m| matches!(m, Message::ScreenSelected(Screen::Inbox)))

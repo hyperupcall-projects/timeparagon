@@ -16,10 +16,7 @@ fn state() -> State {
 fn task_dates_open_calendar_and_day_buttons_select_real_dates() {
     for width in [200.0, 320.0, 720.0] {
         let mut state = state();
-        let _ = app::update(
-            &mut state,
-            Message::Inbox(timeslay::inbox::Action::NewTask),
-        );
+        let _ = app::update(&mut state, Message::Inbox(timeslay::inbox::Action::NewTask));
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
             Size::new(width, 700.0),
@@ -78,10 +75,7 @@ fn preview_forms_in_light_and_dark_themes() {
     for theme in ["Sakura", "Dark"] {
         for width in [200.0, 420.0, 900.0] {
             let mut state = state();
-            let _ = app::update(
-                &mut state,
-                Message::Inbox(timeslay::inbox::Action::NewTask),
-            );
+            let _ = app::update(&mut state, Message::Inbox(timeslay::inbox::Action::NewTask));
             let palette = state.catalog.resolve(theme).theme.clone();
             let mut form: Simulator<'_, Message> = Simulator::with_size(
                 Settings::default(),

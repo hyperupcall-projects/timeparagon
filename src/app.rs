@@ -217,6 +217,8 @@ pub struct State {
     pub screen: Screen,
     pub weekly: bool,
     pub monthly: bool,
+    /// Whether the Day/Week/Month dropdown under the left-hand navigation is open.
+    pub view_menu_open: bool,
     /// Whether the More menu under the right-hand navigation group is open.
     pub more_menu_open: bool,
     pub week_anchor: chrono::NaiveDate,
@@ -312,6 +314,7 @@ pub enum Message {
     Alarms(alarms::Action),
 
     ScreenSelected(Screen),
+    ViewMenuToggled,
     MoreMenuToggled,
     CalendarModeSelected(bool),
     CalendarMonthViewSelected,
@@ -582,6 +585,7 @@ impl State {
             screen: Screen::Calendar,
             weekly: false,
             monthly: false,
+            view_menu_open: false,
             more_menu_open: false,
             week_anchor: calendar::day_at(Local::now(), day_end_hour),
             week_hover: None,
@@ -1039,8 +1043,20 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::Alarms(action) => alarms::update(state, action),
 
+        Message::ViewMenuToggled => {
+            state.view_menu_open = !state.view_menu_open;
+            // Only one dropdown is open at a time.
+            if state.view_menu_open {
+                state.more_menu_open = false;
+            }
+            Task::none()
+        }
+
         Message::MoreMenuToggled => {
             state.more_menu_open = !state.more_menu_open;
+            if state.more_menu_open {
+                state.view_menu_open = false;
+            }
             Task::none()
         }
 
@@ -1050,7 +1066,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 && state.screen != Screen::Calendar
                 && (state.weekly || state.monthly);
             state.view_layout_input = None;
-            // Choosing a destination puts the More menu away.
+            // Choosing a destination puts the dropdown menus away.
+            state.view_menu_open = false;
             state.more_menu_open = false;
             // Alarm setting belongs to the day view, so leaving it ends both.
             state.alarms.mode = false;
@@ -1096,6 +1113,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.open_event = None;
             state.calendar.month_open = false;
             state.calendar.menu_open = false;
+            state.view_menu_open = false;
             state.more_menu_open = false;
             state.week_hover = None;
             state.screen = Screen::Calendar;
@@ -1131,6 +1149,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.open_event = None;
             state.calendar.month_open = false;
             state.calendar.menu_open = false;
+            state.view_menu_open = false;
             state.more_menu_open = false;
             state.alarms.mode = false;
             state.alarms.editor = None;
@@ -3438,6 +3457,12 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     if state.alarms.mode {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::Alarms(alarms::Action::ModeToggled)),
+            _ => None,
+        };
+    }
+    if state.view_menu_open {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::ViewMenuToggled),
             _ => None,
         };
     }

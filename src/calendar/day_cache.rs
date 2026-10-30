@@ -403,6 +403,29 @@ mod tests {
     }
 
     #[test]
+    fn task_timestamps_survive_a_restart() {
+        let scratch = Scratch::new("task-timestamps");
+        let snapshot = sample_snapshot();
+        let mut event = snapshot.events[0].clone();
+        event.id = "task:timestamps".into();
+        event.calendar_id = "tasks:inbox".into();
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-10-29T19:30:12.123Z")
+            .unwrap()
+            .to_utc();
+        event.details.task_updated_at = Some(timestamp);
+        event.details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            legacy_key: None,
+            metadata: crate::timeblocking::Metadata {
+                created_at: Some(timestamp),
+                ..Default::default()
+            },
+        });
+        save(scratch.path(), snapshot.day, &[event.clone()], 0).unwrap();
+        assert_eq!(load(scratch.path(), snapshot.day, 0).unwrap(), vec![event]);
+    }
+
+    #[test]
     fn saving_neighboring_days_does_not_duplicate_other_days_tasks() {
         let scratch = Scratch::new("weekly-duplicates");
         let snapshot = sample_snapshot();

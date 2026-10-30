@@ -1,7 +1,8 @@
 //! The Inbox tab: tasks waiting to be triaged, and the popup that adds one.
 
 use iced::widget::{
-    Space, button, column, container, mouse_area, row, scrollable, stack, text, text_input,
+    Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
+    text_input,
 };
 use iced::{Center, Color, Element, Fill};
 
@@ -41,7 +42,10 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
     };
     let (heading, subtitle) = match list {
         List::Inbox => ("Inbox", "Tasks waiting to be triaged"),
-        List::Triaged => ("Triaged", "Tasks ready to be scheduled"),
+        List::Triaged => (
+            "Triaged",
+            "Tasks ready to be scheduled. Probably don't need this view, triaged tasks should show in projects and be schedule from there.",
+        ),
     };
 
     let title = super::controls::page_heading(heading, subtitle, Some(tasks.len()), metrics);
@@ -54,6 +58,21 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         title.into()
     };
     let mut body = column![header].spacing(metrics.spacing);
+    if list == List::Inbox {
+        body = body.push(
+            row![
+                text("Sort by").size(metrics.label()),
+                pick_list(
+                    inbox::InboxSort::ALL,
+                    Some(state.config.calendar.inbox_sort),
+                    |sort| msg(Action::Sort(sort))
+                )
+                .text_size(metrics.label())
+            ]
+            .spacing(metrics.spacing)
+            .align_y(Center),
+        );
+    }
 
     for error in [&state.inbox.error, &state.calendar.error]
         .into_iter()
@@ -157,6 +176,24 @@ fn metadata_rows<'a>(
     let m = tb::metadata(task);
     let size = metrics.label() - 1.0;
     let mut rows = Vec::new();
+
+    for (label, timestamp) in [
+        ("Created", m.created_at),
+        ("Modified", task.details.task_updated_at),
+    ] {
+        let value = timestamp
+            .map(|time| {
+                time.with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S %Z")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "Unknown".into());
+        rows.push(field_line(
+            label,
+            text(value).size(size).style(text::secondary).into(),
+            metrics,
+        ));
+    }
 
     // Projects.
     let projects: Vec<_> = m
@@ -812,6 +849,35 @@ mod tests {
             m,
             Message::Inbox(Action::ScheduleOn(id, day)) if id == "task:one" && *day == fifteenth
         )));
+    }
+
+    #[test]
+    fn inbox_shows_creation_and_modification_times() {
+        let mut state = state_with_task("");
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-10-29T19:30:12Z")
+            .unwrap()
+            .to_utc();
+        state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            legacy_key: None,
+            metadata: tb::Metadata {
+                created_at: Some(timestamp),
+                ..Default::default()
+            },
+        });
+        let mut ui = simulator(&state, 500.0);
+        for label in ["Sort by", "Created", "Modified", "Unknown"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        assert!(
+            ui.find(
+                timestamp
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S %Z")
+                    .to_string()
+            )
+            .is_ok()
+        );
     }
 
     #[test]

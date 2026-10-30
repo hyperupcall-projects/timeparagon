@@ -389,6 +389,39 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
 }
 
 #[test]
+fn view_switcher_is_one_button_with_a_day_week_month_menu() -> Result<(), Error> {
+    let mut state = state();
+    state.weekly = false;
+    state.monthly = false;
+
+    let mut ui = render(&state, Size::new(420.0, 700.0));
+    // The single switcher shows the current view.
+    assert!(ui.find("Day").is_ok());
+    let _ = ui.click("Day")?;
+    assert!(
+        ui.into_messages()
+            .any(|m| matches!(m, Message::ViewMenuToggled))
+    );
+
+    let _ = app::update(&mut state, Message::ViewMenuToggled);
+    assert!(state.view_menu_open);
+    let mut ui = render(&state, Size::new(420.0, 700.0));
+    for label in ["Day", "Week", "Month"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
+    }
+    let _ = ui.click("Week")?;
+    assert!(
+        ui.into_messages()
+            .any(|m| matches!(m, Message::CalendarModeSelected(true)))
+    );
+
+    let _ = app::update(&mut state, Message::CalendarModeSelected(true));
+    assert!(state.weekly && !state.monthly && !state.view_menu_open);
+
+    Ok(())
+}
+
+#[test]
 fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result<(), Error> {
     let mut state = state();
     state.calendar.month_open = true;
@@ -420,7 +453,7 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
         let _ = ui.click("Week")?;
         assert!(
             ui.into_messages()
-                .any(|m| matches!(m, Message::CalendarModeSelected(true)))
+                .any(|m| matches!(m, Message::ViewMenuToggled))
         );
     }
     let mut ui = render(&state, Size::new(180.0, 240.0));

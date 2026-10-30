@@ -16,6 +16,7 @@ use crate::timeblocking::{self as tb, UNDATED};
 use crate::{blocking, task_db};
 
 pub use crate::calendar::scheduled::DEFAULT_LIST;
+pub use crate::calendar::task_sort::InboxSort;
 /// Widget id of the new-task text box, so it can be focused when it opens.
 pub const TITLE_FIELD: &str = "inbox-title";
 const MAX_TITLE_CHARS: usize = 1024;
@@ -55,6 +56,7 @@ pub struct Draft {
 
 #[derive(Debug, Clone)]
 pub enum Action {
+    Sort(InboxSort),
     /// Open the new-task popup.
     NewTask,
     Cancel,
@@ -104,7 +106,7 @@ pub fn untriaged(state: &State, event: &Event) -> bool {
         && is_inbox_list(state, &event.calendar_id)
 }
 
-/// Every task still to be triaged, in the order they were put in order.
+/// Every task still to be triaged, in the selected order. Unknown times sort last.
 pub fn tasks(state: &State) -> Vec<&Event> {
     let mut tasks: Vec<_> = state
         .calendar
@@ -112,7 +114,35 @@ pub fn tasks(state: &State) -> Vec<&Event> {
         .iter()
         .filter(|event| untriaged(state, event))
         .collect();
-    tasks.sort_by_cached_key(|event| (tb::metadata(event).order, event.title.to_lowercase()));
+    let sort = state.config.calendar.inbox_sort;
+    tasks.sort_by_cached_key(|event| {
+        let metadata = tb::metadata(event);
+        let timestamp = match sort {
+            InboxSort::CreatedAscending | InboxSort::CreatedDescending => metadata.created_at,
+            InboxSort::ModifiedAscending | InboxSort::ModifiedDescending => {
+                event.details.task_updated_at
+            }
+            InboxSort::Manual => None,
+        };
+        let descending = matches!(
+            sort,
+            InboxSort::CreatedDescending | InboxSort::ModifiedDescending
+        );
+        let manual = if sort == InboxSort::Manual {
+            metadata.order
+        } else {
+            0
+        };
+        // Keep unknown timestamps last in either direction, and ties stable across syncs.
+        (
+            timestamp.is_none(),
+            timestamp.filter(|_| !descending),
+            std::cmp::Reverse(timestamp.filter(|_| descending)),
+            manual,
+            event.title.to_lowercase(),
+            event.id.clone(),
+        )
+    });
     tasks
 }
 
@@ -148,6 +178,10 @@ pub fn triaged_tasks(state: &State) -> Vec<&Event> {
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
+        Action::Sort(sort) => {
+            state.config.calendar.inbox_sort = sort;
+            crate::app::queue_save(state)
+        }
         Action::NewTask => {
             state.inbox.error = None;
             state.inbox.draft.get_or_insert_with(Draft::default);
@@ -421,6 +455,7 @@ fn create_event(
     due: Option<NaiveDate>,
 ) -> Result<Event, String> {
     let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
+    let created_at = chrono::Utc::now();
     let created = api::insert_task_with(token, &list, &api::NewTask { title, notes, due })?;
 
     let calendar_id = format!("tasks:{list}");
@@ -437,13 +472,18 @@ fn create_event(
         all_day: true,
         completed: false,
         details: calendar::Details {
+            task_updated_at: created.updated_at,
             link: created.link,
             description: notes.to_owned(),
             ..Default::default()
         },
     };
     // Allocate a stable ID and publish its metadata immediately.
-    let data = task_db::open()?.import(&event)?;
+    let mut database = task_db::open()?;
+    let mut data = database.import(&event)?;
+    data.metadata.created_at = Some(created_at);
+    // Keep the creation instant retryable if the metadata upload fails.
+    database.save(&event, &data)?;
     calendar::task_metadata::save(token, &event, &data)?;
     event.details.task_data = Some(data);
     Ok(event)
@@ -534,6 +574,53 @@ mod tests {
 
     fn day(text: &str) -> NaiveDate {
         deadline::parse_date(text).unwrap()
+    }
+
+    #[test]
+    fn inbox_sorts_both_timestamps_in_both_directions_with_unknowns_last() {
+        let mut state = state();
+        let early = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00-07:00")
+            .unwrap()
+            .to_utc();
+        let late = early + Duration::seconds(1);
+        let mut a = task("a", "inbox", UNDATED);
+        let mut b = task("b", "inbox", UNDATED);
+        for (event, created_at, updated_at) in [(&mut a, early, late), (&mut b, late, early)] {
+            event.details.task_data = Some(task_db::TaskData {
+                id: 100,
+                legacy_key: None,
+                metadata: tb::Metadata {
+                    created_at: Some(created_at),
+                    ..Default::default()
+                },
+            });
+            event.details.task_updated_at = Some(updated_at);
+        }
+        state.calendar.events = vec![task("unknown", "inbox", UNDATED), b, a];
+        for (sort, expected) in [
+            (InboxSort::CreatedAscending, ["a", "b", "unknown"]),
+            (InboxSort::CreatedDescending, ["b", "a", "unknown"]),
+            (InboxSort::ModifiedAscending, ["b", "a", "unknown"]),
+            (InboxSort::ModifiedDescending, ["a", "b", "unknown"]),
+        ] {
+            state.config.calendar.inbox_sort = sort;
+            assert_eq!(
+                tasks(&state)
+                    .iter()
+                    .map(|e| e.title.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let saved = toml::to_string(&state.config.calendar).unwrap();
+            let restored: crate::config::CalendarSettings = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.inbox_sort, sort);
+        }
+        // Equal timestamps use title then identity, independent of fetch order.
+        state.calendar.events[1].details.task_updated_at = Some(late);
+        state.config.calendar.inbox_sort = InboxSort::ModifiedDescending;
+        assert_eq!(tasks(&state)[0].title, "a");
+        state.calendar.events.reverse();
+        assert_eq!(tasks(&state)[0].title, "a");
     }
 
     #[test]

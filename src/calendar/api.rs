@@ -790,6 +790,8 @@ struct TaskPage {
 #[derive(Debug, Clone, Deserialize)]
 struct TaskEntry {
     #[serde(default)]
+    updated: Option<DateTime<Utc>>,
+    #[serde(default)]
     deleted: bool,
     #[serde(default)]
     id: String,
@@ -975,6 +977,7 @@ fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) 
         color,
         completed,
         details: crate::calendar::Details {
+            task_updated_at: task.updated,
             description: task.notes,
             link,
             ..crate::calendar::Details::default()
@@ -1123,6 +1126,7 @@ fn lookup_task(
 /// A task Google has just created. The id is what later writes use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedTask {
+    pub updated_at: Option<DateTime<Utc>>,
     pub id: String,
     pub title: String,
     pub link: String,
@@ -1192,6 +1196,7 @@ fn created_task(response: &str, title: &str) -> Result<CreatedTask, String> {
         created.title
     };
     Ok(CreatedTask {
+        updated_at: created.updated,
         id: created.id,
         title,
         link,
@@ -1497,6 +1502,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
     };
 
     crate::calendar::Details {
+        task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
         task_data: None,
         scheduled: None,
@@ -1973,9 +1979,30 @@ mod tests {
     }
 
     #[test]
+    fn task_updated_timestamp_is_parsed_and_retained() {
+        let task: TaskEntry =
+            serde_json::from_str(r#"{"id":"abc","updated":"2026-10-29T12:30:45.123-07:00"}"#)
+                .unwrap();
+        let event = parse_task(
+            task,
+            "tasks:list",
+            colors::DEFAULT_EVENT,
+            crate::timeblocking::UNDATED,
+        )
+        .unwrap();
+        assert_eq!(
+            event.details.task_updated_at.unwrap().to_rfc3339(),
+            "2026-10-29T19:30:45.123+00:00"
+        );
+        let old: TaskEntry = serde_json::from_str(r#"{"id":"old"}"#).unwrap();
+        assert_eq!(old.updated, None);
+    }
+
+    #[test]
     fn a_task_due_at_utc_midnight_stays_on_that_calendar_day() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         let task = TaskEntry {
+            updated: None,
             deleted: false,
             id: "abc".into(),
             title: "File taxes".into(),
@@ -1998,6 +2025,7 @@ mod tests {
     fn a_task_for_another_day_is_left_out() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         let task = TaskEntry {
+            updated: None,
             deleted: false,
             id: "abc".into(),
             title: "Tomorrow".into(),
@@ -2020,6 +2048,7 @@ mod tests {
         assert_eq!(
             created,
             CreatedTask {
+                updated_at: None,
                 id: "abc".into(),
                 title: "Call the client".into(),
                 link: "https://tasks.google.com/task/abc".into(),
@@ -2048,6 +2077,7 @@ mod tests {
 
     fn task_entry(id: &str, deleted: bool) -> TaskEntry {
         TaskEntry {
+            updated: None,
             deleted,
             id: id.into(),
             title: id.into(),

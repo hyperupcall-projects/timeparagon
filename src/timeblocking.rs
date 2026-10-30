@@ -1250,8 +1250,15 @@ fn create_and_assign(
         settings.app_calendar.as_deref(),
         settings.time_block_list.as_deref(),
     )?;
+    let created_at = chrono::Utc::now();
     let created = calendar::api::insert_task(&token, &list_id, &title)?;
-    let task = new_todo_event(&list_id, &created, start);
+    let mut task = new_todo_event(&list_id, &created, start);
+    let mut database = crate::task_db::open()?;
+    let mut data = database.import(&task)?;
+    data.metadata.created_at = Some(created_at);
+    database.save(&task, &data)?;
+    calendar::task_metadata::save(&token, &task, &data)?;
+    task.details.task_data = Some(data);
     save_and_reflow(
         task,
         settings,
@@ -1277,6 +1284,7 @@ fn new_todo_event(
         color: calendar::colors::TASK,
         completed: false,
         details: calendar::Details {
+            task_updated_at: created.updated_at,
             link: created.link.clone(),
             ..Default::default()
         },
@@ -2665,6 +2673,7 @@ mod tests {
         let event = new_todo_event(
             "has-time",
             &calendar::api::CreatedTask {
+                updated_at: None,
                 id: "fresh".into(),
                 title: "Call the client".into(),
                 link: "https://tasks.google.com/task/fresh".into(),

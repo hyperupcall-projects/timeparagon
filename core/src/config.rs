@@ -39,6 +39,8 @@ pub struct CalendarSettings {
     pub time_block_list: Option<String>,
     pub backlog_list: Option<String>,
     pub inbox_list: Option<String>,
+    #[serde(default)]
+    pub inbox_sort: crate::calendar::task_sort::InboxSort,
     pub triaged_list: Option<String>,
     pub habit_color: Option<HexColor>,
     /// The hour the day ends, 0-5. 0 is midnight.
@@ -69,6 +71,7 @@ impl Default for CalendarSettings {
             time_block_list: None,
             backlog_list: None,
             inbox_list: None,
+            inbox_sort: Default::default(),
             triaged_list: None,
             habit_color: None,
             day_end_hour: 0,

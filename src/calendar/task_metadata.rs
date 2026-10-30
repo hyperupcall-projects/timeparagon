@@ -51,8 +51,17 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
     let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
     let legacy_key = fields.remove("legacy_key").unwrap_or(Value::Null);
     let allowed = [
-        "block", "minutes", "order", "ignored", "schedule", "projects", "project", "labels",
-        "priority", "location",
+        "block",
+        "minutes",
+        "order",
+        "ignored",
+        "schedule",
+        "projects",
+        "project",
+        "labels",
+        "priority",
+        "location",
+        "created_at",
     ];
     if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("Unknown TimeSlay metadata field; update the app before editing".into());
@@ -250,6 +259,11 @@ mod tests {
             id: 123,
             legacy_key: Some("old-history-key".into()),
             metadata: crate::timeblocking::Metadata {
+                created_at: Some(
+                    chrono::DateTime::parse_from_rfc3339("2026-10-29T19:30:12.123Z")
+                        .unwrap()
+                        .to_utc(),
+                ),
                 minutes: 45,
                 block: Some("calendar/block".into()),
                 labels: vec!["two\nlines: yes".into()],

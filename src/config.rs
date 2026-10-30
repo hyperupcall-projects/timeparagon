@@ -845,6 +845,8 @@ pub struct CalendarSettings {
     /// uses Inbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbox_list: Option<String>,
+    #[serde(default)]
+    pub inbox_sort: crate::calendar::task_sort::InboxSort,
     /// Which metadata a task needs before it can leave the Inbox.
     #[serde(default)]
     pub triage: TriageRequirements,
@@ -901,6 +903,7 @@ impl Default for CalendarSettings {
             backlog_list: None,
             triaged_list: None,
             inbox_list: None,
+            inbox_sort: Default::default(),
             triage: TriageRequirements::default(),
             day_end_hour: 0,
             weekly_days: 8,
