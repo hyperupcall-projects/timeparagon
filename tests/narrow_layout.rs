@@ -291,8 +291,7 @@ fn the_settings_tab_uses_the_whole_window() {
     }
 }
 
-/// The calendar keeps the day it already has on screen while a fresh sync is
-/// in flight, and the status line says so. Both have to survive every width.
+/// The cached day remains visible during sync without a status section.
 #[test]
 fn the_calendar_keeps_the_day_while_it_reloads() {
     let mut state = state();
@@ -309,8 +308,8 @@ fn the_calendar_keeps_the_day_while_it_reloads() {
             "the cached day is missing at {width}px"
         );
         assert!(
-            ui.find("Syncing…").is_ok(),
-            "the loading status is missing at {width}px"
+            ui.find("Syncing…").is_err(),
+            "the removed loading status is visible at {width}px"
         );
     }
 }
@@ -862,10 +861,9 @@ fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
     Ok(())
 }
 
-/// The day view counts tasks without a time or time block. Timed tasks,
-/// undated tasks, and tasks on other days stay out of the count.
+/// Task counts and calendar sync status stay out of the day view.
 #[test]
-fn the_calendar_shows_how_many_tasks_are_not_planned() -> Result<(), Error> {
+fn the_calendar_omits_task_counts_and_sync_status() -> Result<(), Error> {
     let mut state = timeblocking_state();
     let day = state.calendar.day;
     let mut task = state.calendar.event("task:backlog").unwrap().clone();
@@ -901,7 +899,25 @@ fn the_calendar_shows_how_many_tasks_are_not_planned() -> Result<(), Error> {
     );
 
     let mut ui = render(&state, Size::new(260.0, 600.0));
-    assert!(ui.find("1 task not planned").is_ok());
+    assert!(ui.find("1 task not planned").is_err());
+    let pending_count = state
+        .calendar
+        .events_on(day)
+        .iter()
+        .filter(|event| event.is_task() && !event.completed)
+        .count();
+    assert!(pending_count > 0);
+    assert!(ui.find(format!("{pending_count} pending")).is_err());
+    assert!(
+        ui.find(
+            state
+                .calendar
+                .last_sync
+                .map(|at| format!("Synced {}", timeslay::calendar::clock_label(at)))
+                .unwrap_or_else(|| "Not synced yet".into())
+        )
+        .is_err()
+    );
     assert!(ui.find("Show tasks").is_err());
     assert!(ui.find("Hide tasks").is_err());
     assert!(ui.find("Hide overdue tasks").is_err());
@@ -911,7 +927,7 @@ fn the_calendar_shows_how_many_tasks_are_not_planned() -> Result<(), Error> {
 
     state.calendar.day = day.pred_opt().unwrap();
     let mut ui = render(&state, Size::new(260.0, 600.0));
-    assert!(ui.find("0 tasks not planned").is_ok());
+    assert!(ui.find("0 tasks not planned").is_err());
     assert!(ui.find("1 task not planned").is_err());
 
     Ok(())
@@ -2068,7 +2084,7 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(260.0, 600.0));
     assert!(ui.find("Todos").is_err());
-    assert!(ui.find("0 tasks not planned").is_ok());
+    assert!(ui.find("0 tasks not planned").is_err());
     // Tasks opens the section; Backlog is one of its two tabs.
     let _ = ui.click(tab_label(260.0, 1))?;
     let message = ui
@@ -2460,4 +2476,88 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
         }
     }
     Ok(())
+}
+
+#[test]
+fn backlog_sections_are_ordered_and_accept_drops_on_headers_and_tasks() -> Result<(), Error> {
+    use timeslay::timeblocking::{Action, BacklogSection, Metadata};
+    let mut state = timeblocking_state();
+    state.screen = Screen::Backlog;
+    let mut other = state.calendar.event("task:backlog").unwrap().clone();
+    other.id = "task:second".into();
+    other.title = "Next task".into();
+    set_task_metadata(
+        &mut other,
+        "",
+        Metadata {
+            backlog_section: BacklogSection::NextMonth,
+            ..Default::default()
+        },
+    );
+    state.calendar.add_event(other);
+    let mut ui = render(&state, Size::new(420.0, 1200.0));
+    let mut previous = 0.0;
+    for section in BacklogSection::ALL {
+        let bounds = ui.find(section.label())?.bounds();
+        assert!(bounds.y > previous, "sections must be top to bottom");
+        previous = bounds.y;
+    }
+    let someday = ui.find("Someday")?.bounds().y;
+    let never = ui.find("Never")?.bounds().y;
+    let task_y = ui.find("Research outline")?.bounds().y;
+    assert!(task_y > someday && task_y < never);
+    drop(ui);
+
+    for section in BacklogSection::ALL {
+        state.timeblocking.dragging = Some("task:backlog".into());
+        let mut ui = render(&state, Size::new(420.0, 1200.0));
+        let target = ui.find(section.label())?.bounds().center();
+        ui.point_at(target);
+        ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        ))]);
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages.iter().any(|m| matches!(m,
+                Message::TimeBlocking(Action::DropBacklogSection(value)) if *value == section
+            )),
+            "no drop for {section:?}: {messages:?}"
+        );
+    }
+
+    // A drop on an occupied section's task uses the same section as its heading.
+    state.timeblocking.dragging = Some("task:backlog".into());
+    let mut ui = render(&state, Size::new(420.0, 1200.0));
+    let target = ui.find("Next task")?.bounds().center();
+    ui.point_at(target);
+    ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+        iced::mouse::Button::Left,
+    ))]);
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        Message::TimeBlocking(Action::DropBacklogSection(BacklogSection::NextMonth))
+    )));
+    for message in messages {
+        let _ = app::update(&mut state, message);
+    }
+    assert!(state.timeblocking.dragging.is_none());
+    assert!(state.timeblocking.busy.contains("task:backlog"));
+    Ok(())
+}
+
+#[test]
+fn dropping_in_the_current_backlog_section_is_a_noop() {
+    use timeslay::timeblocking::{Action, BacklogSection};
+    let mut state = timeblocking_state();
+    state.screen = Screen::Backlog;
+    state.timeblocking.dragging = Some("task:backlog".into());
+    let before = state.calendar.event("task:backlog").unwrap().clone();
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::DropBacklogSection(BacklogSection::Someday)),
+    );
+    assert!(state.timeblocking.dragging.is_none());
+    assert!(state.timeblocking.busy.is_empty());
+    assert_eq!(state.calendar.event("task:backlog"), Some(&before));
 }

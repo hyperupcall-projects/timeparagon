@@ -389,18 +389,42 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
 }
 
 #[test]
-fn view_switcher_is_one_button_with_a_day_week_month_menu() -> Result<(), Error> {
+fn view_switcher_splits_the_name_and_chevron() -> Result<(), Error> {
     let mut state = state();
     state.weekly = false;
     state.monthly = false;
 
+    // The name is one click target: it goes straight to the current view and
+    // does not open the dropdown.
+    let switcher = timeslay::ui::calendar_view_label(&state);
+    assert_eq!(switcher, "Day");
     let mut ui = render(&state, Size::new(420.0, 700.0));
-    // The single switcher shows the current view.
-    assert!(ui.find("Day").is_ok());
-    let _ = ui.click("Day")?;
+    let _ = ui.click(switcher)?;
+    let messages: Vec<_> = ui.into_messages().collect();
     assert!(
-        ui.into_messages()
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::CalendarModeSelected(false)))
+    );
+    assert!(
+        !messages
+            .iter()
             .any(|m| matches!(m, Message::ViewMenuToggled))
+    );
+
+    // The chevron is a separate target: it opens the dropdown.
+    let mut ui = render(&state, Size::new(420.0, 700.0));
+    let _ = ui.click("▾")?;
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::ViewMenuToggled))
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| matches!(m, Message::CalendarModeSelected(_)))
     );
 
     let _ = app::update(&mut state, Message::ViewMenuToggled);
@@ -448,9 +472,12 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
     state.calendar.month_open = false;
     for width in [180.0, 260.0, 900.0] {
         let mut ui = render(&state, Size::new(width, 700.0));
-        let weekly = ui.find("Week")?.bounds();
+        let switcher = timeslay::ui::calendar_view_label(&state);
+        let weekly = ui.find(switcher)?.bounds();
         assert!(weekly.x >= 0.0 && weekly.x + weekly.width <= width);
-        let _ = ui.click("Week")?;
+        let arrow = ui.find("▾")?.bounds();
+        assert!(arrow.x >= 0.0 && arrow.x + arrow.width <= width);
+        let _ = ui.click("▾")?;
         assert!(
             ui.into_messages()
                 .any(|m| matches!(m, Message::ViewMenuToggled))

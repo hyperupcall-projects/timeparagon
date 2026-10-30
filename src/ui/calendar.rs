@@ -63,47 +63,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     let body = pointer_watch(body.push(grid));
 
-    let unplanned = unplanned_task_count(state);
-    let mut unplanned_line = text(unplanned_tasks_label(unplanned))
-        .size(metrics.label() + 4.0)
-        .width(Fill);
-    if unplanned == 0 {
-        unplanned_line = unplanned_line.style(text::secondary);
-    } else {
-        unplanned_line = unplanned_line.font(Font {
-            weight: Weight::Bold,
-            ..Font::DEFAULT
-        });
-    }
-    let mut status = column![
-        text(state.calendar.status_line())
-            .size(metrics.label() - 1.0)
-            .style(if state.calendar.error.is_some() {
-                text::danger
-            } else {
-                text::secondary
-            }),
-        unplanned_line,
-        pending_button(state, state.calendar.day, metrics.label() + 3.0),
-    ]
-    .spacing(2);
-
-    // Alarm setting mode says what a click will do, since nothing else on the
-    // screen does. It sits inside the status block so the grid below keeps its
-    // place in the widget tree, and with it the scroll position.
-    if state.alarms.mode {
-        status = status.push(
-            text("Click a time to set an alarm. Esc cancels.")
-                .size(metrics.label() - 1.0)
-                .color(colors::ALARM),
-        );
-    }
-
-    let status = container(status)
-        .padding([8, 10])
-        .width(Fill)
-        .style(super::controls::summary_surface);
-    let mut content = column![header(state, metrics), status, body]
+    let mut content = column![heading_with_alarm_hint(state, metrics), body]
         .spacing(metrics.spacing)
         .padding(metrics.padding)
         .width(Fill)
@@ -121,8 +81,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         draft_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
-    } else if let Some(day) = state.calendar.pending_open {
-        pending_overlay(state, metrics, day)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -277,14 +235,6 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     };
     let mut content = column![
         heading,
-        text(state.calendar.status_line())
-            .size(metrics.label() - 1.0)
-            .style(if state.calendar.error.is_some() {
-                text::danger
-            } else {
-                text::secondary
-            }),
-        pending_button(state, state.calendar.day, metrics.label()),
         text("Select a date to open its timeline.")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
@@ -346,8 +296,6 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     }
     let overlay = if state.calendar.draft.is_some() {
         draft_overlay(state, metrics)
-    } else if let Some(day) = state.calendar.pending_open {
-        pending_overlay(state, metrics, day)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -392,9 +340,6 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 .width(Fill);
             let content = column![
                 heading,
-                container(pending_button(state, day, day_metrics.label()))
-                    .center_x(Fill)
-                    .height(Length::Fixed(day_metrics.label() + 8.0)),
                 container(all_day)
                     .height(Length::Fixed(all_day_height))
                     .width(Fill),
@@ -523,26 +468,8 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         );
     }
 
-    let mut status = column![
-        text(state.calendar.status_line())
-            .size(metrics.label() - 1.0)
-            .style(if state.calendar.error.is_some() {
-                text::danger
-            } else {
-                text::secondary
-            }),
-    ]
-    .spacing(2);
-    if state.alarms.mode {
-        status = status.push(
-            text("Click a time to set an alarm. Esc cancels.")
-                .size(metrics.label() - 1.0)
-                .color(colors::ALARM),
-        );
-    }
     let mut content = column![
-        header(state, metrics),
-        status,
+        heading_with_alarm_hint(state, metrics),
         pointer_watch(
             iced::widget::Stack::with_children(grid_layers)
                 .width(Fill)
@@ -560,8 +487,6 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         draft_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
-    } else if let Some(day) = state.calendar.pending_open {
-        pending_overlay(state, metrics, day)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
     } else if state.calendar.menu_open {
@@ -754,109 +679,17 @@ fn header_offset(metrics: &Metrics) -> f32 {
     metrics.padding + (metrics.icon_button() + metrics.spacing) * lines
 }
 
-/// Tasks on the day in view that have neither a time nor a time block.
-///
-/// Timed tasks, undated backlog tasks, and tasks filed on another day stay out
-/// of the count.
-fn unplanned_task_count(state: &State) -> usize {
-    let day = state.calendar.day;
-    state
-        .calendar
-        .events
-        .iter()
-        .filter(|event| {
-            event.all_day
-                && event.start.date_naive() == day
-                && crate::timeblocking::in_backlog(event)
-        })
-        .count()
-}
-
-/// Tasks Google Tasks still lists as pending (not completed) on a day.
-fn pending_tasks(state: &State, day: NaiveDate) -> Vec<&Event> {
-    if !state.config.calendar.show_tasks {
-        return Vec::new();
-    }
-    state
-        .calendar
-        .events_on(day)
-        .iter()
-        .filter(|event| event.is_task() && !event.completed)
-        .collect()
-}
-
-/// The pending-task count for a day; pressing it lists the tasks.
-fn pending_button<'a>(state: &'a State, day: NaiveDate, size: f32) -> Element<'a, Message> {
-    let count = pending_tasks(state, day).len();
-    if count == 0 {
-        return Space::new().into();
-    }
-    button(text(format!("{count} pending")).size(size))
-        .padding([0, 4])
-        .style(button::text)
-        .on_press(Message::PendingTasksShown(Some(day)))
-        .into()
-}
-
-/// A popup listing each pending task on a day.
-fn pending_overlay<'a>(
-    state: &'a State,
-    metrics: &Metrics,
-    day: NaiveDate,
-) -> Element<'a, Message> {
-    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
-        .on_press(Message::PendingTasksShown(None));
-
-    let tasks = pending_tasks(state, day);
-    let mut list = column![
-        text(format!("Pending tasks · {}", day.format("%a %b %-d"))).size(metrics.label() + 1.0)
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
-    for task in tasks {
-        list = list.push(
-            column![
-                text(task.title.clone()).size(metrics.label()),
-                text(crate::timeblocking::task_list_name(
-                    state,
-                    &task.calendar_id
-                ))
-                .size(metrics.label() - 2.0)
-                .style(text::secondary),
-            ]
-            .width(Fill),
+/// Keep the heading's position stable when alarm setting mode changes.
+fn heading_with_alarm_hint<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let mut hint = column![];
+    if state.alarms.mode {
+        hint = hint.push(
+            text("Click a time to set an alarm. Esc cancels.")
+                .size(metrics.label() - 1.0)
+                .color(colors::ALARM),
         );
     }
-    list = list.push(
-        button(text("Close").size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .on_press(Message::PendingTasksShown(None))
-            .style(crate::ui::controls::secondary),
-    );
-
-    let card = container(scrollable(list).height(Length::Shrink))
-        .max_height(
-            (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0).max(120.0),
-        )
-        .padding(metrics.padding)
-        .width(Length::Fill)
-        .style(crate::ui::controls::surface);
-
-    let aligned = column![
-        Space::new().height(header_offset(metrics)),
-        container(card).padding(metrics.padding).width(Fill),
-    ]
-    .width(Fill);
-
-    stack![dismiss, aligned].into()
-}
-
-fn unplanned_tasks_label(count: usize) -> String {
-    if count == 1 {
-        "1 task not planned".to_owned()
-    } else {
-        format!("{count} tasks not planned")
-    }
+    column![header(state, metrics), hint].into()
 }
 
 /// The foot of the calendar while an alarm is ringing: the way to silence it.
@@ -1869,16 +1702,8 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     let mut body = column![].spacing(metrics.spacing).width(Fill);
     if is_task(event) {
         body = body
-            .push(super::links::text(
-                event.title.clone(),
-                metrics.label() + 2.0,
-            ))
-            .push(
-                text(schedule_line(event))
-                    .size(metrics.label())
-                    .style(text::secondary),
-            )
-            .push(detail_line("Calendar", calendar_name.to_owned(), metrics));
+            .push(super::timeblocking::editable_title(state, event, metrics))
+            .push(super::timeblocking::editor(state, event, metrics));
     } else {
         // An event is edited right here. There is no separate Edit button and
         // no popup: every field the app can write is in the pane.
@@ -1891,11 +1716,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     if !is_task(event) && !details.status.is_empty() {
         body = body.push(detail_line("Status", details.status.clone(), metrics));
     }
-    if is_task(event) {
-        if !details.location.is_empty() {
-            body = body.push(detail_line("Location", details.location.clone(), metrics));
-        }
-    } else {
+    if !is_task(event) {
         // A calendar event gets a place to search for and choose, the same as
         // a task does. Where Google holds a location no saved place matches,
         // that text stays above the button.
@@ -1932,7 +1753,6 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 
     // A Google Task gets a way to tick it off; events never do.
     if is_task(event) {
-        body = body.push(super::timeblocking::editor(state, event, metrics));
         buttons.push(super::timeblocking::task_actions(state, event, metrics));
     }
 

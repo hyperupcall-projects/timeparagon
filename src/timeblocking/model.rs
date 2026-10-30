@@ -19,6 +19,9 @@ pub struct Metadata {
     /// Creation instant recorded by TimeSlay; absent for tasks created elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Planning horizon in the backlog; older and newly created tasks use Someday.
+    #[serde(default)]
+    pub backlog_section: BacklogSection,
     pub block: Option<String>,
     pub minutes: u32,
     #[serde(default)]
@@ -46,6 +49,41 @@ pub struct Metadata {
     /// Where the task happens, by `config::Place::id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<u64>,
+}
+
+/// Ordered planning horizons for parked tasks. These do not change due dates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BacklogSection {
+    NextWeekOrTwo,
+    NextMonth,
+    NextQuarter,
+    NextYear,
+    #[default]
+    Someday,
+    Never,
+}
+
+impl BacklogSection {
+    pub const ALL: [Self; 6] = [
+        Self::NextWeekOrTwo,
+        Self::NextMonth,
+        Self::NextQuarter,
+        Self::NextYear,
+        Self::Someday,
+        Self::Never,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NextWeekOrTwo => "Next week or two",
+            Self::NextMonth => "Next month",
+            Self::NextQuarter => "Next quarter",
+            Self::NextYear => "Next year",
+            Self::Someday => "Someday",
+            Self::Never => "Never",
+        }
+    }
 }
 
 /// Reads either a single id (the old `project` field) or a list of ids.
@@ -247,6 +285,27 @@ pub fn overdue(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backlog_sections_default_to_someday_and_round_trip() {
+        let old: Metadata = serde_json::from_str(r#"{"minutes":30}"#).unwrap();
+        assert_eq!(old.backlog_section, BacklogSection::Someday);
+        assert_eq!(Metadata::default().backlog_section, BacklogSection::Someday);
+        for section in BacklogSection::ALL {
+            let data = crate::task_db::TaskData {
+                id: 123,
+                legacy_key: None,
+                metadata: Metadata {
+                    backlog_section: section,
+                    ..Default::default()
+                },
+            };
+            let notes = calendar::task_metadata::write("Keep these notes", &data).unwrap();
+            let read = calendar::task_metadata::read(&notes).unwrap().unwrap();
+            assert_eq!(read, data);
+            assert_eq!(calendar::task_metadata::prose(&notes), "Keep these notes");
+        }
+    }
 
     #[test]
     fn a_legacy_single_project_still_loads_and_is_saved_as_a_list() {

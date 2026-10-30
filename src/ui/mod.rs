@@ -376,9 +376,9 @@ const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Tasks", "Proj", "Note", "Mo
 /// The longest labels the menu can show, used to reserve room for the switcher
 /// whatever view it is currently displaying.
 const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
-    ["Month ▾", "Tasks", "Projects", "Note", "More", "Settings"];
+    ["Month", "Tasks", "Projects", "Note", "More", "Settings"];
 const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-    ["Month ▾", "Tasks", "Proj", "Note", "More", "Set"];
+    ["Month", "Tasks", "Proj", "Note", "More", "Set"];
 
 /// The label for the calendar view switcher: the view currently on show.
 pub fn calendar_view_label(state: &State) -> &'static str {
@@ -441,9 +441,11 @@ fn tab_fit(metrics: Metrics) -> TabFit {
             .iter()
             .map(|label| label.chars().count())
             .sum::<usize>()
-            + 6;
-        // Eight tabs, gaps within the three groups, and two gaps between them.
-        let fixed = 16.0 * pad + 5.0 * gap + 2.0 * (gap * 2.0).max(4.0);
+            // The switcher's chevron is a glyph of its own, plus a little slack.
+            + 4;
+        // Six tabs, the switcher's second half, the gaps within the three
+        // groups, and the two gaps between them.
+        let fixed = 14.0 * pad + 3.0 * gap + 2.0 * (gap * 2.0).max(4.0) + 1.0;
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_WIDEST_LABELS);
@@ -487,8 +489,14 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             Screen::Travel | Screen::Habits | Screen::KeepNotes | Screen::BrainDump
         );
 
+    let select_view = if state.monthly {
+        Message::CalendarMonthViewSelected
+    } else {
+        Message::CalendarModeSelected(state.weekly)
+    };
     let view = view_tab(
         calendar_view_label(state),
+        select_view,
         state.screen == Screen::Calendar || state.view_menu_open,
         metrics,
         fit,
@@ -631,34 +639,103 @@ fn tab<'a>(
     .into()
 }
 
-/// The single Day/Week/Month switcher: the current view's name with a chevron
-/// showing that it opens a dropdown.
+/// The single Day/Week/Month switcher. Its two halves share one button shape:
+/// the name selects the current view, while the chevron opens the dropdown.
 fn view_tab<'a>(
     label: &'a str,
+    select_view: Message,
     active: bool,
     metrics: &Metrics,
     fit: TabFit,
 ) -> Element<'a, Message> {
-    button(
-        row![
-            text(label)
-                .size(fit.size)
-                .wrapping(text::Wrapping::None)
-                .center(),
-            text("▾").size(fit.size).center(),
-        ]
-        .spacing(2.0)
-        .align_y(Center),
+    let name = button(
+        text(label)
+            .size(fit.size)
+            .wrapping(text::Wrapping::None)
+            .center(),
     )
     .height(tab_height(metrics))
     .padding(Padding::from([0.0, fit.pad]))
-    .on_press(Message::ViewMenuToggled)
-    .style(if active {
-        crate::ui::controls::primary
-    } else {
-        crate::ui::controls::secondary
-    })
-    .into()
+    .on_press(select_view)
+    .style(view_half_style(active));
+
+    let arrow = button(text("▾").size(fit.size).center())
+        .height(tab_height(metrics))
+        .padding(Padding::from([0.0, fit.pad.max(4.0)]))
+        .on_press(Message::ViewMenuToggled)
+        .style(view_half_style(active));
+
+    let divider = container(Space::new().height(tab_height(metrics) * 0.6))
+        .width(1.0)
+        .style(|theme: &iced::Theme| container::Style {
+            background: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .strong
+                    .color
+                    .scale_alpha(0.35)
+                    .into(),
+            ),
+            ..Default::default()
+        });
+
+    container(row![name, divider, arrow].spacing(0.0).align_y(Center))
+        .clip(true)
+        .style(view_button_style(active))
+        .into()
+}
+
+/// The shared background, border and shadow behind both halves of the switcher.
+fn view_button_style(active: bool) -> impl Fn(&iced::Theme) -> container::Style {
+    move |theme: &iced::Theme| {
+        let palette = theme.extended_palette();
+        let base = if active {
+            palette.primary.base
+        } else {
+            palette.secondary.base
+        };
+
+        container::Style {
+            background: Some(base.color.into()),
+            text_color: Some(base.text),
+            border: iced::Border {
+                color: palette.background.strong.color.scale_alpha(0.65),
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            shadow: iced::Shadow {
+                color: iced::Color::BLACK.scale_alpha(0.17),
+                offset: iced::Vector::new(0.0, 2.5),
+                blur_radius: 4.5,
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// A transparent button half that tints when hovered or pressed, so each side
+/// of the switcher responds on its own without breaking the shared shape.
+fn view_half_style(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |theme: &iced::Theme, status: button::Status| {
+        let palette = theme.extended_palette();
+        let base = if active {
+            palette.primary.base
+        } else {
+            palette.secondary.base
+        };
+        let background = match status {
+            button::Status::Hovered => Some(iced::Color::WHITE.scale_alpha(0.08).into()),
+            button::Status::Pressed => Some(iced::Color::BLACK.scale_alpha(0.10).into()),
+            _ => None,
+        };
+
+        button::Style {
+            background,
+            text_color: base.text,
+            ..Default::default()
+        }
+    }
 }
 
 /// The calendar view switcher's menu: Day, Week and Month, in a card below the

@@ -230,24 +230,6 @@ button {
     flex: 1;
 }
 
-.sync {
-    text-align: right;
-    margin-right: 4px;
-    white-space: nowrap;
-}
-
-.sync-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-soft);
-}
-
-.sync-detail {
-    font-size: 9.5px;
-    color: var(--dim);
-    letter-spacing: 0.04em;
-}
-
 .controls {
     display: flex;
     align-items: center;
@@ -1166,22 +1148,6 @@ button {
         font-size: 10px;
     }
 
-    .sync {
-        order: 5;
-        width: 100%;
-        margin: 0;
-        text-align: left;
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-    }
-
-    .sync-detail {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
     .controls {
         margin-left: auto;
         gap: 5px;
@@ -1300,7 +1266,6 @@ button {
 
 @media (max-width: 420px) {
     .brand-sub,
-    .sync-detail,
     .theme-label {
         display: none;
     }

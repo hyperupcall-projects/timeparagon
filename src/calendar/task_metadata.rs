@@ -51,6 +51,7 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
     let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
     let legacy_key = fields.remove("legacy_key").unwrap_or(Value::Null);
     let allowed = [
+        "backlog_section",
         "block",
         "minutes",
         "order",
@@ -264,6 +265,7 @@ mod tests {
                         .unwrap()
                         .to_utc(),
                 ),
+                backlog_section: crate::timeblocking::BacklogSection::NextQuarter,
                 minutes: 45,
                 block: Some("calendar/block".into()),
                 labels: vec!["two\nlines: yes".into()],

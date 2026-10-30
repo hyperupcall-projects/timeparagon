@@ -723,12 +723,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .size(metrics.label())
                 .style(text::danger),
         );
-    } else {
-        section = section.push(
-            text(state.calendar.status_line())
-                .size(metrics.label())
-                .style(text::secondary),
-        );
     }
 
     let resync_label = if state.calendar.is_busy() {

@@ -19,7 +19,7 @@ But you'll typically plan the day within the larger panel:
 
 ![Day view](./assets/timeslay-day.png)
 
-We have week and month views, just like any other calendar app:
+There's week and month views, just like any other calendar app:
 
 ![Week view](./assets/timeslay-week.png)
 
@@ -31,22 +31,25 @@ We have week and month views, just like any other calendar app:
 - Independently reserve screen space for the dock and side panel on Wayland, using the “Reserve screen space” switch in each Settings section. Popups and tooltips do not increase the reservation.
 - Intuitive to use (WIP).
 - View your time:
-	- Day view
-	- Week view
-	- Month view
-	- Custom views for week and month view. (TODO)
-		- Based on query; omit private event details. (TODO)
+	- By day
+	- By week
+	- By month
+	- Including a custom sort (TODO).
+		- Based on search or query; omit private event details (TODO).
 - Manage your time:
 	- Events
+		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, and project name.
 		- Integrates with meeting software like Zoom and Google Meet.
 		- Integrates with guest/event/RSVP going/not going feature (TODO)
-		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP)
+		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP).
 	- Time blocks
+		- These are standard calendar events with a special interface to easily order tasks within them; great for deep work.
 		- Assign tasks to time blocks.
 		- Brain dump.
-		- Pomodoro timer in the time block view: configurable work/break lengths, separate elapsed totals, and automatic task stop/resume at phase boundaries. Task tracking also works independently. Pause freezes only the Pomodoro clock; Reset clears its totals. The shared timer continues across blocks and while the popup is closed.
+		- Pomodoro timer.
 	- Habits
-		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)a
+		- These are standard calendar events that are colored differently.
+		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
 - Manage tasks:
 	- Create tasks:
 		- With Todoist-like syntax
@@ -54,19 +57,32 @@ We have week and month views, just like any other calendar app:
 		- From Gmail URLs
 		- From a web page with the browser extension
 		- From a Slack message with the Slack app
-	- Triage tasks so they're discoverable later.
-	- Workflow to manage tasks not done in days prior (TODO)
-	- Workflow to organize/manage pending tasks (TODO)
-	- Send low-priority tasks to a backlog.
-- Projects (TODO)
-	- View the events, tasks, and notes for any project. (TODO)
-	- List view, kanban view, calendar view (TODO)
-	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
-- Objectives & Goals (TODO)
+	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
+	- Inbox section for new tasks that are yet to be triaged.
+	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled (TODO).
+	- Segmented backlog section for deferring tasks to next week, next month, and so on (WIP).
+	- Manually assign tasks to time blocks.
+	- Flexibly group and order tasks without anchoring to any particular start time; automatically project these tasks onto available time blocks (TODO).
+	- Handle long-running or multi-step/subtasks (TODO).
+		- Tasks that may be done over multiple days/time blocks (TODO).
+		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
+		- But, also keep track of subtasks (TODO)?
+- Notes
+	- Associate notes and files with events, tasks, goals, objectives, and projects.
+- Autolaunchers
+	- Save configure presets for launching and positioning application windows (TODO).
+- Goals
+	- Track long-term goals (year, decade).
+- Objectives (TODO)
+	- Implement your goals in a SMART way.
 	- Tasks, certain amount of time per project. (TODO)
 	- Day, week, month, quarter, year. (TODO)
-	- SMART goals (TODO)
-- Uses Google Calendar, Tasks, and Drive to store events, tasks, and app data.
+- Projects (TODO)
+	- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
+	- View as list, kanban, or calendar (TODO).
+	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
+- Stores data in Google Calendar, Tasks and Drive to get cross-device syncing for free.
+	- Uses local database as cache to keep UI performant/responsive.
 
 ## Usage
 

@@ -41,6 +41,10 @@ pub struct Workspace {
     pub estimate_error: Option<String>,
     /// The name being edited for the open task, before it is saved.
     pub title: String,
+    pub editing_title: bool,
+    pub editing_due_time: bool,
+    pub editing_deadline_time: bool,
+    pub deadline_time: String,
     pub title_error: Option<String>,
     /// The task whose rename is in flight, so a failure stays on the name field.
     pub renaming: Option<String>,
@@ -60,9 +64,7 @@ pub struct Workspace {
     /// card can follow it. Only meaningful while `dragging` is set.
     pub drag_pointer: Option<iced::Point>,
     pub busy: std::collections::HashSet<String>,
-    /// A task whose project or priority is being saved. Saving those leaves
-    /// the details open, since they are picked with a click and the next one
-    /// often follows.
+    /// A task whose fields are being saved without closing its details pane.
     pub keep_open: Option<String>,
     /// Text that narrows the backlog by task title or list name.
     pub backlog_query: String,
@@ -100,6 +102,11 @@ pub enum Action {
     EndTime(String),
     ScheduleEntered(String),
     SaveDeadline(String),
+    EditTitle,
+    EditScheduleTime(bool),
+    DeadlineTime(String),
+    DeadlineDay(String),
+    DeadlineWithTime(String),
     Schedule(String, DateTime<Local>, DateTime<Local>),
     DropTime(DateTime<Local>),
     RefreshBlock(String),
@@ -123,6 +130,9 @@ pub enum Action {
     Date(String),
     SaveEstimate(String),
     Backlog(String),
+    /// Drop the dragged task into a backlog planning horizon.
+    DropBacklogSection(BacklogSection),
+    SetBacklogSection(String, BacklogSection),
     /// Confirm a task out of the Inbox and onto the triaged list.
     Triage(String),
     /// Remove a task from its block without deleting it or moving lists.
@@ -667,6 +677,32 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 }
             };
         }
+        Action::EditTitle => {
+            state.timeblocking.editing_title = true;
+            return iced::widget::operation::focus(iced::widget::Id::new("task-title"));
+        }
+        Action::EditScheduleTime(deadline) => {
+            if deadline {
+                state.timeblocking.editing_deadline_time =
+                    !state.timeblocking.editing_deadline_time;
+            } else {
+                state.timeblocking.editing_due_time = !state.timeblocking.editing_due_time;
+            }
+            return Task::none();
+        }
+        Action::DeadlineTime(value) => {
+            state.timeblocking.deadline_time = value;
+            return Task::none();
+        }
+        Action::DeadlineDay(id) => {
+            state.timeblocking.deadline.truncate(10);
+            return update(state, Action::SaveDeadline(id));
+        }
+        Action::DeadlineWithTime(id) => {
+            let day = state.timeblocking.deadline.get(..10).unwrap_or("");
+            state.timeblocking.deadline = format!("{day} {}", state.timeblocking.deadline_time);
+            return update(state, Action::SaveDeadline(id));
+        }
         Action::Deadline(value) => {
             state.timeblocking.deadline = value;
             return Task::none();
@@ -801,7 +837,37 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             return Task::none();
         }
+        Action::DropBacklogSection(section) => {
+            let Some(id) = state.timeblocking.dragging.take() else {
+                return Task::none();
+            };
+            state.timeblocking.drag_pointer = None;
+            return update(state, Action::SetBacklogSection(id, section));
+        }
+        Action::SetBacklogSection(id, section) => {
+            let Some(task) = state.calendar.event(&id).filter(|task| {
+                task.is_task()
+                    && !task.completed
+                    && metadata(task).block.is_none()
+                    && is_backlog_list(state, &task.calendar_id)
+            }) else {
+                return Task::none();
+            };
+            if metadata(task).backlog_section == section {
+                return Task::none();
+            }
+            (id, Change::BacklogSection(section))
+        }
         Action::DropTask(target) => {
+            if state.screen == crate::app::Screen::Backlog {
+                let Some(task) = state.calendar.event(&target) else {
+                    return Task::none();
+                };
+                return update(
+                    state,
+                    Action::DropBacklogSection(metadata(task).backlog_section),
+                );
+            }
             let Some(id) = state.timeblocking.dragging.take() else {
                 return Task::none();
             };
@@ -874,6 +940,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     if renaming {
                         state.timeblocking.renaming = None;
                         state.timeblocking.title_error = None;
+                        state.timeblocking.editing_title = false;
                     }
                     if id == ADDING_TODO {
                         state.timeblocking.todo_draft.clear();
@@ -890,6 +957,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                             state.config.calendar.time_block_list =
                                 Some(format!("tasks:{}", link.list_id));
                         }
+                    }
+                    if keep_open && state.calendar.open_event.as_deref() == Some(&id) {
+                        state.timeblocking.editing_due_time = false;
+                        state.timeblocking.editing_deadline_time = false;
                     }
                     let key = task_key(&event);
                     state
@@ -951,6 +1022,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Backlog(id) => (id, Change::Backlog),
         Action::Triage(id) => (id, Change::Triaged),
         Action::Unassign(id) => (id, Change::Unassign),
+        Action::Reschedule(id) if state.timeblocking.date.is_empty() => (id, Change::ClearSchedule),
         Action::Reschedule(id) => {
             let Ok(day) = NaiveDate::parse_from_str(&state.timeblocking.date, "%Y-%m-%d") else {
                 state.calendar.error = Some("Enter a date as YYYY-MM-DD".into());
@@ -991,6 +1063,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
             if task.title == title {
                 state.timeblocking.title_error = None;
+                state.timeblocking.editing_title = false;
                 return Task::none();
             }
             state.timeblocking.title_error = None;
@@ -1139,7 +1212,16 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     }
     if matches!(
         change,
-        Change::Projects(_) | Change::Labels(_) | Change::Priority(_) | Change::Location(_)
+        Change::Projects(_)
+            | Change::Labels(_)
+            | Change::BacklogSection(_)
+            | Change::Priority(_)
+            | Change::Location(_)
+            | Change::Title(_)
+            | Change::Deadline(_)
+            | Change::Day(_)
+            | Change::Time(_, _)
+            | Change::ClearSchedule
     ) {
         state.timeblocking.keep_open = Some(id.clone());
     }
@@ -1342,10 +1424,12 @@ enum Change {
     Location(Option<u64>),
     Deadline(Option<calendar::deadline::Deadline>),
     Backlog,
+    BacklogSection(BacklogSection),
     /// Confirm a fully filled-in task and move it to the triaged list.
     Triaged,
     Unassign,
     Day(NaiveDate),
+    ClearSchedule,
     Block(String, DateTime<Local>, DateTime<Local>),
     Reorder(Option<String>, i64, NaiveDate),
     Time(DateTime<Local>, DateTime<Local>),
@@ -1506,6 +1590,11 @@ fn save(
             calendar::task_metadata::save(&access(settings)?, &task, &data)?;
             database.save(&task, &data)?;
         }
+        Change::BacklogSection(section) => {
+            data.metadata.backlog_section = section;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
+            database.save(&task, &data)?;
+        }
         Change::Priority(priority) => {
             data.metadata.priority = priority;
             calendar::task_metadata::save(&access(settings)?, &task, &data)?;
@@ -1538,9 +1627,14 @@ fn save(
                 .map_err(|e| e.message)?;
             }
         }
-        Change::Backlog | Change::Triaged | Change::Unassign | Change::Day(_) => {
+        Change::Backlog
+        | Change::Triaged
+        | Change::Unassign
+        | Change::Day(_)
+        | Change::ClearSchedule => {
             let (day, destination) = match change {
                 Change::Day(day) => (Some(day), None),
+                Change::ClearSchedule => (None, None),
                 Change::Unassign => (Some(task.start.date_naive()), None),
                 Change::Triaged => (None, Some(Destination::Triaged)),
                 _ => (None, Some(Destination::Backlog)),
@@ -2205,6 +2299,37 @@ mod tests {
     }
 
     #[test]
+    fn clearing_the_due_date_removes_the_calendar_event_without_moving_lists() {
+        let mut task = calendar::sample_snapshot().events.remove(0);
+        task.id = "task:clear".into();
+        task.calendar_id = "tasks:has-time".into();
+        task.details.description = "DEADLINE: 2026-12-31".into();
+        let mut database =
+            crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+        let mut data = database.import(&task).unwrap();
+        data.metadata.schedule =
+            Some(calendar::scheduled::Link::new("calendar".into(), &task).unwrap());
+        let remote = BacklogGoogle::default();
+        unschedule_with(
+            &mut task,
+            &mut data,
+            &mut database,
+            &CalendarSettings::default(),
+            &remote,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(task.id, "task:clear");
+        assert_eq!(task.calendar_id, "tasks:has-time");
+        assert_eq!(task.start.date_naive(), UNDATED);
+        assert!(task.all_day);
+        assert!(data.metadata.schedule.is_none());
+        assert_eq!(task.details.description, "DEADLINE: 2026-12-31");
+        assert_eq!(*remote.calls.borrow(), ["remove", "day:clear:None"]);
+    }
+
+    #[test]
     fn a_day_only_change_keeps_the_google_tasks_list() {
         let mut task = calendar::sample_snapshot().events.remove(0);
         task.id = "task:original-task".into();
@@ -2372,6 +2497,31 @@ mod tests {
         state.config.calendar.backlog_list = Some("tasks:park".into());
         assert!(is_backlog_list(&state, "tasks:park"));
         assert!(!is_backlog_list(&state, "tasks:Backlog"));
+    }
+
+    #[test]
+    fn deadline_day_removes_time_and_time_save_requires_a_date() {
+        let mut state = estimate_state();
+        state.timeblocking.deadline = "2026-10-29 14:45".into();
+        let _ = update(&mut state, Action::DeadlineDay("task:deep".into()));
+        assert_eq!(state.timeblocking.deadline, "2026-10-29");
+        assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
+
+        let mut state = estimate_state();
+        state.timeblocking.deadline_time = "14:45".into();
+        let _ = update(&mut state, Action::DeadlineWithTime("task:deep".into()));
+        assert!(state.calendar.error.is_some());
+        assert!(state.timeblocking.busy.is_empty());
+    }
+
+    #[test]
+    fn clearing_a_due_date_keeps_the_editor_and_the_task_list() {
+        let mut state = estimate_state();
+        state.timeblocking.date.clear();
+        let _ = update(&mut state, Action::Reschedule("task:deep".into()));
+        assert!(state.calendar.error.is_none());
+        assert!(state.timeblocking.busy.contains("task:deep"));
+        assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
     }
 
     #[test]

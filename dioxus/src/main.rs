@@ -125,7 +125,6 @@ fn App() -> Element {
     // from another device through Google Drive.
     let mut config = use_signal(day::load_config);
     let settings = config.read().calendar.clone();
-    let mut config_status = use_signal(config_sync::status);
     let config_hint = timeslay_core::config::config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "config.toml".to_owned());
@@ -237,11 +236,6 @@ fn App() -> Element {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-            let status = config_sync::status();
-            if *config_status.peek() != status {
-                config_status.set(status);
-            }
-
             let generation = config_sync::generation();
             if generation != seen {
                 seen = generation;
@@ -301,24 +295,6 @@ fn App() -> Element {
 
     let heading = calendar::day_heading(selected_day, today);
     let stats = model.as_ref().map(header_stats).unwrap_or_default();
-    let status = if pending {
-        "Syncing…".to_owned()
-    } else if let Some(model) = &model {
-        format!("Synced {}", calendar::clock_label(model.synced_at))
-    } else if fetch_error.is_some() {
-        "Could not sync".to_owned()
-    } else if !signed_in() {
-        "Not connected".to_owned()
-    } else {
-        "Not synced yet".to_owned()
-    };
-
-    let config_summary = config_status().summary();
-    let config_detail = match config_status() {
-        config_sync::Status::Failed(error) => error,
-        _ => "The config is kept in Google Drive's hidden app folder".to_owned(),
-    };
-
     let prev_day = move |_| {
         current_day.set(day::shift_day(current_day(), -1));
         selected_block.set(None);
@@ -354,10 +330,6 @@ fn App() -> Element {
                 div { class: "day-sub", "{selected_day.year()} · {stats}" }
             }
             div { class: "spacer" }
-            div { class: "sync",
-                div { class: "sync-label", "{status}" }
-                div { class: "sync-detail", title: "{config_detail}", "Google Calendar + Google Tasks · {config_summary}" }
-            }
             div { class: "controls",
                 button {
                     class: "btn theme-toggle",

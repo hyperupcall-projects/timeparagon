@@ -152,7 +152,6 @@ pub fn shift_day(day: NaiveDate, days: i64) -> NaiveDate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DayModel {
     pub day: NaiveDate,
-    pub synced_at: DateTime<Local>,
     pub notice: Option<String>,
     /// Timed events and time blocks, already placed in columns.
     pub timed: Vec<TimedEvent>,
@@ -290,7 +289,6 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 
     DayModel {
         day,
-        synced_at: snapshot.fetched_at,
         notice: snapshot.notice.clone(),
         timed,
         all_day,

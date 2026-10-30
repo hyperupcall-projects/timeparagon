@@ -573,8 +573,6 @@ pub struct Store {
     pub color_editor: Option<String>,
     /// Whether the month picker is showing over the day view.
     pub month_open: bool,
-    /// The day whose pending Google Tasks are listed in a popup.
-    pub pending_open: Option<NaiveDate>,
     /// The first day of the month the picker is showing.
     pub month: NaiveDate,
     /// Whether the day in view should follow the real today. Cleared once the
@@ -623,7 +621,6 @@ impl Store {
             details_below: false,
             color_editor: None,
             month_open: false,
-            pending_open: None,
             month: first_of_month(day),
             follow_today: true,
             pending: HashMap::new(),
@@ -658,7 +655,6 @@ impl Store {
             details_below: false,
             color_editor: None,
             month_open: false,
-            pending_open: None,
             month: first_of_month(snapshot.day),
             // A snapshot is pinned to the day it was fetched for, so it does
             // not follow the clock until the user asks it to.
@@ -1392,17 +1388,6 @@ impl Store {
             .filter(|event| crate::timeblocking::is_block(event, settings))
             .map(crate::timeblocking::block_key)
             .collect()
-    }
-
-    pub fn status_line(&self) -> String {
-        match (self.sync, self.error.as_deref(), self.last_sync) {
-            (SyncState::Connecting, _, _) => "Signing in…".to_owned(),
-            (SyncState::Syncing, _, _) => "Syncing…".to_owned(),
-            (_, Some(error), _) => error.to_owned(),
-            (_, _, Some(when)) => format!("Synced {}", clock_label(when)),
-            _ if self.is_signed_in() => "Not synced yet".to_owned(),
-            _ => "Not connected".to_owned(),
-        }
     }
 }
 

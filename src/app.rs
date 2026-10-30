@@ -491,8 +491,6 @@ pub enum Message {
     CalendarDaySelected(chrono::NaiveDate),
     /// Open or close the month picker.
     CalendarMonthToggled,
-    /// Opens the pending-tasks popup for a day, or closes it.
-    PendingTasksShown(Option<chrono::NaiveDate>),
     /// Move the month picker by a number of months, positive or negative.
     CalendarMonthShift(i32),
 
@@ -2084,11 +2082,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Ignored => Task::none(),
 
-        Message::PendingTasksShown(day) => {
-            state.calendar.pending_open = day;
-            Task::none()
-        }
-
         Message::CalendarMenuToggled => {
             state.calendar.menu_open = !state.calendar.menu_open;
             // Dismissing the menu also puts away any open color picker, so it
@@ -2271,16 +2264,25 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     state.calendar.edit_draft = Some(draft);
                 }
                 if is_task {
+                    state.timeblocking.editing_title = false;
+                    state.timeblocking.editing_due_time = false;
+                    state.timeblocking.editing_deadline_time = false;
                     state.timeblocking.title = event.title.clone();
                     state.timeblocking.title_error = None;
                     state.timeblocking.date =
                         if event.start.date_naive() == crate::timeblocking::UNDATED {
-                            state.calendar.day.to_string()
+                            String::new()
                         } else {
                             event.start.date_naive().to_string()
                         };
                     state.timeblocking.deadline =
                         calendar::deadline::input_text(&event.details.description);
+                    state.timeblocking.deadline_time = state
+                        .timeblocking
+                        .deadline
+                        .get(11..)
+                        .unwrap_or("09:00")
+                        .to_owned();
                     state.timeblocking.start_time = if event.all_day {
                         "09:00".into()
                     } else {

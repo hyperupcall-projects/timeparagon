@@ -822,33 +822,39 @@ mod tests {
     }
 
     #[test]
-    fn the_details_pane_offers_schedule_day_and_a_month_to_pick_from() {
+    fn the_details_pane_uses_the_clearable_date_picker_and_schedules_the_chosen_day() {
         let mut state = state_with_task("");
         let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
         assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
         assert!(state.details_pane_open);
+        assert!(state.timeblocking.date.is_empty());
 
+        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        assert!(ui.find("Name").is_err());
+        assert!(ui.find("Rename").is_err());
+        assert!(ui.find("Scheduled day and time").is_err());
+        ui.click("Choose date").unwrap();
+        let picker = ui
+            .into_messages()
+            .find_map(|m| match m {
+                Message::Picker(crate::ui::controls::Action::Open(p)) => Some(p),
+                _ => None,
+            })
+            .expect("date picker opens");
+        assert!(picker.optional);
+        let _ = crate::ui::controls::update(&mut state, crate::ui::controls::Action::Open(picker));
+        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
+        assert!(ui.find("Clear").is_ok());
+        ui.click("15").unwrap();
+        assert!(ui.into_messages().any(|m| matches!(m, Message::Picker(crate::ui::controls::Action::Select(day)) if day.day() == 15)));
+
+        state.picker = None;
+        let _ = tb::update(&mut state, tb::Action::Date("2026-10-15".into()));
         let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
         ui.click("Schedule Day").unwrap();
-        assert!(
-            ui.into_messages()
-                .any(|m| matches!(m, Message::Inbox(Action::TogglePicker(id)) if id == "task:one"))
-        );
-
-        let _ = crate::app::update(
-            &mut state,
-            Message::Inbox(Action::TogglePicker("task:one".into())),
-        );
-        let mut ui = simulator_of(&state, Size::new(900.0, 2400.0));
-        // The 15th is in no month's margin, so there is only one such button.
-        ui.click("15").unwrap();
-        let messages: Vec<_> = ui.into_messages().collect();
-        let today = calendar::day_at(Local::now(), 0);
-        let fifteenth = calendar::first_of_month(today).with_day(15).unwrap();
-        assert!(messages.iter().any(|m| matches!(
-            m,
-            Message::Inbox(Action::ScheduleOn(id, day)) if id == "task:one" && *day == fifteenth
-        )));
+        assert!(ui.into_messages().any(
+            |m| matches!(m, Message::TimeBlocking(tb::Action::Reschedule(id)) if id == "task:one")
+        ));
     }
 
     #[test]

@@ -248,88 +248,182 @@ pub(super) fn task_title<'a>(task: &'a Event, size: f32) -> Element<'a, Message>
             .into()
     }
 }
-pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+/// The title occupies its own field only while it is being edited.
+pub(super) fn editable_title<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
     let busy = state.timeblocking.busy.contains(&task.id);
-    let mut name = text_input("Task name", &state.timeblocking.title).size(metrics.label());
-    let mut rename = button(text(if busy { "Renaming…" } else { "Rename" }).size(metrics.label()));
-    let mut save_deadline = button(text("Save deadline").size(metrics.label()));
-    let mut schedule = button(text("Schedule time").size(metrics.label()));
-    let mut day = button(text("Set day only").size(metrics.label())).style(button::text);
-    if !busy {
-        let id = task.id.clone();
-        name = name
-            .on_input(|value| msg(Action::Title(value)))
-            .on_submit(msg(Action::SaveTitle(id.clone())));
-        rename = rename.on_press(msg(Action::SaveTitle(id)));
-        save_deadline = save_deadline.on_press(msg(Action::SaveDeadline(task.id.clone())));
-        schedule = schedule.on_press(msg(Action::ScheduleEntered(task.id.clone())));
-        day = day.on_press(msg(Action::Reschedule(task.id.clone())));
+    let size = metrics.label() + 6.0;
+    let title: Element<'a, Message> = if state.timeblocking.editing_title {
+        let mut input = text_input("Task name", &state.timeblocking.title)
+            .id(iced::widget::Id::new("task-title"))
+            .size(size);
+        if !busy {
+            input = input
+                .on_input(|v| msg(Action::Title(v)))
+                .on_submit(msg(Action::SaveTitle(task.id.clone())));
+        }
+        input.into()
+    } else {
+        let mut title = button(text(&task.title).size(size).font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        }))
+        .padding(0)
+        .width(Fill)
+        .style(button::text);
+        if !busy {
+            title = title.on_press(msg(Action::EditTitle));
+        }
+        title.into()
+    };
+    let mut body = column![title].spacing(4);
+    if state.timeblocking.editing_title {
+        body = body.push(
+            text("Press Enter to save")
+                .size(metrics.label() - 2.0)
+                .style(text::secondary),
+        );
     }
-    let mut body = column![
-        text("Name").size(metrics.label()).style(text::secondary),
-        name,
-        rename,
-    ]
-    .spacing(8);
     if let Some(error) = &state.timeblocking.title_error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
-    body = body.push(estimate_button(state, task, metrics.label()));
-    body = body.push(project_field(state, task, metrics));
-    body = body.push(labels_field(state, task, metrics));
-    body = body.push(priority_field(state, task, metrics));
-    body = body.push(location_field(state, task, metrics));
-    body = body.push(
-        text("Deadline")
+    body.into()
+}
+
+pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+    let busy = state.timeblocking.busy.contains(&task.id);
+    let mut estimate =
+        button(text(format!("{}m", tb::metadata(task).minutes)).size(metrics.label()))
+            .style(super::controls::secondary)
+            .width(Fill);
+    if !busy {
+        estimate = estimate.on_press(msg(Action::EditEstimate(task.id.clone())));
+    }
+    column![
+        project_field(state, task, metrics),
+        column![field_label("Estimate", metrics), estimate].spacing(6),
+        date_field(state, task, metrics, false),
+        date_field(state, task, metrics, true),
+        labels_field(state, task, metrics),
+        priority_field(state, task, metrics),
+        location_field(state, task, metrics),
+    ]
+    .spacing(12)
+    .into()
+}
+
+/// Due date and deadline share the same layout and optional date picker.
+fn date_field<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+    deadline: bool,
+) -> Element<'a, Message> {
+    let busy = state.timeblocking.busy.contains(&task.id);
+    let value = if deadline {
+        &state.timeblocking.deadline
+    } else {
+        &state.timeblocking.date
+    };
+    let mut day = button(
+        text("Schedule Day")
             .size(metrics.label())
-            .style(text::secondary),
-    );
-    body = body.push(super::controls::date(
-        &state.timeblocking.deadline,
-        true,
-        true,
-        !busy,
-        metrics.label(),
-        |v| msg(Action::Deadline(v)),
-    ));
-    body = body.push(save_deadline);
-    body = body.push(
-        text("Scheduled day and time")
+            .center()
+            .width(Fill),
+    )
+    .width(Fill);
+    let mut time = button(
+        text("Schedule Time")
             .size(metrics.label())
-            .style(text::secondary),
-    );
-    body = body.push(super::controls::date(
-        &state.timeblocking.date,
-        false,
-        false,
-        true,
-        metrics.label(),
-        |v| msg(Action::Date(v)),
-    ));
-    body = body.push(
-        row![
-            container(super::controls::time(
-                &state.timeblocking.start_time,
-                true,
+            .center()
+            .width(Fill),
+    )
+    .width(Fill);
+    let mut reset = button(
+        text("Reset Time")
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .style(super::controls::secondary);
+    if !busy {
+        day = day.on_press(msg(if deadline {
+            Action::DeadlineDay(task.id.clone())
+        } else {
+            Action::Reschedule(task.id.clone())
+        }));
+        time = time.on_press(msg(Action::EditScheduleTime(deadline)));
+        reset = reset.on_press(msg(if deadline {
+            Action::DeadlineDay(task.id.clone())
+        } else {
+            Action::Reschedule(task.id.clone())
+        }));
+    }
+    let mut body = column![
+        field_label(if deadline { "Deadline" } else { "Due Date" }, metrics),
+        super::controls::date(value, true, false, !busy, metrics.label(), move |v| msg(
+            if deadline {
+                Action::Deadline(v)
+            } else {
+                Action::Date(v)
+            }
+        )),
+        day,
+        row![time, reset].spacing(8),
+    ]
+    .spacing(6)
+    .width(Fill);
+    let editing = if deadline {
+        state.timeblocking.editing_deadline_time
+    } else {
+        state.timeblocking.editing_due_time
+    };
+    if editing {
+        let times: Element<'a, Message> = if deadline {
+            super::controls::time(
+                &state.timeblocking.deadline_time,
+                !busy,
                 metrics.label(),
-                |v| msg(Action::StartTime(v))
-            )),
-            container(super::controls::time(
-                &state.timeblocking.end_time,
-                true,
-                metrics.label(),
-                |v| msg(Action::EndTime(v))
-            ))
-        ]
-        .spacing(6),
-    );
-    // Right under "Schedule time": give the task a day from a month calendar.
-    body = body
-        .push(schedule)
-        .push(super::inbox::day_picker(state, task, metrics))
-        .push(day);
-    if let Err(error) = crate::calendar::deadline::check(&task.details.description) {
-        body = body.push(text(error).size(metrics.label()).style(text::danger));
+                |v| msg(Action::DeadlineTime(v)),
+            )
+        } else {
+            row![
+                container(super::controls::time(
+                    &state.timeblocking.start_time,
+                    !busy,
+                    metrics.label(),
+                    |v| msg(Action::StartTime(v))
+                ))
+                .width(Fill),
+                container(super::controls::time(
+                    &state.timeblocking.end_time,
+                    !busy,
+                    metrics.label(),
+                    |v| msg(Action::EndTime(v))
+                ))
+                .width(Fill),
+            ]
+            .spacing(6)
+            .into()
+        };
+        let mut save = button(text("Save time").size(metrics.label())).width(Fill);
+        if !busy {
+            save = save.on_press(msg(if deadline {
+                Action::DeadlineWithTime(task.id.clone())
+            } else {
+                Action::ScheduleEntered(task.id.clone())
+            }));
+        }
+        body = body.push(times).push(save);
+    }
+    if deadline {
+        if let Err(error) = crate::calendar::deadline::check(&task.details.description) {
+            body = body.push(text(error).size(metrics.label()).style(text::danger));
+        }
     }
     body.into()
 }
@@ -337,6 +431,10 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
     text(label)
         .size(metrics.label())
+        .font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        })
         .style(text::secondary)
         .into()
 }
@@ -940,8 +1038,37 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
     } else if shown.is_empty() {
         body = body.push(text("No matching tasks").style(text::secondary));
     }
-    for task in shown {
-        body = body.push(task_row(state, task, metrics, true));
+    for section in tb::BacklogSection::ALL {
+        let mut contents = column![text(section.label()).size(metrics.label())].spacing(6);
+        for task in shown
+            .iter()
+            .copied()
+            .filter(|task| tb::metadata(task).backlog_section == section)
+        {
+            contents = contents.push(task_row(state, task, metrics, true));
+        }
+        let dragging = state.timeblocking.dragging.is_some();
+        let section_card =
+            container(contents)
+                .padding(8)
+                .width(Fill)
+                .style(move |theme: &iced::Theme| {
+                    let palette = theme.extended_palette();
+                    container::Style {
+                        border: iced::Border {
+                            color: if dragging {
+                                palette.primary.base.color
+                            } else {
+                                palette.background.strong.color
+                            },
+                            width: 1.0,
+                            radius: 5.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                });
+        body = body
+            .push(mouse_area(section_card).on_release(msg(Action::DropBacklogSection(section))));
     }
     let content: Element<'a, Message> = container(scrollable(body))
         .padding(metrics.padding)
@@ -1047,6 +1174,73 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
 mod tests {
     use super::*;
     use iced::{Point, Size, mouse};
+
+    #[test]
+    fn task_title_click_starts_inline_editing() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+        let metrics = Metrics::of(Size::new(450.0, 900.0));
+        let task = state.calendar.event("task:deep").unwrap();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(450.0, 900.0),
+            editable_title(&state, task, &metrics),
+        );
+        ui.click(task.title.as_str()).unwrap();
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::TimeBlocking(Action::EditTitle)))
+        );
+    }
+
+    #[test]
+    fn both_date_sections_offer_clear_and_matching_scheduling_actions() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+        state.timeblocking.date = "2026-10-29".into();
+        state.timeblocking.deadline = "2026-10-30".into();
+        let metrics = Metrics::of(Size::new(450.0, 900.0));
+        for deadline in [false, true] {
+            let task = state.calendar.event("task:deep").unwrap();
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                Size::new(450.0, 900.0),
+                date_field(&state, task, &metrics, deadline),
+            );
+            assert!(
+                ui.find(if deadline { "Deadline" } else { "Due Date" })
+                    .is_ok()
+            );
+            assert!(ui.find("Schedule Day").is_ok());
+            assert!(ui.find("Reset Time").is_ok());
+            ui.click("Schedule Time").unwrap();
+            assert!(ui.into_messages().any(|m| matches!(m, Message::TimeBlocking(Action::EditScheduleTime(value)) if value == deadline)));
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                Size::new(450.0, 900.0),
+                date_field(&state, task, &metrics, deadline),
+            );
+            ui.click(if deadline {
+                "Oct 30, 2026"
+            } else {
+                "Oct 29, 2026"
+            })
+            .unwrap();
+            assert!(ui.into_messages().any(|m| matches!(m, Message::Picker(super::super::controls::Action::Open(p)) if p.optional)));
+        }
+    }
 
     #[test]
     fn estimate_popup_covers_the_time_block_view_at_narrow_and_wide_widths() {
