@@ -15,11 +15,13 @@
 // link handling and the running-app IPC are shared.
 
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { App, type RespondFn } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 
 import { loadConfig, type Config } from "./config.ts";
+import { AppTokens } from "./tokens.ts";
 import {
   buildTask,
   messageBody,
@@ -442,7 +444,37 @@ const invokedDirectly =
   import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-  const app = createApp(loadConfig());
+  const config = loadConfig();
+  const tokens = config.appRotation ? new AppTokens(config.appRotation) : undefined;
+  while (tokens) {
+    try {
+      config.appToken = await tokens.getToken();
+      break;
+    } catch {
+      console.error("Could not refresh or save Slack app tokens; check client credentials and token-cache permissions. Retrying in 30 seconds.");
+      await delay(30_000);
+    }
+  }
+  let app = createApp(config);
   await app.start();
   console.log("TimeSlay Slack app is running (socket mode).");
+  let retrying = false;
+  while (tokens) {
+    if (!retrying) await delay(Math.max(1_000, tokens.refreshAt - Date.now()));
+    try {
+      // Save the replacement pair before reconnecting Socket Mode. The new
+      // receiver also uses this token for all subsequent automatic reconnects.
+      const appToken = await tokens.getToken();
+      await app.stop();
+      config.appToken = appToken;
+      app = createApp(config);
+      await app.start();
+      retrying = false;
+      console.log("Slack app-level token rotated; Socket Mode reconnected.");
+    } catch {
+      retrying = true;
+      console.error("Slack token rotation or reconnection failed; retrying in 30 seconds.");
+      await delay(30_000);
+    }
+  }
 }

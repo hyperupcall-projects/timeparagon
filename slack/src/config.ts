@@ -1,6 +1,14 @@
+import { fileURLToPath } from "node:url";
+
 export type Config = {
   botToken: string;
   appToken: string;
+  appRotation?: {
+    refreshToken: string;
+    clientId: string;
+    clientSecret: string;
+    tokenFile: string;
+  };
   timeslayBin: string;
   timeslayTimeoutMs: number;
 };
@@ -28,9 +36,23 @@ function timeout(env: NodeJS.ProcessEnv): number {
  * Slack tokens are absent, which keeps the helpers unit-testable.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const appToken = required(env, "SLACK_APP_TOKEN");
+  const refreshToken = env.SLACK_APP_REFRESH_TOKEN?.trim();
+  if (appToken.startsWith("xoxe.") && !refreshToken) {
+    throw new Error("Rotating app tokens require SLACK_APP_REFRESH_TOKEN.");
+  }
   return {
     botToken: required(env, "SLACK_BOT_TOKEN"),
-    appToken: required(env, "SLACK_APP_TOKEN"),
+    appToken,
+    ...(refreshToken ? {
+      appRotation: {
+        refreshToken,
+        clientId: required(env, "SLACK_CLIENT_ID"),
+        clientSecret: required(env, "SLACK_CLIENT_SECRET"),
+        tokenFile: env.SLACK_APP_TOKEN_FILE?.trim() ||
+          fileURLToPath(new URL("../.slack-app-tokens.json", import.meta.url)),
+      },
+    } : {}),
     timeslayBin: env.TIMESLAY_BIN?.trim() || "time-slay",
     timeslayTimeoutMs: timeout(env),
   };

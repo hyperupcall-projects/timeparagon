@@ -47,10 +47,11 @@ Same for the week. Notice how yesterday can be included in this view.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)a
 - Manage tasks:
 	- Create tasks:
-		- With Todoist-like syntax and voice input. (TODO)
+		- With Todoist-like syntax
+		- With voice input. (TODO)
 		- From Gmail URLs
-		- From any web page with the browser extension (see [`webextension/`](./webextension))
-		- From a Slack message with the Slack app (see [`slack/`](./slack))
+		- From a web page with the browser extension
+		- From a Slack message with the Slack app
 	- Triage tasks so they're discoverable later.
 	- Workflow to manage tasks not done in days prior (TODO)
 	- Workflow to organize/manage pending tasks (TODO)
