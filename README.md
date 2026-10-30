@@ -2,12 +2,9 @@
 
 Slay the day with TimeSlay.
 
-There's currently two implementations:
-
-- An [Iced](https://iced.rs) desktop application.
-- A [Dioxus](https://dioxuslabs.com) mobile application (WIP).
-
 ## Overview
+
+TimeSlay is designed to help you implement some of the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime). Rather than spending time switching between, searching through, and using multiple apps, focus on the work.
 
 There's a plethora of nifty features; I'll be listing some of my favorites (TODO).
 
@@ -64,12 +61,15 @@ There's week and month views, just like any other calendar app:
 	- Segmented backlog section for deferring tasks to next week, next month, and so on (WIP).
 	- Manually assign tasks to time blocks.
 	- Flexibly group and order tasks without anchoring to any particular start time; automatically project these tasks onto available time blocks (TODO).
+		- "Do immediately" etc. No need to categorize other than project.
 	- Handle long-running or multi-step/subtasks (TODO).
 		- Tasks that may be done over multiple days/time blocks (TODO).
 		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
 		- But, also keep track of subtasks (TODO)?
-- Notes
+		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
+- Notes (TODO)
 	- Associate notes and files with events, tasks, goals, objectives, and projects.
+	- Local/url (TODO).
 - Autolaunchers
 	- Save configure presets for launching and positioning application windows (TODO).
 - Goals
@@ -94,6 +94,13 @@ There's week and month views, just like any other calendar app:
 
 ## Usage
 
+There's currently two implementations:
+
+- An [Iced](https://iced.rs) desktop application.
+- A [Dioxus](https://dioxuslabs.com) mobile application (WIP).
+
+Both can be built:
+
 ```sh
 # Iced desktop app.
 cargo run -p timeslay --release
@@ -105,32 +112,25 @@ cargo run -p timeslay-dioxus
 ./scripts/build-android.sh
 ```
 
-## Next Up
+## Roadmap
 
-- File attachments/file:// links & notes integration for event/task/habit etc.
-- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
-- alt+tab proper icon does not show up
-
-### Stretch
-
-- Webhook for Google Calendar
-- For everywhere in interface, there should be a new task button
-- Command palette
-	- Global search
+- meal planning/grocery list
+	- lists in general
+- meeting agenda
+- alt+tab proper icon does not show up (remove this mode entirely)
 - Reminders (use Google Calendar)
 - Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
-- Analytics of time spent
 - People/contacts
 - Start/shutdown/review rituals for day/week/month
 - Offline write queue
-- Eisenhower matrix (TODO)
-- Theme/project days (TODO)
+- Eisenhower matrix
+- Theme/project days
 
 ## Design Constraints
 
 The design of this app is, in part, constrainted by the fact that:
 
-- Google Task API does not allow for reading/writing the time of dday of a due date or deadline (only day).
+- Google Task API does not allow for reading/writing the time of day of a due date or deadline (only day).
 - Google Task API does not allow writing the deadline field (only due date).
 - Google Keep API cannot be used by non-workspace users.
 - Integrates only with the KDE Plasma desktop environment on Linux.
