@@ -92,9 +92,44 @@ the current page or a Slack message to the inbox.
 When a TimeSlay window, panel or dock is running it writes the task and shows it
 immediately; otherwise the host writes straight to Google Tasks.
 
+## Remote metadata and migration
+
+SQLite remains local (`tasks.sqlite3`), caching task metadata and allocating IDs.
+Google is the source of truth after migration: Calendar uses
+`extendedProperties.private`; Tasks uses a versioned footer at the end of notes:
+
+```text
+normal thing
+---
+tt-version: 1
+tt-id: 100
+tt-legacy_key: null
+tt-deadline: null
+tt-block: null
+tt-ignored: false
+tt-minutes: 45
+tt-order: 0
+```
+
+Values are JSON so lists, strings, booleans, and scheduling links round-trip.
+Projects, labels, priority, location, and schedule are included when set.
+Human notes stay above the separator. Existing work-history keys are preserved.
+Task metadata is uploaded on edit and at scheduling checkpoints; fresh syncs
+rebuild the SQLite cache from remote metadata instead of overwriting it.
+Oversized, malformed, and unsupported-version footers fail without replacement.
+
+**Temporary backwards compatibility:** search for `LEGACY_METADATA_COMPAT`.
+On sync, tasks without a footer export their existing SQLite values (or older
+`tt-timeblocking:`/`ttid:` notes). Old `DUE:`/`DEADLINE:` lines move into the footer.
+Calendar `Type:` footers move into private properties. Failed exports are retried
+on the next sync; legacy sources are retained until the remote write succeeds.
+Once migration support is no longer needed, remove the marked legacy readers,
+SQLite fallback branch in `calendar::task_metadata::load`, and Calendar footer
+migration helper. Keep the cache, allocator, aliases, and versioned footer codec.
+The shared core crate also supplies these rules to the Dioxus app.
+
 ## Next Up
 
-- Better UI (shadcdn/pure.css)
 - File attachments/file:// links & notes integration for event/task/habit etc.
 - Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
 - alt+tab proper icon does not show up

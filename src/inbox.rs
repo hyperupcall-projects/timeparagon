@@ -442,9 +442,10 @@ fn create_event(
             ..Default::default()
         },
     };
-    // The local record is what carries estimates and block assignments, so it
-    // exists from the first moment.
-    event.details.task_data = Some(task_db::open()?.import(&event)?);
+    // Allocate a stable ID and publish its metadata immediately.
+    let data = task_db::open()?.import(&event)?;
+    calendar::task_metadata::save(token, &event, &data)?;
+    event.details.task_data = Some(data);
     Ok(event)
 }
 

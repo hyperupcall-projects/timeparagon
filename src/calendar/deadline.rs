@@ -104,6 +104,15 @@ pub fn parse_input(input: &str) -> Result<Deadline, String> {
 /// The deadline in the notes. `DEADLINE:` takes precedence over `DUE:`, and
 /// every reserved line is checked so a typo is reported wherever it appears.
 pub fn read_deadline(notes: &str) -> Result<Option<Deadline>, String> {
+    // Versioned remote footer; legacy DUE/DEADLINE lines remain readable below.
+    if super::task_metadata::prose(notes) != notes {
+        if let Some(value) = Notes::new(notes).value("tt-deadline:") {
+            let value: Option<String> = serde_json::from_str(value)
+                .map_err(|e| format!("Invalid metadata deadline: {e}"))?;
+            return value.map(|value| parse_input(&value)).transpose();
+        }
+    }
+    // LEGACY_METADATA_COMPAT: deadlines embedded among human notes.
     let mut timed = None;
     let mut dated = None;
     for line in Notes::new(notes).lines() {

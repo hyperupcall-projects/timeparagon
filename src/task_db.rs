@@ -1,4 +1,5 @@
-//! Durable task metadata and IDs. SQLite owns inter-process locking and recovery.
+//! Local cache of remote task metadata and durable ID/alias allocation.
+//! LEGACY_METADATA_COMPAT: unexported SQLite rows are migration sources only.
 use crate::{
     calendar::Event,
     timeblocking::{Metadata, legacy_id, legacy_metadata},
@@ -11,7 +12,7 @@ use std::{path::Path, time::Duration};
 pub struct TaskData {
     pub id: i64,
     pub metadata: Metadata,
-    // Preserve keys already used by work sessions without keeping UUIDs in Google.
+    // Preserve keys already used by work sessions, including in remote metadata.
     pub legacy_key: Option<String>,
 }
 
@@ -33,8 +34,18 @@ impl Database {
         Ok(Self(db))
     }
 
+    /// Adopt authoritative remote data even on a fresh installation.
+    pub fn cache_remote(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
+        self.save(event, data)
+    }
+
     /// Allocate and record the mapping in one transaction. No ID escapes until commit.
     pub fn import(&mut self, event: &Event) -> Result<TaskData, String> {
+        if let Some(data) = crate::calendar::task_metadata::read(&event.details.description)? {
+            self.cache_remote(event, &data)?;
+            return Ok(data);
+        }
+        // LEGACY_METADATA_COMPAT: consult SQLite/inline notes only without a remote footer.
         self.import_inner(event).map_err(|e| e.to_string())
     }
     fn import_inner(&mut self, event: &Event) -> rusqlite::Result<TaskData> {
@@ -95,7 +106,9 @@ impl Database {
         (|| -> rusqlite::Result<()> {
             let tx = self.0.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let json = serde_json::to_string(&data.metadata).expect("metadata serializes");
-            tx.execute("UPDATE tasks SET metadata=?1 WHERE id=?2", params![json,data.id])?;
+            tx.execute("INSERT INTO tasks (id,metadata,legacy_key) VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata,legacy_key=excluded.legacy_key", params![data.id,json,data.legacy_key])?;
+            let next = data.id.checked_add(1).ok_or(rusqlite::Error::InvalidQuery)?;
+            tx.execute("UPDATE counter SET next_id=max(next_id,?1) WHERE singleton=1", [next])?;
             tx.execute("INSERT INTO task_aliases VALUES (?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id", params![crate::timeblocking::block_key(event),data.id])?;
             tx.commit()
         })().map_err(|e| e.to_string())

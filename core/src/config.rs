@@ -38,6 +38,9 @@ pub struct CalendarSettings {
     pub app_calendar: Option<String>,
     pub time_block_list: Option<String>,
     pub backlog_list: Option<String>,
+    pub inbox_list: Option<String>,
+    pub triaged_list: Option<String>,
+    pub habit_color: Option<HexColor>,
     /// The hour the day ends, 0-5. 0 is midnight.
     pub day_end_hour: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -65,6 +68,9 @@ impl Default for CalendarSettings {
             app_calendar: None,
             time_block_list: None,
             backlog_list: None,
+            inbox_list: None,
+            triaged_list: None,
+            habit_color: None,
             day_end_hour: 0,
             task_colors: BTreeMap::new(),
             calendar_colors: BTreeMap::new(),
@@ -162,6 +168,12 @@ impl CalendarSettings {
     pub fn time_block_color(&self) -> crate::Color {
         self.time_block_color
             .map_or(crate::calendar::colors::TIME_BLOCK, |color| color.0)
+    }
+
+    /// The color habit events are drawn in.
+    pub fn habit_color(&self) -> crate::Color {
+        self.habit_color
+            .map_or(crate::calendar::colors::HABIT, |color| color.0)
     }
 
     /// The color scheduled task events are drawn in, or Google's task blue.

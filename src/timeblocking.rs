@@ -1,4 +1,4 @@
-//! Local task metadata and Google Tasks time-block operations.
+//! Remote-backed task metadata and Google Tasks time-block operations.
 use crate::{
     app::{Message, State},
     blocking,
@@ -1488,22 +1488,27 @@ fn save(
         }
         Change::Estimate(minutes) => {
             data.metadata.minutes = minutes;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
             database.save(&task, &data)?;
         }
         Change::Projects(projects) => {
             data.metadata.projects = projects;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
             database.save(&task, &data)?;
         }
         Change::Labels(labels) => {
             data.metadata.labels = labels;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
             database.save(&task, &data)?;
         }
         Change::Priority(priority) => {
             data.metadata.priority = priority;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
             database.save(&task, &data)?;
         }
         Change::Location(location) => {
             data.metadata.location = location;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
             database.save(&task, &data)?;
         }
         Change::Deadline(deadline) => {
@@ -1513,7 +1518,8 @@ fn save(
             calendar::api::patch(
                 &base,
                 &token,
-                &serde_json::json!({"notes": notes}).to_string(),
+                &serde_json::json!({"notes": calendar::task_metadata::write(&notes, &data)?})
+                    .to_string(),
                 "Save task deadline",
             )?;
             task.details.description = notes;
@@ -1605,6 +1611,7 @@ fn save(
                     start + chrono::Duration::minutes(i64::from(minutes)),
                 )?;
             } else {
+                calendar::task_metadata::save(&access(settings)?, &task, &data)?;
                 database.save(&task, &data)?;
             }
         }
@@ -1657,6 +1664,7 @@ fn unschedule_with(
         .ok_or("Invalid local date")?;
     task.end = task.start + chrono::Duration::days(1);
     // If moving lists fails, sync still sees the successfully cleared schedule.
+    remote.save_metadata(task, data)?;
     database.save(task, data)?;
     if let Some(destination) = destination.filter(|destination| *destination != link.list_id) {
         let response = remote.move_task(&link, &destination)?;
@@ -1678,6 +1686,7 @@ fn unschedule_with(
         task.color = settings
             .task_color(&task.calendar_id)
             .unwrap_or(calendar::colors::TASK);
+        remote.save_metadata(task, data)?;
         database.save(task, data)?;
     }
     Ok(())
@@ -1762,6 +1771,7 @@ fn schedule_with(
     link.block = data.metadata.block.clone();
     link.order = data.metadata.order;
     data.metadata.schedule = Some(link.clone());
+    remote.save_metadata(task, data)?;
     database.save(task, data)?;
     if link.list_id != destination_list {
         let response = remote.move_task(&link, &destination_list)?;
@@ -1782,10 +1792,14 @@ fn schedule_with(
                 )
             });
         data.metadata.schedule = Some(link.clone());
+        // The move already succeeded; retain its returned identity even if
+        // publishing notes fails. Sync can also repair it from the moved notes.
         database.save(task, data)?;
+        remote.save_metadata(task, data)?;
     }
     // The native Tasks date is the planned day, never the description deadline.
     remote.set_day(&link, Some(start.date_naive()))?;
+    task.details.task_data = Some(data.clone());
     remote.save_event(task, &link, start, end).map_err(|e| {
         format!("Task saved, but its calendar block could not be saved: {e}. Sync or retry.")
     })?;
@@ -1798,6 +1812,7 @@ fn schedule_with(
     task.all_day = false;
     task.details.scheduled = Some(link.clone());
     data.metadata.schedule = Some(link);
+    remote.save_metadata(task, data)?;
     database.save(task, data)?;
     task.details.task_data = Some(data.clone());
     Ok(())
@@ -1812,8 +1827,17 @@ mod tests {
         calls: std::cell::RefCell<Vec<String>>,
         fail_calendar: std::cell::Cell<bool>,
         event_ids: std::cell::RefCell<Vec<String>>,
+        metadata_writes: std::cell::RefCell<Vec<crate::task_db::TaskData>>,
     }
     impl calendar::scheduled::Remote for FakeGoogle {
+        fn save_metadata(
+            &self,
+            _task: &Event,
+            data: &crate::task_db::TaskData,
+        ) -> Result<(), String> {
+            self.metadata_writes.borrow_mut().push(data.clone());
+            Ok(())
+        }
         fn destinations(
             &self,
             calendar: Option<&str>,
@@ -1923,6 +1947,7 @@ mod tests {
             "moved-task"
         );
         assert!(persisted.metadata.schedule.as_ref().unwrap().pending);
+        assert_eq!(remote.metadata_writes.borrow().last(), Some(&persisted));
         assert_eq!(database.lookup(&task).unwrap().unwrap().id, local_id);
 
         // Simulate retrying the old chip after an app restart.
@@ -1939,6 +1964,8 @@ mod tests {
             end,
         )
         .unwrap();
+        assert_eq!(remote.metadata_writes.borrow().last(), Some(&data));
+        assert!(!data.metadata.schedule.as_ref().unwrap().pending);
         assert_eq!(
             remote
                 .calls
@@ -1972,6 +1999,13 @@ mod tests {
     }
 
     impl calendar::scheduled::Remote for BacklogGoogle {
+        fn save_metadata(
+            &self,
+            _task: &Event,
+            _data: &crate::task_db::TaskData,
+        ) -> Result<(), String> {
+            Ok(())
+        }
         fn destinations(
             &self,
             _: Option<&str>,

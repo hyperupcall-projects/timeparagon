@@ -26,7 +26,7 @@ pub struct Metadata {
     pub schedule: Option<calendar::scheduled::Link>,
     /// The projects this task is filed under, by `config::Project::id`.
     ///
-    /// Older task databases stored a single `project` value, so that shape is
+    /// LEGACY_METADATA_COMPAT: older task databases stored a single `project` value, so that shape is
     /// still accepted when reading.
     #[serde(
         default,
@@ -109,7 +109,7 @@ pub fn apply_status(task: &mut Event, status: TaskStatus) {
     } else {
         let mut meta = metadata(task);
         meta.ignored = ignored;
-        // Legacy tasks can be edited before their first database import.
+        // LEGACY_METADATA_COMPAT: tasks edited before their first database import.
         task.details.description = format!(
             "{}\n{META}{}",
             description(&task.details.description),
@@ -132,7 +132,17 @@ fn is_internal(line: &str) -> bool {
 }
 
 pub fn description(notes: &str) -> String {
-    let notes = Notes::new(notes);
+    let prose = calendar::task_metadata::prose(notes);
+    let expanded;
+    let notes = if prose != notes {
+        expanded = calendar::deadline::write(
+            prose,
+            calendar::deadline::read_deadline(notes).ok().flatten(),
+        );
+        Notes::new(&expanded)
+    } else {
+        Notes::new(notes)
+    };
     if !notes.lines().any(is_internal) {
         return notes.text().to_owned();
     }
@@ -145,9 +155,16 @@ pub fn metadata(event: &Event) -> Metadata {
         .task_data
         .as_ref()
         .map(|data| data.metadata.clone())
+        .or_else(|| {
+            calendar::task_metadata::read(&event.details.description)
+                .ok()
+                .flatten()
+                .map(|data| data.metadata)
+        })
         .unwrap_or_else(|| legacy_metadata(&event.details.description))
 }
 
+/// LEGACY_METADATA_COMPAT: remove with the old inline JSON/ttid migration.
 pub fn legacy_metadata(notes: &str) -> Metadata {
     Notes::new(notes)
         .lines()
@@ -158,6 +175,7 @@ pub fn legacy_metadata(notes: &str) -> Metadata {
         .unwrap_or_default()
 }
 
+/// LEGACY_METADATA_COMPAT: preserves existing work-history keys during migration.
 pub fn legacy_id(notes: &str) -> Option<String> {
     Notes::new(notes)
         .lines()

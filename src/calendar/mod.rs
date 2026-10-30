@@ -10,6 +10,7 @@ pub mod notes;
 pub mod oauth;
 pub mod projects;
 pub mod scheduled;
+pub mod task_metadata;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -127,22 +128,13 @@ impl Event {
 /// last one, so prose may itself contain a `---`.
 pub const METADATA_DELIMITER: &str = "---";
 
-/// Builds the description of an app-written event: the human notes, the
-/// delimiter, then the event's kind and any extra metadata lines. A person
-/// reading the event in Google Calendar sees what kind it is; the app sees the
-/// same lines below the delimiter.
-pub fn event_description(notes: &str, kind: &str, extra: &[String]) -> String {
-    let notes = notes.trim_end();
-    let mut footer = vec![format!("Type: {kind}")];
-    footer.extend(extra.iter().cloned());
-    let footer = footer.join("\n");
-    if notes.is_empty() {
-        format!("{METADATA_DELIMITER}\n{footer}")
-    } else {
-        format!("{notes}\n{METADATA_DELIMITER}\n{footer}")
-    }
+/// Calendar descriptions contain human notes only. Type and link metadata
+/// belong to `extendedProperties.private` at the API boundary.
+pub fn event_description(notes: &str, _kind: &str, _extra: &[String]) -> String {
+    description_notes(notes).trim_end().to_owned()
 }
 
+// LEGACY_METADATA_COMPAT: recognize old Calendar Type footers for migration.
 /// The app metadata written below the last [`METADATA_DELIMITER`] of an event
 /// description, or `None` when there is no footer.
 pub fn metadata_block(description: &str) -> Option<&str> {
@@ -1686,13 +1678,14 @@ fn save_task_status(
     status: crate::timeblocking::TaskStatus,
     mut write: impl FnMut(&Event) -> Result<(), String>,
 ) -> Result<Event, String> {
-    let mut updated = task.clone();
-    updated.details.task_data = Some(database.import(task)?);
+    let mut previous = task.clone();
+    previous.details.task_data = Some(database.import(task)?);
+    let mut updated = previous.clone();
     crate::timeblocking::apply_status(&mut updated, status);
     if let Err(error) = write(&updated)
         .and_then(|()| database.save(&updated, updated.details.task_data.as_ref().unwrap()))
     {
-        return match write(task) {
+        return match write(&previous) {
             Ok(()) => Err(format!(
                 "Task status could not be saved; the task was restored: {error}"
             )),
@@ -1710,6 +1703,9 @@ fn write_task_status(token: &str, task: &Event) -> Result<(), String> {
         .strip_prefix("tasks:")
         .ok_or("Invalid task list")?;
     let id = task.id.strip_prefix("task:").ok_or("Invalid task")?;
+    if let Some(data) = &task.details.task_data {
+        task_metadata::save(token, task, data)?;
+    }
     api::set_task_completed(token, list, id, task.completed).map_err(describe_task_write_error)?;
     if let Some(link) = &task.details.scheduled {
         scheduled::request(
@@ -2989,16 +2985,9 @@ mod tests {
     }
 
     #[test]
-    fn the_event_type_sits_after_the_last_metadata_delimiter() {
-        let description = event_description(
-            "Notes\n---\nprose after a delimiter",
-            "Time Block",
-            &["Google Task: https://example.test/task".into()],
-        );
-        assert_eq!(
-            description,
-            "Notes\n---\nprose after a delimiter\n---\nType: Time Block\nGoogle Task: https://example.test/task"
-        );
+    fn legacy_calendar_type_footers_are_readable_but_new_descriptions_are_prose() {
+        let description = "Notes\n---\nprose after a delimiter\n---\nType: Time Block\nGoogle Task: https://example.test/task";
+        assert_eq!(event_description("Notes", "Time Block", &[]), "Notes");
         assert_eq!(
             description_notes(&description),
             "Notes\n---\nprose after a delimiter"

@@ -91,11 +91,7 @@ impl Link {
 
 pub fn description(task: &Event) -> String {
     let notes = crate::timeblocking::description(&task.details.description);
-    let mut extra = Vec::new();
-    if !task.details.link.is_empty() {
-        extra.push(format!("Google Task: {}", task.details.link));
-    }
-    super::event_description(&notes, "Task", &extra)
+    super::notes::Notes::new(&notes).without(&["DUE:", "DEADLINE:"])
 }
 
 pub fn content(task: &Event, link: &Link) -> Value {
@@ -111,6 +107,8 @@ pub fn content(task: &Event, link: &Link) -> Value {
             "ttBlock": link.block.as_deref().unwrap_or(""), "ttOrder": link.order.to_string(),
             "ttCompleted": task.completed.to_string(),
             "ttColor": link.color_id.as_deref().unwrap_or(""),
+            "ttTaskLink": task.details.link,
+            "ttDeadline": super::deadline::read_deadline(&task.details.description).ok().flatten().map(|d| d.value()).unwrap_or_default(),
         }},
     });
     if let Some(color_id) = &link.color_id {
@@ -213,6 +211,17 @@ pub struct Error {
 }
 
 pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Result<Value, Error> {
+    if let Some(properties) = body.and_then(|b| b["extendedProperties"]["private"].as_object()) {
+        if properties
+            .values()
+            .any(|value| value.as_str().is_some_and(|s| s.chars().count() > 1024))
+        {
+            return Err(Error {
+                status: None,
+                message: "Calendar metadata exceeds the 1024 character property limit".into(),
+            });
+        }
+    }
     let request = api::agent()
         .request(method, url)
         .set("Authorization", &format!("Bearer {token}"))
@@ -370,6 +379,7 @@ pub fn remove_task_copies(token: &str, calendar_id: &str, task_id: &str) -> Resu
 /// The cross-service scheduling transaction is tested against this boundary,
 /// including failures after Google has changed a task's identity.
 pub trait Remote {
+    fn save_metadata(&self, task: &Event, data: &crate::task_db::TaskData) -> Result<(), String>;
     fn destinations(
         &self,
         calendar: Option<&str>,
@@ -393,6 +403,9 @@ pub struct Google<'a> {
     pub token: &'a str,
 }
 impl Remote for Google<'_> {
+    fn save_metadata(&self, task: &Event, data: &crate::task_db::TaskData) -> Result<(), String> {
+        super::task_metadata::save(self.token, task, data)
+    }
     fn destinations(
         &self,
         calendar: Option<&str>,
@@ -710,11 +723,10 @@ mod tests {
         assert_eq!(changes.len(), 1);
         let body = &changes[0].1;
         assert_eq!(body["summary"], "✓ Same title");
-        assert!(
-            body["description"]
-                .as_str()
-                .unwrap()
-                .starts_with("DUE: 2026-11-05\n")
+        assert_eq!(body["description"], "Updated from another device");
+        assert_eq!(
+            body["extendedProperties"]["private"]["ttDeadline"],
+            "2026-11-05"
         );
         assert_eq!(body["extendedProperties"]["private"]["ttCompleted"], "true");
         assert!(body.get("start").is_none());
@@ -762,12 +774,11 @@ mod tests {
             ),
             Some(link)
         );
-        assert!(
-            body["description"]
-                .as_str()
-                .unwrap()
-                .contains(&task.details.link)
+        assert_eq!(
+            body["extendedProperties"]["private"]["ttTaskLink"],
+            task.details.link
         );
+        assert!(!body["description"].as_str().unwrap().contains("Type:"));
     }
 
     #[test]

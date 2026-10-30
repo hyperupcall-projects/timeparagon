@@ -25,6 +25,63 @@ pub(crate) fn agent() -> &'static ureq::Agent {
     })
 }
 
+/// LEGACY_METADATA_COMPAT: move the old Calendar description footer into
+/// private extended properties on encounter. Unknown footer lines are retained.
+fn calendar_metadata_body(description: &str) -> Option<serde_json::Value> {
+    let footer = super::metadata_block(description)?;
+    let mut lines = footer.lines();
+    let kind = match lines.next()? {
+        "Type: Habit" => "habit",
+        "Type: Task" => "task",
+        "Type: Time Block" => "time_block",
+        _ => return None,
+    };
+    let mut body = serde_json::json!({
+        "description": super::description_notes(description),
+        "extendedProperties": { "private": { "ttKind": kind } }
+    });
+    let mut other = Vec::new();
+    for line in lines {
+        if let Some(link) = line.strip_prefix("Google Task: ") {
+            body["extendedProperties"]["private"]["ttTaskLink"] = link.into();
+        } else {
+            other.push(line);
+        }
+    }
+    if !other.is_empty() {
+        body["extendedProperties"]["private"]["ttLegacyFooter"] = other.join("\n").into();
+    }
+    Some(body)
+}
+
+fn migrate_calendar_metadata(
+    token: &str,
+    calendar_id: &str,
+    entry: &mut EventEntry,
+) -> Result<(), String> {
+    if entry.status.as_deref() == Some("cancelled") {
+        return Ok(());
+    }
+    let Some(mut body) = calendar_metadata_body(&entry.description) else {
+        return Ok(());
+    };
+    // Existing native properties are authoritative and unrelated keys survive.
+    if let Some(existing) = entry.extended_properties["private"].as_object() {
+        for (key, value) in existing {
+            body["extendedProperties"]["private"][key] = value.clone();
+        }
+    }
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(&entry.id)
+    );
+    super::scheduled::request("PATCH", &url, token, Some(&body)).map_err(|e| e.message)?;
+    entry.description = body["description"].as_str().unwrap().to_owned();
+    entry.extended_properties = body["extendedProperties"].clone();
+    Ok(())
+}
+
 fn append_notice(notice: &mut Option<String>, message: &str) {
     match notice {
         Some(existing) => {
@@ -240,6 +297,7 @@ pub fn fetch_range(
         if event.is_task() {
             if let Some(data) = &event.details.task_data {
                 if database.lookup(event)?.as_ref() != Some(data) {
+                    super::task_metadata::save(access_token, event, data)?;
                     database.save(event, data)?;
                 }
             }
@@ -381,7 +439,8 @@ fn fetch_events(
 
         let list: EventList = get(&url, access_token)?;
 
-        for entry in list.items {
+        for mut entry in list.items {
+            migrate_calendar_metadata(access_token, &calendar.id, &mut entry)?;
             if entry.status.as_deref() == Some("cancelled") {
                 continue;
             }
@@ -502,7 +561,8 @@ fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec
             url.push_str(&urlencoding::encode(token));
         }
         let page: EventList = get(&url, access_token)?;
-        for entry in page.items {
+        for mut entry in page.items {
+            migrate_calendar_metadata(access_token, &calendar.id, &mut entry)?;
             if entry.status.as_deref() != Some("cancelled") {
                 if let Some(event) = parse_event(entry, calendar, Local::now().date_naive()) {
                     events.push(event);
@@ -553,7 +613,8 @@ pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<Ha
             url.push_str(&urlencoding::encode(token));
         }
         let page: EventList = get(&url, access_token)?;
-        for entry in page.items {
+        for mut entry in page.items {
+            migrate_calendar_metadata(access_token, &calendar_id, &mut entry)?;
             if entry.status.as_deref() != Some("cancelled")
                 && let Some(habit) = parse_habit(entry, &calendar_id)
             {
@@ -874,28 +935,11 @@ fn fetch_task_items(
             .and_then(task_due_date)
             .unwrap_or(crate::timeblocking::UNDATED);
         if let Some(mut event) = parse_task(task, calendar_id, color, due) {
-            // A cached task only needs a lookup; avoid a write transaction per
-            // unchanged task on every day navigation.
-            let data = match database.lookup(&event)? {
-                Some(data) => data,
-                None => database.import(&event)?,
-            };
-            let cleaned = crate::timeblocking::description(&event.details.description);
-            if cleaned != event.details.description {
-                let id = event.id.strip_prefix("task:").ok_or("Invalid task ID")?;
-                let url = format!(
-                    "{TASKS}/{}/tasks/{}",
-                    urlencoding::encode(list_id),
-                    urlencoding::encode(id)
-                );
-                patch(
-                    &url,
-                    access_token,
-                    &serde_json::json!({"notes":cleaned}).to_string(),
-                    "Migrate Google Tasks metadata",
-                )?;
-            }
-            event.details.description = cleaned;
+            let data = super::task_metadata::load(&mut database, &event, |data| {
+                super::task_metadata::save(access_token, &event, data)
+            })?;
+            event.details.description =
+                crate::timeblocking::description(&event.details.description);
             event.details.task_data = Some(data);
             events.push(event);
         }
@@ -1731,6 +1775,19 @@ pub fn color_or_default(value: Option<Color>) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_calendar_footers_move_to_native_properties_without_touching_prose() {
+        let notes = "Human notes\n---\nordinary prose\n---\nType: Task\nGoogle Task: https://tasks.google.com/task/one\nOther: keep me";
+        let body = calendar_metadata_body(notes).unwrap();
+        assert_eq!(body["description"], "Human notes\n---\nordinary prose");
+        let p = &body["extendedProperties"]["private"];
+        assert_eq!(p["ttKind"], "task");
+        assert_eq!(p["ttTaskLink"], "https://tasks.google.com/task/one");
+        assert_eq!(p["ttLegacyFooter"], "Other: keep me");
+        assert!(calendar_metadata_body(body["description"].as_str().unwrap()).is_none());
+        assert!(calendar_metadata_body("Human notes\n---\nordinary prose").is_none());
+    }
 
     #[test]
     fn descriptions_keep_html_link_targets_and_line_breaks() {
