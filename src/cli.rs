@@ -17,6 +17,8 @@ pub enum Mode {
     Dock,
     /// The background process that owns the global shortcuts.
     Daemon,
+    /// The native-messaging host the browser extension talks to.
+    WebExtension,
 }
 
 /// What to do with the command line.
@@ -44,12 +46,15 @@ Options:
       --daemon         Run the background process that owns the global
                        shortcuts (Toggle Visibility and Toggle Shape) and
                        shows, hides and switches the side panel and dock
+      --webextension   Run the browser native-messaging host: read one
+                       message from the extension on stdin, add its link to
+                       the inbox through the running app, and answer on stdout
       --from <ORIGIN>  With --dock, what the dock's back button returns to:
                        \"window\" (default) or \"sidebar\"
   -h, --help           Print this help
   -V, --version        Print the version
 
-Only one of --sidebar, --dock and --daemon can be given.
+Only one of --sidebar, --dock, --daemon and --webextension can be given.
 ";
 
 /// Parses the arguments that follow the program name.
@@ -57,6 +62,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
     let mut args = args.into_iter();
     let mut mode: Option<Mode> = None;
     let mut origin: Option<Origin> = None;
+    // Browsers launch a native-messaging host with the caller's origin as an
+    // extra argument, so `--webextension` tolerates arguments it does not
+    // recognize instead of failing the way every other mode does.
+    let mut unexpected: Vec<String> = Vec::new();
 
     while let Some(arg) = args.next() {
         let requested = match arg.as_str() {
@@ -65,13 +74,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
             "--sidebar" => Some(Mode::Sidebar),
             "--dock" => Some(Mode::Dock),
             "--daemon" => Some(Mode::Daemon),
+            "--webextension" => Some(Mode::WebExtension),
             _ => None,
         };
 
         if let Some(requested) = requested {
             match mode {
                 Some(existing) if existing != requested => {
-                    return Err("only one of --sidebar, --dock and --daemon can be given".into());
+                    return Err(
+                        "only one of --sidebar, --dock, --daemon and --webextension can be given"
+                            .into(),
+                    );
                 }
                 _ => mode = Some(requested),
             }
@@ -92,13 +105,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
                     format!("unknown --from value '{value}': use window or sidebar")
                 })?);
             }
-            None => return Err(format!("unknown option '{arg}'")),
+            None => unexpected.push(arg),
         }
     }
 
     let mode = mode.unwrap_or_default();
     if origin.is_some() && mode != Mode::Dock {
         return Err("--from only applies with --dock".into());
+    }
+    if mode != Mode::WebExtension {
+        if let Some(arg) = unexpected.first() {
+            return Err(format!("unknown option '{arg}'"));
+        }
     }
 
     Ok(Action::Run {
@@ -132,6 +150,7 @@ mod tests {
         assert_eq!(parse_all(&["--sidebar"]), Ok(run(Mode::Sidebar)));
         assert_eq!(parse_all(&["--dock"]), Ok(run(Mode::Dock)));
         assert_eq!(parse_all(&["--daemon"]), Ok(run(Mode::Daemon)));
+        assert_eq!(parse_all(&["--webextension"]), Ok(run(Mode::WebExtension)));
     }
 
     #[test]
@@ -163,5 +182,19 @@ mod tests {
     #[test]
     fn repeating_a_flag_is_harmless() {
         assert_eq!(parse_all(&["--dock", "--dock"]), Ok(run(Mode::Dock)));
+    }
+
+    #[test]
+    fn the_webextension_host_tolerates_the_browsers_origin_argument() {
+        // Chrome passes "chrome-extension://<id>/"; Firefox passes the add-on
+        // id. Neither may be treated as a mistake.
+        assert_eq!(
+            parse_all(&["--webextension", "chrome-extension://abc/"]),
+            Ok(run(Mode::WebExtension)),
+        );
+        assert_eq!(
+            parse_all(&["--webextension", "timeslay@example.org"]),
+            Ok(run(Mode::WebExtension)),
+        );
     }
 }

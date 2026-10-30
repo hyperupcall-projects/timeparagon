@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "TimeSlay — Add to inbox",
+  "version": "0.1.0",
+  "description": "Send the page you are looking at to your TimeSlay inbox.",
+  "permissions": ["activeTab", "tabs", "nativeMessaging"],
+  "action": {
+    "default_title": "Add to inbox",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "timeslay@example.org",
+      "strict_min_version": "109.0"
+    }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp9teAddrv7O6cFdmJhKiXPgopzqmGqJo6b3jEnocQ8OH0Zkjvz4zsDLR+srbqV8lCG7AS8yQotjlYyxZzknBqxTxUHxpAmoJB/066PD5mvuLK+GRbA59aBF2VYdLyH9fqELo56xI2YS4vgM6tkRkaSNip798IqkTOjp3M1frFZOoTHI9PfhdgTeEuYbd20ENIUPznBV36v5Miiff4OPwcP7MEVdQPX8ZNIxqwh6ciaZBiQrTTnZ/nPcpK6FUsdTr173lvhNJY20r44F2zw4Hyx+98/vgLKHMrpkGFHYfb+665/1cpA7B300iwCsawK/0B0zo5a0YJv0zAAM/Jh2pKQIDAQAB"
+}

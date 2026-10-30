@@ -4104,17 +4104,14 @@ fn lighten(color: Color) -> Color {
     }
 }
 
-/// Fills text as glyph outlines instead of leaving it for the canvas to draw.
-///
-/// Canvas text is replayed uncullably: the tiny-skia backend cannot clip it to
-/// the visible slice of the day, and it resets its whole window-sized clip mask
-/// once per label on every frame, which is what made a busy day stutter while
-/// scrolling. Outlines are ordinary paths — they are culled to the visible
-/// slice like the grid lines — and, kept in the geometry cache, they are traced
-/// once per change to the events or the zoom rather than once per frame.
+/// Use the GPU glyph atlas for readable, hinted calendar labels. Software
+/// builds retain cached outlines to preserve clipping while scrolling.
 fn fill_glyphs(frame: &mut Frame, text: impl Into<Text>) {
-    let text = text.into();
-    text.draw_with(|glyph, color| frame.fill(&glyph, color));
+    #[cfg(feature = "wgpu")]
+    frame.fill_text(text);
+    #[cfg(not(feature = "wgpu"))]
+    text.into()
+        .draw_with(|glyph, color| frame.fill(&glyph, color));
 }
 
 /// Draws a block's title and the time under it, inside the block.

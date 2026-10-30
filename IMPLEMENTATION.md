@@ -8,9 +8,8 @@ finally worked.
 
 The code samples below come from the original standalone `sidepanel` prototype
 (hence names like `sidepanel` in the layer-shell namespace); the current
-implementation lives in `src/panel/` (shortcuts, daemon) and `src/dock/`. The
-shortcut and layer-shell parts are Wayland-only, with deliberately no X11 path.
-The rest of the app (the regular window) runs on Wayland or X11.
+implementation lives in `src/panel/` (shortcuts, daemon) and `src/dock/`. TimeSlay is
+Wayland-only; there is deliberately no X11 path anywhere.
 
 ---
 

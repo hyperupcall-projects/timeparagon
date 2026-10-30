@@ -23,16 +23,22 @@ pub enum Action {
     ToggleVisibility,
     /// Switches between the side panel and the dock.
     ToggleShape,
+    ToggleReservation,
 }
 
 impl Action {
-    pub const ALL: [Self; 2] = [Self::ToggleVisibility, Self::ToggleShape];
+    pub const ALL: [Self; 3] = [
+        Self::ToggleVisibility,
+        Self::ToggleShape,
+        Self::ToggleReservation,
+    ];
 
     /// The id KGlobalAccel knows the action by.
     pub fn id(self) -> &'static str {
         match self {
             Self::ToggleVisibility => "toggle-visibility",
             Self::ToggleShape => "toggle-shape",
+            Self::ToggleReservation => "toggle-reservation",
         }
     }
 
@@ -41,6 +47,7 @@ impl Action {
         match self {
             Self::ToggleVisibility => "Toggle Visibility",
             Self::ToggleShape => "Toggle Shape",
+            Self::ToggleReservation => "Toggle Space Reservation",
         }
     }
 
@@ -52,6 +59,7 @@ impl Action {
         match self {
             Self::ToggleVisibility => 0,
             Self::ToggleShape => 1,
+            Self::ToggleReservation => 2,
         }
     }
 
@@ -61,6 +69,9 @@ impl Action {
                 "Hides TimeSlay, as the side panel or the dock, or shows it again exactly as it was."
             }
             Self::ToggleShape => "Switches between the side panel and the dock.",
+            Self::ToggleReservation => {
+                "Toggles reserved space for the visible panel or dock only. Does nothing when hidden."
+            }
         }
     }
 }
@@ -80,6 +91,8 @@ pub struct PanelConfig {
     /// Global shortcuts for [`Action::ToggleShape`].
     #[serde(deserialize_with = "string_or_list")]
     pub toggle_shape: Vec<String>,
+    #[serde(deserialize_with = "string_or_list")]
+    pub toggle_reservation: Vec<String>,
 }
 
 /// Accepts `"Meta+U"` as well as `["Meta+U", "Meta+J"]`.
@@ -107,6 +120,7 @@ impl Default for PanelConfig {
             width: 200,
             toggle_visibility: vec!["Meta+U".to_owned()],
             toggle_shape: vec!["Meta+Shift+U".to_owned()],
+            toggle_reservation: Vec::new(),
         }
     }
 }
@@ -117,6 +131,7 @@ impl PanelConfig {
         match action {
             Action::ToggleVisibility => &self.toggle_visibility,
             Action::ToggleShape => &self.toggle_shape,
+            Action::ToggleReservation => &self.toggle_reservation,
         }
     }
 
@@ -124,6 +139,7 @@ impl PanelConfig {
         match action {
             Action::ToggleVisibility => self.toggle_visibility = shortcuts,
             Action::ToggleShape => self.toggle_shape = shortcuts,
+            Action::ToggleReservation => self.toggle_reservation = shortcuts,
         }
     }
 

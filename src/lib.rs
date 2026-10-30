@@ -8,7 +8,9 @@
 //! * `--sidebar` — the side panel, the full app in a wide edge strip;
 //! * `--dock` — the dock (see [`dock`]), a very thin strip of today;
 //! * `--daemon` — the shortcut daemon (see [`panel`]), which shows, hides and
-//!   switches between the panel and the dock.
+//!   switches between the panel and the dock;
+//! * `--webextension` — the browser native-messaging host (see
+//!   [`webextension`]), which adds a link to the inbox and exits.
 
 pub mod alarm;
 pub mod alarms;
@@ -37,6 +39,7 @@ pub mod theme;
 pub mod todos;
 pub mod travel;
 pub mod ui;
+pub mod webextension;
 pub mod window_effect;
 
 pub mod timeblocking;

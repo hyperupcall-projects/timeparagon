@@ -1,0 +1,7 @@
+{
+  "name": "com.timeslay.webextension",
+  "description": "TimeSlay inbox native host",
+  "path": "/absolute/path/to/time-slay-webextension",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://ebhljjjdkfmgagkochllhjanjncnedlo/"]
+}

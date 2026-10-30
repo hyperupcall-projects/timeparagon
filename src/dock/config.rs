@@ -24,6 +24,8 @@ pub struct DockConfig {
     /// Whether the strip reserves work area; popup space is never included.
     #[serde(skip)]
     pub reserve_space: bool,
+    #[serde(skip)]
+    pub border_radius: f32,
     /// Space left above and below the strip, in logical pixels. Not read from
     /// `dock.toml`: it is the "Screen margin" in the app's settings, shared
     /// with the side panel.
@@ -67,6 +69,7 @@ impl Default for DockConfig {
             side: DockSide::Left,
             width: 10,
             reserve_space: false,
+            border_radius: 0.0,
             screen_margin: 8,
             margin: 0,
             border_outer_width: 1.0,
@@ -87,7 +90,12 @@ impl DockConfig {
     /// values that would make the surface unusable. The size, edge and border
     /// come from the app's own view settings.
     pub fn load(views: &ViewSettings) -> Self {
-        let mut config = Self::from_file();
+        Self::from_file().with_views(views)
+    }
+
+    pub fn with_views(mut self, views: &ViewSettings) -> Self {
+        let config = &mut self;
+        config.border_radius = views.dock_border_radius();
         config.width = views.dock_width().round() as u32;
         config.reserve_space = views.dock_reserve_space;
         config.screen_margin = views.margin().round() as u32;
@@ -100,7 +108,7 @@ impl DockConfig {
         config.animation = views.window_animation;
         config.fade_duration_ms = views.fade_duration_ms();
         config.hour_lines = views.dock_hour_lines;
-        config.sanitized()
+        self.sanitized()
     }
 
     fn from_file() -> Self {

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Add to inbox</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header class="hero">
+        <img src="icons/icon-48.png" alt="" width="34" height="34" />
+        <div class="hero-text">
+          <h1>Add to inbox</h1>
+          <p id="page-title" class="page-title">Reading the page…</p>
+          <p id="page-url" class="page-url"></p>
+        </div>
+      </header>
+
+      <form id="form" class="form">
+        <label class="field">
+          <span class="label">Title</span>
+          <input id="title" name="title" type="text" autocomplete="off"
+                 placeholder="What needs doing?" />
+        </label>
+
+        <label class="field">
+          <span class="label">Description</span>
+          <textarea id="description" name="description" rows="3"
+                    placeholder="Notes, context, anything worth keeping"></textarea>
+        </label>
+
+        <div class="dates">
+          <label class="field">
+            <span class="label">Due date</span>
+            <input id="due" name="due" type="date" />
+          </label>
+
+          <div class="field">
+            <span class="label">Deadline</span>
+            <div class="deadline">
+              <input id="deadline-date" name="deadline-date" type="date"
+                     aria-label="Deadline date" />
+              <input id="deadline-time" name="deadline-time" type="time"
+                     aria-label="Deadline time (optional)" />
+            </div>
+          </div>
+        </div>
+
+        <button id="add" class="add" type="submit">Add to inbox</button>
+      </form>
+
+      <section id="status" class="status" hidden aria-live="polite">
+        <div id="status-title" class="status-title"></div>
+        <div id="status-detail" class="status-detail"></div>
+        <pre id="trace" class="trace" hidden></pre>
+        <button id="copy" class="copy" type="button" hidden>Copy debug info</button>
+      </section>
+
+      <footer class="footer">
+        <span>TimeSlay</span>
+        <span id="theme-name" class="theme-name"></span>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

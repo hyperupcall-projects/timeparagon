@@ -1,0 +1,23 @@
+{
+  "name": "timeslay-slack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Add Slack messages to the TimeSlay inbox",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types --env-file-if-exists=.env src/app.ts",
+    "dev": "node --watch --experimental-strip-types --env-file-if-exists=.env src/app.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slack/bolt": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}

@@ -49,7 +49,8 @@ Same for the week. Notice how yesterday can be included in this view.
 	- Create tasks:
 		- With Todoist-like syntax and voice input. (TODO)
 		- From Gmail URLs
-		- Within Slack (WIP)
+		- From any web page with the browser extension (see [`webextension/`](./webextension))
+		- From a Slack message with the Slack app (see [`slack/`](./slack))
 	- Triage tasks so they're discoverable later.
 	- Workflow to manage tasks not done in days prior (TODO)
 	- Workflow to organize/manage pending tasks (TODO)
@@ -76,6 +77,20 @@ cargo run -p time-slay-dioxus
 # Dioxus mobile app (minimal).
 ./scripts/build-android.sh
 ```
+
+### Add links from a browser or Slack
+
+The `time-slay` binary doubles as a native-messaging host (`time-slay
+--webextension`), which the browser extension and the Slack app both use to add
+the current page or a Slack message to the inbox.
+
+- Browser extension: [`webextension/`](./webextension) — load it unpacked and
+  run `./webextension/install.sh` to register the native host.
+- Slack app: [`slack/`](./slack) — a socket-mode Bolt app run without a build
+  step (`npm start`).
+
+When a TimeSlay window, panel or dock is running it writes the task and shows it
+immediately; otherwise the host writes straight to Google Tasks.
 
 ## Next Up
 
@@ -106,3 +121,5 @@ The design of this app is, in part, constrainted by the fact that:
 - Google Task API does not allow writing the deadline field (only due date).
 - Google Keep API cannot be used by non-workspace users.
 - Integrates only with the KDE Plasma desktop environment on Linux.
+
+Dock and side-panel corner radii can be set independently in Settings. Bind **Toggle Space Reservation** under Keyboard shortcuts to toggle only the currently visible shape; it does nothing while both shapes are hidden. Margin changes update the reserved space live, and popup areas are excluded.

@@ -388,19 +388,43 @@ pub(crate) fn write(
             .map_or("", |source| source.url.as_str()),
         task.deadline,
     );
-    let list = calendar::scheduled::inbox_destination(&token, settings.inbox_list.as_deref())?;
-    let created = api::insert_task_with(
-        &token,
-        &list,
-        &api::NewTask {
-            title: &title,
-            notes: &notes,
-            due: task.due,
-        },
-    )?;
+    create_event(settings, &token, &title, &notes, task.due)
+}
+
+/// Adds a task that already has its title and notes, for callers outside the
+/// new-task popup: the browser extension and the Slack app. The notes keep the
+/// link that lets the task show its source later.
+pub fn add(
+    settings: &crate::config::CalendarSettings,
+    title: &str,
+    notes: &str,
+    due: Option<NaiveDate>,
+    deadline: Option<Deadline>,
+) -> Result<Event, String> {
+    let token = tb::access(settings)?;
+    // A deadline lives in the notes, since Google Tasks has no such field.
+    // With none there is nothing to add, so the notes are left exactly as the
+    // caller wrote them.
+    let notes = match deadline {
+        Some(deadline) => deadline::write(notes, Some(deadline)),
+        None => notes.to_owned(),
+    };
+    create_event(settings, &token, title, &notes, due)
+}
+
+/// Writes one task to the inbox list and builds the local [`Event`] for it.
+fn create_event(
+    settings: &crate::config::CalendarSettings,
+    token: &str,
+    title: &str,
+    notes: &str,
+    due: Option<NaiveDate>,
+) -> Result<Event, String> {
+    let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
+    let created = api::insert_task_with(token, &list, &api::NewTask { title, notes, due })?;
 
     let calendar_id = format!("tasks:{list}");
-    let start = calendar::at_clock(task.due.unwrap_or(UNDATED), 0, 0);
+    let start = calendar::at_clock(due.unwrap_or(UNDATED), 0, 0);
     let mut event = Event {
         id: format!("task:{}", created.id),
         color: settings
@@ -414,7 +438,7 @@ pub(crate) fn write(
         completed: false,
         details: calendar::Details {
             link: created.link,
-            description: notes,
+            description: notes.to_owned(),
             ..Default::default()
         },
     };

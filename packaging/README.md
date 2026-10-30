@@ -78,10 +78,10 @@ packaging/uninstall.sh --purge    # also delete config and cache
 path of the installed binary. It is a user unit bound to
 `graphical-session.target`, so it starts and stops with the desktop session.
 
-Because the daemon draws with iced, it needs a Wayland or X11 display. Most
-Wayland sessions export `WAYLAND_DISPLAY`/`DISPLAY` to the systemd user
-manager; if yours does not, uncomment the relevant `Environment=` lines in the
-unit (or run `systemctl --user import-environment WAYLAND_DISPLAY DISPLAY`).
+TimeSlay is Wayland-only, so the daemon needs a Wayland display. Most
+Wayland sessions export `WAYLAND_DISPLAY` to the systemd user manager; if
+yours does not, uncomment the `Environment=` line in the unit (or run
+`systemctl --user import-environment WAYLAND_DISPLAY`).
 
 Useful commands:
 

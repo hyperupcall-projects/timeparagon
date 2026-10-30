@@ -234,7 +234,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         }
         iced::widget::stack(layers).into()
     });
-    let radius = state.config.views.border_radius();
+    let radius = if state.sidebar.is_some() {
+        state.config.views.panel_border_radius()
+    } else {
+        state.config.views.border_radius()
+    };
     let content = container(content).width(Fill).height(Fill).clip(true);
     let body: Element<'_, Message> = if state.sidebar.is_some() {
         let outer_width = state.config.views.panel_border_outer_width();

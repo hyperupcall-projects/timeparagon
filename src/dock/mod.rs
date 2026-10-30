@@ -110,46 +110,8 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         Some(dock_config.animation.namespace("time-slay-dock")),
         None,
     );
-    let (anchor, margins) = match dock_config.side {
-        DockSide::Left => (
-            Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
-            (
-                dock_config.screen_margin as i32,
-                0,
-                dock_config.screen_margin as i32,
-                dock_config.margin as i32,
-            ),
-        ),
-        DockSide::Right => (
-            Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
-            (
-                dock_config.screen_margin as i32,
-                dock_config.margin as i32,
-                dock_config.screen_margin as i32,
-                0,
-            ),
-        ),
-        DockSide::Top => (
-            Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-            (0, dock_config.margin as i32, 0, dock_config.margin as i32),
-        ),
-        DockSide::Bottom => (
-            Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-            (0, dock_config.margin as i32, 0, dock_config.margin as i32),
-        ),
-    };
-    layer.set_anchor(anchor);
-    layer.set_margin(margins.0, margins.1, margins.2, margins.3);
-    layer.set_exclusive_zone(dock_config.exclusive_zone());
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    // A zero asks the compositor to stretch between the anchors along that
-    // axis, so only the strip's fixed size is set.
-    if dock_config.side.is_vertical() {
-        layer.set_size(dock_config.surface_width(), 0);
-    } else {
-        layer.set_size(0, dock_config.surface_height());
-    }
-    layer.commit();
+    configure_layer(&layer, &dock_config);
 
     let theme = Catalog::load()
         .resolve(&app_config.appearance.theme)
@@ -173,18 +135,26 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     handle
         .insert_source(config_rx, |event, _, dock| {
             if let channel::Event::Msg(config) = event {
-                dock.config.reserve_space = config.views.dock_reserve_space;
-                dock.layer.set_exclusive_zone(dock.config.exclusive_zone());
-                dock.layer.commit();
-                dock.app_config.views.dock_reserve_space = config.views.dock_reserve_space;
+                let updated = dock.config.clone().with_views(&config.views);
+                if updated != dock.config {
+                    dock.config = updated;
+                    configure_layer(&dock.layer, &dock.config);
+                    dock.regions_for = None;
+                    dock.draw();
+                }
+                dock.app_config.views = config.views;
             }
         })
         .map_err(|error| anyhow!("could not watch dock reservation settings: {error}"))?;
 
+    // Tasks added over IPC take the same path as ones composed in the dock, so
+    // they appear without waiting for the next sync.
+    let (created_tx, created_rx) = channel::channel::<Result<calendar::Event, String>>();
+
     // Listening only now means the shortcut daemon can take an answer to mean
     // the strip is really going to appear.
     let (hide_tx, hide_rx) = channel::channel::<()>();
-    spawn_ipc(hide_tx)?;
+    spawn_ipc(hide_tx, created_tx.clone())?;
     handle
         .insert_source(hide_rx, |event, _, dock| {
             if let channel::Event::Msg(()) = event {
@@ -213,7 +183,6 @@ pub fn run(origin: launch::Origin) -> Result<()> {
             }
         })
         .map_err(|error| anyhow!("could not listen for clipboard: {error}"))?;
-    let (created_tx, created_rx) = channel::channel::<Result<calendar::Event, String>>();
     handle
         .insert_source(created_rx, |event, _, dock| {
             if let channel::Event::Msg(result) = event {
@@ -319,6 +288,48 @@ pub fn run(origin: launch::Origin) -> Result<()> {
     Ok(())
 }
 
+fn configure_layer(layer: &LayerSurface, config: &config::DockConfig) {
+    let (anchor, margins) = match config.side {
+        DockSide::Left => (
+            Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+            (
+                config.screen_margin as i32,
+                0,
+                config.screen_margin as i32,
+                config.margin as i32,
+            ),
+        ),
+        DockSide::Right => (
+            Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
+            (
+                config.screen_margin as i32,
+                config.margin as i32,
+                config.screen_margin as i32,
+                0,
+            ),
+        ),
+        DockSide::Top => (
+            Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
+            (0, config.margin as i32, 0, config.margin as i32),
+        ),
+        DockSide::Bottom => (
+            Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            (0, config.margin as i32, 0, config.margin as i32),
+        ),
+    };
+    layer.set_anchor(anchor);
+    layer.set_margin(margins.0, margins.1, margins.2, margins.3);
+    layer.set_exclusive_zone(config.exclusive_zone());
+    // A zero asks the compositor to stretch between the anchors along that
+    // axis, so only the strip's fixed size is set.
+    if config.side.is_vertical() {
+        layer.set_size(config.surface_width(), 0);
+    } else {
+        layer.set_size(0, config.surface_height());
+    }
+    layer.commit();
+}
+
 fn watch_config(sender: channel::Sender<Config>) -> Option<notify::RecommendedWatcher> {
     use notify::Watcher;
 
@@ -354,28 +365,51 @@ fn watch_config(sender: channel::Sender<Config>) -> Option<notify::RecommendedWa
     }
 }
 
-/// Answers the shortcut daemon: `status` says the strip is up, and `hide`
-/// makes the dock quit.
-fn spawn_ipc(hide: channel::Sender<()>) -> Result<()> {
+/// Answers the shortcut daemon (`status`, `hide`) and the browser extension or
+/// Slack app (a JSON inbox request).
+fn spawn_ipc(
+    hide: channel::Sender<()>,
+    created: channel::Sender<Result<calendar::Event, String>>,
+) -> Result<()> {
     let listener = ipc::bind(ipc::DOCK)?;
     let closing = std::sync::atomic::AtomicBool::new(false);
 
     std::thread::Builder::new()
         .name("dock-ipc".into())
         .spawn(move || {
-            let result = ipc::serve(listener, |command| match command {
-                "hide" => {
-                    closing.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let _ = hide.send(());
-                    ipc::OK.to_owned()
+            let result = ipc::serve(listener, |command| {
+                if command.starts_with('{') {
+                    let handled = crate::webextension::handle_ipc(command);
+                    if let Some(event) = handled.event {
+                        let _ = created.send(Ok(event));
+                    }
+                    return handled.reply;
                 }
-                "status" if closing.load(std::sync::atomic::Ordering::Relaxed) => {
-                    ipc::HIDDEN.to_owned()
-                }
-                "status" => ipc::VISIBLE.to_owned(),
-                other => {
-                    log::warn!("unknown dock command: {other:?}");
-                    String::new()
+                match command {
+                    "toggle-reservation" => {
+                        let mut config = Config::load();
+                        config.views.dock_reserve_space = !config.views.dock_reserve_space;
+                        match config.save() {
+                            Ok(()) => ipc::OK.to_owned(),
+                            Err(error) => {
+                                log::error!("could not save dock reservation: {error}");
+                                "error".to_owned()
+                            }
+                        }
+                    }
+                    "hide" => {
+                        closing.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let _ = hide.send(());
+                        ipc::OK.to_owned()
+                    }
+                    "status" if closing.load(std::sync::atomic::Ordering::Relaxed) => {
+                        ipc::HIDDEN.to_owned()
+                    }
+                    "status" => ipc::VISIBLE.to_owned(),
+                    other => {
+                        log::warn!("unknown dock command: {other:?}");
+                        String::new()
+                    }
                 }
             });
             if let Err(error) = result {
@@ -677,7 +711,11 @@ impl Dock {
                 self.layer.set_input_region(Some(region.wl_region()));
                 if let Ok(opaque) = Region::new(&self.compositor) {
                     opaque.add(x as i32, y as i32, w as i32, h as i32);
-                    self.layer.set_opaque_region(Some(opaque.wl_region()));
+                    self.layer.set_opaque_region(if layout.border_radius > 0.0 {
+                        None
+                    } else {
+                        Some(opaque.wl_region())
+                    });
                 }
                 self.regions_for = Some(layout);
             }

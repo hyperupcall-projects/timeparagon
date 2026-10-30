@@ -1,10 +1,7 @@
 //! TimeSlay: slay the day with TimeSlay.
 
 use time_slay::cli::{self, Mode};
-use time_slay::{app, dock, panel};
-
-/// The boot function the daemon starts from.
-type Boot = fn() -> (app::State, iced::Task<app::Message>);
+use time_slay::{app, dock, panel, webextension};
 
 fn main() -> iced::Result {
     let (mode, origin) = match cli::parse(std::env::args().skip(1)) {
@@ -28,6 +25,7 @@ fn main() -> iced::Result {
     let result = match mode {
         Mode::Dock => Some(dock::run(origin)),
         Mode::Daemon => Some(panel::run()),
+        Mode::WebExtension => Some(webextension::run()),
         Mode::Window | Mode::Sidebar => None,
     };
     if let Some(result) = result {
@@ -41,7 +39,7 @@ fn main() -> iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
         .init();
 
-    if mode == Mode::Sidebar && panel::layer::available() {
+    if mode == Mode::Sidebar {
         let result = panel::layer::run();
         time_slay::window_effect::shutdown();
         if let Err(error) = result {
@@ -51,16 +49,11 @@ fn main() -> iced::Result {
         return Ok(());
     }
 
-    let boot: Boot = if mode == Mode::Sidebar {
-        app::boot_sidebar
-    } else {
-        app::boot
-    };
-
     // A daemon rather than an application: it opens no window on its own, so
     // the clock and the flash overlay are peers, and it does not quit the
     // moment the overlay closes.
-    let result = iced::daemon(boot, app::update, app::view)
+    let result = iced::daemon(app::boot, app::update, app::view)
+        .antialiasing(true)
         .title(app::title)
         .theme(app::active_theme)
         .style(|_state, theme| {

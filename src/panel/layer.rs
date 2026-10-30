@@ -19,10 +19,6 @@ use super::Side;
 use crate::app::{self, State};
 use crate::config::ViewSettings;
 
-pub fn available() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some()
-}
-
 #[derive(Debug)]
 enum Message {
     App(app::Message),
@@ -288,6 +284,7 @@ pub fn run() -> iced_layershell::Result {
         })
         .subscription(subscription)
         .settings(Settings {
+            antialiasing: true,
             layer_settings: LayerShellSettings {
                 start_mode: StartMode::Background,
                 ..Default::default()

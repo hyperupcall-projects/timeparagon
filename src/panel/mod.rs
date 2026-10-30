@@ -10,12 +10,13 @@
 //! TimeSlay has two shapes, both started from the one binary: the **panel**
 //! (`time-slay --sidebar`, the full app in a wide edge strip) and the
 //! **dock** (`time-slay --dock`, a very thin strip of today). The daemon
-//! draws neither. It has two actions, each of which can have several
+//! draws neither. It has three actions, each of which can have several
 //! shortcuts:
 //!
 //! * **Toggle Visibility** hides whichever shape is on screen, and when
 //!   nothing is, brings back the shape that was last shown.
 //! * **Toggle Shape** swaps the panel for the dock and the dock for the panel.
+//! * **Toggle Space Reservation** changes only the visible shape; hidden is a no-op.
 //!
 //! The daemon keeps no record of what is on screen. It asks, over the sockets
 //! in [`crate::ipc`], so the answer is right even when a shape was changed
@@ -124,6 +125,13 @@ impl Controller {
         match action {
             Action::ToggleVisibility => self.toggle_visibility(),
             Action::ToggleShape => self.toggle_shape(),
+            Action::ToggleReservation => {
+                if let Some(shape) = self.visible().first() {
+                    if let Err(error) = ipc::request(shape.socket(), "toggle-reservation") {
+                        log::warn!("could not toggle reservation: {error}");
+                    }
+                }
+            }
         }
     }
 

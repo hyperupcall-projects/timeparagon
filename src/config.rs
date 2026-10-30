@@ -188,6 +188,8 @@ pub struct ViewSettings {
     pub margin: f32,
     /// Radius of the application's visible outer corners, in logical pixels.
     pub border_radius: f32,
+    pub dock_border_radius: f32,
+    pub panel_border_radius: Option<f32>,
     /// Width of the dock strip, in logical pixels.
     pub dock_width: f32,
     /// Reserve the visible dock strip in the compositor work area.
@@ -306,6 +308,8 @@ impl Default for ViewSettings {
             detail_width: 360.0,
             margin: 8.0,
             border_radius: 4.0,
+            dock_border_radius: 0.0,
+            panel_border_radius: None,
             dock_width: 10.0,
             dock_margin: 0.0,
             dock_side: DockSide::Left,
@@ -359,6 +363,20 @@ impl ViewSettings {
         } else {
             Self::default().margin
         }
+    }
+
+    pub fn dock_border_radius(&self) -> f32 {
+        if self.dock_border_radius.is_finite() {
+            self.dock_border_radius.clamp(0.0, Self::MAX_BORDER_RADIUS)
+        } else {
+            0.0
+        }
+    }
+    pub fn panel_border_radius(&self) -> f32 {
+        self.panel_border_radius
+            .filter(|r| r.is_finite())
+            .unwrap_or(self.border_radius())
+            .clamp(0.0, Self::MAX_BORDER_RADIUS)
     }
 
     pub fn border_radius(&self) -> f32 {

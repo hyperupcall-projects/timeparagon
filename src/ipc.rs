@@ -12,9 +12,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-/// The side panel's socket: `show`, `hide` and `status`.
+/// The regular window's socket: `status` and JSON inbox requests.
+pub const WINDOW: &str = "time-slay-window.sock";
+/// The side panel's socket: `show`, `hide`, `status` and JSON inbox requests.
 pub const SIDEBAR: &str = "time-slay-sidebar.sock";
-/// The dock's socket: `hide` and `status`.
+/// The dock's socket: `hide`, `status` and JSON inbox requests.
 pub const DOCK: &str = "time-slay-dock.sock";
 
 /// What `status` answers while the window or strip is on screen.
@@ -27,6 +29,10 @@ pub const OK: &str = "ok";
 /// How long a peer gets to answer before it is treated as gone.
 const TIMEOUT: Duration = Duration::from_secs(2);
 
+/// The largest request a peer may send. Inbox requests carry a page title and,
+/// for Slack, the text of a message; a megabyte is far more than any of them.
+const MAX_REQUEST: u64 = 1024 * 1024;
+
 /// The path of a socket, preferring the XDG runtime directory.
 pub fn path(name: &str) -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
@@ -37,11 +43,17 @@ pub fn path(name: &str) -> PathBuf {
 
 /// Sends one command and returns the reply. Fails when nothing is listening.
 pub fn request(name: &str, command: &str) -> Result<String> {
+    request_with_timeout(name, command, TIMEOUT)
+}
+
+/// Like [`request`], for work that may take longer than a visibility check:
+/// adding a task waits on Google's API, which can take a few seconds.
+pub fn request_with_timeout(name: &str, command: &str, timeout: Duration) -> Result<String> {
     let path = path(name);
     let mut stream = UnixStream::connect(&path)
         .with_context(|| format!("nothing is listening on {}", path.display()))?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     stream.write_all(command.as_bytes())?;
     stream.shutdown(Shutdown::Write)?;
 
@@ -89,7 +101,7 @@ pub fn serve(listener: UnixListener, mut handle: impl FnMut(&str) -> String) -> 
         let _ = stream.set_write_timeout(Some(TIMEOUT));
 
         let mut command = String::new();
-        if let Err(error) = (&stream).take(64).read_to_string(&mut command) {
+        if let Err(error) = (&stream).take(MAX_REQUEST).read_to_string(&mut command) {
             log::warn!("failed to read a command: {error}");
             continue;
         }

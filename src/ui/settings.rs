@@ -203,7 +203,7 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
             .size(metrics.label())
             .style(text::secondary),
         layout_number(
-            "Calendar dday width (px)",
+            "Calendar day width (px)",
             LayoutField::CalendarWidth,
             state,
             metrics
@@ -252,6 +252,12 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         text("Keep maximized windows beside the dock. Popups do not reserve space.")
             .size(metrics.label())
             .style(text::secondary),
+        layout_number(
+            "Corner radius (px, 0–30)",
+            LayoutField::DockBorderRadius,
+            state,
+            metrics
+        ),
         text("Change the appearance of the dock.")
             .size(metrics.label())
             .style(text::secondary),
@@ -320,6 +326,12 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         text("Keep maximized windows beside the panel. Tooltips do not reserve space.")
             .size(metrics.label())
             .style(text::secondary),
+        layout_number(
+            "Corner radius (px, 0–30)",
+            LayoutField::PanelBorderRadius,
+            state,
+            metrics
+        ),
         text("Update the borders of the dock and panel.")
             .size(metrics.label())
             .style(text::secondary),
@@ -478,6 +490,8 @@ fn layout_number<'a>(
         LayoutField::CalendarWidth | LayoutField::TimeBlockWidth | LayoutField::DetailWidth => 10.0,
         LayoutField::ScreenMargin
         | LayoutField::BorderRadius
+        | LayoutField::DockBorderRadius
+        | LayoutField::PanelBorderRadius
         | LayoutField::DockWidth
         | LayoutField::DockMargin
         | LayoutField::DockBorderOuterWidth
@@ -1179,7 +1193,8 @@ mod tests {
             let size = iced::Size::new(width, 400.0);
             let metrics = Metrics::of(size);
             let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
-            ui.click(iced::widget::Id::from("dock-reservation")).unwrap();
+            ui.click(iced::widget::Id::from("dock-reservation"))
+                .unwrap();
             for message in ui.into_messages() {
                 let _ = app::update(&mut state, message);
             }
@@ -1187,7 +1202,8 @@ mod tests {
             assert!(!state.config.views.panel_reserve_space);
 
             let mut ui = Simulator::with_size(Settings::default(), size, panel(&state, &metrics));
-            ui.click(iced::widget::Id::from("panel-reservation")).unwrap();
+            ui.click(iced::widget::Id::from("panel-reservation"))
+                .unwrap();
             for message in ui.into_messages() {
                 let _ = app::update(&mut state, message);
             }

@@ -9,7 +9,7 @@ use anyhow::Result as AnyhowResult;
 
 use iced::keyboard::{self, Key};
 use iced::widget::text_editor;
-use iced::{Element, Point, Size, Subscription, Task, Theme, window};
+use iced::{Element, Size, Subscription, Task, Theme, window};
 
 use chrono::{DateTime, Local};
 
@@ -67,6 +67,8 @@ pub enum LayoutField {
     DetailWidth,
     ScreenMargin,
     BorderRadius,
+    DockBorderRadius,
+    PanelBorderRadius,
     DockWidth,
     DockMargin,
     DockBorderOuterWidth,
@@ -84,6 +86,8 @@ impl LayoutField {
             Self::DetailWidth => state.config.views.detail_width(),
             Self::ScreenMargin => state.config.views.margin(),
             Self::BorderRadius => state.config.views.border_radius(),
+            Self::DockBorderRadius => state.config.views.dock_border_radius(),
+            Self::PanelBorderRadius => state.config.views.panel_border_radius(),
             Self::DockWidth => state.config.views.dock_width(),
             Self::DockMargin => state.config.views.dock_margin(),
             Self::DockBorderOuterWidth => state.config.views.dock_border_outer_width(),
@@ -97,7 +101,9 @@ impl LayoutField {
     pub fn bounds(self) -> (f32, f32) {
         match self {
             Self::ScreenMargin => (0.0, config::ViewSettings::MAX_MARGIN),
-            Self::BorderRadius => (0.0, config::ViewSettings::MAX_BORDER_RADIUS),
+            Self::BorderRadius | Self::DockBorderRadius | Self::PanelBorderRadius => {
+                (0.0, config::ViewSettings::MAX_BORDER_RADIUS)
+            }
             Self::DockWidth => (
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
@@ -122,6 +128,8 @@ impl LayoutField {
             Self::DetailWidth => Message::DetailWidthChanged(value),
             Self::ScreenMargin => Message::ScreenMarginChanged(value),
             Self::BorderRadius => Message::BorderRadiusChanged(value),
+            Self::DockBorderRadius => Message::DockBorderRadiusChanged(value),
+            Self::PanelBorderRadius => Message::PanelBorderRadiusChanged(value),
             Self::DockWidth => Message::DockWidthChanged(value),
             Self::DockMargin => Message::DockMarginChanged(value),
             Self::DockBorderOuterWidth => Message::DockBorderOuterWidthChanged(value),
@@ -165,6 +173,7 @@ pub struct ShortcutEditor {
 pub enum PanelCommand {
     Show,
     Hide,
+    ToggleReservation,
 }
 
 impl Flash {
@@ -227,6 +236,9 @@ pub struct State {
     /// Receiver for show/hide commands from the panel daemon, when this process
     /// is the side panel.
     pub panel_command_rx: Option<mpsc::Receiver<PanelCommand>>,
+    /// Tasks added over IPC by the browser extension or the Slack app, waiting
+    /// to be folded into the calendar on the UI thread.
+    pub inbox_added_rx: Option<mpsc::Receiver<calendar::Event>>,
     /// The panel config, kept so the window can be reopened after being closed.
     pub panel_config: Option<crate::panel::PanelConfig>,
     /// Set when the panel window is closed programmatically (to hide), so that
@@ -241,7 +253,7 @@ pub struct State {
     pub audio_error: Option<String>,
 
     /// The "add a shortcut" boxes of the settings page, one per [`panel::Action`].
-    pub shortcut_editors: [ShortcutEditor; 2],
+    pub shortcut_editors: [ShortcutEditor; panel::Action::ALL.len()],
     /// Whether the panel window is on screen, as the shortcut daemon sees it
     /// when it asks. Only meaningful when this process is the side panel.
     pub panel_visible: Arc<AtomicBool>,
@@ -347,6 +359,8 @@ pub enum Message {
     /// Quit and start again from the binary on disk.
     RestartRequested,
     BorderRadiusChanged(f32),
+    DockBorderRadiusChanged(f32),
+    PanelBorderRadiusChanged(f32),
     ViewLayoutInputChanged(LayoutField, String),
     ViewLayoutInputSubmitted(LayoutField),
     ShortcutInputChanged(panel::Action, String),
@@ -372,6 +386,8 @@ pub enum Message {
     FlashFinished,
     /// A poll tick that checks for show/hide commands from the panel daemon.
     PanelCommandPolled,
+    /// A poll tick that checks for tasks added over IPC.
+    InboxAddedPolled,
 
     KeyPressed(Key, keyboard::Modifiers),
     /// An event we deliberately do not act on, such as a key release or a
@@ -580,6 +596,7 @@ impl State {
             weekly_resize_pending: false,
             weekly_width_restoring: None,
             panel_command_rx: None,
+            inbox_added_rx: None,
             panel_config: None,
             panel_expected_close: false,
             flash: None,
@@ -713,7 +730,25 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
 }
 
 pub fn boot() -> (State, Task<Message>) {
-    let state = boot_state();
+    let mut state = boot_state();
+
+    // The browser extension and the Slack app look for a running app here.
+    // The panel has its own socket; this one covers the regular window.
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    state.inbox_added_rx = Some(inbox_rx);
+    match crate::ipc::bind(crate::ipc::WINDOW) {
+        Ok(listener) => {
+            std::thread::Builder::new()
+                .name("window-ipc".into())
+                .spawn(move || {
+                    if let Err(error) = window_ipc_listener(listener, inbox_tx) {
+                        log::error!("window IPC listener stopped: {error:#}");
+                    }
+                })
+                .expect("failed to spawn the window IPC listener");
+        }
+        Err(error) => log::error!("window IPC is unavailable: {error:#}"),
+    }
 
     // A daemon opens no window by itself, which is what lets the flash
     // overlay be a peer window rather than a child of the clock.
@@ -753,6 +788,8 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 
     let (tx, rx) = mpsc::channel();
     state.panel_command_rx = Some(rx);
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    state.inbox_added_rx = Some(inbox_rx);
 
     match crate::ipc::bind(crate::ipc::SIDEBAR) {
         Ok(listener) => {
@@ -760,7 +797,7 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
             std::thread::Builder::new()
                 .name("panel-ipc".into())
                 .spawn(move || {
-                    if let Err(error) = panel_ipc_listener(listener, tx, visible) {
+                    if let Err(error) = panel_ipc_listener(listener, tx, visible, inbox_tx) {
                         log::error!("panel IPC listener stopped: {error:#}");
                     }
                 })
@@ -786,16 +823,10 @@ const PANEL_FILL: f32 = 10_000.0;
 /// The window a panel instance opens with.
 fn sidebar_settings(panel: &panel::PanelConfig, views: &config::ViewSettings) -> window::Settings {
     let width = views.calendar_width(panel.width as f32) + views.margin();
-    let side = panel.side;
-
     window::Settings {
         size: Size::new(width, PANEL_FILL),
         min_size: Some(Size::new(width, MIN_SIZE.height)),
         max_size: Some(Size::new(width, 100_000.0)),
-        position: match side {
-            panel::Side::Left => window::Position::SpecificWith(left_edge),
-            panel::Side::Right => window::Position::SpecificWith(right_edge),
-        },
         decorations: false,
         // Transparent gutters provide the screen margin even on Wayland,
         // where clients cannot position their own windows.
@@ -815,16 +846,6 @@ fn sidebar_platform(views: &config::ViewSettings) -> window::settings::PlatformS
         application_id: crate::window_effect::prepare(views, APPLICATION_ID),
         ..Default::default()
     }
-}
-
-/// The top-left corner of the monitor. `SpecificWith` wants a plain `fn`, so
-/// the edge is chosen with a pair of functions rather than a captured closure.
-fn left_edge(_window: Size, _monitor: Size) -> Point {
-    Point::new(0.0, 0.0)
-}
-
-fn right_edge(window: Size, monitor: Size) -> Point {
-    Point::new(monitor.width - window.width, 0.0)
 }
 
 /// Builds the state that is read from disk at startup.
@@ -1397,6 +1418,16 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::batch([resize, queue_save(state)])
         }
 
+        Message::DockBorderRadiusChanged(radius) => {
+            state.config.views.dock_border_radius =
+                radius.clamp(0.0, config::ViewSettings::MAX_BORDER_RADIUS);
+            queue_save(state)
+        }
+        Message::PanelBorderRadiusChanged(radius) => {
+            state.config.views.panel_border_radius =
+                Some(radius.clamp(0.0, config::ViewSettings::MAX_BORDER_RADIUS));
+            queue_save(state)
+        }
         Message::DockReserveSpaceToggled(enabled) => {
             state.config.views.dock_reserve_space = enabled;
             queue_save(state)
@@ -1747,6 +1778,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             };
 
             match command {
+                PanelCommand::ToggleReservation => {
+                    state.config.views.panel_reserve_space =
+                        !state.config.views.panel_reserve_space;
+                    queue_save(state)
+                }
                 PanelCommand::Show => {
                     if state.main_window.is_some() {
                         return Task::none(); // already visible
@@ -1786,6 +1822,25 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     window::close(id)
                 }
             }
+        }
+
+        Message::InboxAddedPolled => {
+            let mut added = Vec::new();
+            if let Some(rx) = state.inbox_added_rx.as_ref() {
+                while let Ok(event) = rx.try_recv() {
+                    added.push(event);
+                }
+            }
+            if added.is_empty() {
+                return Task::none();
+            }
+            for event in added {
+                state.timeblocking.revision += 1;
+                state.calendar.events.retain(|other| other.id != event.id);
+                state.calendar.add_event(event);
+            }
+            state.calendar.invalidate_other_days();
+            Task::done(Message::CalendarSyncRequested)
         }
 
         Message::WindowOpened(id) => {
@@ -3338,6 +3393,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
+    // The extension and the Slack app add tasks from their own processes.
+    if state.inbox_added_rx.is_some() {
+        subscriptions
+            .push(iced::time::every(Duration::from_millis(200)).map(|_| Message::InboxAddedPolled));
+    }
+
     Subscription::batch(subscriptions)
 }
 
@@ -3820,27 +3881,67 @@ fn panel_ipc_listener(
     listener: UnixListener,
     tx: mpsc::Sender<PanelCommand>,
     visible: Arc<AtomicBool>,
+    inbox: mpsc::Sender<calendar::Event>,
 ) -> AnyhowResult<()> {
     log::info!("panel IPC socket listening");
 
-    crate::ipc::serve(listener, |command| match command {
-        "show" => {
-            // Answered from here rather than from the window, so that a
-            // `status` straight afterwards is already right.
-            visible.store(true, Ordering::Relaxed);
-            let _ = tx.send(PanelCommand::Show);
-            crate::ipc::OK.to_owned()
+    crate::ipc::serve(listener, |command| {
+        if command.starts_with('{') {
+            let handled = crate::webextension::handle_ipc(command);
+            if let Some(event) = handled.event {
+                let _ = inbox.send(event);
+            }
+            return handled.reply;
         }
-        "hide" => {
-            visible.store(false, Ordering::Relaxed);
-            let _ = tx.send(PanelCommand::Hide);
-            crate::ipc::OK.to_owned()
+        match command {
+            "toggle-reservation" => {
+                let _ = tx.send(PanelCommand::ToggleReservation);
+                crate::ipc::OK.to_owned()
+            }
+            "show" => {
+                // Answered from here rather than from the window, so that a
+                // `status` straight afterwards is already right.
+                visible.store(true, Ordering::Relaxed);
+                let _ = tx.send(PanelCommand::Show);
+                crate::ipc::OK.to_owned()
+            }
+            "hide" => {
+                visible.store(false, Ordering::Relaxed);
+                let _ = tx.send(PanelCommand::Hide);
+                crate::ipc::OK.to_owned()
+            }
+            "status" if visible.load(Ordering::Relaxed) => crate::ipc::VISIBLE.to_owned(),
+            "status" => crate::ipc::HIDDEN.to_owned(),
+            other => {
+                log::warn!("unknown panel IPC command: {other:?}");
+                String::new()
+            }
         }
-        "status" if visible.load(Ordering::Relaxed) => crate::ipc::VISIBLE.to_owned(),
-        "status" => crate::ipc::HIDDEN.to_owned(),
-        other => {
-            log::warn!("unknown panel IPC command: {other:?}");
-            String::new()
+    })
+}
+
+/// Answers the browser extension and the Slack app on the regular window's
+/// socket. The panel has the same JSON branch in [`panel_ipc_listener`].
+fn window_ipc_listener(
+    listener: UnixListener,
+    inbox: mpsc::Sender<calendar::Event>,
+) -> AnyhowResult<()> {
+    log::info!("window IPC socket listening");
+
+    crate::ipc::serve(listener, |command| {
+        if command.starts_with('{') {
+            let handled = crate::webextension::handle_ipc(command);
+            if let Some(event) = handled.event {
+                let _ = inbox.send(event);
+            }
+            return handled.reply;
+        }
+        match command {
+            "status" => crate::ipc::VISIBLE.to_owned(),
+            other => {
+                log::warn!("unknown window IPC command: {other:?}");
+                String::new()
+            }
         }
     })
 }
@@ -4519,15 +4620,6 @@ mod tests {
         assert_eq!(widths.last(), Some(&1386.0));
         assert!(!state.details_pane_open);
         assert_eq!(state.timeblocking.original_width, None);
-    }
-
-    #[test]
-    fn the_panel_pins_to_the_edge_it_was_asked_for() {
-        let window = Size::new(200.0, 1080.0);
-        let monitor = Size::new(1920.0, 1080.0);
-
-        assert_eq!(left_edge(window, monitor), Point::new(0.0, 0.0));
-        assert_eq!(right_edge(window, monitor), Point::new(1720.0, 0.0));
     }
 
     #[test]

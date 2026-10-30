@@ -16,7 +16,6 @@ iana-time-zone = "0.1"
 iced = { version = "0.14", default-features = false, features = [
     "tiny-skia",
     "wayland",
-    "x11",
     "crisp",
     "lazy",
     "tokio",

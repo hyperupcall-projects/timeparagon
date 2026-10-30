@@ -138,19 +138,6 @@ pub fn window_attributes(
 
     #[cfg(target_os = "linux")]
     {
-        #[cfg(feature = "x11")]
-        {
-            use winit::platform::x11::WindowAttributesExtX11;
-
-            attributes = attributes
-                .with_override_redirect(
-                    settings.platform_specific.override_redirect,
-                )
-                .with_name(
-                    &settings.platform_specific.application_id,
-                    &settings.platform_specific.application_id,
-                );
-        }
         #[cfg(feature = "wayland")]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;

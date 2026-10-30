@@ -1,0 +1,263 @@
+/*
+ * The popup wears the colors of the app's chosen theme. popup.js asks the
+ * native host for them on load and sets the variables below; the values here
+ * are a fallback (the default Sakura palette) for the moment before that.
+ */
+:root {
+  --ts-background: #fff3f7;
+  --ts-surface: #f7e9ef;
+  --ts-surface-strong: #e9d7df;
+  --ts-text: #4a2c39;
+  --ts-text-muted: #7c5b68;
+  --ts-primary: #d6558a;
+  --ts-primary-strong: #c44b7e;
+  --ts-on-primary: #ffffff;
+  --ts-success: #4f8a5c;
+  --ts-warning: #a9772a;
+  --ts-danger: #b8433f;
+  --ts-radius: 10px;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  width: 384px;
+  background: var(--ts-background);
+  color: var(--ts-text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.card {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.hero {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.hero img {
+  border-radius: 8px;
+  flex: none;
+}
+
+.hero-text {
+  min-width: 0;
+}
+
+.hero h1 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.page-title {
+  margin: 1px 0 0;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-url {
+  margin: 0;
+  color: var(--ts-text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Form -------------------------------------------------------------------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.label {
+  color: var(--ts-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--ts-surface-strong);
+  border-radius: var(--ts-radius);
+  background: var(--ts-surface);
+  color: var(--ts-text);
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 56px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ts-text-muted);
+  opacity: 0.85;
+}
+
+input:focus,
+textarea:focus {
+  outline: 2px solid var(--ts-primary);
+  outline-offset: 1px;
+  border-color: var(--ts-primary);
+}
+
+.dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.deadline {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+/* Buttons ----------------------------------------------------------------- */
+
+.add {
+  margin-top: 2px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--ts-radius);
+  background: var(--ts-primary);
+  color: var(--ts-on-primary);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.add:hover:not(:disabled) {
+  background: var(--ts-primary-strong);
+}
+
+.add:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.copy {
+  align-self: flex-start;
+  padding: 5px 9px;
+  border: 1px solid var(--ts-surface-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ts-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.copy:hover {
+  background: var(--ts-surface);
+}
+
+/* Status ------------------------------------------------------------------ */
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--ts-surface-strong);
+  border-radius: var(--ts-radius);
+  background: var(--ts-surface);
+}
+
+.status.busy .status-title {
+  color: var(--ts-text-muted);
+}
+
+.status.ok {
+  border-color: var(--ts-success);
+}
+
+.status.ok .status-title {
+  color: var(--ts-success);
+}
+
+.status.error {
+  border-color: var(--ts-danger);
+}
+
+.status.error .status-title {
+  color: var(--ts-danger);
+}
+
+.status.warn {
+  border-color: var(--ts-warning);
+}
+
+.status.warn .status-title {
+  color: var(--ts-warning);
+}
+
+.status-title {
+  font-weight: 650;
+}
+
+.status-detail a {
+  color: var(--ts-primary);
+}
+
+.trace {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--ts-background);
+  color: var(--ts-text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Footer ------------------------------------------------------------------ */
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ts-text-muted);
+  font-size: 11px;
+}
+
+.theme-name {
+  font-style: italic;
+}

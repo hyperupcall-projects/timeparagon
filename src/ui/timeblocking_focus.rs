@@ -83,7 +83,13 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             ],
         ]
         .spacing(5);
-        let mut body = column![header, pomodoro(state)].spacing(10);
+        // At narrow widths the header and Pomodoro leave no room for a
+        // timeline viewport, so everything below the header scrolls as one.
+        let compact = width < 360.0;
+        let mut body = column![header].spacing(10);
+        if !compact {
+            body = body.push(pomodoro(state));
+        }
         if let Some(error) = &state.calendar.error {
             body = body.push(text(error).size(12).style(text::danger));
         }
@@ -101,44 +107,26 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                     .calendar
                     .event(&block_id)
                     .expect("block exists while view is rendered");
-                timeline(state, block, size)
+                let content: Element<'a, Message> = if compact {
+                    let mut content =
+                        column![timeline(state, block, size), pomodoro(state)].spacing(10);
+                    if let Some(history) = history(state, block) {
+                        content = content.push(history);
+                    }
+                    content.into()
+                } else {
+                    timeline(state, block, size)
+                };
+                scrollable(content)
+                    .id(iced::widget::Id::new("focused-block-timeline"))
+                    .width(Fill)
+                    .height(Fill)
+                    .into()
             })
             .height(Fill),
         );
-        if state.timeblocking.history_open {
-            let key = tb::block_key(block);
-            let now = state.timeblocking.work_now.unwrap_or_else(Utc::now);
-            let mut history = column![text("Saved work sessions").size(14)].spacing(6);
-            let sessions: Vec<_> = state
-                .config
-                .task_work
-                .sessions
-                .iter()
-                .filter(|s| s.block_key.as_deref() == Some(&key))
-                .collect();
-            if sessions.is_empty() {
-                history =
-                    history.push(text("No work sessions yet").size(12).style(text::secondary));
-            }
-            for session in sessions.into_iter().rev() {
-                history = history.push(
-                    text(format!(
-                        "{} · {} → {} · {}",
-                        session.task_title,
-                        session
-                            .started_at
-                            .with_timezone(&Local)
-                            .format("%b %-d %H:%M"),
-                        session
-                            .stopped_at
-                            .map(|t| t.with_timezone(&Local).format("%H:%M").to_string())
-                            .unwrap_or_else(|| "running".into()),
-                        task_work::clock(session.seconds(now))
-                    ))
-                    .size(12),
-                );
-            }
-            body = body.push(container(scrollable(history)).max_height(135));
+        if !compact && let Some(history) = history(state, block) {
+            body = body.push(history);
         }
         body.into()
     } else {
@@ -462,11 +450,46 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
         .height(Length::Fixed(height))
         .into(),
     );
-    scrollable(stack(layers).height(Length::Fixed(height)))
-        .id(iced::widget::Id::new("focused-block-timeline"))
-        .width(Fill)
-        .height(Fill)
-        .into()
+    stack(layers).height(Length::Fixed(height)).into()
+}
+
+/// The block's saved work sessions, while the history is toggled open.
+fn history<'a>(state: &'a State, block: &Event) -> Option<Element<'a, Message>> {
+    if !state.timeblocking.history_open {
+        return None;
+    }
+    let key = tb::block_key(block);
+    let now = state.timeblocking.work_now.unwrap_or_else(Utc::now);
+    let mut history = column![text("Saved work sessions").size(14)].spacing(6);
+    let sessions: Vec<_> = state
+        .config
+        .task_work
+        .sessions
+        .iter()
+        .filter(|s| s.block_key.as_deref() == Some(&key))
+        .collect();
+    if sessions.is_empty() {
+        history = history.push(text("No work sessions yet").size(12).style(text::secondary));
+    }
+    for session in sessions.into_iter().rev() {
+        history = history.push(
+            text(format!(
+                "{} · {} → {} · {}",
+                session.task_title,
+                session
+                    .started_at
+                    .with_timezone(&Local)
+                    .format("%b %-d %H:%M"),
+                session
+                    .stopped_at
+                    .map(|t| t.with_timezone(&Local).format("%H:%M").to_string())
+                    .unwrap_or_else(|| "running".into()),
+                task_work::clock(session.seconds(now))
+            ))
+            .size(12),
+        );
+    }
+    Some(container(scrollable(history)).max_height(135).into())
 }
 /// How wide the lane of worked-time boxes is, and the gap between it and the
 /// task cards. The lane is only reserved while the block has work sessions.

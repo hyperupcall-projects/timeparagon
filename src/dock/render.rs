@@ -99,6 +99,7 @@ pub struct Layout {
     /// Size of the hover card along its fixed axis: its width beside a
     /// vertical edge, its height beside a horizontal one.
     pub card_size: f32,
+    pub border_radius: f32,
     pub border_outer: f32,
     pub border_inner: f32,
     pub border_outer_color: Color,
@@ -148,6 +149,7 @@ impl Layout {
             thickness,
             gap,
             card_size: config.popup_width as f32,
+            border_radius: config.border_radius.min(thickness / 2.0),
             border_outer,
             border_inner,
             border_outer_color: config.border_outer_color.0,
@@ -480,15 +482,16 @@ impl Renderer {
         }
         if layout.border_inner > 0.0 {
             let inset = layout.border_outer;
-            fill_rect(
+            fill_rounded(
                 pixmap,
                 layout,
                 (x + inset, y + inset, w - 2.0 * inset, h - 2.0 * inset),
+                (layout.border_radius - inset).max(0.0),
                 layout.border_inner_color,
                 1.0,
             );
         }
-        fill_rect(
+        fill_rounded(
             pixmap,
             layout,
             (
@@ -497,6 +500,7 @@ impl Renderer {
                 layout.content_width,
                 layout.content_height,
             ),
+            (layout.border_radius - layout.border_outer - layout.border_inner).max(0.0),
             palette.background,
             1.0,
         );
@@ -571,6 +575,20 @@ impl Renderer {
         paint_button(pixmap, layout, scene);
 
         paint_add(pixmap, layout, scene);
+        if layout.border_radius > 0.0 {
+            if let Some(path) = rounded_path(layout, layout.strip_rect(), layout.border_radius) {
+                if let Some(mut mask) = tiny_skia::Mask::new(pixmap.width(), pixmap.height()) {
+                    mask.fill_path(
+                        &path,
+                        tiny_skia::FillRule::Winding,
+                        true,
+                        tiny_skia::Transform::identity(),
+                    );
+                    pixmap.apply_mask(&mask);
+                }
+            }
+        }
+
         let card = if let Some(compose) = scene.compose {
             let rect = self.paint_compose(layout, palette, compose, pixmap);
             Some(PixelRect::from_logical(layout, rect, 2.0))
@@ -1189,6 +1207,43 @@ fn blend_rect(pixmap: &mut Pixmap, x: i32, y: i32, w: u32, h: u32, color: TextCo
 mod tests {
     use super::*;
     use crate::dock::model::Card;
+
+    #[test]
+    fn rounded_strip_has_transparent_corners_without_clipping_its_popup() {
+        let config = DockConfig {
+            width: 20,
+            border_radius: 8.0,
+            ..Default::default()
+        };
+        let layout = Layout::new(&config, 326, 800, 1);
+        let mut pixmap = Pixmap::new(326, 800).unwrap();
+        let form = super::super::compose::Compose::default();
+        let scene = Scene {
+            segments: &[],
+            now_minute: None,
+            hovered: None,
+            pinned: None,
+            day_offset_min: 0,
+            hour_lines: false,
+            button_hovered: false,
+            add_hovered: false,
+            compose: Some(&form),
+            back_label: "",
+            side: config.side,
+            palette: palette(),
+        };
+        Renderer::default().paint(&layout, &scene, &mut pixmap);
+        assert_eq!(pixmap.pixel(0, 0).unwrap().alpha(), 0);
+        assert_eq!(pixmap.pixel(0, 400).unwrap().alpha(), 255);
+        let (x, y, w, _) = super::super::compose::rect(&layout);
+        assert_eq!(
+            pixmap
+                .pixel((x + w / 2.0) as u32, (y + 5.0) as u32)
+                .unwrap()
+                .alpha(),
+            255
+        );
+    }
 
     fn segment(start_min: i32, end_min: i32) -> Segment {
         let card = Card {

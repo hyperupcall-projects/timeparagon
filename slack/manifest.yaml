@@ -1,0 +1,49 @@
+display_information:
+  name: TimeSlay
+  description: Add Slack messages to your TimeSlay inbox
+  background_color: "#1f2430"
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: TimeSlay
+    always_online: true
+  shortcuts:
+    - name: Add to inbox
+      type: message
+      callback_id: add_to_inbox
+      description: Save this message to your TimeSlay inbox
+    - name: Add to inbox
+      type: global
+      callback_id: add_to_inbox_global
+      description: Add a link to your TimeSlay inbox
+  slash_commands:
+    - command: /add-to-inbox
+      description: Add a link to your TimeSlay inbox
+      usage_hint: "<link> [note]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - commands
+      - im:write
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+      - users:read
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
