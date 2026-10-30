@@ -889,7 +889,7 @@ pub struct CalendarSettings {
 impl Default for CalendarSettings {
     fn default() -> Self {
         Self {
-            sync_minutes: 15,
+            sync_minutes: 60,
             client_id: String::new(),
             client_secret: String::new(),
             disabled: Vec::new(),
@@ -967,7 +967,7 @@ impl CalendarSettings {
     }
 
     pub const MIN_SYNC_MINUTES: u32 = 1;
-    pub const MAX_SYNC_MINUTES: u32 = 120;
+    pub const MAX_SYNC_MINUTES: u32 = 1440;
     /// The latest hour a day can end: 5am, which is as far into the morning
     /// as a late night is worth pushing the boundary. Midnight (0) is the
     /// default.
@@ -1737,10 +1737,21 @@ mod tests {
     }
 
     #[test]
-    fn calendar_sync_defaults_to_fifteen_minutes() {
+    fn explicit_sync_intervals_are_preserved_and_invalid_values_are_clamped() {
+        let parsed: Config = toml::from_str("[calendar]\nsync_minutes = 120").unwrap();
+        assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(7200));
+        let mut settings = CalendarSettings::default();
+        settings.sync_minutes = 0;
+        assert_eq!(settings.sync_every(), Duration::from_secs(60));
+        settings.sync_minutes = u32::MAX;
+        assert_eq!(settings.sync_every(), Duration::from_secs(24 * 3600));
+    }
+
+    #[test]
+    fn calendar_sync_defaults_to_one_hour() {
         let parsed: Config = toml::from_str("").unwrap();
-        assert_eq!(parsed.calendar.sync_minutes, 15);
-        assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(15 * 60));
+        assert_eq!(parsed.calendar.sync_minutes, 60);
+        assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(60 * 60));
     }
 
     #[test]

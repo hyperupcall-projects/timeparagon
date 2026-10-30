@@ -749,17 +749,19 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     section = section.push(resync);
 
-    section = section.push(field(
-        sync_label(settings.sync_minutes),
-        slider(
-            config::CalendarSettings::MIN_SYNC_MINUTES..=config::CalendarSettings::MAX_SYNC_MINUTES,
-            settings.sync_minutes.clamp(
-                config::CalendarSettings::MIN_SYNC_MINUTES,
-                config::CalendarSettings::MAX_SYNC_MINUTES,
-            ),
-            Message::CalendarSyncMinutesChanged,
-        )
-        .into(),
+    let selected = SyncInterval(settings.sync_minutes.clamp(
+        config::CalendarSettings::MIN_SYNC_MINUTES,
+        config::CalendarSettings::MAX_SYNC_MINUTES,
+    ));
+    let mut intervals = vec![1, 5, 15, 30, 60, 120, 240, 480, 720, 1440];
+    intervals.push(selected.0);
+    intervals.sort_unstable();
+    intervals.dedup();
+    section = section.push(choice(
+        "Automatic sync",
+        intervals.into_iter().map(SyncInterval).collect(),
+        Some(selected),
+        |interval| Message::CalendarSyncMinutesChanged(interval.0),
         metrics,
     ));
 
@@ -1127,9 +1129,20 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     indent(section.into(), metrics)
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct SyncInterval(u32);
+
+impl std::fmt::Display for SyncInterval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&sync_label(self.0))
+    }
+}
+
 fn sync_label(minutes: u32) -> String {
     match minutes {
         1 => "Sync every minute".to_owned(),
+        60 => "Sync every hour".to_owned(),
+        n if n % 60 == 0 => format!("Sync every {} hours", n / 60),
         n => format!("Sync every {n} minutes"),
     }
 }
@@ -1305,6 +1318,8 @@ mod tests {
     fn sync_labels_read_naturally() {
         assert_eq!(sync_label(1), "Sync every minute");
         assert_eq!(sync_label(15), "Sync every 15 minutes");
+        assert_eq!(sync_label(60), "Sync every hour");
+        assert_eq!(sync_label(1440), "Sync every 24 hours");
     }
 
     #[test]

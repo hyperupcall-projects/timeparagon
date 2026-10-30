@@ -143,13 +143,32 @@ fn App() -> Element {
     let mut client_secret_input = use_signal(String::new);
     let mut client_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
-    let mut last_good = use_signal(|| None::<time_slay_core::calendar::Snapshot>);
+    let mut cached_days = use_signal(move || {
+        let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
+        store.cache_days_in(time_slay_core::config::cache_days_dir());
+        store
+    });
+    // Navigation only changes the cached view. It never restarts the resource.
+    use_effect(move || {
+        let day = current_day();
+        let today = day::today(&config.peek().calendar);
+        cached_days.write().set_day(day, today);
+    });
 
     let data = use_resource(move || {
-        let requested_day = current_day();
-        let _ = revision();
-        let settings = config.read().calendar.clone();
+        let refresh = revision();
+        let requested_day = *current_day.peek();
+        let settings = config.peek().calendar.clone();
+        let initial_is_fresh = refresh == 0
+            && !cached_days
+                .peek()
+                .sync_due(settings.sync_every(), chrono::Local::now());
+        let cached = cached_days.peek().cached_snapshot();
         async move {
+            if initial_is_fresh {
+                return cached
+                    .ok_or_else(|| "No cached calendar data yet. Refresh to load it.".to_owned());
+            }
             if !day::signed_in() {
                 return Err(
                     "Not connected to Google Calendar. Connect an account to load your day."
@@ -181,7 +200,9 @@ fn App() -> Element {
     use_effect(move || {
         let value = data.read();
         if let Some(Ok(snapshot)) = value.as_ref() {
-            last_good.set(Some(snapshot.clone()));
+            cached_days
+                .write()
+                .cache_fetched_snapshot(snapshot.clone(), &[snapshot.day]);
             signed_in.set(true);
             connect_error.set(None);
         }
@@ -189,10 +210,10 @@ fn App() -> Element {
 
     // Pull again on the same cadence as the iced app, and roll the view over
     // to the new day at the configured boundary unless the user stepped away.
-    let refresh_every = settings.sync_every();
     use_future(move || async move {
+        let mut last_refresh = tokio::time::Instant::now();
         loop {
-            tokio::time::sleep(refresh_every).await;
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             if follow_today() {
                 let today = day::today(&config.peek().calendar);
                 if today != current_day() {
@@ -201,7 +222,10 @@ fn App() -> Element {
                     scrolled.set(false);
                 }
             }
-            revision.set(revision() + 1);
+            if last_refresh.elapsed() >= config.peek().calendar.sync_every() {
+                last_refresh = tokio::time::Instant::now();
+                revision.set(revision() + 1);
+            }
         }
     });
 
@@ -262,7 +286,10 @@ fn App() -> Element {
         // A resource keeps the previous value while its next fetch is running.
         // Never paint yesterday's events under today's heading.
         Some(Ok(snapshot)) if snapshot.day == requested_day => Some(snapshot.clone()),
-        _ => last_good().filter(|snapshot| snapshot.day == requested_day),
+        _ => cached_days
+            .read()
+            .cached_snapshot()
+            .filter(|snapshot| snapshot.day == requested_day),
     };
     drop(resource);
 

@@ -456,8 +456,8 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
             state.inbox.draft = None;
             state.timeblocking.revision += 1;
             state.calendar.events.retain(|other| other.id != event.id);
+            state.calendar.replace_cached_task(&event.id, &event);
             state.calendar.add_event(event);
-            state.calendar.invalidate_other_days();
             // Brings the Inbox list itself, if this made it, into the app.
             Task::done(Message::CalendarSyncRequested)
         }

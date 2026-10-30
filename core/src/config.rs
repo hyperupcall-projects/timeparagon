@@ -58,7 +58,7 @@ pub struct CalendarSettings {
 impl Default for CalendarSettings {
     fn default() -> Self {
         Self {
-            sync_minutes: 15,
+            sync_minutes: 60,
             client_id: String::new(),
             client_secret: String::new(),
             disabled: Vec::new(),
@@ -111,7 +111,7 @@ impl CalendarSettings {
     }
 
     pub const MIN_SYNC_MINUTES: u32 = 1;
-    pub const MAX_SYNC_MINUTES: u32 = 120;
+    pub const MAX_SYNC_MINUTES: u32 = 1440;
     /// The latest hour a day can end.
     pub const MAX_DAY_END_HOUR: u32 = 5;
 

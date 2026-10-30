@@ -18,7 +18,7 @@ use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
-use super::{Details, Event, day_at};
+use super::{Calendar, Details, Event, day_at};
 
 /// One month's events as the cache file holds them.
 ///
@@ -28,6 +28,67 @@ use super::{Details, Event, day_at};
 #[derive(Serialize, Deserialize)]
 struct SavedMonth {
     events: Vec<SavedEvent>,
+}
+
+/// Catalog and successful refresh time travel with the event cache, so a
+/// restart can show source names and respect the remaining sync interval.
+#[derive(Serialize, Deserialize)]
+struct SyncState {
+    fetched_at: DateTime<Local>,
+    calendars: Vec<SavedCalendar>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedCalendar {
+    id: String,
+    name: String,
+    color: crate::hex::HexColor,
+    primary: bool,
+    selected_by_google: bool,
+}
+
+pub fn load_sync_state(directory: &Path) -> Option<(DateTime<Local>, Vec<Calendar>)> {
+    let state: SyncState =
+        serde_json::from_slice(&fs::read(directory.join("sync-state.json")).ok()?).ok()?;
+    Some((
+        state.fetched_at,
+        state
+            .calendars
+            .into_iter()
+            .map(|saved| Calendar {
+                id: saved.id,
+                name: saved.name,
+                color: saved.color.0,
+                primary: saved.primary,
+                selected_by_google: saved.selected_by_google,
+            })
+            .collect(),
+    ))
+}
+
+pub fn save_sync_state(
+    directory: &Path,
+    fetched_at: DateTime<Local>,
+    calendars: &[Calendar],
+) -> io::Result<()> {
+    fs::create_dir_all(directory)?;
+    let state = SyncState {
+        fetched_at,
+        calendars: calendars
+            .iter()
+            .map(|calendar| SavedCalendar {
+                id: calendar.id.clone(),
+                name: calendar.name.clone(),
+                color: crate::hex::HexColor(calendar.color),
+                primary: calendar.primary,
+                selected_by_google: calendar.selected_by_google,
+            })
+            .collect(),
+    };
+    let bytes = serde_json::to_vec(&state).map_err(io::Error::other)?;
+    let temporary = directory.join("sync-state.json.tmp");
+    fs::write(&temporary, bytes)?;
+    fs::rename(temporary, directory.join("sync-state.json"))
 }
 
 /// One event as the cache file holds it.
@@ -84,8 +145,8 @@ impl From<SavedEvent> for Event {
 
 /// The day's events as an earlier run wrote them, or nothing when no run has
 /// written this month or the file turns out to be unreadable. Only events
-/// whose start falls within `day`'s window (set by `day_end_hour`) are
-/// returned.
+/// overlapping `day`'s window (set by `day_end_hour`) are returned, along
+/// with tasks, whose backlog is shared across all views.
 pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Event>> {
     let path = directory.join(file_name(day));
 
@@ -100,7 +161,15 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
 
     match serde_json::from_slice::<SavedMonth>(&bytes) {
         Ok(saved) => {
-            let database = crate::config::project_dirs()
+            // LEGACY_METADATA_COMPAT: only old snapshots missing task metadata
+            // need SQLite. Modern navigation reads the snapshot directly.
+            let needs_legacy_data = saved
+                .events
+                .iter()
+                .any(|event| event.id.starts_with("task:") && event.details.task_data.is_none());
+            let database = needs_legacy_data
+                .then(crate::config::project_dirs)
+                .flatten()
                 .map(|dirs| dirs.data_local_dir().join("tasks.sqlite3"))
                 .filter(|path| path.exists())
                 .and_then(|path| {
@@ -113,7 +182,7 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
                 .into_iter()
                 .map(Event::from)
                 .map(|mut event| {
-                    if event.is_task() {
+                    if event.is_task() && event.details.task_data.is_none() {
                         if let Some(database) = &database {
                             match database.lookup(&event) {
                                 Ok(Some(data)) => {
@@ -129,7 +198,7 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
                     }
                     event
                 })
-                .filter(|event| day_at(event.start, day_end_hour) == day)
+                .filter(|event| super::event_on_day(event, day, day_end_hour))
                 .collect();
             Some(events)
         }
@@ -180,6 +249,37 @@ pub fn save(
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, bytes)?;
     fs::rename(&temporary, path)
+}
+
+/// Update known records without throwing away unrelated cached dates.
+pub fn update_events(directory: &Path, mut update: impl FnMut(&mut Vec<Event>)) {
+    for month in days(directory) {
+        let path = directory.join(file_name(month));
+        let Some(saved) = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<SavedMonth>(&bytes).ok())
+        else {
+            continue;
+        };
+        let mut events: Vec<Event> = saved.events.into_iter().map(Event::from).collect();
+        let before = events.clone();
+        update(&mut events);
+        if events == before {
+            continue;
+        }
+        let updated = SavedMonth {
+            events: events.iter().map(SavedEvent::from).collect(),
+        };
+        let write = || -> io::Result<()> {
+            let bytes = serde_json::to_vec(&updated).map_err(io::Error::other)?;
+            let temporary = path.with_extension("json.tmp");
+            fs::write(&temporary, bytes)?;
+            fs::rename(temporary, &path)
+        };
+        if let Err(error) = write() {
+            log::warn!("could not update cached events: {error}");
+        }
+    }
 }
 
 /// Every month sitting in the directory, as the first day of each month.
@@ -270,6 +370,26 @@ mod tests {
     use super::*;
     use crate::calendar::sample_snapshot;
     use chrono::TimeZone;
+
+    #[test]
+    fn cached_days_include_overlapping_events_and_undated_tasks() {
+        let scratch = Scratch::new("overlap-and-tasks");
+        let mut snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let next = day.succ_opt().unwrap();
+        let mut overnight = snapshot.events.remove(0);
+        overnight.all_day = false;
+        overnight.start = super::super::at_clock(day, 23, 0);
+        overnight.end = super::super::at_clock(next, 2, 0);
+        let mut task = overnight.clone();
+        task.id = "task:undated".into();
+        task.calendar_id = "tasks:list".into();
+        task.start = super::super::at_clock(crate::timeblocking::UNDATED, 0, 0);
+        task.end = task.start + chrono::Duration::days(1);
+        let events = vec![overnight, task];
+        save(scratch.path(), day, &events, 0).unwrap();
+        assert_eq!(load(scratch.path(), next, 0).unwrap(), events);
+    }
 
     #[test]
     fn a_month_round_trips_through_the_directory() {

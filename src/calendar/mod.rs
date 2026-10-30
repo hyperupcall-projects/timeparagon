@@ -431,6 +431,21 @@ pub const MIN_HOUR_HEIGHT: f32 = 24.0;
 /// Tallest hour row, so a zoomed-in day stays a grid rather than a poster.
 pub const MAX_HOUR_HEIGHT: f32 = 180.0;
 
+/// Shared membership rule for both memory and disk snapshots.
+fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
+    if event.is_task() {
+        return true;
+    }
+    if event.all_day {
+        // Older cached all-day entries can have a zero-length end.
+        return event.start.date_naive() == day
+            || (event.start.date_naive() < day && event.end.date_naive() > day);
+    }
+    let start = at_clock(day, day_end_hour, 0);
+    let end = at_clock(day.succ_opt().unwrap_or(day), day_end_hour, 0);
+    event.start < end && event.end > start
+}
+
 /// How far either side of the day in view a cached day can be and still be
 /// kept whatever else is cached: the previous day and the next one, once they
 /// have been viewed.
@@ -661,6 +676,16 @@ impl Store {
     /// the store: a store built by hand keeps its days in memory only.
     pub fn cache_days_in(&mut self, directory: Option<PathBuf>) {
         self.day_cache = directory;
+        if self.last_sync.is_none() {
+            if let Some((fetched_at, calendars)) = self
+                .day_cache
+                .as_ref()
+                .and_then(|directory| day_cache::load_sync_state(directory))
+            {
+                self.last_sync = Some(fetched_at);
+                self.calendars = calendars;
+            }
+        }
 
         if self.events.is_empty()
             && let Some(events) = self.read_day(self.day)
@@ -882,6 +907,13 @@ impl Store {
         self.events = snapshot.events;
         self.day = snapshot.day;
         self.last_sync = Some(snapshot.fetched_at);
+        if let Some(directory) = &self.day_cache {
+            if let Err(error) =
+                day_cache::save_sync_state(directory, snapshot.fetched_at, &self.calendars)
+            {
+                log::warn!("could not cache calendar sync state: {error}");
+            }
+        }
         self.connection = Connection::SignedIn;
         self.sync = SyncState::Idle;
         self.error = snapshot.notice;
@@ -911,7 +943,9 @@ impl Store {
     /// Install a range fetch as ordinary per-day snapshots, retaining all tasks
     /// on each day just as a day fetch does.
     pub fn apply_week_snapshot(&mut self, mut snapshot: Snapshot, days: &[NaiveDate]) {
-        self.visible_days = days.to_vec();
+        self.visible_days.extend_from_slice(days);
+        self.visible_days.sort_unstable();
+        self.visible_days.dedup();
         let current = self.day;
         for event in &mut snapshot.events {
             if let Some(pending) = self.pending.get(&event.id) {
@@ -920,20 +954,15 @@ impl Store {
             }
         }
         let mut current_snapshot = snapshot.clone();
+        // A background fetch can complete after navigation. Cache the fetched
+        // dates while preserving the current day's events and selection.
+        current_snapshot.day = current;
+        current_snapshot.events = self.events.clone();
         for &day in days {
-            let start = at_clock(day, self.day_end_hour, 0);
-            let end = at_clock(day.succ_opt().unwrap_or(day), self.day_end_hour, 0);
             let events: Vec<_> = snapshot
                 .events
                 .iter()
-                .filter(|event| {
-                    event.is_task()
-                        || if event.all_day {
-                            event.start.date_naive() <= day && event.end.date_naive() > day
-                        } else {
-                            event.start < end && event.end > start
-                        }
-                })
+                .filter(|event| event_on_day(event, day, self.day_end_hour))
                 .cloned()
                 .collect();
             if day == current {
@@ -948,6 +977,35 @@ impl Store {
         self.trim_cache();
     }
 
+    /// Accept results for any previously requested view without navigating or
+    /// scheduling a follow-up fetch. Keep the active view pinned in the cache.
+    pub fn cache_fetched_snapshot(&mut self, snapshot: Snapshot, days: &[NaiveDate]) {
+        let visible = self.visible_days.clone();
+        self.apply_week_snapshot(snapshot, days);
+        self.visible_days = visible;
+        self.trim_cache();
+    }
+
+    /// The current view's cached data, without making a network request.
+    pub fn cached_snapshot(&self) -> Option<Snapshot> {
+        Some(Snapshot {
+            calendars: self.calendars.clone(),
+            events: self.events.clone(),
+            day: self.day,
+            fetched_at: self.last_sync?,
+            notice: self.error.clone(),
+        })
+    }
+
+    /// View navigation does not call this; startup and the periodic timer do.
+    pub fn sync_due(&self, interval: std::time::Duration, now: DateTime<Local>) -> bool {
+        self.last_sync.is_none_or(|last| {
+            now.signed_duration_since(last)
+                .to_std()
+                .is_ok_and(|elapsed| elapsed >= interval)
+        })
+    }
+
     pub fn events_on(&self, day: NaiveDate) -> &[Event] {
         if day == self.day {
             &self.events
@@ -958,14 +1016,19 @@ impl Store {
 
     pub fn replace_cached_task(&mut self, previous_id: &str, task: &Event) {
         let key = crate::timeblocking::task_key(task);
-        for events in self.cache.values_mut() {
+        let replace = |events: &mut Vec<Event>| {
             events.retain(|event| {
                 event.id != previous_id
                     && (!event.is_task() || crate::timeblocking::task_key(event) != key)
             });
             events.push(task.clone());
+        };
+        for events in self.cache.values_mut() {
+            replace(events);
         }
-        self.clear_disk_cache();
+        if let Some(directory) = &self.day_cache {
+            day_cache::update_events(directory, replace);
+        }
     }
 
     pub fn clear_disk_cache(&self) {
@@ -979,7 +1042,9 @@ impl Store {
         for events in self.cache.values_mut() {
             events.retain(|event| event.id != id);
         }
-        self.clear_disk_cache();
+        if let Some(directory) = &self.day_cache {
+            day_cache::update_events(directory, |events| events.retain(|event| event.id != id));
+        }
     }
 
     pub fn load_cached_days(&mut self, days: &[NaiveDate]) {
@@ -1193,6 +1258,9 @@ impl Store {
                         != Some(task_id.as_str())
             });
         };
+        if let Some(directory) = &self.day_cache {
+            day_cache::update_events(directory, drop_copies);
+        }
         drop_copies(&mut self.events);
         for events in self.cache.values_mut() {
             drop_copies(events);
@@ -1215,6 +1283,7 @@ impl Store {
         self.events.push(event);
         self.events
             .sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
+        self.write_day(self.day, &self.events);
     }
 
     /// Google refused the write, so the event goes back to the time it had.
@@ -2112,6 +2181,74 @@ pub fn sample_snapshot() -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_edits_and_deletions_preserve_unrelated_cached_dates_on_disk() {
+        let scratch = day_cache::Scratch::new("task-edits");
+        let snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let next = day.succ_opt().unwrap();
+        let mut neighbor = snapshot.events[1].clone();
+        neighbor.id = "neighbor-event".into();
+        neighbor.start += chrono::Duration::days(1);
+        neighbor.end += chrono::Duration::days(1);
+        let mut task = snapshot.events[1].clone();
+        task.id = "task:one".into();
+        task.calendar_id = "tasks:list".into();
+        day_cache::save(scratch.path(), day, &[task.clone()], 0).unwrap();
+        day_cache::save(scratch.path(), next, &[neighbor.clone(), task.clone()], 0).unwrap();
+        let mut store = Store::with_snapshot(snapshot);
+        store.cache_days_in(Some(scratch.path().to_path_buf()));
+        task.title = "Updated task".into();
+        store.replace_cached_task("task:one", &task);
+        let cached = day_cache::load(scratch.path(), next, 0).unwrap();
+        assert!(cached.contains(&neighbor));
+        assert!(cached.contains(&task));
+        store.forget_task("task:one");
+        let cached = day_cache::load(scratch.path(), next, 0).unwrap();
+        assert!(cached.contains(&neighbor));
+        assert!(!cached.iter().any(Event::is_task));
+    }
+
+    #[test]
+    fn recent_sync_time_and_calendar_sources_survive_restart() {
+        let scratch = day_cache::Scratch::new("sync-state");
+        let mut snapshot = sample_snapshot();
+        snapshot.fetched_at = Local::now();
+        let mut previous = Store::new(0);
+        previous.cache_days_in(Some(scratch.path().to_path_buf()));
+        previous.apply_snapshot(snapshot.clone());
+        let mut restarted = Store::new(0);
+        restarted.cache_days_in(Some(scratch.path().to_path_buf()));
+        assert_eq!(restarted.last_sync, Some(snapshot.fetched_at));
+        assert_eq!(restarted.calendars, snapshot.calendars);
+        assert!(!restarted.sync_due(
+            std::time::Duration::from_secs(3600),
+            snapshot.fetched_at + chrono::Duration::minutes(59)
+        ));
+        assert!(restarted.sync_due(
+            std::time::Duration::from_secs(3600),
+            snapshot.fetched_at + chrono::Duration::minutes(60)
+        ));
+    }
+
+    #[test]
+    fn a_range_result_after_navigation_is_cached_without_changing_the_active_view() {
+        let snapshot = sample_snapshot();
+        let fetched_day = snapshot.day;
+        let mut store = Store::with_snapshot(snapshot.clone());
+        let current = fetched_day + chrono::Duration::days(10);
+        store.set_day(current, fetched_day);
+        let visible = week_dates(current, 7);
+        store.load_cached_days(&visible);
+        store.sync = SyncState::Syncing;
+        store.cache_fetched_snapshot(snapshot.clone(), &[fetched_day]);
+        assert_eq!(store.day, current);
+        assert!(store.events.is_empty());
+        assert_eq!(store.visible_days, visible);
+        assert_eq!(store.sync, SyncState::Idle);
+        assert_eq!(store.events_on(fetched_day), snapshot.events.as_slice());
+    }
 
     #[test]
     fn task_status_round_trips_and_failed_writes_restore_the_previous_status() {

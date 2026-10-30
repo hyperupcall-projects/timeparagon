@@ -896,10 +896,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         .calendar
                         .events
                         .retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
+                    state.calendar.replace_cached_task(&id, &event);
                     if state.screen == crate::app::Screen::Calendar
                         && (state.weekly || state.monthly)
                     {
-                        state.calendar.replace_cached_task(&id, &event);
                         refresh_week = true;
                     }
                     state.calendar.add_event(event);
@@ -908,9 +908,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         state.timeblocking.estimate_error = None;
                     } else if !keep_open {
                         state.calendar.open_event = None;
-                    }
-                    if !refresh_week {
-                        state.calendar.invalidate_other_days();
                     }
                 }
                 Err(error) if editing_estimate => state.timeblocking.estimate_error = Some(error),

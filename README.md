@@ -128,6 +128,25 @@ SQLite fallback branch in `calendar::task_metadata::load`, and Calendar footer
 migration helper. Keep the cache, allocator, aliases, and versioned footer codec.
 The shared core crate also supplies these rules to the Dioxus app.
 
+## Cached views and automatic sync
+
+Day, week, and month navigation reads the local cache immediately and never
+starts a Google refresh. A request already in progress can fill the cache for
+the view it fetched without navigating back or starting another request.
+Dates without cached data stay empty until a scheduled or manual refresh.
+
+Automatic refresh defaults to **one hour**. In **Settings → Google Calendar →
+Automatic sync**, choose an interval from one minute to 24 hours. Existing saved
+intervals are preserved. The last successful refresh time and calendar source
+names persist with the event cache, so restarting with fresh data avoids an
+immediate refresh. Manual sync and writes you explicitly make still run immediately.
+The Dioxus day view follows the same cache and interval policy.
+
+SQLite remains the task metadata cache, ID allocator, and legacy migration
+source. Its small schema is retained while migration is supported; event
+snapshots continue to use the existing month files. No additional database or
+migration is needed for the new refresh policy.
+
 ## Next Up
 
 - File attachments/file:// links & notes integration for event/task/habit etc.
@@ -136,6 +155,7 @@ The shared core crate also supplies these rules to the Dioxus app.
 
 ### Stretch
 
+- Webhook for Google Calendar
 - For everywhere in interface, there should be a new task button
 - Command palette
 	- Global search

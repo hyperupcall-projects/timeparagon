@@ -399,6 +399,7 @@ pub enum Message {
     /// Move a calendar-view source one position up (left) or down (right).
     CalendarSourceMoved(String, bool),
     CalendarSyncRequested,
+    CalendarAutoSyncRequested,
     /// Drop cached days and pull the day in view from Google again.
     CalendarResyncRequested,
     CalendarSynced(Result<calendar::Snapshot, String>),
@@ -1074,7 +1075,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let close = crate::timeblocking::close(state);
             let close = resize_for_week_transition(state, was_weekly, close);
             if returning_to_week {
-                Task::batch([close, sync_calendar(state)])
+                Task::batch([close, show_cached_calendar(state)])
             } else if screen == Screen::KeepNotes {
                 Task::batch([close, refresh_keep(state)])
             } else if screen == Screen::Habits {
@@ -1117,7 +1118,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 } else {
                     Task::none()
                 };
-                Task::batch([close, scroll, sync_calendar(state)])
+                Task::batch([close, scroll, show_cached_calendar(state)])
             } else {
                 close
             }
@@ -1146,7 +1147,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 resize
             };
-            Task::batch([resize, sync_calendar(state)])
+            Task::batch([resize, show_cached_calendar(state)])
         }
         Message::CalendarViewMonthShift(months) => {
             let first = calendar::first_of_month(state.week_anchor);
@@ -1742,7 +1743,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
             if previous.calendar != state.config.calendar {
-                tasks.push(sync_calendar(state));
+                tasks.push(show_cached_calendar(state));
             }
             log::info!("reloaded config from disk");
             Task::batch(tasks)
@@ -1837,9 +1838,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             for event in added {
                 state.timeblocking.revision += 1;
                 state.calendar.events.retain(|other| other.id != event.id);
+                state.calendar.replace_cached_task(&event.id, &event);
                 state.calendar.add_event(event);
             }
-            state.calendar.invalidate_other_days();
             Task::done(Message::CalendarSyncRequested)
         }
 
@@ -1859,7 +1860,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             );
 
             let sync = if state.calendar.is_signed_in() {
-                sync_calendar(state)
+                auto_sync_calendar(state)
             } else {
                 Task::none()
             };
@@ -2124,6 +2125,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CalendarSyncRequested => sync_calendar(state),
+        Message::CalendarAutoSyncRequested => auto_sync_calendar(state),
 
         Message::CalendarResyncRequested => {
             // Days parked in memory and on disk would paint before the next
@@ -2134,22 +2136,16 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CalendarSyncedAt(revision, result) => {
-            if revision != state.timeblocking.revision
-                || (state.screen == Screen::Calendar && (state.weekly || state.monthly))
-            {
+            if revision != state.timeblocking.revision {
                 state.calendar.sync = SyncState::Idle;
-                return sync_calendar(state);
+                return Task::none();
             }
             Task::done(Message::CalendarSynced(result))
         }
         Message::CalendarRangeSynced(revision, dates, result) => {
-            if revision != state.timeblocking.revision
-                || state.screen != Screen::Calendar
-                || !(state.weekly || state.monthly)
-                || dates != state.calendar_dates()
-            {
+            if revision != state.timeblocking.revision {
                 state.calendar.sync = SyncState::Idle;
-                return sync_calendar(state);
+                return Task::none();
             }
             match result {
                 Ok(mut snapshot) => {
@@ -2160,7 +2156,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                         });
                     }
                     let remember = remember_app_calendar(state, &snapshot);
-                    state.calendar.apply_week_snapshot(snapshot, &dates);
+                    state.calendar.cache_fetched_snapshot(snapshot, &dates);
                     state.calendar.apply_task_colors(&state.config.calendar);
                     let reconcile = reconcile_completed_task(state);
                     if remember {
@@ -2173,14 +2169,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::CalendarSynced(Ok(mut snapshot)) => {
-            // The user may have stepped to another day while this was in
-            // flight. The events are for the day they left, so drop them and
-            // fetch the day now in view rather than snapping the view back.
-            if snapshot.day != state.calendar.day {
-                state.calendar.sync = SyncState::Idle;
-                return sync_calendar(state);
-            }
-
             if let Some(notice) = state.timeblocking.sync_notice.take() {
                 snapshot.notice = Some(match snapshot.notice.take() {
                     Some(existing) => format!("{notice}\n{existing}"),
@@ -2188,7 +2176,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 });
             }
             let remember = remember_app_calendar(state, &snapshot);
-            state.calendar.apply_snapshot(snapshot);
+            let day = snapshot.day;
+            state.calendar.cache_fetched_snapshot(snapshot, &[day]);
             state.calendar.apply_task_colors(&state.config.calendar);
             let reconcile = reconcile_completed_task(state);
             if remember {
@@ -2503,11 +2492,6 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // showing it, including a stale copy on the list it was moved
             // from and the calendar block that held its time.
             state.calendar.forget_task(&id);
-            if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
-                state.calendar.clear_disk_cache();
-            } else {
-                state.calendar.invalidate_other_days();
-            }
             let save = queue_save(state);
             Task::batch([save, refresh_week_after_write(state)])
         }
@@ -2583,11 +2567,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             state.timeblocking.busy.remove(&id);
             state.timeblocking.revision += 1;
-            if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
-                state.calendar.replace_cached_task(&id, &task);
-            } else {
-                state.calendar.invalidate_other_days();
-            }
+            state.calendar.replace_cached_task(&id, &task);
             Task::done(Message::CalendarSyncRequested)
         }
 
@@ -2740,7 +2720,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             };
-            Task::batch([save, resize, sync_calendar(state)])
+            Task::batch([save, resize, show_cached_calendar(state)])
         }
 
         Message::CalendarWeeklyWidthChanged(width) => {
@@ -2796,7 +2776,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             };
-            Task::batch([close, scroll, sync_calendar(state)])
+            Task::batch([close, scroll, show_cached_calendar(state)])
         }
 
         Message::CalendarDaySelected(day) => {
@@ -2819,7 +2799,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             };
-            Task::batch([close, scroll, sync_calendar(state)])
+            Task::batch([close, scroll, show_cached_calendar(state)])
         }
 
         Message::CalendarMonthToggled => {
@@ -3367,7 +3347,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     if state.calendar.is_signed_in() {
         subscriptions.push(
             iced::time::every(state.config.calendar.sync_every())
-                .map(|_| Message::CalendarSyncRequested),
+                .map(|_| Message::CalendarAutoSyncRequested),
         );
     }
 
@@ -3740,7 +3720,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
         if state.weekly || state.monthly {
             state.week_anchor = day;
         }
-        return sync_calendar(state);
+        return show_cached_calendar(state);
     }
     Task::none()
 }
@@ -3748,7 +3728,6 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
     if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
         state.timeblocking.revision += 1;
-        state.calendar.clear_disk_cache();
         Task::done(Message::CalendarSyncRequested)
     } else {
         Task::none()
@@ -3806,13 +3785,29 @@ fn remember_app_calendar(state: &mut State, snapshot: &calendar::Snapshot) -> bo
     }
 }
 
-fn sync_calendar(state: &mut State) -> Task<Message> {
+fn show_cached_calendar(state: &mut State) -> Task<Message> {
     if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
         let days = state.calendar_dates();
         state.calendar.load_cached_days(&days);
     } else {
         state.calendar.load_cached_days(&[]);
     }
+    Task::none()
+}
+
+fn auto_sync_calendar(state: &mut State) -> Task<Message> {
+    if state
+        .calendar
+        .sync_due(state.config.calendar.sync_every(), Local::now())
+    {
+        sync_calendar(state)
+    } else {
+        show_cached_calendar(state)
+    }
+}
+
+fn sync_calendar(state: &mut State) -> Task<Message> {
+    let _ = show_cached_calendar(state);
     if !state.calendar.is_signed_in()
         || state.calendar.is_busy()
         || !state.timeblocking.busy.is_empty()
@@ -4800,6 +4795,44 @@ mod tests {
     }
 
     #[test]
+    fn calendar_navigation_uses_cache_without_syncing_even_when_stale() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state.calendar.connection = Connection::SignedIn;
+        state.calendar.last_sync = Some(Local::now() - chrono::Duration::hours(3));
+        let day = state.calendar.day;
+        let count = state.calendar.events.len();
+        for message in [
+            Message::CalendarModeSelected(true),
+            Message::CalendarMonthViewSelected,
+            Message::CalendarModeSelected(false),
+            Message::CalendarDayShift(1),
+            Message::CalendarDaySelected(day),
+        ] {
+            let _ = update(&mut state, message);
+            assert_eq!(state.calendar.sync, SyncState::Idle);
+        }
+        assert_eq!(state.calendar.events.len(), count);
+        // Automatic refresh is separate and does fetch when its interval is due.
+        let _ = update(&mut state, Message::CalendarAutoSyncRequested);
+        assert_eq!(state.calendar.sync, SyncState::Syncing);
+    }
+
+    #[test]
+    fn a_recent_sync_prevents_an_automatic_fetch_but_manual_sync_still_works() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state.calendar.connection = Connection::SignedIn;
+        state.calendar.last_sync = Some(Local::now());
+        let _ = update(&mut state, Message::CalendarAutoSyncRequested);
+        assert_eq!(state.calendar.sync, SyncState::Idle);
+        let _ = update(&mut state, Message::CalendarSyncMinutesChanged(120));
+        assert_eq!(state.calendar.sync, SyncState::Idle);
+        let _ = update(&mut state, Message::CalendarSyncRequested);
+        assert_eq!(state.calendar.sync, SyncState::Syncing);
+    }
+
+    #[test]
     fn stepping_the_day_moves_the_view_and_drops_the_old_events() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
@@ -4913,6 +4946,14 @@ mod tests {
         );
 
         assert_eq!(state.calendar.day, moved_to);
+        assert_eq!(state.calendar.sync, SyncState::Idle);
+        state
+            .calendar
+            .set_day(moved_to.pred_opt().unwrap(), moved_to);
+        assert!(
+            !state.calendar.events.is_empty(),
+            "late results should remain cached"
+        );
     }
 
     #[test]
