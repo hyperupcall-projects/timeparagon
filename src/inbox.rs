@@ -37,12 +37,14 @@ pub struct Inbox {
     /// brought that list's name back.
     created_list: Option<String>,
     lookups: u64,
+    pub(crate) workspace: Option<Box<tb::Workspace>>,
 }
 
 /// A task being written in the popup.
 #[derive(Debug, Clone, Default)]
 pub struct Draft {
     pub title: String,
+    pub event: Option<Event>,
     pub deadline: String,
     pub due: String,
     /// Where the task came from, once a link has been recognized.
@@ -57,10 +59,12 @@ pub struct Draft {
 #[derive(Debug, Clone)]
 pub enum Action {
     Sort(InboxSort),
+    OverdueSort(InboxSort),
     /// Open the new-task popup.
     NewTask,
     Cancel,
     Title(String),
+    Description(iced::widget::text_editor::Action),
     Deadline(String),
     Due(String),
     /// Forget the recognized link without touching the title.
@@ -114,7 +118,42 @@ pub fn tasks(state: &State) -> Vec<&Event> {
         .iter()
         .filter(|event| untriaged(state, event))
         .collect();
-    let sort = state.config.calendar.inbox_sort;
+    sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
+    tasks
+}
+
+/// Incomplete tasks across all lists whose planned time or deadline has passed.
+pub fn overdue_tasks(state: &State) -> Vec<&Event> {
+    overdue_tasks_at(state, Local::now())
+}
+
+fn overdue_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Event> {
+    let mut tasks: Vec<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| {
+            if !event.is_task() || event.completed || tb::metadata(event).ignored {
+                return false;
+            }
+            let scheduled_past = event.start.date_naive() != UNDATED
+                && if event.all_day {
+                    event.start.date_naive() < now.date_naive()
+                } else {
+                    event.start < now
+                };
+            let deadline_past = deadline::read_deadline(&event.details.description)
+                .ok()
+                .flatten()
+                .is_some_and(|deadline| deadline.is_past(now.naive_local()));
+            scheduled_past || deadline_past
+        })
+        .collect();
+    sort_tasks(&mut tasks, state.config.calendar.overdue_sort);
+    tasks
+}
+
+fn sort_tasks(tasks: &mut Vec<&Event>, sort: InboxSort) {
     tasks.sort_by_cached_key(|event| {
         let metadata = tb::metadata(event);
         let timestamp = match sort {
@@ -143,7 +182,6 @@ pub fn tasks(state: &State) -> Vec<&Event> {
             event.id.clone(),
         )
     });
-    tasks
 }
 
 /// Whether `calendar_id` is the list that collects triaged tasks.
@@ -182,9 +220,21 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.config.calendar.inbox_sort = sort;
             crate::app::queue_save(state)
         }
+        Action::OverdueSort(sort) => {
+            state.config.calendar.overdue_sort = sort;
+            crate::app::queue_save(state)
+        }
         Action::NewTask => {
             state.inbox.error = None;
-            state.inbox.draft.get_or_insert_with(Draft::default);
+            if state.inbox.draft.is_none() {
+                state.inbox.workspace = Some(Box::new(std::mem::take(&mut state.timeblocking)));
+                state.inbox.draft = Some(Draft {
+                    event: Some(blank_event()),
+                    ..Draft::default()
+                });
+                state.calendar.error = None;
+                state.task_description = iced::widget::text_editor::Content::new();
+            }
             operation::focus(Id::new(TITLE_FIELD))
         }
         Action::Cancel => {
@@ -193,14 +243,30 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if state.inbox.draft.as_ref().is_some_and(|draft| draft.saving) {
                 return Task::none();
             }
-            state.inbox.draft = None;
+            close_draft(state);
             // A reply that is still on its way must not land in the next popup.
             state.inbox.lookups += 1;
             Task::none()
         }
         Action::Title(value) => title_changed(state, value),
-        Action::Deadline(value) => edit(state, |draft| draft.deadline = value),
-        Action::Due(value) => edit(state, |draft| draft.due = value),
+        Action::Description(action) => {
+            if state.inbox.draft.as_ref().is_some_and(|d| !d.saving) {
+                state.task_description.perform(action);
+                let value = state.task_description.text();
+                if let Some(event) = state.inbox.draft.as_mut().and_then(|d| d.event.as_mut()) {
+                    event.details.description = value;
+                }
+            }
+            Task::none()
+        }
+        Action::Deadline(value) => {
+            state.timeblocking.deadline = value.clone();
+            edit(state, |draft| draft.deadline = value)
+        }
+        Action::Due(value) => {
+            state.timeblocking.date = value.clone();
+            edit(state, |draft| draft.due = value)
+        }
         Action::ClearSource => edit(state, |draft| draft.source = None),
         Action::Fetched(lookup, result) => {
             fetched(state, lookup, result);
@@ -261,6 +327,39 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             Task::none()
         }
+    }
+}
+
+pub const DRAFT_ID: &str = "task:new-draft";
+
+fn blank_event() -> Event {
+    let start = calendar::at_clock(UNDATED, 0, 0);
+    Event {
+        id: DRAFT_ID.into(),
+        calendar_id: "tasks:inbox".into(),
+        title: String::new(),
+        start,
+        end: start + Duration::days(1),
+        all_day: true,
+        completed: false,
+        color: calendar::colors::TASK,
+        details: calendar::Details {
+            task_data: Some(task_db::TaskData {
+                id: 0,
+                metadata: tb::Metadata::default(),
+                legacy_key: None,
+            }),
+            ..Default::default()
+        },
+    }
+}
+
+fn close_draft(state: &mut State) {
+    state.inbox.draft = None;
+    state.travel.picker = None;
+    state.picker = None;
+    if let Some(workspace) = state.inbox.workspace.take() {
+        state.timeblocking = *workspace;
     }
 }
 
@@ -325,12 +424,17 @@ fn fetched(state: &mut State, lookup: u64, result: Result<integrations::Details,
             }
             if let Some(deadline) = details
                 .deadline
-                .filter(|_| draft.deadline.trim().is_empty())
+                .filter(|_| state.timeblocking.deadline.trim().is_empty())
             {
                 draft.deadline = deadline.value();
+                state.timeblocking.deadline = draft.deadline.clone();
             }
-            if let Some(due) = details.due.filter(|_| draft.due.trim().is_empty()) {
+            if let Some(due) = details
+                .due
+                .filter(|_| state.timeblocking.date.trim().is_empty())
+            {
                 draft.due = due.to_string();
+                state.timeblocking.date = draft.due.clone();
             }
         }
         Err(error) => draft.error = Some(error),
@@ -344,6 +448,7 @@ pub(crate) struct NewTask {
     deadline: Option<Deadline>,
     due: Option<NaiveDate>,
     source: Option<Source>,
+    event: Option<Event>,
 }
 
 pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
@@ -376,13 +481,18 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
         deadline,
         due,
         source,
+        event: draft.event.clone(),
     })
 }
 
 fn create(state: &mut State) -> Task<Message> {
+    let deadline = state.timeblocking.deadline.clone();
+    let due = state.timeblocking.date.clone();
     let Some(draft) = state.inbox.draft.as_mut() else {
         return Task::none();
     };
+    draft.deadline = deadline;
+    draft.due = due;
     if draft.saving || draft.fetching {
         return Task::none();
     }
@@ -416,13 +526,34 @@ pub(crate) fn write(
             title = details.title;
         }
     }
-    let notes = deadline::write(
-        task.source
-            .as_ref()
-            .map_or("", |source| source.url.as_str()),
-        task.deadline,
-    );
-    create_event(settings, &token, &title, &notes, task.due)
+    let mut prose = task
+        .event
+        .as_ref()
+        .map(|e| tb::description(&e.details.description))
+        .unwrap_or_default();
+    if let Some(source) = &task.source {
+        if !prose.contains(&source.url) {
+            if !prose.is_empty() {
+                prose.push_str("\n\n");
+            }
+            prose.push_str(&source.url);
+        }
+    }
+    let notes = deadline::write(&prose, task.deadline);
+    let mut event = create_event_with_metadata(
+        settings,
+        &token,
+        &title,
+        &notes,
+        task.due,
+        task.event.as_ref().map(tb::metadata),
+    )?;
+    if let Some(draft) = task.event {
+        if !draft.all_day {
+            event = tb::schedule_created(event, settings, draft.start, draft.end)?;
+        }
+    }
+    Ok(event)
 }
 
 /// Adds a task that already has its title and notes, for callers outside the
@@ -454,6 +585,17 @@ fn create_event(
     notes: &str,
     due: Option<NaiveDate>,
 ) -> Result<Event, String> {
+    create_event_with_metadata(settings, token, title, notes, due, None)
+}
+
+fn create_event_with_metadata(
+    settings: &crate::config::CalendarSettings,
+    token: &str,
+    title: &str,
+    notes: &str,
+    due: Option<NaiveDate>,
+    metadata: Option<tb::Metadata>,
+) -> Result<Event, String> {
     let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
     let created_at = chrono::Utc::now();
     let created = api::insert_task_with(token, &list, &api::NewTask { title, notes, due })?;
@@ -481,6 +623,9 @@ fn create_event(
     // Allocate a stable ID and publish its metadata immediately.
     let mut database = task_db::open()?;
     let mut data = database.import(&event)?;
+    if let Some(metadata) = metadata {
+        data.metadata = metadata;
+    }
     data.metadata.created_at = Some(created_at);
     // Keep the creation instant retryable if the metadata upload fails.
     database.save(&event, &data)?;
@@ -493,7 +638,7 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
     match result {
         Ok(event) => {
             state.inbox.created_list = Some(event.calendar_id.clone());
-            state.inbox.draft = None;
+            close_draft(state);
             state.timeblocking.revision += 1;
             state.calendar.events.retain(|other| other.id != event.id);
             state.calendar.replace_cached_task(&event.id, &event);
@@ -577,6 +722,71 @@ mod tests {
     }
 
     #[test]
+    fn full_editor_stages_metadata_and_times_without_touching_calendar_tasks() {
+        let mut state = state();
+        let original = state.calendar.events.clone();
+        state.timeblocking.date = "2026-10-01".into();
+        state.timeblocking.busy.insert("task:previous".into());
+        let project = state.config.projects.add("Work".into());
+        let _ = update(&mut state, Action::NewTask);
+        let _ = update(&mut state, Action::Title("Prepare exam".into()));
+        use tb::Action as T;
+        for action in [
+            T::ProjectAdd(DRAFT_ID.into(), project),
+            T::EditEstimate(DRAFT_ID.into()),
+            T::Estimate("45".into()),
+            T::SaveEstimate(DRAFT_ID.into()),
+            T::AddLabel(DRAFT_ID.into(), "study".into()),
+            T::Priority(DRAFT_ID.into(), Some(tb::Priority::P1)),
+            T::Location(DRAFT_ID.into(), Some(7)),
+            T::Date("2026-11-03".into()),
+            T::Reschedule(DRAFT_ID.into()),
+            T::StartTime("10:00".into()),
+            T::EndTime("11:00".into()),
+            T::ScheduleEntered(DRAFT_ID.into()),
+            T::Deadline("2026-11-04".into()),
+            T::DeadlineTime("14:00".into()),
+            T::DeadlineWithTime(DRAFT_ID.into()),
+        ] {
+            let _ = tb::update(&mut state, action);
+        }
+        let _ = update(
+            &mut state,
+            Action::Description(iced::widget::text_editor::Action::Edit(
+                iced::widget::text_editor::Edit::Insert('!'),
+            )),
+        );
+        let task = state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap();
+        let metadata = tb::metadata(task);
+        assert_eq!(metadata.projects, vec![project]);
+        assert_eq!(metadata.minutes, 45);
+        assert_eq!(metadata.labels, vec!["study"]);
+        assert_eq!(metadata.priority, Some(tb::Priority::P1));
+        assert_eq!(metadata.location, Some(7));
+        assert_eq!(task.details.description, "!");
+        let mut ready = state.inbox.draft.as_ref().unwrap().clone();
+        ready.due = state.timeblocking.date.clone();
+        ready.deadline = state.timeblocking.deadline.clone();
+        let ready = validate(&ready).unwrap();
+        assert_eq!(tb::metadata(ready.event.as_ref().unwrap()), metadata);
+        assert_eq!(ready.deadline.unwrap().value(), "2026-11-04 14:00");
+        assert!(!task.all_day);
+        assert_eq!(task.end - task.start, Duration::hours(1));
+        assert_eq!(state.timeblocking.deadline, "2026-11-04 14:00");
+        assert_eq!(state.calendar.events, original);
+        assert!(state.timeblocking.busy.is_empty());
+        let _ = tb::update(
+            &mut state,
+            tb::Action::SavedMany("task:previous".into(), Err("Offline".into())),
+        );
+        let _ = update(&mut state, Action::Cancel);
+        assert!(state.inbox.draft.is_none());
+        assert!(state.timeblocking.busy.is_empty());
+        assert_eq!(state.timeblocking.date, "2026-10-01");
+        assert_eq!(state.calendar.events, original);
+    }
+
+    #[test]
     fn inbox_sorts_both_timestamps_in_both_directions_with_unknowns_last() {
         let mut state = state();
         let early = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00-07:00")
@@ -621,6 +831,68 @@ mod tests {
         assert_eq!(tasks(&state)[0].title, "a");
         state.calendar.events.reverse();
         assert_eq!(tasks(&state)[0].title, "a");
+    }
+
+    #[test]
+    fn overdue_includes_past_dates_and_times_across_lists_but_only_active_tasks() {
+        let mut state = state();
+        let today = day("2026-10-30");
+        let now = calendar::at_clock(today, 12, 0);
+        let mut timed = task("timed", "triaged", today);
+        timed.all_day = false;
+        timed.start = now - Duration::minutes(1);
+        let mut at_now = timed.clone();
+        at_now.id = "task:now".into();
+        at_now.start = now;
+        let mut future = timed.clone();
+        future.id = "task:future".into();
+        future.start = now + Duration::minutes(1);
+        let mut deadline = task("deadline", "inbox", UNDATED);
+        deadline.details.description = "DEADLINE: 2026-10-30 11:59".into();
+        let mut later_deadline = deadline.clone();
+        later_deadline.id = "task:later".into();
+        later_deadline.details.description = "DEADLINE: 2026-10-30 12:01".into();
+        let mut done = task("done", "inbox", today.pred_opt().unwrap());
+        done.completed = true;
+        let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());
+        ignored.details.task_data = Some(task_db::TaskData {
+            id: 101,
+            legacy_key: None,
+            metadata: tb::Metadata {
+                ignored: true,
+                ..Default::default()
+            },
+        });
+        let mut event = task("event", "calendar", today.pred_opt().unwrap());
+        event.id = "event".into();
+        event.calendar_id = "calendar".into();
+        state.calendar.events = vec![
+            task("yesterday", "projects", today.pred_opt().unwrap()),
+            task("today", "inbox", today),
+            task("tomorrow", "backlog", today.succ_opt().unwrap()),
+            task("undated", "inbox", UNDATED),
+            timed,
+            at_now,
+            future,
+            deadline,
+            later_deadline,
+            done,
+            ignored,
+            event,
+        ];
+        assert_eq!(
+            overdue_tasks_at(&state, now)
+                .iter()
+                .map(|t| t.title.as_str())
+                .collect::<Vec<_>>(),
+            ["deadline", "timed", "yesterday"]
+        );
+        // Crossing midnight includes yesterday's date-only task.
+        assert!(
+            overdue_tasks_at(&state, calendar::at_clock(today.succ_opt().unwrap(), 0, 0))
+                .iter()
+                .any(|task| task.title == "today")
+        );
     }
 
     #[test]

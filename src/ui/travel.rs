@@ -109,7 +109,7 @@ fn places<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     if state.config.travel.places.is_empty() {
         list = list.push(
-            text("No locations yet. Add one to a task, or choose where the day starts and ends in Settings.")
+            text("No locations yet. Add one to a task, or choose Home in Settings.")
                 .size(metrics.label())
                 .style(text::secondary),
         );
@@ -145,16 +145,9 @@ fn place_row<'a>(state: &'a State, place: &'a Place, metrics: &Metrics) -> Eleme
         );
     }
 
-    let mut uses = Vec::new();
-    if state.config.travel.start == Some(place.id) {
-        uses.push("Start of day");
-    }
-    if state.config.travel.end == Some(place.id) {
-        uses.push("End of day");
-    }
-    if !uses.is_empty() {
+    if state.config.travel.home == Some(place.id) {
         content = content.push(
-            text(uses.join(" · "))
+            text("Home")
                 .size(metrics.label() - 1.0)
                 .style(text::secondary),
         );
@@ -367,9 +360,21 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
         input = input.on_submit(msg(Action::Search));
     }
 
-    let mut content = column![row![input, search].spacing(6).align_y(Alignment::Center),]
-        .spacing(6)
-        .width(Fill);
+    let map_button = button(text("Choose on map").size(metrics.label()))
+        .on_press_maybe(
+            state
+                .config
+                .travel
+                .key()
+                .map(|_| msg(Action::Map(travel::map::Action::Open))),
+        )
+        .style(crate::ui::controls::secondary);
+    let mut content = column![
+        row![input, search].spacing(6).align_y(Alignment::Center),
+        map_button
+    ]
+    .spacing(6)
+    .width(Fill);
 
     if let Some(error) = &picker.error {
         content = content.push(text(error).size(metrics.label()).style(text::danger));
@@ -419,7 +424,7 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
 // ---------------------------------------------------------------------------
 
 /// The travel part of the settings page: the key, the usual method, and where
-/// the day starts and ends.
+/// Home is.
 pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = &state.config.travel;
     let label = |label: &'static str| text(label).size(metrics.label()).style(text::secondary);
@@ -451,22 +456,17 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
             |app| msg(Action::SetMapApp(app)),
             metrics,
         ),
-        label("Start location"),
+        label("Home"),
         location_control(
             state,
-            PickTarget::Start,
-            settings.start.and_then(|id| settings.place(id)),
-            "Search for a start location",
+            PickTarget::Home,
+            settings.home.and_then(|id| settings.place(id)),
+            "Search for your home address",
             metrics,
         ),
-        label("End location"),
-        location_control(
-            state,
-            PickTarget::End,
-            settings.end.and_then(|id| settings.place(id)),
-            "Search for an end location",
-            metrics,
-        ),
+        text("Your day’s travel starts and ends at Home. Place searches favor results near this address.")
+            .size((metrics.label() - 1.0).max(10.0))
+            .style(text::secondary),
     ]
     .spacing(metrics.spacing)
     .into()

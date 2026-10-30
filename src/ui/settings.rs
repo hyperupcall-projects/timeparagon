@@ -180,6 +180,14 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     column![
         theme,
+        container(switch(
+            "Use 24-hour time",
+            state.config.appearance.use_24_hour,
+            Message::Use24HourToggled,
+            metrics,
+        ))
+        .id("time-format")
+        .width(Fill),
         switch(
             "Follow system light/dark",
             state.config.appearance.follow_system,
@@ -217,18 +225,6 @@ fn view_layout<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         layout_number(
             "Task details width (px)",
             LayoutField::DetailWidth,
-            state,
-            metrics
-        ),
-        layout_number(
-            "Screen margin (px, 0–30)",
-            LayoutField::ScreenMargin,
-            state,
-            metrics
-        ),
-        layout_number(
-            "Border radius (px, 0–30)",
-            LayoutField::BorderRadius,
             state,
             metrics
         ),
@@ -275,8 +271,14 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics
         ),
         layout_number(
-            "Left/right margin (px, 0–100)",
-            LayoutField::DockMargin,
+            "Left margin (px, 0–100)",
+            LayoutField::DockLeftMargin,
+            state,
+            metrics,
+        ),
+        layout_number(
+            "Right margin (px, 0–100)",
+            LayoutField::DockRightMargin,
             state,
             metrics,
         ),
@@ -326,6 +328,12 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         text("Keep maximized windows beside the panel. Tooltips do not reserve space.")
             .size(metrics.label())
             .style(text::secondary),
+        layout_number(
+            "Screen margin (px, 0–30)",
+            LayoutField::ScreenMargin,
+            state,
+            metrics,
+        ),
         layout_number(
             "Corner radius (px, 0–30)",
             LayoutField::PanelBorderRadius,
@@ -493,7 +501,8 @@ fn layout_number<'a>(
         | LayoutField::DockBorderRadius
         | LayoutField::PanelBorderRadius
         | LayoutField::DockWidth
-        | LayoutField::DockMargin
+        | LayoutField::DockLeftMargin
+        | LayoutField::DockRightMargin
         | LayoutField::DockBorderOuterWidth
         | LayoutField::DockBorderInnerWidth
         | LayoutField::PanelBorderOuterWidth
@@ -760,7 +769,10 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ));
 
     section = section.push(field(
-        day_end_label(settings.day_start_hour()),
+        day_end_label(
+            settings.day_start_hour(),
+            state.config.appearance.use_24_hour,
+        ),
         slider(
             0..=config::CalendarSettings::MAX_DAY_END_HOUR,
             settings.day_start_hour(),
@@ -1141,11 +1153,14 @@ fn sync_label(minutes: u32) -> String {
     }
 }
 
-fn day_end_label(hour: u32) -> String {
+fn day_end_label(hour: u32, use_24_hour: bool) -> String {
     if hour == 0 {
         "Day ends at midnight".to_owned()
     } else {
-        format!("Day ends at {}", calendar::hour_label(hour))
+        format!(
+            "Day ends at {}",
+            calendar::time_format::hour(hour, use_24_hour)
+        )
     }
 }
 
@@ -1220,17 +1235,38 @@ mod tests {
     }
 
     #[test]
+    fn margin_controls_live_in_their_respective_sections() {
+        use crate::{config::Config, theme::Catalog};
+        use iced_test::{Simulator, core::Settings};
+        let state = State::new(Config::default(), Catalog::built_in());
+        let size = iced::Size::new(420.0, 1800.0);
+        let metrics = Metrics::of(size);
+        let mut ui = Simulator::with_size(Settings::default(), size, view_layout(&state, &metrics));
+        assert!(ui.find("Screen margin (px, 0–30)").is_err());
+        assert!(ui.find("Border radius (px, 0–30)").is_err());
+        let mut ui = Simulator::with_size(Settings::default(), size, panel(&state, &metrics));
+        assert!(ui.find("Screen margin (px, 0–30)").is_ok());
+        let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
+        assert!(ui.find("Left margin (px, 0–100)").is_ok());
+        assert!(ui.find("Right margin (px, 0–100)").is_ok());
+    }
+
+    #[test]
     fn layout_number_buttons_step_and_stop_at_the_limits() {
         use crate::{app, config::Config, theme::Catalog};
         use iced_test::{Simulator, core::Settings};
 
         let mut state = State::new(Config::default(), Catalog::built_in());
+        state.config.views.dock_left_margin = Some(10.0);
+        state.config.views.dock_right_margin = Some(20.0);
         for (kind, step) in [
             (LayoutField::CalendarWidth, 10.0),
             (LayoutField::TimeBlockWidth, 10.0),
             (LayoutField::DetailWidth, 10.0),
             (LayoutField::ScreenMargin, 1.0),
             (LayoutField::DockWidth, 1.0),
+            (LayoutField::DockLeftMargin, 1.0),
+            (LayoutField::DockRightMargin, 1.0),
             (LayoutField::DockBorderOuterWidth, 1.0),
             (LayoutField::DockBorderInnerWidth, 1.0),
             (LayoutField::PanelBorderOuterWidth, 1.0),
@@ -1282,6 +1318,34 @@ mod tests {
     }
 
     #[test]
+    fn time_format_toggle_updates_and_persists_the_preference() {
+        use crate::{app, config::Config, theme::Catalog};
+        use iced_test::{Simulator, core::Settings};
+
+        let old: Config = toml::from_str("[appearance]\ntheme = 'Sakura'\n").unwrap();
+        assert!(old.appearance.use_24_hour);
+        for width in [180.0, 420.0] {
+            let mut state = State::new(old.clone(), Catalog::built_in());
+            for expected in [false, true] {
+                let size = iced::Size::new(width, 400.0);
+                let mut ui = Simulator::with_size(
+                    Settings::default(),
+                    size,
+                    appearance(&state, &Metrics::of(size)),
+                );
+                ui.click(iced::widget::Id::from("time-format")).unwrap();
+                for message in ui.into_messages() {
+                    let _ = app::update(&mut state, message);
+                }
+                assert_eq!(state.config.appearance.use_24_hour, expected);
+                let saved = toml::to_string(&state.config).unwrap();
+                let restored: Config = toml::from_str(&saved).unwrap();
+                assert_eq!(restored.appearance.use_24_hour, expected);
+            }
+        }
+    }
+
+    #[test]
     fn cycling_wraps_around_the_options() {
         let options = vec!["a", "b", "c"];
 
@@ -1318,8 +1382,8 @@ mod tests {
 
     #[test]
     fn day_end_labels_read_naturally() {
-        assert_eq!(day_end_label(0), "Day ends at midnight");
-        assert_eq!(day_end_label(3), "Day ends at 3 AM");
-        assert_eq!(day_end_label(5), "Day ends at 5 AM");
+        assert_eq!(day_end_label(0, false), "Day ends at midnight");
+        assert_eq!(day_end_label(3, false), "Day ends at 3 AM");
+        assert_eq!(day_end_label(5, false), "Day ends at 5 AM");
     }
 }

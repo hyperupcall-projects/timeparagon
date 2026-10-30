@@ -4,6 +4,9 @@ use timeslay::cli::{self, Mode};
 use timeslay::{app, dock, panel, webextension};
 
 fn main() -> iced::Result {
+    if iced_webview::cef_subprocess_check() {
+        return Ok(());
+    }
     let (mode, origin) = match cli::parse(std::env::args().skip(1)) {
         Ok(cli::Action::Run { mode, origin }) => (mode, origin),
         Ok(cli::Action::Help) => {
@@ -26,7 +29,7 @@ fn main() -> iced::Result {
         Mode::Dock => Some(dock::run(origin)),
         Mode::Daemon => Some(panel::run()),
         Mode::WebExtension => Some(webextension::run()),
-        Mode::Window | Mode::Sidebar => None,
+        Mode::Window | Mode::Sidebar | Mode::NewTask => None,
     };
     if let Some(result) = result {
         if let Err(error) = result {
@@ -39,8 +42,12 @@ fn main() -> iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
         .init();
 
-    if mode == Mode::Sidebar {
-        let result = panel::layer::run();
+    if matches!(mode, Mode::Sidebar | Mode::NewTask) {
+        let result = if mode == Mode::NewTask {
+            panel::layer::run_task_popover()
+        } else {
+            panel::layer::run()
+        };
         timeslay::window_effect::shutdown();
         if let Err(error) = result {
             eprintln!("timeslay: {error}");

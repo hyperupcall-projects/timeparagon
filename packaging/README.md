@@ -314,3 +314,19 @@ keeps workspace bot tokens and permitted user IDs in
 app-level token cache. Installation copies a development installation file only
 when the destination does not exist; upgrades preserve it. Ordinary uninstall
 preserves credentials; `--purge` removes them.
+
+## Embedded location map
+
+Every location search offers **Choose on map**. It opens Mapbox GL JS in
+`iced_webview_v2` using Chromium (CEF). Search suggestions fly to a place;
+clicking the map resolves a nearby address or named feature. **Confirm** becomes
+available after a valid place is selected. **Back to search** or Escape cancels
+without changing the field. Home is the initial map center and search bias;
+panning updates search proximity to the area being explored.
+
+Set a Mapbox public access token in Settings. Maps and search require internet
+access and a graphics driver supporting WebGL2. The first build downloads CEF;
+the installed runtime is considerably larger than the TimeSlay binary.
+`install.sh` copies the complete CEF runtime to `PREFIX/lib/timeslay/cef`.
+For a custom build/runtime location, set `CEF_PATH` at build time and
+`TIMESLAY_CEF_DIR` at install/runtime. Mapbox attribution remains visible.

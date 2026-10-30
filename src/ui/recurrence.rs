@@ -253,6 +253,7 @@ where
                 EndKind::OnDate => {
                     let send = map.clone();
                     let until = super::controls::date(
+                        false,
                         &rule.until,
                         false,
                         false,
@@ -314,6 +315,7 @@ where
             }
             let send = map.clone();
             let skip_input = super::controls::date(
+                false,
                 &rule.skip_input,
                 false,
                 false,

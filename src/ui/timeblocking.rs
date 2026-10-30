@@ -41,7 +41,9 @@ pub fn task_row<'a>(
             }
             total > (block.end - block.start).num_minutes().max(0) as u64
         });
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let mut check = button(text(if task.completed { "●" } else { "○" })).style(button::text);
     if state.timeblocking.busy.is_empty() {
         check = check.on_press(Message::TaskToggled(task.id.clone()));
@@ -108,7 +110,7 @@ pub fn task_row<'a>(
         if let Some(due) = tb::due(task) {
             let late = due.is_past(chrono::Local::now().naive_local());
             content = content.push(
-                text(due_label(&due))
+                text(due_label(&due, state.config.appearance.use_24_hour))
                     .size(metrics.label() - 1.0)
                     .style(if late { text::danger } else { text::secondary }),
             );
@@ -212,7 +214,7 @@ pub(super) fn drag_ghost<'a>(
 
 /// "Due Today", "Due Tomorrow", or "Due Mon, Oct 26" (with the year when it
 /// isn't this one), followed by the time when the deadline has one.
-fn due_label(due: &crate::calendar::deadline::Deadline) -> String {
+fn due_label(due: &crate::calendar::deadline::Deadline, use_24_hour: bool) -> String {
     let today = chrono::Local::now().date_naive();
     let day = if due.date == today {
         "Today".to_owned()
@@ -224,7 +226,10 @@ fn due_label(due: &crate::calendar::deadline::Deadline) -> String {
         due.date.format("%a, %b %-d, %Y").to_string()
     };
     match due.time {
-        Some(time) => format!("Due {day} at {}", time.format("%H:%M")),
+        Some(time) => format!(
+            "Due {day} at {}",
+            crate::calendar::time_format::clock(time, use_24_hour)
+        ),
         None => format!("Due {day}"),
     }
 }
@@ -254,7 +259,9 @@ pub(super) fn editable_title<'a>(
     task: &'a Event,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let size = metrics.label() + 6.0;
     let title: Element<'a, Message> = if state.timeblocking.editing_title {
         let mut input = text_input("Task name", &state.timeblocking.title)
@@ -293,8 +300,53 @@ pub(super) fn editable_title<'a>(
     body.into()
 }
 
+/// The task fields used by details and every creation entry point.
+pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+    let draft = state
+        .inbox
+        .draft
+        .as_ref()
+        .filter(|_| task.id == crate::inbox::DRAFT_ID);
+    let title: Element<'a, Message> = if let Some(draft) = draft {
+        let mut input = text_input("Task, or paste a link", &draft.title)
+            .id(iced::widget::Id::new(crate::inbox::TITLE_FIELD))
+            .size(metrics.label() + 6.0);
+        if !draft.saving {
+            input = input.on_input(|v| Message::Inbox(crate::inbox::Action::Title(v)));
+        }
+        column![field_label("Title", metrics), input]
+            .spacing(6)
+            .into()
+    } else {
+        editable_title(state, task, metrics)
+    };
+    let description: Element<'a, Message> = if let Some(draft) = draft {
+        let mut input = iced::widget::text_editor(&state.task_description)
+            .placeholder("Add description…")
+            .size(metrics.label())
+            .height(140);
+        if !draft.saving {
+            input = input.on_action(|a| Message::Inbox(crate::inbox::Action::Description(a)));
+        }
+        input.into()
+    } else {
+        super::links::text(tb::description(&task.details.description), metrics.label())
+    };
+    column![
+        title,
+        editor(state, task, metrics),
+        field_label("Description", metrics),
+        description
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill)
+    .into()
+}
+
 pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let mut estimate =
         button(text(format!("{}m", tb::metadata(task).minutes)).size(metrics.label()))
             .style(super::controls::secondary)
@@ -322,7 +374,9 @@ fn date_field<'a>(
     metrics: &Metrics,
     deadline: bool,
 ) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let value = if deadline {
         &state.timeblocking.deadline
     } else {
@@ -365,13 +419,19 @@ fn date_field<'a>(
     }
     let mut body = column![
         field_label(if deadline { "Deadline" } else { "Due Date" }, metrics),
-        super::controls::date(value, true, false, !busy, metrics.label(), move |v| msg(
-            if deadline {
+        super::controls::date(
+            state.config.appearance.use_24_hour,
+            value,
+            true,
+            false,
+            !busy,
+            metrics.label(),
+            move |v| msg(if deadline {
                 Action::Deadline(v)
             } else {
                 Action::Date(v)
-            }
-        )),
+            })
+        ),
         day,
         row![time, reset].spacing(8),
     ]
@@ -385,6 +445,7 @@ fn date_field<'a>(
     if editing {
         let times: Element<'a, Message> = if deadline {
             super::controls::time(
+                state.config.appearance.use_24_hour,
                 &state.timeblocking.deadline_time,
                 !busy,
                 metrics.label(),
@@ -393,6 +454,7 @@ fn date_field<'a>(
         } else {
             row![
                 container(super::controls::time(
+                    state.config.appearance.use_24_hour,
                     &state.timeblocking.start_time,
                     !busy,
                     metrics.label(),
@@ -400,6 +462,7 @@ fn date_field<'a>(
                 ))
                 .width(Fill),
                 container(super::controls::time(
+                    state.config.appearance.use_24_hour,
                     &state.timeblocking.end_time,
                     !busy,
                     metrics.label(),
@@ -442,7 +505,9 @@ fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
 /// The task's projects, plus a searchable picker for adding more.
 fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let projects = tb::metadata(task).projects;
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
 
     let mut selected = column![].spacing(4).width(Fill);
     // A project that has since been removed is simply left out.
@@ -552,7 +617,9 @@ fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Eleme
 /// matching labels already used elsewhere as suggestions.
 fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let labels = tb::metadata(task).labels;
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
 
     let mut content = column![field_label("Labels", metrics)]
         .spacing(4)
@@ -628,7 +695,9 @@ fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elemen
 /// The task's priority: none, P1 or P2.
 fn priority_field<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let current = tb::metadata(task).priority;
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains(&task.id)
+        || (task.id == crate::inbox::DRAFT_ID
+            && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
 
     let choices = std::iter::once((None, "None")).chain(
         tb::Priority::ALL
@@ -763,8 +832,8 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         text(format!(
             "{} · {}–{}",
             block.start.format("%a, %b %-d"),
-            block.start.format("%H:%M"),
-            block.end.format("%H:%M")
+            crate::calendar::time_format::clock(block.start, state.config.appearance.use_24_hour),
+            crate::calendar::time_format::clock(block.end, state.config.appearance.use_24_hour)
         ))
         .size(metrics.label())
         .style(text::secondary),
@@ -1102,10 +1171,12 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         .timeblocking
         .estimate_task
         .as_deref()
-        .and_then(|id| state.calendar.event(id));
+        .and_then(|id| tb::event(state, id));
     let mut body = column![text("Estimated completion time").size(18)].spacing(10);
     if let Some(task) = task {
-        let busy = state.timeblocking.busy.contains(&task.id);
+        let busy = state.timeblocking.busy.contains(&task.id)
+            || (task.id == crate::inbox::DRAFT_ID
+                && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
         let mut input = text_input("Minutes", &state.timeblocking.estimate)
             .id(iced::widget::Id::new("task-estimate"))
             .size(metrics.label());

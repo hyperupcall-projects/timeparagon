@@ -82,6 +82,8 @@ pub struct Appearance {
     /// When set, the theme follows the system light/dark preference and
     /// `theme` is only remembered for when it is switched back off.
     pub follow_system: bool,
+    /// Display clock times in 24-hour format throughout the application.
+    pub use_24_hour: bool,
 }
 
 impl Default for Appearance {
@@ -89,6 +91,7 @@ impl Default for Appearance {
         Self {
             theme: "Sakura".to_owned(),
             follow_system: false,
+            use_24_hour: true,
         }
     }
 }
@@ -200,6 +203,11 @@ pub struct ViewSettings {
     /// pixels. A top or bottom dock uses it at both ends; a side dock uses it
     /// as the gap from the edge it hugs.
     pub dock_margin: f32,
+    /// Independent horizontal gaps; absent values inherit the legacy dock margin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dock_left_margin: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dock_right_margin: Option<f32>,
     /// Which screen edge the dock hugs.
     pub dock_side: DockSide,
     /// Thickness of the dock's outer border, in logical pixels. Zero hides it.
@@ -312,6 +320,8 @@ impl Default for ViewSettings {
             panel_border_radius: None,
             dock_width: 10.0,
             dock_margin: 0.0,
+            dock_left_margin: None,
+            dock_right_margin: None,
             dock_side: DockSide::Left,
             dock_border_outer_width: 1.0,
             dock_border_outer_color: HexColor(Color::WHITE),
@@ -403,6 +413,22 @@ impl ViewSettings {
         } else {
             Self::default().dock_margin
         }
+    }
+
+    pub fn dock_left_margin(&self) -> f32 {
+        self.dock_left_margin.filter(|v| v.is_finite()).map_or_else(
+            || self.dock_margin(),
+            |v| v.clamp(0.0, Self::MAX_DOCK_MARGIN),
+        )
+    }
+
+    pub fn dock_right_margin(&self) -> f32 {
+        self.dock_right_margin
+            .filter(|v| v.is_finite())
+            .map_or_else(
+                || self.dock_margin(),
+                |v| v.clamp(0.0, Self::MAX_DOCK_MARGIN),
+            )
     }
 
     /// A border thickness, clamped to the range the settings offer.
@@ -698,18 +724,14 @@ pub struct RouteMode {
 }
 
 /// Places, the Mapbox access token, and how trips between places are made.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct TravelSettings {
     /// A Mapbox access token (public, `pk.`) that may use the Search Box and
     /// Directions APIs.
     pub api_key: String,
-    /// Where a day's travel starts: the first event is reached from here.
+    /// Home: the day's first and last trips, and the center for place search.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub start: Option<u64>,
-    /// Where a day's travel ends: the last event is left for here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end: Option<u64>,
+    pub home: Option<u64>,
     /// How a trip is made until it is set otherwise.
     pub default_mode: TravelMode,
     /// The map "Open in Maps" opens a trip on.
@@ -721,6 +743,36 @@ pub struct TravelSettings {
     /// The place each calendar event, by id, was given.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub event_places: std::collections::BTreeMap<String, u64>,
+}
+
+// Read the old start/end settings once, then save only Home. Keep all saved
+// places, including the former end location, available to tasks and events.
+impl<'de> Deserialize<'de> for TravelSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Stored {
+            api_key: String,
+            home: Option<u64>,
+            start: Option<u64>,
+            end: Option<u64>,
+            default_mode: TravelMode,
+            map_app: MapApp,
+            places: Vec<Place>,
+            modes: Vec<RouteMode>,
+            event_places: std::collections::BTreeMap<String, u64>,
+        }
+        let stored = Stored::deserialize(deserializer)?;
+        Ok(Self {
+            api_key: stored.api_key,
+            home: stored.home.or(stored.start).or(stored.end),
+            default_mode: stored.default_mode,
+            map_app: stored.map_app,
+            places: stored.places,
+            modes: stored.modes,
+            event_places: stored.event_places,
+        })
+    }
 }
 
 impl TravelSettings {
@@ -847,6 +899,8 @@ pub struct CalendarSettings {
     pub inbox_list: Option<String>,
     #[serde(default)]
     pub inbox_sort: crate::calendar::task_sort::InboxSort,
+    #[serde(default)]
+    pub overdue_sort: crate::calendar::task_sort::InboxSort,
     /// Which metadata a task needs before it can leave the Inbox.
     #[serde(default)]
     pub triage: TriageRequirements,
@@ -904,6 +958,7 @@ impl Default for CalendarSettings {
             triaged_list: None,
             inbox_list: None,
             inbox_sort: Default::default(),
+            overdue_sort: Default::default(),
             triage: TriageRequirements::default(),
             day_end_hour: 0,
             weekly_days: 8,
@@ -1737,6 +1792,22 @@ mod tests {
         };
 
         assert_eq!(flash.pulse_period(), Flash::MIN_PULSE);
+    }
+
+    #[test]
+    fn dock_margins_inherit_legacy_values_and_can_be_saved_independently() {
+        let mut views: ViewSettings = toml::from_str("dock_margin = 18.0").unwrap();
+        assert_eq!(
+            (views.dock_left_margin(), views.dock_right_margin()),
+            (18.0, 18.0)
+        );
+        views.dock_left_margin = Some(0.0);
+        views.dock_right_margin = Some(32.0);
+        let restored: ViewSettings = toml::from_str(&toml::to_string(&views).unwrap()).unwrap();
+        assert_eq!(
+            (restored.dock_left_margin(), restored.dock_right_margin()),
+            (0.0, 32.0)
+        );
     }
 
     #[test]

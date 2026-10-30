@@ -11,6 +11,7 @@ pub enum Mode {
     /// The regular window.
     #[default]
     Window,
+    NewTask,
     /// The wide side panel.
     Sidebar,
     /// The thin dock strip.
@@ -37,7 +38,7 @@ Usage: timeslay [OPTIONS]
 With no options, TimeSlay opens its regular window.
 
 Options:
-      --sidebar        Open the side panel: the full app in a wide strip
+      --new-task       Open the full task creation editor\n      --sidebar        Open the side panel: the full app in a wide strip
                        down the edge of the screen (the width and edge are
                        set in the [panel] table of config.toml)
       --dock           Open the dock: a very thin strip of today along the
@@ -71,6 +72,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
         let requested = match arg.as_str() {
             "-h" | "--help" => return Ok(Action::Help),
             "-V" | "--version" => return Ok(Action::Version),
+            "--new-task" => Some(Mode::NewTask),
             "--sidebar" => Some(Mode::Sidebar),
             "--dock" => Some(Mode::Dock),
             "--daemon" => Some(Mode::Daemon),

@@ -119,9 +119,13 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
             .style(text::secondary),
     );
     details = details.push(
-        text(habit.time_label())
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
+        text(format!(
+            "{} – {}",
+            crate::calendar::time_format::clock(habit.start, state.config.appearance.use_24_hour),
+            crate::calendar::time_format::clock(habit.end, state.config.appearance.use_24_hour)
+        ))
+        .size(metrics.label() - 1.0)
+        .style(text::secondary),
     );
     if !habit.notes.is_empty() {
         details = details.push(
@@ -148,6 +152,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         &state.form_editors[2],
         state.habits.busy,
         metrics,
+        state.config.appearance.use_24_hour,
     )))
     .padding(16)
     .width(Fill)
@@ -239,6 +244,7 @@ fn form<'a>(
     notes: &'a iced::widget::text_editor::Content,
     busy: bool,
     metrics: &Metrics,
+    use_24_hour: bool,
 ) -> Element<'a, Message> {
     let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
 
@@ -270,16 +276,24 @@ fn form<'a>(
     .spacing(6);
 
     // Keep the date above the time pair so long dates fit narrow panels.
-    let date = super::controls::date(&draft.date, false, false, true, metrics.label(), |value| {
-        msg(Action::Date(value))
-    });
+    let date = super::controls::date(
+        use_24_hour,
+        &draft.date,
+        false,
+        false,
+        true,
+        metrics.label(),
+        |value| msg(Action::Date(value)),
+    );
     let start = container(super::controls::time(
+        use_24_hour,
         &draft.start,
         true,
         metrics.label(),
         |value| msg(Action::Start(value)),
     ));
     let end = container(super::controls::time(
+        use_24_hour,
         &draft.end,
         true,
         metrics.label(),

@@ -2,7 +2,6 @@
 
 use iced::widget::{
     Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
-    text_input,
 };
 use iced::{Center, Color, Element, Fill};
 
@@ -22,12 +21,17 @@ fn msg(action: Action) -> Message {
 /// Which Tasks list a card is drawn for, so the actions can differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum List {
+    Overdue,
     Inbox,
     Triaged,
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     list_view(state, metrics, List::Inbox)
+}
+
+pub fn overdue<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    list_view(state, metrics, List::Overdue)
 }
 
 /// The Triaged tab: tasks confirmed out of the Inbox but not yet scheduled.
@@ -37,10 +41,15 @@ pub fn triaged<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 
 fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a, Message> {
     let tasks = match list {
+        List::Overdue => inbox::overdue_tasks(state),
         List::Inbox => inbox::tasks(state),
         List::Triaged => inbox::triaged_tasks(state),
     };
     let (heading, subtitle) = match list {
+        List::Overdue => (
+            "Overdue",
+            "Incomplete tasks with a past scheduled time or deadline",
+        ),
         List::Inbox => ("Inbox", "Tasks waiting to be triaged"),
         List::Triaged => (
             "Triaged",
@@ -58,14 +67,22 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         title.into()
     };
     let mut body = column![header].spacing(metrics.spacing);
-    if list == List::Inbox {
+    if matches!(list, List::Inbox | List::Overdue) {
         body = body.push(
             row![
                 text("Sort by").size(metrics.label()),
                 pick_list(
                     inbox::InboxSort::ALL,
-                    Some(state.config.calendar.inbox_sort),
-                    |sort| msg(Action::Sort(sort))
+                    Some(if list == List::Overdue {
+                        state.config.calendar.overdue_sort
+                    } else {
+                        state.config.calendar.inbox_sort
+                    }),
+                    move |sort| msg(if list == List::Overdue {
+                        Action::OverdueSort(sort)
+                    } else {
+                        Action::Sort(sort)
+                    })
                 )
                 .text_size(metrics.label())
             ]
@@ -83,6 +100,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
     if tasks.is_empty() {
         body = body.push(
             text(match list {
+                List::Overdue => "Nothing overdue",
                 List::Inbox => "Nothing to triage",
                 List::Triaged => "Nothing triaged yet",
             })
@@ -112,7 +130,9 @@ fn task_card<'a>(
     let shown = state.calendar.open_event.as_deref() == Some(task.id.as_str());
 
     let mut heading = row![].spacing(4).align_y(Center);
-    if let Some(source) = integrations::source_in(&task.details.description) {
+    if let Some(source) =
+        integrations::source_in(&task.details.description).filter(|_| list != List::Overdue)
+    {
         heading = heading.push(source_icon::link(&source, 16.0));
     }
     // The title opens the task's details beside the list, where its project,
@@ -135,8 +155,10 @@ fn task_card<'a>(
     );
 
     let mut card = column![heading].spacing(4);
-    for row in metadata_rows(state, task, metrics, list == List::Inbox) {
-        card = card.push(row);
+    if list != List::Overdue {
+        for row in metadata_rows(state, task, metrics, list == List::Inbox) {
+            card = card.push(row);
+        }
     }
     if list == List::Triaged {
         card = card.push(actions(task, metrics, busy));
@@ -184,7 +206,11 @@ fn metadata_rows<'a>(
         let value = timestamp
             .map(|time| {
                 time.with_timezone(&Local)
-                    .format("%Y-%m-%d %H:%M:%S %Z")
+                    .format(if state.config.appearance.use_24_hour {
+                        "%Y-%m-%d %H:%M:%S %Z"
+                    } else {
+                        "%Y-%m-%d %-I:%M:%S%p %Z"
+                    })
                     .to_string()
             })
             .unwrap_or_else(|| "Unknown".into());
@@ -302,7 +328,7 @@ fn metadata_rows<'a>(
     }
 
     // The scheduled day or time, once it has one.
-    if let Some(scheduled) = scheduled_label(task) {
+    if let Some(scheduled) = scheduled_label(task, state.config.appearance.use_24_hour) {
         rows.push(field_line(
             "Scheduled",
             text(scheduled).size(size).into(),
@@ -352,7 +378,7 @@ fn format_duration(minutes: u32) -> String {
 }
 
 /// The day or time a task has been scheduled for, if it has one.
-fn scheduled_label(task: &Event) -> Option<String> {
+fn scheduled_label(task: &Event, use_24_hour: bool) -> Option<String> {
     let date = task.start.date_naive();
     if date == tb::UNDATED {
         return None;
@@ -363,7 +389,7 @@ fn scheduled_label(task: &Event) -> Option<String> {
         format!(
             "{} at {}",
             date.format("%a, %b %-d"),
-            task.start.format("%H:%M")
+            crate::calendar::time_format::clock(task.start, use_24_hour)
         )
     })
 }
@@ -598,12 +624,41 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     let Some(draft) = &state.inbox.draft else {
         return Space::new().into();
     };
-    let card = container(scrollable(form(draft, metrics)))
+    let card = container(scrollable(form(state, draft, metrics)))
         .padding(16)
         .width(Fill)
-        .max_width(420)
-        .max_height((metrics.size.height - 32.0).max(80.0))
+        .max_width(if state.task_creation_window { 440 } else { 420 })
+        .max_height(
+            (metrics.size.height
+                - if state.task_creation_window {
+                    0.0
+                } else {
+                    32.0
+                })
+            .max(80.0),
+        )
         .style(crate::ui::controls::surface);
+    if state.task_creation_window {
+        let viewport_height = metrics.size.height;
+        let bounds = move |size: iced::Size| {
+            Message::TaskPopoverBounds(iced::Rectangle {
+                x: 0.0,
+                y: (viewport_height - size.height).max(0.0),
+                width: size.width,
+                height: size.height,
+            })
+        };
+        return container(
+            iced::widget::sensor(card.id("dock-task-card"))
+                .key(viewport_height.to_bits())
+                .on_show(bounds)
+                .on_resize(bounds),
+        )
+        .width(Fill)
+        .height(Fill)
+        .align_y(iced::alignment::Vertical::Bottom)
+        .into();
+    }
     let backdrop =
         mouse_area(
             container(Space::new())
@@ -627,28 +682,12 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     stack![backdrop, foreground].into()
 }
 
-fn form<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
-    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
+fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
     let locked = draft.saving;
-
-    let mut title = text_input("Task, or paste a link", &draft.title)
-        .id(iced::widget::Id::new(inbox::TITLE_FIELD))
-        .size(metrics.label())
-        .width(Fill);
-    let deadline =
-        super::controls::date(&draft.deadline, true, true, !locked, metrics.label(), |v| {
-            msg(Action::Deadline(v))
-        });
-    let due = super::controls::date(&draft.due, true, false, !locked, metrics.label(), |v| {
-        msg(Action::Due(v))
-    });
-    if !locked {
-        title = title
-            .on_input(|value| msg(Action::Title(value)))
-            .on_submit(msg(Action::Create));
+    let mut body = column![text("New task").size(20)].spacing(8);
+    if let Some(event) = &draft.event {
+        body = body.push(super::timeblocking::fields(state, event, metrics));
     }
-
-    let mut body = column![text("New task").size(20), label("Task name"), title].spacing(8);
     if let Some(source) = &draft.source {
         let mut chip = row![
             source_icon::logo(source.kind, 16.0),
@@ -672,22 +711,7 @@ fn form<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
         }
         body = body.push(chip);
     }
-    body = body
-        .push(label("Deadline (optional)"))
-        .push(
-            text("The last day to finish this task.")
-                .size(metrics.label() - 1.0)
-                .style(text::secondary),
-        )
-        .push(deadline)
-        .push(label("Due date (optional)"))
-        .push(
-            text("The day you plan to work on it.")
-                .size(metrics.label() - 1.0)
-                .style(text::secondary),
-        )
-        .push(due);
-    if let Some(error) = &draft.error {
+    if let Some(error) = draft.error.as_ref().or(state.calendar.error.as_ref()) {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
 
@@ -879,11 +903,38 @@ mod tests {
             ui.find(
                 timestamp
                     .with_timezone(&Local)
-                    .format("%Y-%m-%d %H:%M:%S %Z")
+                    .format(if state.config.appearance.use_24_hour {
+                        "%Y-%m-%d %H:%M:%S %Z"
+                    } else {
+                        "%Y-%m-%d %-I:%M:%S%p %Z"
+                    })
                     .to_string()
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn overdue_shows_sorting_and_only_clickable_titles() {
+        for width in [320.0, 900.0] {
+            let mut state = state_with_task("");
+            state.screen = crate::app::Screen::Overdue;
+            state.calendar.events[0].start =
+                calendar::at_clock(Local::now().date_naive().pred_opt().unwrap(), 0, 0);
+            let mut ui = simulator(&state, width);
+            assert!(ui.find("Sort by").is_ok());
+            for label in [
+                "Project", "Priority", "Estimate", "Created", "Modified", "New task",
+            ] {
+                assert!(ui.find(label).is_err(), "{label}");
+            }
+            ui.click("Reply to Sam").unwrap();
+            assert!(ui.into_messages().any(|message| matches!(message,
+                Message::EventOpened(id) if id == "task:one")));
+            let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
+            assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
+            assert!(crate::app::shows_details(state.screen));
+        }
     }
 
     #[test]
@@ -907,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_task_button_opens_a_popup_with_both_optional_fields() {
+    fn the_new_task_button_opens_the_full_shared_editor() {
         let mut state = state_with_task("");
         let mut ui = simulator(&state, 400.0);
         ui.click("New task").unwrap();
@@ -919,8 +970,15 @@ mod tests {
         let _ = inbox::update(&mut state, Action::NewTask);
         let mut ui = simulator(&state, 400.0);
         for label in [
-            "Deadline (optional)",
-            "Due date (optional)",
+            "Deadline",
+            "Due Date",
+            "Projects",
+            "+ Add project",
+            "Estimate",
+            "Labels",
+            "Priority",
+            "Location",
+            "Description",
             "Add task",
             "Cancel",
         ] {

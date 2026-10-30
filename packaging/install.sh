@@ -99,6 +99,23 @@ if [ ! -x "$built" ]; then
     exit 1
 fi
 
+# Locate the complete Chromium runtime (resources, locales and shared libraries).
+cef_runtime=${TIMESLAY_CEF_DIR:-${CEF_PATH:-}}
+if [ -z "$cef_runtime" ]; then
+    for candidate in "$repo_root"/target/debug/build/cef-dll-sys-*/out/cef_linux_*; do
+        if [ -f "$candidate/libcef.so" ]; then
+            cef_runtime=$candidate
+            break
+        fi
+    done
+fi
+if [ -z "$cef_runtime" ] || [ ! -f "$cef_runtime/libcef.so" ]; then
+    echo "install.sh: Chromium runtime not found; build first or set TIMESLAY_CEF_DIR" >&2
+    exit 1
+fi
+mkdir -p "$prefix/lib/timeslay/cef"
+cp -aL "$cef_runtime/." "$prefix/lib/timeslay/cef/"
+
 # --- Install the binaries --------------------------------------------------
 mkdir -p "$bin_dir"
 install -m 0755 "$built" "$binary"

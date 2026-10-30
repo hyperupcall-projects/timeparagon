@@ -42,6 +42,8 @@ const NEEDLE_TICK: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Calendar,
+    /// Incomplete tasks whose scheduled time or deadline has passed.
+    Overdue,
     /// Tasks that have not been triaged yet.
     Inbox,
     /// Tasks that have been triaged but not yet scheduled.
@@ -70,7 +72,8 @@ pub enum LayoutField {
     DockBorderRadius,
     PanelBorderRadius,
     DockWidth,
-    DockMargin,
+    DockLeftMargin,
+    DockRightMargin,
     DockBorderOuterWidth,
     DockBorderInnerWidth,
     PanelBorderOuterWidth,
@@ -89,7 +92,8 @@ impl LayoutField {
             Self::DockBorderRadius => state.config.views.dock_border_radius(),
             Self::PanelBorderRadius => state.config.views.panel_border_radius(),
             Self::DockWidth => state.config.views.dock_width(),
-            Self::DockMargin => state.config.views.dock_margin(),
+            Self::DockLeftMargin => state.config.views.dock_left_margin(),
+            Self::DockRightMargin => state.config.views.dock_right_margin(),
             Self::DockBorderOuterWidth => state.config.views.dock_border_outer_width(),
             Self::DockBorderInnerWidth => state.config.views.dock_border_inner_width(),
             Self::PanelBorderOuterWidth => state.config.views.panel_border_outer_width(),
@@ -108,7 +112,9 @@ impl LayoutField {
                 config::ViewSettings::MIN_DOCK_WIDTH,
                 config::ViewSettings::MAX_DOCK_WIDTH,
             ),
-            Self::DockMargin => (0.0, config::ViewSettings::MAX_DOCK_MARGIN),
+            Self::DockLeftMargin | Self::DockRightMargin => {
+                (0.0, config::ViewSettings::MAX_DOCK_MARGIN)
+            }
             Self::DockBorderOuterWidth
             | Self::DockBorderInnerWidth
             | Self::PanelBorderOuterWidth
@@ -131,7 +137,8 @@ impl LayoutField {
             Self::DockBorderRadius => Message::DockBorderRadiusChanged(value),
             Self::PanelBorderRadius => Message::PanelBorderRadiusChanged(value),
             Self::DockWidth => Message::DockWidthChanged(value),
-            Self::DockMargin => Message::DockMarginChanged(value),
+            Self::DockLeftMargin => Message::DockLeftMarginChanged(value),
+            Self::DockRightMargin => Message::DockRightMarginChanged(value),
             Self::DockBorderOuterWidth => Message::DockBorderOuterWidthChanged(value),
             Self::DockBorderInnerWidth => Message::DockBorderInnerWidthChanged(value),
             Self::PanelBorderOuterWidth => Message::PanelBorderOuterWidthChanged(value),
@@ -199,6 +206,8 @@ impl Flash {
 pub struct State {
     pub picker: Option<crate::ui::controls::Picker>,
     /// Persistent cursor and selection state for new events, event edits and habits.
+    pub task_description: text_editor::Content,
+    pub task_creation_window: bool,
     pub form_editors: [text_editor::Content; 3],
     pub config: Config,
     pub catalog: Catalog,
@@ -303,6 +312,7 @@ pub enum Message {
     TimeBlocking(crate::timeblocking::Action),
     BrainDump(crate::brain_dump::Action),
     Inbox(crate::inbox::Action),
+    TaskPopoverBounds(iced::Rectangle),
     Accounts(crate::integrations::accounts::Action),
     FlashFrame(Instant),
 
@@ -338,6 +348,7 @@ pub enum Message {
 
     ThemeSelected(String),
     FollowSystemToggled(bool),
+    Use24HourToggled(bool),
     AlwaysOnTopToggled(bool),
     CalendarWidthChanged(f32),
     TimeBlockWidthChanged(f32),
@@ -346,7 +357,8 @@ pub enum Message {
     DockReserveSpaceToggled(bool),
     PanelReserveSpaceToggled(bool),
     DockWidthChanged(f32),
-    DockMarginChanged(f32),
+    DockLeftMarginChanged(f32),
+    DockRightMarginChanged(f32),
     DockSideSelected(config::DockSide),
     DockBorderOuterWidthChanged(f32),
     DockBorderInnerWidthChanged(f32),
@@ -576,6 +588,8 @@ impl State {
 
         Self {
             picker: None,
+            task_description: text_editor::Content::new(),
+            task_creation_window: false,
             form_editors: std::array::from_fn(|_| text_editor::Content::new()),
             now: Instant::now(),
             sidebar: None,
@@ -654,6 +668,10 @@ impl State {
         }
     }
 
+    pub fn screen_margin_width(&self) -> f32 {
+        self.screen_margin() * 2.0
+    }
+
     fn range_view_active(&self) -> bool {
         self.screen == Screen::Calendar && (self.weekly || self.monthly)
     }
@@ -672,8 +690,8 @@ impl State {
         } else {
             ui::calendar::weekly_view_width(&self.config.calendar)
         };
-        let width =
-            (view_width + self.screen_margin()).max(self.calendar_width() + self.screen_margin());
+        let width = (view_width + self.screen_margin_width())
+            .max(self.calendar_width() + self.screen_margin_width());
         match self.monitor_size {
             Some(size) if size.width.is_finite() && size.width > 0.0 => width.min(size.width),
             _ => width,
@@ -684,11 +702,14 @@ impl State {
 /// Resize the panes together, keeping the panel's transparent screen inset
 /// outside the calendar's configured width.
 fn apply_view_sizes(state: &mut State) -> Task<Message> {
+    if state.task_creation_window {
+        return Task::none();
+    }
     let weekly = state.range_view_active();
     let base = if weekly {
         state.weekly_window_width()
     } else {
-        state.calendar_width() + state.screen_margin()
+        state.calendar_width() + state.screen_margin_width()
     };
     let block_open = state.timeblocking.original_width.is_some();
     let mut width = if block_open {
@@ -715,7 +736,7 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
                 id,
                 Some(Size::new(
                     if weekly {
-                        (MIN_SIZE.width + state.screen_margin()).min(base)
+                        (MIN_SIZE.width + state.screen_margin_width()).min(base)
                     } else {
                         base
                     },
@@ -732,25 +753,42 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
     }
 }
 
+pub fn boot_new_task() -> (State, Task<Message>) {
+    boot_window(true)
+}
+
 pub fn boot() -> (State, Task<Message>) {
+    boot_window(false)
+}
+
+fn boot_window(task_creation_window: bool) -> (State, Task<Message>) {
     let mut state = boot_state();
+    state.task_creation_window = task_creation_window;
+    let edit = if task_creation_window {
+        state.main_size = Size::new(480.0, 800.0);
+        crate::inbox::update(&mut state, crate::inbox::Action::NewTask)
+    } else {
+        Task::none()
+    };
 
     // The browser extension and the Slack app look for a running app here.
     // The panel has its own socket; this one covers the regular window.
-    let (inbox_tx, inbox_rx) = mpsc::channel();
-    state.inbox_added_rx = Some(inbox_rx);
-    match crate::ipc::bind(crate::ipc::WINDOW) {
-        Ok(listener) => {
-            std::thread::Builder::new()
-                .name("window-ipc".into())
-                .spawn(move || {
-                    if let Err(error) = window_ipc_listener(listener, inbox_tx) {
-                        log::error!("window IPC listener stopped: {error:#}");
-                    }
-                })
-                .expect("failed to spawn the window IPC listener");
+    if !task_creation_window {
+        let (inbox_tx, inbox_rx) = mpsc::channel();
+        state.inbox_added_rx = Some(inbox_rx);
+        match crate::ipc::bind(crate::ipc::WINDOW) {
+            Ok(listener) => {
+                std::thread::Builder::new()
+                    .name("window-ipc".into())
+                    .spawn(move || {
+                        if let Err(error) = window_ipc_listener(listener, inbox_tx) {
+                            log::error!("window IPC listener stopped: {error:#}");
+                        }
+                    })
+                    .expect("failed to spawn the window IPC listener");
+            }
+            Err(error) => log::error!("window IPC is unavailable: {error:#}"),
         }
-        Err(error) => log::error!("window IPC is unavailable: {error:#}"),
     }
 
     // A daemon opens no window by itself, which is what lets the flash
@@ -766,7 +804,7 @@ pub fn boot() -> (State, Task<Message>) {
         ..Default::default()
     });
 
-    (state, open.map(Message::WindowOpened))
+    (state, Task::batch([open.map(Message::WindowOpened), edit]))
 }
 
 /// Opens the clock as the side panel: a separate, narrow instance pinned to one
@@ -809,7 +847,10 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
         Err(error) => log::error!("panel IPC is unavailable: {error:#}"),
     }
 
-    state.main_size = Size::new(state.calendar_width() + state.screen_margin(), PANEL_FILL);
+    state.main_size = Size::new(
+        state.calendar_width() + state.screen_margin_width(),
+        PANEL_FILL,
+    );
     let (_id, open) = window::open(sidebar_settings(&panel, &state.config.views));
 
     (state, open.map(Message::WindowOpened))
@@ -825,7 +866,7 @@ const PANEL_FILL: f32 = 10_000.0;
 
 /// The window a panel instance opens with.
 fn sidebar_settings(panel: &panel::PanelConfig, views: &config::ViewSettings) -> window::Settings {
-    let width = views.calendar_width(panel.width as f32) + views.margin();
+    let width = views.calendar_width(panel.width as f32) + views.margin() * 2.0;
     window::Settings {
         size: Size::new(width, PANEL_FILL),
         min_size: Some(Size::new(width, MIN_SIZE.height)),
@@ -972,7 +1013,7 @@ fn resize_for_week_transition(
 
     state.details_pane_open = detail_pane_visible(state);
     let restored_width = state.calendar_width()
-        + state.screen_margin()
+        + state.screen_margin_width()
         + if state.details_pane_open {
             state.config.views.detail_width()
         } else {
@@ -998,15 +1039,22 @@ fn resize_for_week_transition(
 pub(crate) fn shows_details(screen: Screen) -> bool {
     matches!(
         screen,
-        Screen::Calendar | Screen::Backlog | Screen::Inbox | Screen::Triaged
+        Screen::Calendar | Screen::Backlog | Screen::Overdue | Screen::Inbox | Screen::Triaged
     )
 }
 
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
+        Message::TaskPopoverBounds(_) => Task::none(),
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::BrainDump(action) => crate::brain_dump::update(state, action),
-        Message::Inbox(action) => crate::inbox::update(state, action),
+        Message::Inbox(action) => {
+            let task = crate::inbox::update(state, action);
+            if state.task_creation_window && state.inbox.draft.is_none() {
+                return Task::batch([task, iced::exit()]);
+            }
+            task
+        }
         Message::Accounts(action) => crate::integrations::accounts::update(state, action),
         Message::FlashFrame(now) => {
             state.now = now;
@@ -1072,9 +1120,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.alarms.editor = None;
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
-            // Whatever was open belongs to the screen being left: the Inbox
-            // and Triaged show their details pane only for their own tasks.
-            let tasks_screen = |screen| matches!(screen, Screen::Inbox | Screen::Triaged);
+            // Each task list opens its own selection in the details pane.
+            let tasks_screen =
+                |screen| matches!(screen, Screen::Overdue | Screen::Inbox | Screen::Triaged);
             if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {
                 state.calendar.open_event = None;
                 state.inbox.picker = None;
@@ -1385,7 +1433,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.config.window.time_block_width = state
                 .timeblocking
                 .original_width
-                .map(|_| state.calendar_width() + state.screen_margin() + pane);
+                .map(|_| state.calendar_width() + state.screen_margin_width() + pane);
             let resize = apply_view_sizes(state);
             Task::batch([resize, queue_save(state)])
         }
@@ -1422,9 +1470,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             if !margin.is_finite() {
                 return Task::none();
             }
-            let before = state.screen_margin();
+            let before = state.screen_margin_width();
             state.config.views.margin = margin.clamp(0.0, config::ViewSettings::MAX_MARGIN);
-            let delta = state.screen_margin() - before;
+            let delta = state.screen_margin_width() - before;
             if let Some(width) = &mut state.config.window.time_block_width {
                 *width += delta;
             }
@@ -1466,13 +1514,18 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
-        Message::DockMarginChanged(margin) => {
+        Message::DockLeftMarginChanged(margin) | Message::DockRightMarginChanged(margin) => {
+            let left = matches!(message, Message::DockLeftMarginChanged(_));
             state.view_layout_input = None;
             if !margin.is_finite() {
                 return Task::none();
             }
-            state.config.views.dock_margin =
-                margin.clamp(0.0, config::ViewSettings::MAX_DOCK_MARGIN);
+            let margin = Some(margin.clamp(0.0, config::ViewSettings::MAX_DOCK_MARGIN));
+            if left {
+                state.config.views.dock_left_margin = margin;
+            } else {
+                state.config.views.dock_right_margin = margin;
+            }
             queue_save(state)
         }
 
@@ -1621,6 +1674,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
+        Message::Use24HourToggled(enabled) => {
+            state.config.appearance.use_24_hour = enabled;
+            queue_save(state)
+        }
+
         Message::FollowSystemToggled(follow) => {
             state.config.appearance.follow_system = follow;
             queue_save(state)
@@ -1729,7 +1787,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 && previous.window.time_block_width == state.config.window.time_block_width
             {
                 if let Some(width) = &mut state.config.window.time_block_width {
-                    *width += state.config.views.margin() - previous.views.margin();
+                    *width += (state.config.views.margin() - previous.views.margin()) * 2.0;
                 }
             }
             if views_changed || weekly_size_changed {
@@ -1813,7 +1871,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                         let width = state.weekly_window_width();
                         settings.size = Size::new(width, PANEL_FILL);
                         settings.min_size = Some(Size::new(
-                            (MIN_SIZE.width + state.screen_margin()).min(width),
+                            (MIN_SIZE.width + state.screen_margin_width()).min(width),
                             MIN_SIZE.height,
                         ));
                         settings.max_size = Some(Size::new(width, 100_000.0));
@@ -1891,6 +1949,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
 
             state.monitor_size = size;
+            if state.task_creation_window {
+                return Task::none();
+            }
             if state.range_view_active() {
                 if state.sidebar.is_some() {
                     if let Some(size) =
@@ -1912,7 +1973,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 let mut width = match state.timeblocking.original_width {
                     Some(base) => crate::timeblocking::editor_width(state, base),
                     None => {
-                        state.config.views.calendar_width(sidebar.width) + state.screen_margin()
+                        state.config.views.calendar_width(sidebar.width)
+                            + state.screen_margin_width()
                     }
                 };
                 if state.details_pane_open {
@@ -1956,6 +2018,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
 
             state.main_size = size;
+            if state.task_creation_window {
+                return Task::none();
+            }
             log::debug!("window is now {}x{}", size.width, size.height);
 
             if state.range_view_active() {
@@ -2209,6 +2274,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::CalendarTick if state.screen == Screen::Overdue => Task::none(),
         Message::CalendarTick => refresh_day(state),
 
         Message::OpenGoogleCalendar => {
@@ -3282,6 +3348,9 @@ pub fn active_theme(state: &State, window: window::Id) -> Option<Theme> {
 }
 
 pub fn title(state: &State, window: window::Id) -> String {
+    if state.task_creation_window {
+        return "New task — TimeSlay".into();
+    }
     if state
         .flash
         .as_ref()
@@ -3301,6 +3370,7 @@ pub fn title(state: &State, window: window::Id) -> String {
 
 pub fn subscription(state: &State) -> Subscription<Message> {
     let mut subscriptions = vec![
+        crate::travel::map::subscription(state),
         config::watch().map(Message::ConfigReloaded),
         window::close_events().map(Message::WindowClosed),
         window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
@@ -3335,9 +3405,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         }));
     }
 
-    // The needle has to move even when the clock is idle, but only while
-    // the day view is actually on screen.
-    if state.screen == Screen::Calendar {
+    // Refresh the calendar needle and the Overdue list as time passes.
+    if matches!(state.screen, Screen::Calendar | Screen::Overdue) {
         subscriptions.push(iced::time::every(NEEDLE_TICK).map(|_| Message::CalendarTick));
     }
 
@@ -3423,6 +3492,14 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 /// looked at without running anything.
 fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
+    if state.travel.map.active {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Travel(crate::travel::Action::Map(
+                crate::travel::map::Action::Close,
+            ))),
+            _ => None,
+        };
+    }
     if let Some(picker) = &state.picker {
         use crate::ui::controls::Action;
         return match key {
@@ -3555,13 +3632,20 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     // show: a space would otherwise silence an alarm halfway through a word.
     if matches!(
         state.screen,
-        Screen::Notepad | Screen::BrainDump | Screen::KeepNotes | Screen::Inbox | Screen::Triaged
+        Screen::Notepad
+            | Screen::BrainDump
+            | Screen::KeepNotes
+            | Screen::Overdue
+            | Screen::Inbox
+            | Screen::Triaged
     ) {
         return match key.as_ref() {
             // A task's details come away first; a second press leaves.
             Key::Named(Named::Escape)
-                if matches!(state.screen, Screen::Inbox | Screen::Triaged)
-                    && state.calendar.open_event.is_some() =>
+                if matches!(
+                    state.screen,
+                    Screen::Overdue | Screen::Inbox | Screen::Triaged
+                ) && state.calendar.open_event.is_some() =>
             {
                 Some(Message::EventClosed)
             }
@@ -4411,8 +4495,8 @@ mod tests {
 
         // The width is fixed from both sides, so the compositor cannot stretch
         // the strip, but the height is free to fill the screen.
-        assert_eq!(settings.min_size.unwrap().width, 208.0);
-        assert_eq!(settings.max_size.unwrap().width, 208.0);
+        assert_eq!(settings.min_size.unwrap().width, 216.0);
+        assert_eq!(settings.max_size.unwrap().width, 216.0);
         assert!(settings.min_size.unwrap().height < settings.max_size.unwrap().height);
         assert!(!settings.decorations);
         assert!(settings.transparent);
@@ -4433,11 +4517,11 @@ mod tests {
             width: 200.0,
             side: panel::Side::Left,
         });
-        assert_eq!(state.weekly_window_width(), 2016.0);
+        assert_eq!(state.weekly_window_width(), 2024.0);
         state.monitor_size = Some(Size::new(1200.0, 900.0));
         assert_eq!(state.weekly_window_width(), 1200.0);
         state.monitor_size = Some(Size::new(f32::NAN, 900.0));
-        assert_eq!(state.weekly_window_width(), 2016.0);
+        assert_eq!(state.weekly_window_width(), 2024.0);
         state.sidebar = None;
         state.monitor_size = None;
         state.config.window.width = 3000.0;
@@ -4452,7 +4536,7 @@ mod tests {
             width: 200.0,
             side: panel::Side::Left,
         });
-        state.main_size = Size::new(208.0, 900.0);
+        state.main_size = Size::new(216.0, 900.0);
 
         let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
         assert!(matches!(actions.as_slice(), [
@@ -4460,7 +4544,7 @@ mod tests {
             GeometryAction::Min(Some(min)),
             GeometryAction::Resize(size),
             GeometryAction::Max(Some(max)),
-        ] if min.width < 208.0 && size.width == 1386.0 && max.width == size.width));
+        ] if min.width < 216.0 && size.width == 1394.0 && max.width == size.width));
 
         let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
         assert!(matches!(actions.as_slice(), [
@@ -4468,7 +4552,7 @@ mod tests {
             GeometryAction::Min(Some(min)),
             GeometryAction::Resize(size),
             GeometryAction::Max(Some(max)),
-        ] if min.width == 208.0 && size.width == 208.0 && max.width == 208.0));
+        ] if min.width == 216.0 && size.width == 216.0 && max.width == 216.0));
     }
 
     #[test]
@@ -4610,7 +4694,7 @@ mod tests {
         assert!(matches!(actions.as_slice(), [
             GeometryAction::Max(None), GeometryAction::Min(Some(min)),
             GeometryAction::Resize(size), GeometryAction::Max(_)
-        ] if size.width == 1386.0 && min.width < 1000.0));
+        ] if size.width == 1394.0 && min.width < 1000.0));
 
         let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
         let actions = geometry_actions(update(
@@ -4628,7 +4712,7 @@ mod tests {
             width: 200.0,
             side: panel::Side::Left,
         });
-        state.timeblocking.original_width = Some(208.0);
+        state.timeblocking.original_width = Some(216.0);
         state.details_pane_open = true;
         state.calendar.open_event = Some("event".into());
         let actions = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
@@ -4639,7 +4723,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(widths.last(), Some(&1386.0));
+        assert_eq!(widths.last(), Some(&1394.0));
         assert!(!state.details_pane_open);
         assert_eq!(state.timeblocking.original_width, None);
     }

@@ -33,8 +33,7 @@ fn state() -> (State, u64, u64, u64) {
     let home = travel.add_place("Home", "12 Elm St", "m-home", 1.0, 1.0);
     let office = travel.add_place("Office", "500 Market St", "m-office", 1.0, 2.0);
     let cafe = travel.add_place("Blue Bottle", "66 Mint St", "m-cafe", 1.0, 3.0);
-    travel.start = Some(home);
-    travel.end = Some(home);
+    travel.home = Some(home);
     travel.api_key = "key".into();
     travel.set_mode(office, cafe, TravelMode::Bike);
 
@@ -294,37 +293,32 @@ fn a_place_can_be_renamed_from_the_travel_tab() -> Result<(), Error> {
     Ok(())
 }
 
-/// The settings page can search for where the day starts and ends.
+/// The settings page can search for Home.
 #[test]
-fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
+fn settings_choose_home() -> Result<(), Error> {
     for width in WIDTHS {
         let (mut state, ..) = state();
         state.screen = Screen::Settings;
 
         let mut ui = render(&state, Size::new(width, 5200.0));
-        for label in [
-            "Travel",
-            "Mapbox access token",
-            "Start location",
-            "End location",
-        ] {
+        for label in ["Travel", "Mapbox access token", "Home"] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
         let _ = ui.click("Change")?;
         assert!(
             messages(ui)
                 .iter()
-                .any(|m| matches!(m, Message::Travel(Action::OpenPicker(PickTarget::Start))))
+                .any(|m| matches!(m, Message::Travel(Action::OpenPicker(PickTarget::Home))))
         );
     }
 
     // Searching shows what Mapbox found, and choosing one sets the place.
     let (mut state, ..) = state();
     state.screen = Screen::Settings;
-    state.config.travel.end = None;
+    state.config.travel.home = None;
     let _ = app::update(
         &mut state,
-        Message::Travel(Action::OpenPicker(PickTarget::End)),
+        Message::Travel(Action::OpenPicker(PickTarget::Home)),
     );
     let picker = state.travel.picker.as_mut().unwrap();
     picker.query = "coffee".into();
@@ -347,8 +341,8 @@ fn settings_choose_where_the_day_starts_and_ends() -> Result<(), Error> {
     );
 
     let _ = app::update(&mut state, Message::Travel(Action::Choose(0)));
-    let end = state.config.travel.end.expect("the end place is set");
-    let place = state.config.travel.place(end).unwrap();
+    let home = state.config.travel.home.expect("Home is set");
+    let place = state.config.travel.place(home).unwrap();
     assert_eq!(
         (place.name.as_str(), place.place_id.as_str()),
         ("Philz Coffee", "m-philz")
@@ -390,6 +384,48 @@ fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
         let mut ui = render(&state, Size::new(width, 900.0));
         assert!(ui.find("Office").is_ok() && ui.find("Change").is_ok() && ui.find("Clear").is_ok());
         assert!(ui.find("Add location").is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> {
+    for width in WIDTHS {
+        let (mut state, ..) = state();
+        state.screen = Screen::Settings;
+        let _ = app::update(
+            &mut state,
+            Message::Travel(Action::OpenPicker(PickTarget::Home)),
+        );
+        let mut ui = render(&state, Size::new(width, 5200.0));
+        let _ = ui.click("Choose on map")?;
+        assert!(messages(ui).iter().any(|m| matches!(
+            m,
+            Message::Travel(Action::Map(timeslay::travel::map::Action::Open))
+        )));
+
+        // Render native controls without initializing CEF in headless tests.
+        state.travel.map.active = true;
+        let mut ui = render(&state, Size::new(width, 900.0));
+        assert!(ui.find("Confirm").is_ok());
+        let _ = ui.click("Confirm")?;
+        assert!(!messages(ui).iter().any(|m| matches!(
+            m,
+            Message::Travel(Action::Map(timeslay::travel::map::Action::Confirm))
+        )));
+        state.travel.map.selected = Some(Found {
+            place_id: "cafe".into(),
+            name: "Cafe".into(),
+            address: "1 Main St".into(),
+            lat: 37.8,
+            lng: -122.4,
+        });
+        let mut ui = render(&state, Size::new(width, 900.0));
+        let _ = ui.click("Confirm")?;
+        assert!(messages(ui).iter().any(|m| matches!(
+            m,
+            Message::Travel(Action::Map(timeslay::travel::map::Action::Confirm))
+        )));
     }
     Ok(())
 }

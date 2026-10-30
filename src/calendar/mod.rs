@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod colors;
+pub mod time_format;
 mod day_cache;
 pub mod deadline;
 pub mod layout;

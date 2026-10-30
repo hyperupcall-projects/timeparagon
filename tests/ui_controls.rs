@@ -112,7 +112,8 @@ fn preview_forms_in_light_and_dark_themes() {
 #[test]
 fn time_picker_retains_the_other_segment() {
     for (x, expected) in [(40.0, "22:47"), (160.0, "23:46")] {
-        let control = ui::controls::time("23:47", true, 13.0, Message::EventDraftStartChanged);
+        let control =
+            ui::controls::time(true, "23:47", true, 13.0, Message::EventDraftStartChanged);
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
             Size::new(320.0, 700.0),
@@ -130,6 +131,39 @@ fn time_picker_retains_the_other_segment() {
         assert!(
             form.into_messages()
                 .any(|m| matches!(m, Message::EventDraftStartChanged(value) if value==expected))
+        );
+    }
+}
+
+#[test]
+fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
+    for (value, x, expected) in [
+        ("14:47", 30.0, "13:47"),
+        ("12:47", 30.0, "23:47"),
+        ("00:47", 30.0, "11:47"),
+        ("13:47", 160.0, "13:46"),
+        ("12:47", 260.0, "00:47"),
+    ] {
+        let control = ui::controls::time(false, value, true, 13.0, Message::EventDraftStartChanged);
+        let mut form: Simulator<'_, Message> = Simulator::with_size(
+            Settings::default(),
+            Size::new(320.0, 700.0),
+            iced::widget::container(control).width(300),
+        );
+        form.point_at(iced::Point::new(x, 15.0));
+        form.simulate([
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(
+                iced::keyboard::Modifiers::CTRL,
+            )),
+            iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+                delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+            }),
+        ]);
+        assert!(
+            form.into_messages().any(
+                |m| matches!(m, Message::EventDraftStartChanged(actual) if actual == expected)
+            ),
+            "{value} -> {expected}"
         );
     }
 }

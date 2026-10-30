@@ -5,7 +5,7 @@ Slay the day with TimeSlay.
 There's currently two implementations:
 
 - An [Iced](https://iced.rs) desktop application.
-- A [Dioxus](https://dioxuslabs.com) mobile and desktop application (WIP).
+- A [Dioxus](https://dioxuslabs.com) mobile application (WIP).
 
 ## Overview
 
@@ -28,7 +28,7 @@ There's week and month views, just like any other calendar app:
 - Stays out of your way during work, but is easily accessible when needed.
 	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+J</kbd>).
 	- Toggle between hiding and showing the app (<kbd>Meta+Shift+J</kbd>).
-- Independently reserve screen space for the dock and side panel on Wayland, using the “Reserve screen space” switch in each Settings section. Popups and tooltips do not increase the reservation.
+	- Configure dock or panel to either show above exisitng windows or take up space like other apps.
 - Intuitive to use (WIP).
 - View your time:
 	- By day
@@ -47,19 +47,20 @@ There's week and month views, just like any other calendar app:
 		- Assign tasks to time blocks.
 		- Brain dump.
 		- Pomodoro timer.
+		- Record distractions (TODO).
 	- Habits
 		- These are standard calendar events that are colored differently.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
 - Manage tasks:
 	- Create tasks:
-		- With Todoist-like syntax
-		- With voice input. (TODO)
+		- With Todoist-like syntax (TODO).
+		- With voice input (TODO).
 		- From Gmail URLs
 		- From a web page with the browser extension
 		- From a Slack message with the Slack app
 	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
 	- Inbox section for new tasks that are yet to be triaged.
-	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled (TODO).
+	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled (WIP).
 	- Segmented backlog section for deferring tasks to next week, next month, and so on (WIP).
 	- Manually assign tasks to time blocks.
 	- Flexibly group and order tasks without anchoring to any particular start time; automatically project these tasks onto available time blocks (TODO).
@@ -83,6 +84,13 @@ There's week and month views, just like any other calendar app:
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 - Stores data in Google Calendar, Tasks and Drive to get cross-device syncing for free.
 	- Uses local database as cache to keep UI performant/responsive.
+- Activity monitoring
+	- Project allocation
+	- Distractions
+	- Custom data
+		- Sleep
+		- Location and exercise
+		- Food?
 
 ## Usage
 

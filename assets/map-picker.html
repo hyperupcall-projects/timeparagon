@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Choose a location</title>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.css" rel="stylesheet">
+<style>
+html,body,#map{margin:0;width:100%;height:100%;font:14px system-ui,sans-serif}
+#status{position:absolute;bottom:34px;left:10px;right:10px;padding:10px;border-radius:8px;background:white;color:#222;box-shadow:0 2px 10px #0003;pointer-events:none}
+.mapboxgl-ctrl-geocoder,.mapboxgl-ctrl-top-left{max-width:calc(100% - 20px)}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Location map"></div><div id="status" role="status">Loading map…</div>
+<script>
+const config = /*TIMESLAY_CONFIG*/null;
+const status = document.getElementById('status');
+let revision = 0, marker;
+function publish(selected=null,error=null){
+  document.title='timeslay-map:'+JSON.stringify({session:config.session,selected,error});
+}
+function fail(message){ status.textContent=message; publish(null,message); }
+function loadScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('Could not load the map. Check your connection and try again.'));document.head.append(s);});}
+function place(feature){
+  if(!feature) return null;
+  const p=feature.properties||{}, c=feature.geometry?.coordinates;
+  const lng=p.coordinates?.longitude ?? c?.[0],lat=p.coordinates?.latitude ?? c?.[1];
+  const name=p.name||p.full_address||p.place_formatted;
+  if(!p.mapbox_id||!name||!Number.isFinite(lng)||!Number.isFinite(lat))return null;
+  return {place_id:p.mapbox_id,name,address:p.full_address||p.place_formatted||name,lng,lat};
+}
+(async()=>{
+ try{
+  await Promise.all([
+    loadScript('https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.js'),
+    loadScript('https://api.mapbox.com/search-js/v1.6.0/web.js')
+  ]);
+  if(!mapboxgl.supported())throw new Error('WebGL is unavailable. Check your graphics driver and restart TimeSlay.');
+  const map=new mapboxgl.Map({container:'map',accessToken:config.token,style:'mapbox://styles/mapbox/streets-v12',center:config.center||[0,20],zoom:config.center?12:2});
+  map.addControl(new mapboxgl.NavigationControl(),'top-right');
+  const search=new MapboxSearchBox();
+  search.accessToken=config.token;
+  search.mapboxgl=mapboxgl;
+  search.marker=false;
+  search.options={types:'address,poi,place,street',...(config.center?{proximity:config.center}:{})};
+  map.addControl(search,'top-left');
+  if(config.query) search.value=config.query;
+  function clear(){revision++;publish();if(marker){marker.remove();marker=null;}}
+  function select(found){
+    if(!found){fail('No address found here. Select a named place or search for an address.');return;}
+    if(marker)marker.remove();
+    marker=new mapboxgl.Marker({color:'#4264fb'}).setLngLat([found.lng,found.lat]).addTo(map);
+    status.textContent=found.name+' · '+found.address;
+    publish(found);
+  }
+  search.addEventListener('input',()=>{clear();status.textContent='Choose a search result to select its location.';});
+  search.addEventListener('clear',()=>{clear();status.textContent='Search for a place or click the map.';});
+  search.addEventListener('retrieve',event=>{clear();select(place(event.detail?.features?.[0]));});
+  search.addEventListener('error',()=>{clear();fail('Location search failed. Check your connection and Mapbox token.');});
+  map.on('load',()=>{status.textContent='Search for a place or click the map.';});
+  map.on('error',event=>{if(event.error?.status===401||event.error?.status===403)fail('Mapbox rejected the access token. Update it in Settings.');else if(!map.loaded())fail('The map could not load. Check your connection and try again.');});
+  map.on('click',async event=>{
+    clear();const request=revision;status.textContent='Finding this location…';
+    // Named map features (shops, landmarks, streets) get resolved through
+    // Search Box as well, so only a real Mapbox place can enable Confirm.
+    const feature=map.queryRenderedFeatures(event.point).find(f=>f.properties?.name&&f.layer?.type==='symbol');
+    try{
+      let found=null;
+      if(feature){
+        const url=new URL('https://api.mapbox.com/search/searchbox/v1/forward');
+        url.search=new URLSearchParams({q:feature.properties.name,proximity:`${event.lngLat.lng},${event.lngLat.lat}`,limit:'1',access_token:config.token});
+        const response=await fetch(url);if(!response.ok)throw new Error('Search failed');
+        const candidate=place((await response.json()).features?.[0]);
+        // Do not choose an unrelated distant result with the same name.
+        if(candidate&&Math.abs(candidate.lng-event.lngLat.lng)<0.01&&Math.abs(candidate.lat-event.lngLat.lat)<0.01)found=candidate;
+      }
+      if(!found){
+        const url=new URL('https://api.mapbox.com/search/searchbox/v1/reverse');
+        url.search=new URLSearchParams({longitude:event.lngLat.lng,latitude:event.lngLat.lat,access_token:config.token});
+        const response=await fetch(url);if(!response.ok)throw new Error('Search failed');
+        found=place((await response.json()).features?.[0]);
+      }
+      if(request===revision)select(found);
+    }catch(error){if(request===revision)fail('Could not find this address. Try searching for the place instead.');}
+  });
+  // Start near Home, then follow the area the user chooses to explore.
+  map.on('moveend',()=>{const c=map.getCenter();search.options={...search.options,proximity:[c.lng,c.lat]};});
+ }catch(error){fail(error.message||'The map could not be opened.');}
+})();
+</script>
+</body>
+</html>

@@ -59,8 +59,11 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             text(format!(
                 "{} · {} – {}",
                 block.start.format("%a, %b %-d"),
-                block.start.format("%H:%M"),
-                block.end.format("%H:%M")
+                crate::calendar::time_format::clock(
+                    block.start,
+                    state.config.appearance.use_24_hour
+                ),
+                crate::calendar::time_format::clock(block.end, state.config.appearance.use_24_hour)
             ))
             .size(13)
             .style(text::secondary),
@@ -277,6 +280,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
             column![
                 text("Start").size(12).style(text::secondary),
                 super::controls::time(
+                    state.config.appearance.use_24_hour,
                     &state.timeblocking.session_start,
                     true,
                     metrics.label(),
@@ -288,6 +292,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
             column![
                 text("End").size(12).style(text::secondary),
                 container(super::controls::time(
+                    state.config.appearance.use_24_hour,
                     &state.timeblocking.session_end,
                     true,
                     metrics.label(),
@@ -395,6 +400,7 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
         SESSION_LANE + SESSION_GAP
     };
     let lines = Timeline {
+        use_24_hour: state.config.appearance.use_24_hour,
         start: block.start,
         end: block.end,
         now,
@@ -440,6 +446,7 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
     }
     layers.push(
         canvas(Timeline {
+            use_24_hour: state.config.appearance.use_24_hour,
             start: block.start,
             end: block.end,
             now,
@@ -476,13 +483,19 @@ fn history<'a>(state: &'a State, block: &Event) -> Option<Element<'a, Message>> 
             text(format!(
                 "{} · {} → {} · {}",
                 session.task_title,
-                session
-                    .started_at
-                    .with_timezone(&Local)
-                    .format("%b %-d %H:%M"),
+                session.started_at.with_timezone(&Local).format(
+                    if state.config.appearance.use_24_hour {
+                        "%b %-d %H:%M"
+                    } else {
+                        "%b %-d %-I:%M%p"
+                    }
+                ),
                 session
                     .stopped_at
-                    .map(|t| t.with_timezone(&Local).format("%H:%M").to_string())
+                    .map(|t| crate::calendar::time_format::clock(
+                        t.with_timezone(&Local),
+                        state.config.appearance.use_24_hour
+                    ))
                     .unwrap_or_else(|| "running".into()),
                 task_work::clock(session.seconds(now))
             ))
@@ -825,6 +838,7 @@ fn task_card<'a>(
         .into()
 }
 struct Timeline {
+    use_24_hour: bool,
     start: DateTime<Local>,
     end: DateTime<Local>,
     now: DateTime<Utc>,
@@ -870,7 +884,10 @@ impl canvas::Program<Message> for Timeline {
             frame.fill_text(Text {
                 content: format!(
                     "Now {}{}",
-                    self.now.with_timezone(&Local).format("%H:%M"),
+                    crate::calendar::time_format::clock(
+                        self.now.with_timezone(&Local),
+                        self.use_24_hour
+                    ),
                     suffix
                 ),
                 position: Point::new(gutter + 8.0, (y - 16.0).max(0.0)),
@@ -886,7 +903,7 @@ impl canvas::Program<Message> for Timeline {
                 line(&mut frame, y, palette.background.strong.color, 1.0);
                 let when = self.start + chrono::Duration::seconds(seconds as i64);
                 frame.fill_text(Text {
-                    content: when.format("%H:%M").to_string(),
+                    content: crate::calendar::time_format::clock(when, self.use_24_hour),
                     position: Point::new(2.0, y + 3.0),
                     color: palette.background.base.text.scale_alpha(0.6),
                     size: iced::Pixels(11.0),
@@ -903,7 +920,7 @@ impl canvas::Program<Message> for Timeline {
                 1.5,
             );
             frame.fill_text(Text {
-                content: self.end.format("%H:%M").to_string(),
+                content: crate::calendar::time_format::clock(self.end, self.use_24_hour),
                 position: Point::new(2.0, y + 3.0),
                 color: palette.background.base.text.scale_alpha(0.6),
                 size: iced::Pixels(11.0),

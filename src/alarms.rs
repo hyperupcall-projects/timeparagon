@@ -53,14 +53,17 @@ impl Alarm {
     /// A label becomes the notification's headline, and the body always says
     /// what time was asked for, so the notification never falls back to the
     /// timer wording.
-    pub fn firing_profile(&self) -> AlarmProfile {
+    pub fn firing_profile(&self, use_24_hour: bool) -> AlarmProfile {
         let mut profile = self.profile.clone();
 
         if !self.label.trim().is_empty() {
             profile.notification.summary = self.label.trim().to_owned();
         }
         if profile.notification.body.trim().is_empty() {
-            profile.notification.body = format!("Alarm for {}", self.at.format("%H:%M"));
+            profile.notification.body = format!(
+                "Alarm for {}",
+                crate::calendar::time_format::clock(self.at, use_24_hour)
+            );
         }
 
         profile
@@ -579,7 +582,10 @@ fn ring_due(state: &mut State) -> Task<Message> {
             state.alarms.editor = None;
         }
 
-        tasks.push(app::fire(state, &alarm.firing_profile()));
+        tasks.push(app::fire(
+            state,
+            &alarm.firing_profile(state.config.appearance.use_24_hour),
+        ));
     }
 
     tasks.push(save(state));
@@ -696,7 +702,7 @@ mod tests {
         let id = alarms.add(at(8, 5, 0), AlarmProfile::default());
         alarms.get_mut(id).unwrap().label = "  Stand up ".to_owned();
 
-        let profile = alarms.get(id).unwrap().firing_profile();
+        let profile = alarms.get(id).unwrap().firing_profile(true);
 
         assert_eq!(profile.notification.summary, "Stand up");
         assert_eq!(profile.notification.body, "Alarm for 08:05");

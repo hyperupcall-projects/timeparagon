@@ -72,6 +72,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     let mut when = column![field(
         "Time",
         container(super::controls::time(
+            state.config.appearance.use_24_hour,
             &editor.time_text,
             true,
             metrics.label(),

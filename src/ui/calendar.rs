@@ -143,7 +143,11 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 }
             }
             for event in state.calendar.timed_events_on(day, &state.config.calendar) {
-                let label = format!("{} {}", event.start.format("%-I:%M%P"), event.title);
+                let label = format!(
+                    "{} {}",
+                    calendar::time_format::clock(event.start, state.config.appearance.use_24_hour),
+                    event.title
+                );
                 let color = event.display_color(&state.config.calendar);
                 events = events.push(
                     button(
@@ -1029,7 +1033,7 @@ fn day_canvas<'a>(
             } else {
                 event.title.clone()
             },
-            when: calendar::event_time_label(event),
+            when: calendar::time_format::event(event, state.config.appearance.use_24_hour),
             start_min: span.start_min,
             end_min: span.end_min,
             column: slot.column,
@@ -1084,7 +1088,7 @@ fn day_canvas<'a>(
             (0..=DAY_MINUTES).contains(&minutes).then(|| AlarmMark {
                 id: alarm.id,
                 minutes,
-                label: alarm_label(alarm),
+                label: alarm_label(alarm, state.config.appearance.use_24_hour),
             })
         })
         .collect();
@@ -1110,6 +1114,7 @@ fn day_canvas<'a>(
         });
 
     canvas_widget(DayCanvas {
+        use_24_hour: state.config.appearance.use_24_hour,
         blocks,
         travel,
         needle,
@@ -1135,8 +1140,8 @@ const DAY_MINUTES: i32 = 24 * 60;
 
 /// What an alarm's needle says beside it: its time, and its label if it has
 /// one.
-fn alarm_label(alarm: &alarms::Alarm) -> String {
-    let time = alarm.at.format("%H:%M").to_string();
+fn alarm_label(alarm: &alarms::Alarm, use_24_hour: bool) -> String {
+    let time = calendar::time_format::clock(alarm.at, use_24_hour);
     let label = alarm.label.trim();
 
     if label.is_empty() {
@@ -1471,7 +1476,7 @@ pub fn event_editor<'a>(
     else {
         return column![
             super::links::text(event.title.clone(), metrics.label() + 2.0),
-            text(schedule_line(event))
+            text(schedule_line(event, state.config.appearance.use_24_hour))
                 .size(metrics.label())
                 .style(text::secondary),
         ]
@@ -1488,6 +1493,7 @@ pub fn event_editor<'a>(
 
     let when = column![
         super::controls::date(
+            state.config.appearance.use_24_hour,
             &draft.date_text,
             false,
             false,
@@ -1499,6 +1505,7 @@ pub fn event_editor<'a>(
             column![
                 label("Start"),
                 super::controls::time(
+                    state.config.appearance.use_24_hour,
                     &draft.start_text,
                     true,
                     metrics.label(),
@@ -1510,6 +1517,7 @@ pub fn event_editor<'a>(
             column![
                 label("End"),
                 super::controls::time(
+                    state.config.appearance.use_24_hour,
                     &draft.end_text,
                     true,
                     metrics.label(),
@@ -1701,9 +1709,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 
     let mut body = column![].spacing(metrics.spacing).width(Fill);
     if is_task(event) {
-        body = body
-            .push(super::timeblocking::editable_title(state, event, metrics))
-            .push(super::timeblocking::editor(state, event, metrics));
+        body = body.push(super::timeblocking::fields(state, event, metrics));
     } else {
         // An event is edited right here. There is no separate Edit button and
         // no popup: every field the app can write is in the pane.
@@ -1738,13 +1744,6 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     }
     if !details.attendees.is_empty() {
         body = body.push(detail_line("Guests", details.attendees.join("\n"), metrics));
-    }
-    if is_task(event) && !details.description.is_empty() {
-        body = body.push(detail_line(
-            "Description",
-            crate::timeblocking::description(&details.description),
-            metrics,
-        ));
     }
 
     // The action buttons sit outside the scrollable, so they stay reachable
@@ -1974,6 +1973,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     let when = column![
         row![
             super::controls::date(
+                state.config.appearance.use_24_hour,
                 &draft.date_text,
                 false,
                 false,
@@ -1987,6 +1987,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         .align_y(Alignment::Center),
         row![
             container(super::controls::time(
+                state.config.appearance.use_24_hour,
                 &draft.start_text,
                 true,
                 metrics.label(),
@@ -1995,6 +1996,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
             .width(Fill),
             text("–").size(metrics.label()),
             container(super::controls::time(
+                state.config.appearance.use_24_hour,
                 &draft.end_text,
                 true,
                 metrics.label(),
@@ -2325,18 +2327,21 @@ fn detail_line<'a>(label: &'a str, value: String, metrics: &Metrics) -> Element<
     .into()
 }
 
-fn schedule_line(event: &Event) -> String {
+fn schedule_line(event: &Event, use_24_hour: bool) -> String {
     let date = event.start.format("%A, %B %d, %Y");
     if event.all_day {
         format!("{date} · All day")
     } else if event.start.date_naive() != event.end.date_naive() {
         format!(
             "{date} · {} – {}",
-            calendar::event_time_label(event),
+            calendar::time_format::event(event, use_24_hour),
             event.end.format("%A, %B %d")
         )
     } else {
-        format!("{date} · {}", calendar::event_time_label(event))
+        format!(
+            "{date} · {}",
+            calendar::time_format::event(event, use_24_hour)
+        )
     }
 }
 
@@ -2577,6 +2582,7 @@ fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> Vec<TravelBo
 }
 
 struct DayCanvas {
+    use_24_hour: bool,
     blocks: Vec<Block>,
     travel: Vec<TravelBox>,
     needle: Option<i32>,
@@ -3077,6 +3083,8 @@ impl canvas::Program<Message> for DayCanvas {
         )
         .wrapping_mul(31)
         .wrapping_add(travel_key(&self.travel))
+        .wrapping_mul(31)
+        .wrapping_add(u64::from(self.use_24_hour))
         // A task row in the air leaves its row behind, so the cached grid has
         // to retrace when the drag starts and when it ends.
         .wrapping_mul(31)
@@ -3152,7 +3160,10 @@ impl DayCanvas {
             fill_glyphs(
                 frame,
                 Text {
-                    content: calendar::hour_label((self.day_start_hour + hour) % 24),
+                    content: calendar::time_format::hour(
+                        (self.day_start_hour + hour) % 24,
+                        self.use_24_hour,
+                    ),
                     position: Point::new(self.gutter - 6.0, y + 2.0),
                     color: colors::GUTTER_TEXT,
                     size: Pixels(label_size),
@@ -3803,11 +3814,13 @@ impl DayCanvas {
         }
     }
 
-    /// A previewed minute-of-day as the grid spells a time, matching the
-    /// 24-hour labels the chips already use.
+    /// A previewed minute-of-day in the selected display format.
     fn clock_label(&self, minutes: i32) -> String {
         let total = (self.day_start_hour as i32 * 60 + minutes).rem_euclid(DAY_MINUTES);
-        format!("{:02}:{:02}", total / 60, total % 60)
+        calendar::time_format::clock(
+            chrono::NaiveTime::from_hms_opt((total / 60) as u32, (total % 60) as u32, 0).unwrap(),
+            self.use_24_hour,
+        )
     }
 
     fn track_hover(
@@ -4693,6 +4706,7 @@ mod tests {
     /// A canvas with one 9:00–9:30 block, for the drag tests.
     fn canvas_with_one_block() -> DayCanvas {
         DayCanvas {
+            use_24_hour: true,
             blocks: vec![Block {
                 id: "standup".into(),
                 title: "Standup".into(),
@@ -4833,8 +4847,7 @@ mod tests {
         let travel = &mut state.config.travel;
         let home = travel.add_place("Home", "1 Elm St", "g-home", 0.0, 0.0);
         let office = travel.add_place("Office", "2 Oak St", "g-office", 0.0, 1.0);
-        travel.start = Some(home);
-        travel.end = Some(home);
+        travel.home = Some(home);
         travel.api_key = "key".into();
         for event in &mut state.calendar.events {
             if matches!(event.id.as_str(), "standup" | "review") {
@@ -5028,6 +5041,7 @@ mod tests {
 
     fn canvas_clone(canvas: &DayCanvas) -> DayCanvas {
         DayCanvas {
+            use_24_hour: canvas.use_24_hour,
             blocks: canvas.blocks.clone(),
             alarms: canvas.alarms.clone(),
             ..alarm_canvas(canvas.day, canvas.alarm_mode)

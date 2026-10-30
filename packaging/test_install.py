@@ -19,6 +19,8 @@ class InstallTest(unittest.TestCase):
             if source.suffix in (".sh", ".in"):
                 shutil.copy2(source, packaging / source.name)
         fixtures = {
+            "target/debug/build/cef-dll-sys-fixture/out/cef_linux_x86_64/libcef.so": "chromium-fixture",
+            "target/debug/build/cef-dll-sys-fixture/out/cef_linux_x86_64/locales/en-US.pak": "locale-fixture",
             "target/debug/timeslay": "#!/bin/sh\nexit 0\n",
             "assets/noto-hourglass-done.png": "fixture",
             "slack/package.json": '{"private":true}',
@@ -66,6 +68,8 @@ class InstallTest(unittest.TestCase):
 
     def test_install_upgrade_and_uninstall(self):
         self.run_script("install.sh", "--no-build")
+        self.assertEqual((self.prefix / "lib/timeslay/cef/libcef.so").read_text(), "chromium-fixture")
+        self.assertTrue((self.prefix / "lib/timeslay/cef/locales/en-US.pak").exists())
         self.assertTrue((self.data / "timeslay/slack/src/app.ts").exists())
         self.assertIn("npm ci --omit=dev", self.log.read_text())
         self.assertIn("systemctl --user enable timeslay-slack.service", self.log.read_text())
@@ -92,6 +96,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(installations.read_text(), "newer-workspaces")
         self.assertEqual(env_file.read_text(), "updated-credentials")
         self.run_script("uninstall.sh")
+        self.assertFalse((self.prefix / "lib/timeslay/cef").exists())
         self.assertFalse(self.unit.exists())
         self.assertFalse((self.data / "timeslay/slack").exists())
         self.assertEqual(tokens.read_text(), "newer-pair")

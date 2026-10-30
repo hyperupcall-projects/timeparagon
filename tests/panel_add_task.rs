@@ -12,7 +12,7 @@ fn state(side: panel::Side, width: f32) -> State {
     let mut state = State::new(Config::default(), Catalog::built_in());
     state.sidebar = Some(Sidebar { width, side });
     state.main_window = Some(iced::window::Id::unique());
-    state.main_size = Size::new(width + state.screen_margin(), 700.0);
+    state.main_size = Size::new(width + state.screen_margin_width(), 700.0);
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     state
 }
@@ -38,7 +38,7 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
                 let base = state
                     .timeblocking
                     .original_width
-                    .unwrap_or(width + state.screen_margin());
+                    .unwrap_or(width + state.screen_margin_width());
                 let editor = if state.timeblocking.block.is_some() {
                     400.0
                 } else {
@@ -89,11 +89,80 @@ fn panel_plus_opens_the_inbox_task_form() {
     );
     for label in [
         "Task, or paste a link",
-        "Deadline (optional)",
-        "Due date (optional)",
+        "Deadline",
+        "Due Date",
+        "Projects",
+        "+ Add project",
+        "Estimate",
+        "Labels",
+        "Priority",
+        "Location",
+        "Description",
         "Add task",
         "Cancel",
     ] {
         assert!(ui.find(label).is_ok(), "missing {label}");
+    }
+}
+
+#[test]
+fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
+    let mut state = State::new(Config::default(), Catalog::built_in());
+    state.task_creation_window = true;
+    let _ = app::update(&mut state, Message::Inbox(inbox::Action::NewTask));
+    for width in [240.0, 480.0] {
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            Size::new(width, 700.0),
+            timeslay::ui::view(&state),
+        );
+        assert!(ui.find(Id::new("application-body")).is_err());
+        for label in [
+            "Title",
+            "Projects",
+            "Estimate",
+            "Due Date",
+            "Deadline",
+            "Labels",
+            "Priority",
+            "Location",
+            "Description",
+            "Add task",
+            "Cancel",
+        ] {
+            assert!(ui.find(label).is_ok(), "missing {label} at {width}");
+        }
+    }
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timeslay::timeblocking::Action::EditEstimate(
+            inbox::DRAFT_ID.into(),
+        )),
+    );
+    let mut ui = Simulator::with_size(
+        Settings::default(),
+        Size::new(480.0, 700.0),
+        timeslay::ui::view(&state),
+    );
+    assert!(ui.find("Estimated completion time").is_ok());
+    assert!(ui.find("Save").is_ok());
+}
+
+#[test]
+fn dock_task_card_bottom_matches_the_dock_surface_at_short_and_tall_heights() {
+    let mut state = State::new(Config::default(), Catalog::built_in());
+    state.task_creation_window = true;
+    let _ = app::update(&mut state, Message::Inbox(inbox::Action::NewTask));
+    for height in [700.0, 1600.0] {
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            Size::new(440.0, height),
+            timeslay::ui::view(&state),
+        );
+        let card = ui.find(Id::new("dock-task-card")).unwrap().bounds();
+        assert!((card.y + card.height - height).abs() < 1.0, "{card:?}");
+        if height == 1600.0 {
+            assert!(card.y > 0.0);
+        }
     }
 }

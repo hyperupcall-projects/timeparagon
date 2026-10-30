@@ -7,10 +7,12 @@
 //!
 //! Travel is only worked out between events that follow one another: with
 //! events A, B and C in a day, that is A to B and B to C, never A to C. The
-//! day's first event is reached from the default start place, and the day's
-//! last event is left for the default end place. How long a trip takes comes
+//! day's first event is reached from Home, and the day's
+//! last event is left for Home. How long a trip takes comes
 //! from the Mapbox Directions API, and is kept on disk so that it is only asked
 //! for once.
+
+pub mod map;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +39,7 @@ pub const START_OF_DAY: &str = "Start of day";
 pub const END_OF_DAY: &str = "End of day";
 
 /// A place Mapbox found, before it is saved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Found {
     pub place_id: String,
     pub name: String,
@@ -53,10 +55,8 @@ pub enum PickTarget {
     Task(String),
     /// Where this calendar event, by id, happens.
     Event(String),
-    /// Where the day's travel starts.
-    Start,
-    /// Where the day's travel ends.
-    End,
+    /// Home, where the day's travel starts and ends.
+    Home,
 }
 
 /// A place search that is open: what was typed and what came back.
@@ -124,6 +124,7 @@ pub struct Hop {
 /// What the Travel tab is in the middle of.
 #[derive(Debug, Default)]
 pub struct Workspace {
+    pub map: map::Workspace,
     /// Whether travel is shown on the day view.
     pub show: bool,
     pub picker: Option<Picker>,
@@ -156,6 +157,7 @@ impl Workspace {
 
 #[derive(Debug, Clone)]
 pub enum Action {
+    Map(map::Action),
     /// Show or hide travel on the day view.
     Toggle,
     ApiKey(String),
@@ -190,6 +192,7 @@ pub enum Action {
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
+        Action::Map(action) => map::update(state, action),
         Action::Toggle => {
             state.travel.show = !state.travel.show;
             if state.travel.show {
@@ -397,7 +400,13 @@ fn search(state: &mut State) -> Task<Message> {
     state.travel.serial += 1;
     let serial = state.travel.serial;
 
-    blocking::run(move || search_places(&key, &query))
+    let proximity = state
+        .config
+        .travel
+        .home
+        .and_then(|id| state.config.travel.place(id))
+        .map(|home| (home.lng, home.lat));
+    blocking::run(move || search_places(&key, &query, proximity))
         .map(move |result| Message::Travel(Action::Searched(serial, result)))
 }
 
@@ -429,12 +438,8 @@ fn choose(state: &mut State, index: usize) -> Task<Message> {
 /// Points the target at a place, or at none.
 fn assign(state: &mut State, target: &PickTarget, place: Option<u64>) -> Task<Message> {
     match target {
-        PickTarget::Start => {
-            state.config.travel.start = place;
-            queue_save(state)
-        }
-        PickTarget::End => {
-            state.config.travel.end = place;
+        PickTarget::Home => {
+            state.config.travel.home = place;
             queue_save(state)
         }
         PickTarget::Task(id) => {
@@ -640,8 +645,8 @@ fn normalize(text: &str) -> String {
 /// The trips a day needs, in order, given its events in the order they happen.
 ///
 /// Only events that follow one another are joined, and only when both have a
-/// place and the places differ. The first event is reached from the start
-/// place and the last one is left for the end place.
+/// place and the places differ. The first event is reached from Home
+/// and the last one is left for Home.
 pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
     let mut found = Vec::new();
     let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
@@ -649,7 +654,7 @@ pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
     };
 
     if let (Some(start), Some(place)) = (
-        travel.start.filter(|id| travel.place(*id).is_some()),
+        travel.home.filter(|id| travel.place(*id).is_some()),
         first.place,
     ) && start != place
     {
@@ -682,7 +687,7 @@ pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
 
     if let (Some(place), Some(end)) = (
         last.place,
-        travel.end.filter(|id| travel.place(*id).is_some()),
+        travel.home.filter(|id| travel.place(*id).is_some()),
     ) && place != end
     {
         found.push(Hop {
@@ -845,14 +850,31 @@ fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
 
 /// Searches Mapbox for `query`. Blocking: call it from
 /// [`crate::blocking::run`].
-pub fn search_places(key: &str, query: &str) -> Result<Vec<Found>, String> {
-    let url = format!(
+pub fn search_places(
+    key: &str,
+    query: &str,
+    proximity: Option<(f64, f64)>,
+) -> Result<Vec<Found>, String> {
+    Ok(parse_places(&get(&search_url(key, query, proximity))?))
+}
+
+/// Proximity is longitude, latitude; it biases ranking without limiting the area.
+fn search_url(key: &str, query: &str, proximity: Option<(f64, f64)>) -> String {
+    let mut url = format!(
         "{SEARCH_URL}?q={}&limit={MAX_RESULTS}&access_token={}",
         urlencoding::encode(query),
         urlencoding::encode(key),
     );
 
-    Ok(parse_places(&get(&url)?))
+    if let Some((lng, lat)) = proximity
+        && lng.is_finite()
+        && lat.is_finite()
+        && (-180.0..=180.0).contains(&lng)
+        && (-90.0..=90.0).contains(&lat)
+    {
+        url.push_str(&format!("&proximity={lng},{lat}"));
+    }
+    url
 }
 
 pub fn parse_places(response: &Value) -> Vec<Found> {
@@ -1101,8 +1123,7 @@ mod tests {
         let home = place(&mut travel, "Home", "g-home");
         let work = place(&mut travel, "Work", "g-work");
         let gym = place(&mut travel, "Gym", "g-gym");
-        travel.start = Some(home);
-        travel.end = Some(home);
+        travel.home = Some(home);
 
         let found = hops(&travel, &[stop("w", Some(work)), stop("g", Some(gym))]);
 
@@ -1143,7 +1164,7 @@ mod tests {
     fn a_default_place_that_was_removed_makes_no_trip() {
         let mut travel = TravelSettings::default();
         let work = place(&mut travel, "Work", "g-work");
-        travel.start = Some(12345);
+        travel.home = Some(12345);
 
         assert!(hops(&travel, &[stop("w", Some(work))]).is_empty());
     }
@@ -1284,7 +1305,7 @@ mod tests {
         let home = place(&mut config.travel, "Home", "g-home");
         let work = place(&mut config.travel, "Work", "g-work");
         config.travel.api_key = "key".into();
-        config.travel.start = Some(home);
+        config.travel.home = Some(home);
         config.travel.default_mode = TravelMode::Car;
         config.travel.set_mode(home, work, TravelMode::Bike);
 
@@ -1439,6 +1460,46 @@ mod tests {
     }
 
     #[test]
+    fn home_migrates_legacy_endpoints_and_saves_only_home() {
+        for (input, expected) in [
+            ("start = 1\nend = 2", Some(1)),
+            ("end = 2", Some(2)),
+            ("home = 3\nstart = 1\nend = 2", Some(3)),
+            ("", None),
+        ] {
+            let read: TravelSettings = toml::from_str(input).unwrap();
+            assert_eq!(read.home, expected);
+            let saved = toml::to_string(&read).unwrap();
+            assert!(!saved.contains("start ="));
+            assert!(!saved.contains("end ="));
+            let again: TravelSettings = toml::from_str(&saved).unwrap();
+            assert_eq!(again, read);
+        }
+    }
+
+    #[test]
+    fn search_biases_near_home_with_longitude_first_and_escapes_input() {
+        let url = search_url("key&value", "coffee & tea", Some((-122.4, 37.8)));
+        let parsed = url::Url::parse(&url).unwrap();
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+        assert_eq!(params["q"], "coffee & tea");
+        assert_eq!(params["access_token"], "key&value");
+        assert_eq!(params["proximity"], "-122.4,37.8");
+        assert!(
+            !params.contains_key("bbox"),
+            "distant places remain searchable"
+        );
+        for proximity in [
+            None,
+            Some((f64::NAN, 0.0)),
+            Some((0.0, 91.0)),
+            Some((181.0, 0.0)),
+        ] {
+            assert!(!search_url("key", "coffee", proximity).contains("proximity="));
+        }
+    }
+
+    #[test]
     fn a_config_from_before_mapbox_still_reads() {
         // Public transport used to be a method; it is a drive now.
         let read: TravelSettings = toml::from_str("default_mode = \"multimodal\"").unwrap();
@@ -1465,7 +1526,7 @@ mod tests {
     #[test]
     fn a_search_needs_a_key_and_something_to_look_for() {
         let mut state = state();
-        let _ = update(&mut state, Action::OpenPicker(PickTarget::Start));
+        let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
 
         let _ = update(&mut state, Action::Search);
         let picker = state.travel.picker.as_ref().unwrap();
@@ -1484,7 +1545,7 @@ mod tests {
     #[test]
     fn a_late_answer_to_an_old_search_is_ignored() {
         let mut state = state();
-        let _ = update(&mut state, Action::OpenPicker(PickTarget::Start));
+        let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
         state.travel.serial = 5;
 
         let _ = update(&mut state, Action::Searched(4, Ok(vec![found("Old")])));
@@ -1502,28 +1563,21 @@ mod tests {
     }
 
     #[test]
-    fn choosing_a_result_sets_the_start_and_end_places() {
+    fn choosing_a_result_sets_and_clears_home() {
         let mut state = state();
 
-        for (target, read) in [
-            (
-                PickTarget::Start,
-                (|s: &State| s.config.travel.start) as fn(&State) -> Option<u64>,
-            ),
-            (PickTarget::End, |s: &State| s.config.travel.end),
-        ] {
-            let _ = update(&mut state, Action::OpenPicker(target.clone()));
+        for _ in 0..2 {
+            let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
             state.travel.picker.as_mut().unwrap().results = vec![found("Home")];
             let _ = update(&mut state, Action::Choose(0));
 
             assert!(state.travel.picker.is_none(), "choosing closes the search");
-            let id = read(&state).expect("the place is set");
+            let id = state.config.travel.home.expect("Home is set");
             assert_eq!(state.config.travel.place(id).unwrap().name, "Home");
 
-            let _ = update(&mut state, Action::Clear(target));
-            assert_eq!(read(&state), None);
+            let _ = update(&mut state, Action::Clear(PickTarget::Home));
+            assert_eq!(state.config.travel.home, None);
         }
-
         assert_eq!(
             state.config.travel.places.len(),
             1,

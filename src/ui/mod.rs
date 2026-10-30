@@ -34,7 +34,25 @@ use layout::Metrics;
 
 pub fn view(state: &State) -> Element<'_, Message> {
     let content = responsive(move |size| {
+        if state.travel.map.active {
+            return crate::travel::map::view(state);
+        }
         let metrics = Metrics::of(size);
+
+        if state.task_creation_window {
+            let mut layers = vec![inbox::new_task_overlay(state, &metrics)];
+            if state.timeblocking.estimate_task.is_some() {
+                layers.push(timeblocking::estimate_overlay(state, &metrics));
+            }
+            if let Some(picker) = &state.picker {
+                layers.push(controls::overlay(
+                    picker,
+                    &metrics,
+                    state.config.appearance.use_24_hour,
+                ));
+            }
+            return iced::widget::stack(layers).into();
+        }
 
         // The event details pane is a column of its own to the right of the
         // view. The view keeps its width and the window is widened to match,
@@ -54,7 +72,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         // The details pane and block editor grow out of the view underneath,
         // not out of the navigation above it.
         let nav_width = if let Some(original) = state.timeblocking.original_width {
-            (original - state.screen_margin()).max(1.0).min(size.width)
+            (original - state.screen_margin_width())
+                .max(1.0)
+                .min(size.width)
         } else if details_open {
             main_width
         } else {
@@ -69,6 +89,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::BrainDump, _) => brain_dump::view(state, &metrics),
+            (Screen::Overdue, _) => inbox::overdue(state, &main_metrics),
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
             (Screen::Triaged, _) => inbox::triaged(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
@@ -93,7 +114,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                         // The calendar keeps the width it had before the editor
                         // opened, and the editor takes whatever the window gained.
                         Some(base) => {
-                            let pane = (base - state.screen_margin()).min(main_width);
+                            let pane = (base - state.screen_margin_width()).min(main_width);
                             let calendar_metrics = Metrics::of(Size::new(pane, size.height));
                             row![
                                 container(calendar::view(state, &calendar_metrics))
@@ -181,6 +202,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.brain_dump.open.is_some() {
             layers.push(brain_dump::editor_overlay(state, &metrics));
         }
+        if state.inbox.draft.is_some() {
+            layers.push(inbox::new_task_overlay(state, &metrics));
+        }
         if state.timeblocking.estimate_task.is_some() {
             layers.push(timeblocking::estimate_overlay(state, &metrics));
         }
@@ -196,9 +220,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.habits.confirm_delete.is_some() {
             layers.push(habits::delete_confirmation(state, &metrics));
         }
-        if state.inbox.draft.is_some() {
-            layers.push(inbox::new_task_overlay(state, &metrics));
-        }
         // The floating task card is drawn last so it is never hidden, and it is
         // only added while a task is actually in the air.
         if let Some(task) = state
@@ -211,16 +232,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
             let pointer = state.timeblocking.drag_pointer.unwrap_or_default();
             // The sidebar body is inset from the window, and the pointer is in
             // window coordinates, so shift it into the view's own space.
-            let inset = if let Some(sidebar) = &state.sidebar {
+            let inset = if state.sidebar.is_some() {
                 let margin = state.screen_margin();
-                iced::Point::new(
-                    if sidebar.side == crate::panel::Side::Left {
-                        margin
-                    } else {
-                        0.0
-                    },
-                    margin,
-                )
+                iced::Point::new(margin, margin)
             } else {
                 iced::Point::ORIGIN
             };
@@ -233,10 +247,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
             ));
         }
         if let Some(picker) = &state.picker {
-            layers.push(controls::overlay(picker, &metrics));
+            layers.push(controls::overlay(
+                picker,
+                &metrics,
+                state.config.appearance.use_24_hour,
+            ));
         }
         iced::widget::stack(layers).into()
     });
+    if state.task_creation_window {
+        return content.into();
+    }
     let radius = if state.sidebar.is_some() {
         state.config.views.panel_border_radius()
     } else {
@@ -308,23 +329,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
             })
             .into()
     };
-    if let Some(sidebar) = &state.sidebar {
+    if state.sidebar.is_some() {
         let margin = state.screen_margin();
         container(body)
-            .padding(Padding {
-                top: margin,
-                bottom: margin,
-                left: if sidebar.side == crate::panel::Side::Left {
-                    margin
-                } else {
-                    0.0
-                },
-                right: if sidebar.side == crate::panel::Side::Right {
-                    margin
-                } else {
-                    0.0
-                },
-            })
+            .padding(margin)
             .width(Fill)
             .height(Fill)
             .into()
@@ -393,7 +401,7 @@ pub fn calendar_view_label(state: &State) -> &'static str {
 
 /// The tabs that live inside Tasks, shown beneath the top menu while any of
 /// them is open.
-pub const TASKS_LABELS: [&str; 3] = ["Inbox", "Triaged", "Backlog"];
+pub const TASKS_LABELS: [&str; 4] = ["Overdue", "Inbox", "Triaged", "Backlog"];
 
 /// The destinations kept inside the More menu.
 pub const MORE_LABELS: [&str; 4] = ["Travel", "Habits", "Keep", "Brain dump"];
@@ -470,7 +478,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 /// the Day/Week/Month switcher, then Tasks/Projects, then Note/More/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
-/// While a Tasks screen is open, a second row with the Inbox and Backlog tabs
+/// While a Tasks screen is open, a second row with the task-list tabs
 /// is placed beneath the menu.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
@@ -481,7 +489,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     };
     let tasks_open = matches!(
         state.screen,
-        Screen::Inbox | Screen::Triaged | Screen::Backlog
+        Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
     );
     let more_active = state.more_menu_open
         || matches!(
@@ -506,6 +514,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         tasks_open,
         match state.screen {
             // Within the section, Tasks keeps the tab that is open.
+            Screen::Overdue => Message::ScreenSelected(Screen::Overdue),
             Screen::Triaged => Message::ScreenSelected(Screen::Triaged),
             Screen::Backlog => Message::ScreenSelected(Screen::Backlog),
             _ => Message::ScreenSelected(Screen::Inbox),
@@ -568,7 +577,12 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
     let subtabs = row(TASKS_LABELS
         .iter()
-        .zip([Screen::Inbox, Screen::Triaged, Screen::Backlog])
+        .zip([
+            Screen::Overdue,
+            Screen::Inbox,
+            Screen::Triaged,
+            Screen::Backlog,
+        ])
         .map(|(label, screen)| {
             tab(
                 label,
@@ -597,7 +611,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
     let tasks_row = if matches!(
         state.screen,
-        Screen::Inbox | Screen::Triaged | Screen::Backlog
+        Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
     ) {
         TASKS_ROW_GAP + tab_height(metrics)
     } else {

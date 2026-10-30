@@ -41,7 +41,12 @@ pub struct Card {
 }
 
 /// The first-column spans of `day`, in start order.
-pub fn segments(store: &Store, settings: &CalendarSettings, day: NaiveDate) -> Vec<Segment> {
+pub fn segments(
+    store: &Store,
+    settings: &CalendarSettings,
+    day: NaiveDate,
+    use_24_hour: bool,
+) -> Vec<Segment> {
     let offset = settings.day_end_minutes();
     let timed = store.timed_events_on(day, settings);
 
@@ -83,8 +88,8 @@ pub fn segments(store: &Store, settings: &CalendarSettings, day: NaiveDate) -> V
                 end_min: span.end_min,
                 color: event.display_color(settings),
                 completed: event.is_task() && event.completed,
-                card: card(event, &assigned, false),
-                full: card(event, &assigned, true),
+                card: card(event, &assigned, false, use_24_hour),
+                full: card(event, &assigned, true, use_24_hour),
             }
         })
         .collect()
@@ -131,7 +136,7 @@ fn minutes_into_day(when: DateTime<Local>, day: NaiveDate, offset: i32) -> i32 {
 
 /// `full` keeps the whole description and lists a time block's tasks; the
 /// hover card only says how many there are.
-fn card(event: &Event, assigned: &[&Event], full: bool) -> Card {
+fn card(event: &Event, assigned: &[&Event], full: bool, use_24_hour: bool) -> Card {
     let title = if event.is_task() {
         crate::timeblocking::task_label(event)
     } else {
@@ -180,7 +185,7 @@ fn card(event: &Event, assigned: &[&Event], full: bool) -> Card {
 
     Card {
         title,
-        when: calendar::event_time_label(event),
+        when: calendar::time_format::event(event, use_24_hour),
         lines,
     }
 }
@@ -269,7 +274,7 @@ mod tests {
             day,
         );
 
-        let titles: Vec<_> = segments(&store, &settings, day)
+        let titles: Vec<_> = segments(&store, &settings, day, true)
             .into_iter()
             .map(|segment| segment.card.title)
             .collect();
@@ -283,7 +288,7 @@ mod tests {
         let settings = CalendarSettings::default();
         let store = store(vec![event("standup", "work", at(day, 9, 15), 45)], day);
 
-        let found = segments(&store, &settings, day);
+        let found = segments(&store, &settings, day, true);
 
         assert_eq!(found.len(), 1);
         assert_eq!((found[0].start_min, found[0].end_min), (555, 600));
@@ -311,7 +316,7 @@ mod tests {
         );
         long.details.description = "x".repeat(1000);
 
-        let card = card(&long, &[], false);
+        let card = card(&long, &[], false, true);
 
         let description = &card.lines[card.lines.len() - 2];
         assert_eq!(description.chars().count(), DESCRIPTION_CHARS + 1);
@@ -320,7 +325,7 @@ mod tests {
             Some("Click for everything")
         );
 
-        let full = self::card(&long, &[], true);
+        let full = self::card(&long, &[], true, true);
         assert_eq!(full.lines.last().unwrap().chars().count(), 1000);
     }
 
@@ -350,7 +355,7 @@ mod tests {
             day,
         );
 
-        let found = segments(&store, &settings, day);
+        let found = segments(&store, &settings, day, true);
         let block = found.iter().find(|s| s.card.title == "b1").unwrap();
 
         let tasks: Vec<_> = block

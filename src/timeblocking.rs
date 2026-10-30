@@ -331,10 +331,7 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
     state.timeblocking.focus = None;
     // The panel edits the block in place, so it always opens with a live
     // draft of the block's own fields.
-    state.calendar.edit_draft = state
-        .calendar
-        .event(&id)
-        .map(crate::calendar::EditDraft::from_event);
+    state.calendar.edit_draft = event(state, &id).map(crate::calendar::EditDraft::from_event);
     state.timeblocking.block = Some(id);
     if state.screen == crate::app::Screen::Calendar && (state.weekly || state.monthly) {
         return Task::none();
@@ -372,7 +369,38 @@ fn advance_pomodoro(state: &mut State, now: chrono::DateTime<chrono::Utc>) -> bo
         })
 }
 
+/// Resolve staged tasks without adding them to calendar snapshots or caches.
+pub fn event<'a>(state: &'a State, id: &str) -> Option<&'a Event> {
+    state
+        .inbox
+        .draft
+        .as_ref()
+        .and_then(|d| d.event.as_ref())
+        .filter(|e| e.id == id)
+        .or_else(|| state.calendar.event(id))
+}
+
+pub(crate) fn schedule_created(
+    task: Event,
+    settings: &CalendarSettings,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<Event, String> {
+    save(task, settings, Change::Time(start, end), 0)
+}
+
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
+    // Writes started before creation opened still finish in their own workspace.
+    if matches!(&action, Action::Saved(_, _) | Action::SavedMany(_, _)) {
+        if let Some(previous) = state.inbox.workspace.take() {
+            let draft_workspace = std::mem::replace(&mut state.timeblocking, *previous);
+            let task = update(state, action);
+            let previous = std::mem::replace(&mut state.timeblocking, draft_workspace);
+            state.inbox.workspace = Some(Box::new(previous));
+            return task;
+        }
+    }
+
     // Triaging is a review step: the task cannot leave the Inbox until every
     // required field is filled in. Nothing is sent to Google when it is not.
     if let Action::Triage(id) = &action
@@ -384,20 +412,14 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     state.inbox.error = None;
     let (id, change) = match action {
         Action::View(id) => {
-            if !state
-                .calendar
-                .event(&id)
-                .is_some_and(|e| is_block(e, &state.config.calendar))
-            {
+            if !event(state, &id).is_some_and(|e| is_block(e, &state.config.calendar)) {
                 return Task::none();
             }
             let resize = close(state);
             // The block's fields are edited in place in the panel, so seed the
             // draft as the panel opens rather than behind an Edit button.
-            state.calendar.edit_draft = state
-                .calendar
-                .event(&id)
-                .map(crate::calendar::EditDraft::from_event);
+            state.calendar.edit_draft =
+                event(state, &id).map(crate::calendar::EditDraft::from_event);
             state.timeblocking.focus = Some(id);
             state.timeblocking.history_open = false;
             state.timeblocking.work_now = Some(chrono::Utc::now());
@@ -585,9 +607,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::StartWork(id) => {
             let now = chrono::Utc::now();
             advance_pomodoro(state, now);
-            let Some(task) = state
-                .calendar
-                .event(&id)
+            let Some(task) = event(state, &id)
                 .filter(|e| e.is_task() && !e.completed && !state.timeblocking.busy.contains(&id))
             else {
                 return Task::none();
@@ -617,7 +637,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::StopWork(id) => {
             let now = chrono::Utc::now();
             advance_pomodoro(state, now);
-            if let Some(task) = state.calendar.event(&id) {
+            if let Some(task) = event(state, &id) {
                 let key = task_key(task);
                 state.config.task_work.stop(&key, now);
                 if state
@@ -726,11 +746,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             let Some(id) = state.timeblocking.dragging.take() else {
                 return Task::none();
             };
-            let minutes = state
-                .calendar
-                .event(&id)
-                .map(|t| metadata(t).minutes)
-                .unwrap_or(0);
+            let minutes = event(state, &id).map(|t| metadata(t).minutes).unwrap_or(0);
             let minutes = if minutes == 0 { 30 } else { minutes };
             return update(
                 state,
@@ -797,7 +813,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::EditEstimate(id) => {
-            let Some(task) = state.calendar.event(&id).filter(|e| e.is_task()) else {
+            let Some(task) = event(state, &id).filter(|e| e.is_task()) else {
                 return Task::none();
             };
             if state.timeblocking.busy.contains(&id) {
@@ -845,7 +861,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return update(state, Action::SetBacklogSection(id, section));
         }
         Action::SetBacklogSection(id, section) => {
-            let Some(task) = state.calendar.event(&id).filter(|task| {
+            let Some(task) = event(state, &id).filter(|task| {
                 task.is_task()
                     && !task.completed
                     && metadata(task).block.is_none()
@@ -860,7 +876,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::DropTask(target) => {
             if state.screen == crate::app::Screen::Backlog {
-                let Some(task) = state.calendar.event(&target) else {
+                let Some(task) = event(state, &target) else {
                     return Task::none();
                 };
                 return update(
@@ -874,7 +890,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if id == target {
                 return Task::none();
             }
-            let Some(target) = state.calendar.event(&target) else {
+            let Some(target) = event(state, &target) else {
                 return Task::none();
             };
             let m = metadata(target);
@@ -1032,10 +1048,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::ScheduleDay(id, day) => (id, Change::Day(day)),
         Action::Assign(id, block) => {
-            let Some(event) = state
-                .calendar
-                .event(&block)
-                .filter(|e| is_block(e, &state.config.calendar))
+            let Some(event) = event(state, &block).filter(|e| is_block(e, &state.config.calendar))
             else {
                 return Task::none();
             };
@@ -1058,7 +1071,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 ));
                 return Task::none();
             }
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             if task.title == title {
@@ -1073,7 +1086,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if state.config.projects.get(project).is_none() {
                 return Task::none();
             }
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             let mut projects = metadata(task).projects;
@@ -1085,7 +1098,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Projects(projects))
         }
         Action::ProjectRemove(id, project) => {
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             let mut projects = metadata(task).projects;
@@ -1113,7 +1126,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::AddLabel(id, label) => {
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             let label = match clean_label(&label) {
@@ -1138,7 +1151,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Labels(labels))
         }
         Action::RemoveLabel(id, label) => {
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             let mut labels = metadata(task).labels;
@@ -1152,7 +1165,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Labels(labels))
         }
         Action::Priority(id, priority) => {
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             if metadata(task).priority == priority {
@@ -1161,7 +1174,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             (id, Change::Priority(priority))
         }
         Action::Location(id, location) => {
-            let Some(task) = state.calendar.event(&id).filter(|event| event.is_task()) else {
+            let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
                 return Task::none();
             };
             if metadata(task).location == location {
@@ -1201,10 +1214,50 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
     };
+    if id == crate::inbox::DRAFT_ID {
+        let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
+            return Task::none();
+        };
+        let Some(task) = draft.event.as_mut() else {
+            return Task::none();
+        };
+        let data = task.details.task_data.as_mut().unwrap();
+        match change {
+            Change::Estimate(v) => {
+                data.metadata.minutes = v;
+                state.timeblocking.estimate_task = None;
+            }
+            Change::Projects(v) => data.metadata.projects = v,
+            Change::Labels(v) => data.metadata.labels = v,
+            Change::Priority(v) => data.metadata.priority = v,
+            Change::Location(v) => data.metadata.location = v,
+            Change::Deadline(v) => {
+                draft.deadline = v.map(|v| v.value()).unwrap_or_default();
+            }
+            Change::Day(day) => {
+                task.start = calendar::at_clock(day, 0, 0);
+                task.end = task.start + chrono::Duration::days(1);
+                task.all_day = true;
+            }
+            Change::ClearSchedule => {
+                task.start = calendar::at_clock(UNDATED, 0, 0);
+                task.end = task.start + chrono::Duration::days(1);
+                task.all_day = true;
+            }
+            Change::Time(start, end) => {
+                task.start = start;
+                task.end = end;
+                task.all_day = false;
+                state.timeblocking.editing_due_time = false;
+            }
+            _ => {}
+        }
+        return Task::none();
+    }
     if !state.timeblocking.busy.is_empty() {
         return Task::none();
     }
-    let Some(task) = state.calendar.event(&id).filter(|e| e.is_task()).cloned() else {
+    let Some(task) = event(state, &id).filter(|e| e.is_task()).cloned() else {
         return Task::none();
     };
     if matches!(change, Change::Title(_)) {
@@ -1272,9 +1325,7 @@ fn add_todo(state: &mut State, block_id: &str) -> Task<Message> {
     if !state.timeblocking.busy.is_empty() {
         return Task::none();
     }
-    let Some(block) = state
-        .calendar
-        .event(block_id)
+    let Some(block) = event(state, block_id)
         .filter(|event| is_block(event, &state.config.calendar))
         .cloned()
     else {
@@ -1376,7 +1427,7 @@ fn new_todo_event(
 /// Why a task cannot be triaged yet, from the Inbox's required-field settings,
 /// or `None` when it is ready to leave the Inbox.
 fn triage_error(state: &State, id: &str) -> Option<String> {
-    let task = state.calendar.event(id).filter(|event| event.is_task())?;
+    let task = event(state, id).filter(|event| event.is_task())?;
     let required = &state.config.calendar.triage;
     let metadata = metadata(task);
     let mut missing = Vec::new();
@@ -1472,9 +1523,7 @@ fn save_and_reflow(
 }
 
 fn refresh_block(state: &mut State, id: &str) -> Task<Message> {
-    let Some(block) = state
-        .calendar
-        .event(id)
+    let Some(block) = event(state, id)
         .filter(|e| is_block(e, &state.config.calendar))
         .cloned()
     else {

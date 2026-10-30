@@ -32,10 +32,12 @@ pub struct DockConfig {
     #[serde(skip)]
     pub screen_margin: u32,
     /// Space between the dock and the left and right screen edges, in logical
-    /// pixels. Not read from `dock.toml`: it is the "Dock margin" in the app's
-    /// settings.
+    /// pixels, including the gap facing other windows when space is reserved.
+    /// Not read from `dock.toml`: these are the app's left/right dock margins.
     #[serde(skip)]
-    pub margin: u32,
+    pub left_margin: u32,
+    #[serde(skip)]
+    pub right_margin: u32,
     /// Thickness of the outermost border, in logical pixels. Zero hides it.
     #[serde(skip)]
     pub border_outer_width: f32,
@@ -71,7 +73,8 @@ impl Default for DockConfig {
             reserve_space: false,
             border_radius: 0.0,
             screen_margin: 8,
-            margin: 0,
+            left_margin: 0,
+            right_margin: 0,
             border_outer_width: 1.0,
             border_outer_color: HexColor(iced::Color::WHITE),
             border_inner_width: 1.0,
@@ -99,7 +102,8 @@ impl DockConfig {
         config.width = views.dock_width().round() as u32;
         config.reserve_space = views.dock_reserve_space;
         config.screen_margin = views.margin().round() as u32;
-        config.margin = views.dock_margin().round() as u32;
+        config.left_margin = views.dock_left_margin().round() as u32;
+        config.right_margin = views.dock_right_margin().round() as u32;
         config.side = views.dock_side;
         config.border_outer_width = views.dock_border_outer_width();
         config.border_outer_color = views.dock_border_outer_color;
@@ -155,12 +159,18 @@ impl DockConfig {
         wanted.min(((self.width as f32 - 1.0) / 2.0).max(0.0))
     }
 
-    /// Reserve only the visible strip. KWin adds the anchored surface margin
-    /// to the work-area inset itself; adding it here would count it twice.
+    /// Reserve the strip and the gap facing other windows. The compositor
+    /// adds the margin on the anchored screen edge separately.
     /// Transparent room for hover/task cards never contributes to this zone.
     pub fn exclusive_zone(&self) -> i32 {
         if self.reserve_space {
-            self.width.min(i32::MAX as u32) as i32
+            self.width
+                .saturating_add(match self.side {
+                    DockSide::Left => self.right_margin,
+                    DockSide::Right => self.left_margin,
+                    _ => 0,
+                })
+                .min(i32::MAX as u32) as i32
         } else {
             0
         }
@@ -193,22 +203,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reservation_excludes_cards_and_leaves_edge_margins_to_the_compositor() {
+    fn reservation_includes_the_inner_gap_and_leaves_the_outer_gap_to_the_compositor() {
         for side in DockSide::ALL {
             let mut config = DockConfig {
                 side,
                 reserve_space: true,
                 width: 14,
-                margin: 12,
+                left_margin: 12,
+                right_margin: 24,
                 screen_margin: 25,
                 popup_width: 900,
                 popup_gap: 100,
                 ..DockConfig::default()
             };
-            assert_eq!(config.exclusive_zone(), 14);
+            let expected = match side {
+                DockSide::Left => 38,
+                DockSide::Right => 26,
+                _ => 14,
+            };
+            assert_eq!(config.exclusive_zone(), expected);
             config.popup_width = 150;
             config.popup_gap = 0;
-            assert_eq!(config.exclusive_zone(), 14);
+            assert_eq!(config.exclusive_zone(), expected);
             config.reserve_space = false;
             assert_eq!(config.exclusive_zone(), 0);
         }
@@ -248,7 +264,8 @@ mod tests {
         let config = DockConfig::load(&views);
 
         assert_eq!(config.width, 14);
-        assert_eq!(config.margin, 12);
+        assert_eq!(config.left_margin, 12);
+        assert_eq!(config.right_margin, 12);
         assert_eq!(config.screen_margin, 20);
         assert_eq!(config.side, DockSide::Top);
         assert_eq!(config.border_outer_width, 2.0);
@@ -275,7 +292,8 @@ mod tests {
         let config: DockConfig = toml::from_str("width = 99\nmargin = 99").unwrap();
 
         assert_eq!(config.width, DockConfig::default().width);
-        assert_eq!(config.margin, DockConfig::default().margin);
+        assert_eq!(config.left_margin, DockConfig::default().left_margin);
+        assert_eq!(config.right_margin, DockConfig::default().right_margin);
         assert_eq!(config.screen_margin, DockConfig::default().screen_margin);
     }
 

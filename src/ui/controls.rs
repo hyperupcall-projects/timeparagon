@@ -119,6 +119,7 @@ fn msg(a: Action) -> Message {
 
 /// Readable date trigger; ISO formatting stays at the data boundary.
 pub fn date<'a>(
+    use_24_hour: bool,
     value: &str,
     optional: bool,
     with_time: bool,
@@ -137,7 +138,7 @@ pub fn date<'a>(
             format!(
                 "{}{}",
                 d.format("%b %-d, %Y"),
-                time.map(|t| format!(" · {}", t.format("%H:%M")))
+                time.map(|t| format!(" · {}", crate::calendar::time_format::clock(t, use_24_hour)))
                     .unwrap_or_default()
             )
         })
@@ -172,23 +173,42 @@ pub fn date<'a>(
 
 /// Separate hour and minute columns, retaining minute precision.
 pub fn time<'a>(
+    use_24_hour: bool,
     value: &str,
     enabled: bool,
     size: f32,
     change: impl Fn(String) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
     let parsed = NaiveTime::parse_from_str(value, "%H:%M").ok();
-    let hour = parsed.map(|t| format!("{:02}", t.hour()));
+    let hour_label = move |h: u32| {
+        if use_24_hour {
+            format!("{h:02}")
+        } else {
+            ((h + 11) % 12 + 1).to_string()
+        }
+    };
+    let hour = parsed.map(|t| hour_label(t.hour()));
     let minute = parsed.map(|t| format!("{:02}", t.minute()));
     let h = parsed.map(|t| t.hour()).unwrap_or(9);
     let m = parsed.map(|t| t.minute()).unwrap_or(0);
     let c = change.clone();
+    let period_change = change.clone();
     let hours = pick_list(
-        (0..24).map(|n| format!("{n:02}")).collect::<Vec<_>>(),
+        if use_24_hour {
+            (0..24).map(hour_label).collect::<Vec<_>>()
+        } else {
+            (1..=12).map(|h| h.to_string()).collect::<Vec<_>>()
+        },
         hour,
         move |v| {
             if enabled {
-                c(format!("{v}:{m:02}"))
+                let selected = v.parse::<u32>().unwrap_or(h);
+                let hour = if use_24_hour {
+                    selected
+                } else {
+                    selected % 12 + (h / 12) * 12
+                };
+                c(format!("{hour:02}:{m:02}"))
             } else {
                 Message::Ignored
             }
@@ -213,13 +233,33 @@ pub fn time<'a>(
     .text_size(size)
     .padding([7, 8])
     .width(Fill);
-    row![hours, text(":").size(size), minutes]
+    let mut fields = row![hours, text(":").size(size), minutes]
         .spacing(3)
-        .align_y(iced::Center)
-        .into()
+        .align_y(iced::Center);
+    if !use_24_hour {
+        fields = fields.push(
+            pick_list(
+                vec!["AM", "PM"],
+                parsed.map(|t| if t.hour() < 12 { "AM" } else { "PM" }),
+                move |period| {
+                    if enabled {
+                        let hour = h % 12 + if period == "PM" { 12 } else { 0 };
+                        period_change(format!("{hour:02}:{m:02}"))
+                    } else {
+                        Message::Ignored
+                    }
+                },
+            )
+            .placeholder("AM/PM")
+            .text_size(size)
+            .padding([7, 8])
+            .width(Fill),
+        );
+    }
+    fields.into()
 }
 
-pub fn overlay<'a>(p: &'a Picker, metrics: &Metrics) -> Element<'a, Message> {
+pub fn overlay<'a>(p: &'a Picker, metrics: &Metrics, use_24_hour: bool) -> Element<'a, Message> {
     let size = metrics.label();
     let selected = p
         .value
@@ -347,9 +387,13 @@ pub fn overlay<'a>(p: &'a Picker, metrics: &Metrics) -> Element<'a, Message> {
             .on_press(msg(Action::ToggleTime)),
         );
         if let Some(t) = p.time {
-            body = body.push(time(&t.format("%H:%M").to_string(), true, size, |v| {
-                msg(Action::Time(v))
-            }));
+            body = body.push(time(
+                use_24_hour,
+                &t.format("%H:%M").to_string(),
+                true,
+                size,
+                |v| msg(Action::Time(v)),
+            ));
         }
     }
     let mut shortcuts = row![
