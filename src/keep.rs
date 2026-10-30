@@ -238,8 +238,8 @@ fn run(subcommand: &str) -> Result<Vec<u8>, String> {
 fn helper_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Some(path) = std::env::var_os("TIME_SLAY_KEEP_BRIDGE")
-        .or_else(|| std::env::var_os("TIME_SLAY_TASKS_BRIDGE"))
+    if let Some(path) = std::env::var_os("TIMESLAY_KEEP_BRIDGE")
+        .or_else(|| std::env::var_os("TIMESLAY_TASKS_BRIDGE"))
     {
         return vec![PathBuf::from(path)];
     }

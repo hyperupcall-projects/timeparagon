@@ -6,7 +6,7 @@
 
 use iced::{Size, Task, futures::StreamExt, window};
 use iced_test::runtime::{self, Action, window::Action as WindowAction};
-use time_slay::{
+use timeslay::{
     app::{self, LayoutField, Message, State},
     calendar,
     config::Config,

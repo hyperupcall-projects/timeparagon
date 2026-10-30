@@ -3,7 +3,7 @@
 (function () {
     function duration(window) {
         if (window.pid !== __PID__) return null;
-        const match = /(?:^| )time-slay-(instant|fade-([0-9]+))(?: |$)/.exec(window.windowClass);
+        const match = /(?:^| )timeslay-(instant|fade-([0-9]+))(?: |$)/.exec(window.windowClass);
         if (!match) return null; // Desktop default belongs to the desktop effect.
         return match[1] === "instant" ? 0 : Math.min(Number(match[2]), 5000);
     }

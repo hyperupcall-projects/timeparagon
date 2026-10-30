@@ -20,7 +20,7 @@
 //! The Keep notes themselves are left untouched; the browser helper is
 //! read-only, so archive them by hand once you are happy with the habits.
 
-use time_slay::migrate_habits::{self, DEFAULT_MINUTES};
+use timeslay::migrate_habits::{self, DEFAULT_MINUTES};
 
 fn main() {
     let mut apply = false;

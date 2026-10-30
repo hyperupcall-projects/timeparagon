@@ -20,7 +20,7 @@ where
     // (a timer firing, a button press), so the spawn cost is irrelevant and
     // there is no pool to keep alive while the app sits idle.
     let spawned = std::thread::Builder::new()
-        .name("time-slay-blocking".to_owned())
+        .name("timeslay-blocking".to_owned())
         .spawn(move || {
             let _ = sender.send(work());
         });

@@ -16,7 +16,7 @@
 //! It uses the Google token the app already stored, so connect Google in the
 //! app first if you have not.
 
-use time_slay::migrate;
+use timeslay::migrate;
 
 fn main() {
     let apply = std::env::args().any(|argument| argument == "--apply");

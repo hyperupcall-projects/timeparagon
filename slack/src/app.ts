@@ -11,7 +11,7 @@
 //   * an App Home tab with instructions.
 //
 // Every path builds the same task and sends it through the same native host
-// (`time-slay --webextension`) the browser extension uses, so the Gmail-aware
+// (`timeslay --webextension`) the browser extension uses, so the Gmail-aware
 // link handling and the running-app IPC are shared.
 
 import { pathToFileURL } from "node:url";
@@ -22,6 +22,8 @@ import type { WebClient } from "@slack/web-api";
 
 import { loadConfig, type Config } from "./config.ts";
 import { AppTokens } from "./tokens.ts";
+import { Installations, authorizeInstallation } from "./installations.ts";
+import { startOAuth } from "./oauth.ts";
 import {
   buildTask,
   messageBody,
@@ -412,7 +414,7 @@ export function register(app: App, config: Config): void {
               elements: [
                 {
                   type: "mrkdwn",
-                  text: "TimeSlay must be able to run the `time-slay` binary on this machine.",
+                  text: "TimeSlay must be able to run the `timeslay` binary on this machine.",
                 },
               ],
             },
@@ -425,13 +427,38 @@ export function register(app: App, config: Config): void {
   });
 }
 
+/** Checks the actor, never the author of a message selected by a shortcut. */
+export function actorId(body: unknown): string | undefined {
+  const value = body as { user?: string | { id?: string }; user_id?: string; event?: { user?: string } };
+  return (typeof value.user === "string" ? value.user : value.user?.id) ??
+    value.user_id ?? value.event?.user;
+}
+
+export function installOwnerGuard(app: App, distributed: boolean, legacyOwner?: string): void {
+  app.use(async (args) => {
+    const owner = distributed ? args.context.ownerUserId : legacyOwner;
+    if ((!distributed && !owner) || (typeof owner === "string" && actorId(args.body) === owner)) {
+      await args.next();
+      return;
+    }
+    if ("ack" in args && typeof args.ack === "function") await args.ack();
+    if ("respond" in args && typeof args.respond === "function") {
+      await args.respond({ response_type: "ephemeral", text: "This TimeSlay inbox belongs to another Slack account." });
+    }
+  });
+}
+
 /** Builds the Bolt app and attaches every listener. */
-export function createApp(config: Config): App {
+export function createApp(config: Config, installations?: Installations): App {
+  if (config.oauth && !installations) throw new Error("OAuth mode requires an installation store.");
   const app = new App({
-    token: config.botToken,
+    ...(config.oauth && installations ? {
+      authorize: authorizeInstallation(installations),
+    } : { token: config.botToken }),
     appToken: config.appToken,
     socketMode: true,
   });
+  installOwnerGuard(app, !!config.oauth, config.allowedUserId);
   register(app, config);
   app.error(async (error) => {
     console.error("Unhandled Slack app error:", error);
@@ -455,7 +482,9 @@ if (invokedDirectly) {
       await delay(30_000);
     }
   }
-  let app = createApp(config);
+  const installations = config.oauth ? new Installations(config.oauth.installationsFile, config.oauth.clientId) : undefined;
+  if (config.oauth && installations) await startOAuth(config.oauth, installations);
+  let app = createApp(config, installations);
   await app.start();
   console.log("TimeSlay Slack app is running (socket mode).");
   let retrying = false;
@@ -467,7 +496,7 @@ if (invokedDirectly) {
       const appToken = await tokens.getToken();
       await app.stop();
       config.appToken = appToken;
-      app = createApp(config);
+      app = createApp(config, installations);
       await app.start();
       retrying = false;
       console.log("Slack app-level token rotated; Socket Mode reconnected.");

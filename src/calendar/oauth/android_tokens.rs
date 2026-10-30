@@ -13,7 +13,7 @@ use super::Tokens;
 
 const ALIAS: &str = "dev.timeslay.google-tokens.v1";
 const HEADER: &[u8] = b"TTK1";
-const AAD: &[u8] = b"time-slay-google-tokens-v1";
+const AAD: &[u8] = b"timeslay-google-tokens-v1";
 const IV_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const MAX_FILE_SIZE: u64 = 64 * 1024;

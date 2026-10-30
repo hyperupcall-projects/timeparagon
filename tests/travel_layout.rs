@@ -5,11 +5,11 @@ use iced::{Element, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
-use time_slay::app::{self, Message, Screen, State};
-use time_slay::calendar::{Store, sample_snapshot};
-use time_slay::config::{Config, TravelMode};
-use time_slay::theme::Catalog;
-use time_slay::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
+use timeslay::app::{self, Message, Screen, State};
+use timeslay::calendar::{Store, sample_snapshot};
+use timeslay::config::{Config, TravelMode};
+use timeslay::theme::Catalog;
+use timeslay::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
 
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
 

@@ -1,7 +1,7 @@
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
 use iced::{Element, Size};
 use iced_test::{Simulator, core::Settings};
-use time_slay::{
+use timeslay::{
     app::{self, Message, State},
     calendar::{self, Store},
     config::Config,
@@ -131,7 +131,7 @@ fn month_navigation_remains_reachable_at_small_widths() {
     for width in [180.0, 260.0, 420.0, 1100.0] {
         let mut ui = render(&state, Size::new(width, 900.0));
         for label in [
-            time_slay::ui::tab_labels(width)[2],
+            timeslay::ui::tab_labels(width)[2],
             "Today",
             "Menu",
             "August 2026 ▾",

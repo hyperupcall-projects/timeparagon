@@ -296,7 +296,7 @@ fn stream_properties() -> pw::properties::PropertiesBox {
         *pw::keys::MEDIA_ROLE => "Notification",
         *pw::keys::APP_NAME => "TimeSlay",
         *pw::keys::APP_ID => "dev.timeslay.TimeSlay",
-        *pw::keys::NODE_NAME => "time-slay",
+        *pw::keys::NODE_NAME => "timeslay",
         *pw::keys::AUDIO_CHANNELS => "2",
     }
 }

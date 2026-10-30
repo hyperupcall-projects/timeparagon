@@ -8,7 +8,7 @@ use notify_rust::{Notification, Timeout, Urgency};
 use crate::config;
 
 /// The icon name notification daemons look up in the icon theme.
-const ICON: &str = "time-slay";
+const ICON: &str = "timeslay";
 
 /// Shows the alarm notification described by `settings`.
 pub fn show(settings: &config::Notification) -> Result<(), String> {

@@ -1,7 +1,7 @@
 # TimeSlay for Slack
 
 A small Slack app that adds a message to your TimeSlay inbox. It talks to the
-same `time-slay --webextension` native host the browser extension uses, so a
+same `timeslay --webextension` native host the browser extension uses, so a
 Slack task gets the Gmail-aware link handling and the running-app IPC for free.
 
 The task's description holds the **whole message** (text, attachments and file
@@ -28,14 +28,14 @@ in every place Slack offers an app:
 
 - Node **22.18+** (this project runs TypeScript directly, without a build
   step, using Node's type stripping).
-- The `time-slay` binary built from this repository and reachable on `PATH`,
+- The `timeslay` binary built from this repository and reachable on `PATH`,
   or `TIMESLAY_BIN` pointing at it.
 
 ## 1. Build TimeSlay
 
 ```sh
 cargo build --release
-export TIMESLAY_BIN="$PWD/target/release/time-slay"
+export TIMESLAY_BIN="$PWD/target/release/timeslay"
 ```
 
 ## 2. Create the Slack app
@@ -63,8 +63,18 @@ npm start
 `npm start` runs `src/app.ts` with `node --experimental-strip-types`. There is
 no compile step: `.ts` files run as-is.
 
-Leave it running while you use Slack. Socket mode means no public URL or
-tunnel is needed.
+Leave it running while you use Slack. Socket Mode needs no public URL or
+tunnel for normal operation. Connecting multiple workspaces uses an HTTPS
+installation endpoint, described below.
+
+For automatic startup, run `packaging/install.sh` from the repository root.
+It installs and enables the **`timeslay-slack.service`** systemd user service,
+copies the current credentials and token cache on first installation, and
+starts the bridge. Stop a manually running `npm start` before switching to
+the service. After installation, edit `~/.config/timeslay/slack/.env` and
+use `systemctl --user restart timeslay-slack.service` to apply changes.
+See [the packaging guide](../packaging/README.md#slack-service) for paths,
+logs, and uninstall behavior.
 
 ### App-level token rotation
 
@@ -89,13 +99,82 @@ supported without refresh/client credentials: omit `SLACK_APP_REFRESH_TOKEN`.
 
 See [Slack's token rotation guide](https://docs.slack.dev/authentication/using-token-rotation/).
 
+## Connect multiple workspaces with one app
+
+Use **unlisted distribution** for your personal workspaces. You do not need a
+Slack Marketplace listing. Each workspace still needs its own authorization;
+use the same connection link once per workspace.
+
+1. Keep your existing Slack app and its Socket Mode app-level credentials.
+   In **OAuth & Permissions**, keep **bot token rotation disabled** (the
+   manifest default). App-level token rotation remains supported separately.
+2. Choose an HTTPS hostname and forward its `/slack/*` paths to the bridge at
+   `http://127.0.0.1:3000`, using a reverse proxy or HTTPS tunnel on this machine.
+   Register `https://YOUR-HOST/slack/oauth/callback` under **OAuth & Permissions
+   → Redirect URLs**. The URL must match exactly. The listener binds only to
+   loopback; expose it through your HTTPS proxy.
+3. In **Manage Distribution → Share Your App with Other Workspaces**, complete
+   Slack's checklist and click **Activate Public Distribution**. Keep Socket
+   Mode enabled. Do not submit a Marketplace listing for this personal setup.
+4. Add to the bridge's `.env` (for the installed service, edit
+   `~/.config/timeslay/slack/.env`):
+
+   ```dotenv
+   SLACK_CLIENT_ID=your-client-id
+   SLACK_CLIENT_SECRET=your-client-secret
+   SLACK_REDIRECT_URI=https://YOUR-HOST/slack/oauth/callback
+   # SLACK_OAUTH_PORT=3000
+   ```
+
+   Keep `SLACK_APP_TOKEN` and any app-level refresh settings. `SLACK_BOT_TOKEN`
+   is ignored in this mode. Restart `npm start` or the installed
+   `timeslay-slack.service` after upgrading it with `packaging/install.sh`.
+5. Open the **private connection link** printed at startup. For the service:
+
+   ```sh
+   journalctl --user -u timeslay-slack.service -n 50 --no-pager
+   ```
+
+   Choose a workspace and authorize using **your own Slack account**. The
+   installer account becomes the only account allowed to add to your inbox
+   from that workspace. Repeat with the same link for each workspace,
+   **including the original workspace**, to register all their tokens locally.
+   New connections work immediately without restarting the bridge.
+
+The link contains a private setup key: anyone holding it can connect their own
+workspace to your local inbox. Keep it and proxy access logs private. The key
+changes on every process restart; get the latest link from startup output.
+Authorization also uses a browser cookie and expiring, single-use OAuth state.
+Complete one workspace connection at a time in the same browser. Admin approval
+policies still apply. If approval requires another person, have them approve the
+app, then finish the connection as your own account.
+
+Tokens and the allowed user for each workspace are saved atomically with
+owner-only permissions in `.slack-installations.json`. For the installed service,
+the file lives in `~/.config/timeslay/slack/` and survives upgrades and ordinary
+uninstall. For manual runs it defaults to the `slack/` directory; override it
+with `SLACK_INSTALLATIONS_FILE` (parent directory must exist). Run only one
+bridge per installation file, and preserve it alongside the app-token cache.
+A reinstall by the same user updates tokens; a different user cannot replace
+an existing workspace's owner. To disconnect a workspace, stop the bridge,
+uninstall the app from that workspace in Slack, remove its entry from the
+installation file, then restart. Enterprise organization-wide installation and
+rotating **bot** tokens are not supported by this personal bridge.
+
+Without `SLACK_REDIRECT_URI`, the original single-workspace configuration
+continues to work. Set `SLACK_ALLOWED_USER_ID` to your Slack member ID to restrict
+that mode to your account too (Slack profile → **⋯ → Copy member ID**).
+
+See [Slack's distribution guide](https://docs.slack.dev/app-management/distribution/)
+and [OAuth guide](https://docs.slack.dev/authentication/installing-with-oauth/).
+
 ## How it fits together
 
 ```
 Slack (shortcut / command / home)
   └─ app.ts                       (builds the task from the Slack message)
        └─ timeslay.ts             (spawns the native host, frames one message)
-            └─ time-slay --webextension
+            └─ timeslay --webextension
                  ├─ integrations::recognize/fetch   (Gmail subject, if any)
                  ├─ ipc::WINDOW / SIDEBAR / DOCK    (running app writes it)
                  └─ inbox::add                      (fallback if the app is closed)
@@ -116,7 +195,14 @@ npm run typecheck
 
 ## Troubleshooting
 
-- **`Could not run time-slay`**: set `TIMESLAY_BIN` in `.env`, or put the
+- **Menu entry appears, but Slack says “Sorry, that didn’t work. Try again?”**:
+  the menu is registered with Slack even when the local bridge is offline.
+  Run `cd slack && npm start` from the repository root and check that it prints
+  `TimeSlay Slack app is running (socket mode).` If startup reports missing
+  `SLACK_CLIENT_ID` or `SLACK_CLIENT_SECRET`, add both from the app's
+  **Basic Information → App Credentials** to `slack/.env` and start again.
+  Leave the bridge running while using the shortcut.
+- **`Could not run timeslay`**: set `TIMESLAY_BIN` in `.env`, or put the
   binary on `PATH`. The app prints the path it tried in the error trace.
 - **Nothing appears on a message**: the message shortcut must be enabled in the
   app manifest and the app installed after adding it.

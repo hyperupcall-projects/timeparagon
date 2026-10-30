@@ -16,10 +16,10 @@ pub const FROM_FLAG: &str = "--from";
 /// What the dock replaced, and so what its back button returns to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Origin {
-    /// The regular `time-slay` window.
+    /// The regular `timeslay` window.
     #[default]
     Window,
-    /// The `time-slay --sidebar` panel.
+    /// The `timeslay --sidebar` panel.
     Sidebar,
 }
 
@@ -100,7 +100,7 @@ pub fn close_dock(origin: Origin) -> Result<()> {
     }
 }
 
-/// The `time-slay` binary: this very program when that is what is running,
+/// The `timeslay` binary: this very program when that is what is running,
 /// and otherwise the one installed beside it.
 /// Starts a fresh copy of this process, same mode and arguments, from
 /// whatever binary is on disk now, a moment after this one has quit. The
@@ -121,7 +121,7 @@ pub fn relaunch() -> Result<()> {
     Command::new("sh")
         .arg("-c")
         .arg(
-            "sleep 0.7; systemctl --user try-restart time-slay-shortcuts.service \
+            "sleep 0.7; systemctl --user try-restart timeslay-shortcuts.service \
              >/dev/null 2>&1; exec \"$0\" \"$@\"",
         )
         .arg(&exe)
@@ -134,11 +134,11 @@ pub fn relaunch() -> Result<()> {
 
 pub(crate) fn main_binary() -> Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
-        && exe.file_stem().is_some_and(|stem| stem == "time-slay")
+        && exe.file_stem().is_some_and(|stem| stem == "timeslay")
     {
         return Ok(exe);
     }
-    find_binary("time-slay")
+    find_binary("timeslay")
 }
 
 /// A binary installed beside this one, or else on `PATH`, so a manual

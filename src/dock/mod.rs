@@ -80,7 +80,7 @@ const TICK: Duration = Duration::from_secs(30);
 ///
 /// `origin` is what the dock replaced, which its back button returns to.
 pub fn run(origin: launch::Origin) -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
         .init();
 
     anyhow::ensure!(!ipc::is_visible(ipc::DOCK), "the dock is already running");
@@ -107,7 +107,7 @@ pub fn run(origin: launch::Origin) -> Result<()> {
         &qh,
         surface,
         Layer::Top,
-        Some(dock_config.animation.namespace("time-slay-dock")),
+        Some(dock_config.animation.namespace("timeslay-dock")),
         None,
     );
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);

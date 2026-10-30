@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 /// The regular window's socket: `status` and JSON inbox requests.
-pub const WINDOW: &str = "time-slay-window.sock";
+pub const WINDOW: &str = "timeslay-window.sock";
 /// The side panel's socket: `show`, `hide`, `status` and JSON inbox requests.
-pub const SIDEBAR: &str = "time-slay-sidebar.sock";
+pub const SIDEBAR: &str = "timeslay-sidebar.sock";
 /// The dock's socket: `hide`, `status` and JSON inbox requests.
-pub const DOCK: &str = "time-slay-dock.sock";
+pub const DOCK: &str = "timeslay-dock.sock";
 
 /// What `status` answers while the window or strip is on screen.
 pub const VISIBLE: &str = "visible";
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn a_request_gets_the_reply_of_the_server() {
-        let name = format!("time-slay-test-{}.sock", std::process::id());
+        let name = format!("timeslay-test-{}.sock", std::process::id());
         let listener = bind(&name).unwrap();
         std::thread::spawn(move || {
             let _ = serve(listener, |command| match command {

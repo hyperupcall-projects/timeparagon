@@ -1,5 +1,5 @@
 [package]
-name = "time-slay-dioxus"
+name = "timeslay-dioxus"
 version = "0.1.0"
 edition = "2024"
 description = "Slay the day with TimeSlay"
@@ -15,7 +15,7 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 tokio = { version = "1", features = ["rt", "time"] }
 # Renderer-agnostic calendar/OAuth/Tasks/time-block data shared with the iced
 # app, and safe to cross-compile for Android.
-time-slay-core = { path = "../core" }
+timeslay-core = { path = "../core" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 dioxus = { version = "0.7.3", default-features = false, features = ["mobile", "lib", "launch"] }

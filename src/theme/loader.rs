@@ -1,4 +1,4 @@
-//! Reading themes out of `~/.config/time-slay/themes/*.toml`.
+//! Reading themes out of `~/.config/timeslay/themes/*.toml`.
 //!
 //! Adding a theme should not require rebuilding the app, so the picker is
 //! populated from disk at startup. A broken file is skipped with a warning
@@ -209,6 +209,6 @@ mod tests {
 
     #[test]
     fn a_missing_directory_yields_no_themes() {
-        assert!(load(Path::new("/nonexistent/time-slay/themes")).is_empty());
+        assert!(load(Path::new("/nonexistent/timeslay/themes")).is_empty());
     }
 }

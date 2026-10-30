@@ -1,17 +1,17 @@
 //! The day view's data model.
 //!
 //! Sync, OAuth, Google Tasks metadata and time-block assignment all come from
-//! the existing `time-slay` library, so this crate only has to arrange that
+//! the existing `timeslay` library, so this crate only has to arrange that
 //! data for the screen: which events are timed, which are all-day, which task
 //! belongs to which block, and how overlaps share a column.
 
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
-use time_slay_core::calendar::layout::{self, Span};
-use time_slay_core::calendar::{self, Event, Snapshot};
-use time_slay_core::config::{CalendarSettings, Config};
-use time_slay_core::timeblocking as tb;
+use timeslay_core::calendar::layout::{self, Span};
+use timeslay_core::calendar::{self, Event, Snapshot};
+use timeslay_core::config::{CalendarSettings, Config};
+use timeslay_core::timeblocking as tb;
 
 /// Reads the same configuration the iced app uses.
 pub fn load_config() -> Config {
@@ -73,7 +73,7 @@ impl Theme {
     /// per-device choice, so it must not travel with the synced config.
     fn path() -> Option<std::path::PathBuf> {
         Some(
-            time_slay_core::config::project_dirs()?
+            timeslay_core::config::project_dirs()?
                 .config_dir()
                 .join("dioxus-theme"),
         )
@@ -129,7 +129,7 @@ pub fn save_google_client(client_id: &str, client_secret: &str) -> Result<Config
     if client_id.trim().is_empty() {
         return Err("Enter the Google OAuth client ID.".to_owned());
     }
-    time_slay_core::config::save_google_client(client_id, client_secret)
+    timeslay_core::config::save_google_client(client_id, client_secret)
         .map_err(|error| format!("Could not save the Google client: {error}"))?;
     Ok(load_config())
 }
@@ -140,7 +140,7 @@ pub fn save_google_client(client_id: &str, client_secret: &str) -> Result<Config
 pub fn connect_google(settings: &CalendarSettings) -> Result<(), String> {
     calendar::connect(settings.client_id.clone(), settings.client_secret.clone())?;
     // Signing in is what lets the config sync reach Google Drive.
-    time_slay_core::config_sync::poke();
+    timeslay_core::config_sync::poke();
     Ok(())
 }
 
@@ -642,9 +642,9 @@ pub fn capacity_label(minutes: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time_slay_core::calendar::{Calendar, Details};
-    use time_slay_core::task_db::TaskData;
-    use time_slay_core::timeblocking::Metadata;
+    use timeslay_core::calendar::{Calendar, Details};
+    use timeslay_core::task_db::TaskData;
+    use timeslay_core::timeblocking::Metadata;
 
     fn day() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 26).unwrap()

@@ -172,7 +172,7 @@ async function addToInbox(event) {
     const response = await sendNative(readForm());
     if (!response) {
       throw new Error(
-        "The native host closed without a reply. Check that the host manifest is installed and that the time-slay binary is built.",
+        "The native host closed without a reply. Check that the host manifest is installed and that the timeslay binary is built.",
       );
     }
     if (response.ok) {

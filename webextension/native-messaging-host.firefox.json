@@ -1,7 +1,7 @@
 {
   "name": "com.timeslay.webextension",
   "description": "TimeSlay inbox native host",
-  "path": "/absolute/path/to/time-slay-webextension",
+  "path": "/absolute/path/to/timeslay-webextension",
   "type": "stdio",
   "allowed_extensions": ["timeslay@example.org"]
 }

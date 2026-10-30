@@ -1,6 +1,6 @@
 //! TimeSlay: slay the day with TimeSlay.
 //!
-//! The library backs a single binary, `time-slay`, so the interface can be
+//! The library backs a single binary, `timeslay`, so the interface can be
 //! exercised by tests without a compositor. A flag picks what it runs (see
 //! [`cli`]):
 //!

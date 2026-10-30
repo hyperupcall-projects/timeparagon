@@ -875,13 +875,13 @@ fn boot_state() -> State {
     state
 }
 
-/// The desktop-file basename, `time-slay.desktop`.
+/// The desktop-file basename, `timeslay.desktop`.
 ///
 /// On Wayland the title-bar icon is not the pixmap passed to `set_window_icon`
 /// (winit ignores that). KWin looks up this id, finds the desktop entry, and
-/// paints `Icon=time-slay`. An empty id leaves the generic Wayland logo, the
+/// paints `Icon=timeslay`. An empty id leaves the generic Wayland logo, the
 /// yellow W, in the corner while the dock still shows the hourglass.
-const APPLICATION_ID: &str = "time-slay";
+const APPLICATION_ID: &str = "timeslay";
 
 fn window_platform() -> window::settings::PlatformSpecific {
     window::settings::PlatformSpecific {

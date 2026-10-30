@@ -1,7 +1,7 @@
 //! Calendar selection and multiline forms exercised through the real widget tree.
 use iced::{Size, widget::text_editor};
 use iced_test::{Simulator, core::Settings};
-use time_slay::{
+use timeslay::{
     app::{self, Message, State},
     config::Config,
     theme::Catalog,
@@ -18,7 +18,7 @@ fn task_dates_open_calendar_and_day_buttons_select_real_dates() {
         let mut state = state();
         let _ = app::update(
             &mut state,
-            Message::Inbox(time_slay::inbox::Action::NewTask),
+            Message::Inbox(timeslay::inbox::Action::NewTask),
         );
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
@@ -45,7 +45,7 @@ fn task_dates_open_calendar_and_day_buttons_select_real_dates() {
 fn multiline_descriptions_survive_editing_and_habit_handoff() {
     let mut state = state();
     let now = chrono::Local::now();
-    state.calendar.draft = Some(time_slay::calendar::Draft::new(
+    state.calendar.draft = Some(timeslay::calendar::Draft::new(
         "calendar".into(),
         now,
         now + chrono::Duration::hours(1),
@@ -64,7 +64,7 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
     assert_eq!(state.calendar.draft.as_ref().unwrap().description, expected);
     let _ = app::update(
         &mut state,
-        Message::EventDraftKindSelected(time_slay::calendar::DraftKind::Habit),
+        Message::EventDraftKindSelected(timeslay::calendar::DraftKind::Habit),
     );
     assert_eq!(state.form_editors[2].text(), expected);
     assert_eq!(state.habits.draft.as_ref().unwrap().notes, expected);
@@ -80,7 +80,7 @@ fn preview_forms_in_light_and_dark_themes() {
             let mut state = state();
             let _ = app::update(
                 &mut state,
-                Message::Inbox(time_slay::inbox::Action::NewTask),
+                Message::Inbox(timeslay::inbox::Action::NewTask),
             );
             let palette = state.catalog.resolve(theme).theme.clone();
             let mut form: Simulator<'_, Message> = Simulator::with_size(

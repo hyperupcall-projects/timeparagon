@@ -13,7 +13,7 @@ The popup is painted with the colors of the theme the TimeSlay app is currently
 using: it asks the native host for them (the `theme` command) and applies them
 as CSS variables, so it matches the app even after you switch themes.
 
-The form sends the task to the `time-slay --webextension` native host. The host
+The form sends the task to the `timeslay --webextension` native host. The host
 reads a Gmail link for its subject (the same way a pasted link is read in the
 app), then asks a running TimeSlay window, panel or dock to write the task. If
 no TimeSlay process is running, the host writes to Google Tasks itself.
@@ -64,8 +64,8 @@ Firefox identifies the add-on as `timeslay@example.org`.
 
 It writes:
 
-- a wrapper at `~/.local/share/timeslay/time-slay-webextension` that runs
-  `time-slay --webextension` (browsers cannot pass arguments to a native host);
+- a wrapper at `~/.local/share/timeslay/timeslay-webextension` that runs
+  `timeslay --webextension` (browsers cannot pass arguments to a native host);
 - `com.timeslay.webextension.json` under the Chrome-family
   `NativeMessagingHosts` directories and under
   `~/.mozilla/native-messaging-hosts`.
@@ -73,7 +73,7 @@ It writes:
 If the binary is not on `PATH`, set `TIMESLAY_BIN`:
 
 ```sh
-TIMESLAY_BIN="$PWD/target/release/time-slay" ./webextension/install.sh
+TIMESLAY_BIN="$PWD/target/release/timeslay" ./webextension/install.sh
 ```
 
 Restart the browser after installing the host manifest. Chrome reads native
@@ -84,9 +84,9 @@ host manifests at startup.
 ```
 popup.js
   ├─ chrome.runtime.sendNativeMessage("com.timeslay.webextension", {command:"theme"})
-  │    └─ time-slay --webextension          (the app's chosen theme as hex colors)
+  │    └─ timeslay --webextension          (the app's chosen theme as hex colors)
   └─ chrome.runtime.sendNativeMessage("com.timeslay.webextension", {command:"add-to-inbox", …})
-       └─ time-slay --webextension          (length-prefixed JSON on stdin/stdout)
+       └─ timeslay --webextension          (length-prefixed JSON on stdin/stdout)
             ├─ integrations::recognize/fetch  (Gmail subject)
             ├─ ipc::WINDOW / SIDEBAR / DOCK   (running app writes the task)
             └─ inbox::add                     (fallback when the app is closed)

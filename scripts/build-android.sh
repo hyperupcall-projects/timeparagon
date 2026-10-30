@@ -32,10 +32,10 @@
 #   ANDROID_NDK_HOME / NDK_HOME       NDK location
 #   JAVA_HOME                         JDK location
 #   For --release (keep the keystore outside the repository):
-#   TIME_SLAY_KEYSTORE              Path to the .jks/.keystore file
-#   TIME_SLAY_KEYSTORE_PASSWORD     Keystore password
-#   TIME_SLAY_KEY_ALIAS             Key alias
-#   TIME_SLAY_KEY_PASSWORD          Key password (default: keystore password)
+#   TIMESLAY_KEYSTORE              Path to the .jks/.keystore file
+#   TIMESLAY_KEYSTORE_PASSWORD     Keystore password
+#   TIMESLAY_KEY_ALIAS             Key alias
+#   TIMESLAY_KEY_PASSWORD          Key password (default: keystore password)
 #   Passwords must not contain the characters " ' ` $ \ & < > =
 
 set -eu
@@ -237,13 +237,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$profile" = release ]; then
-    keystore=${TIME_SLAY_KEYSTORE:-}
-    keystore_password=${TIME_SLAY_KEYSTORE_PASSWORD:-}
-    key_alias=${TIME_SLAY_KEY_ALIAS:-}
-    key_password=${TIME_SLAY_KEY_PASSWORD:-$keystore_password}
+    keystore=${TIMESLAY_KEYSTORE:-}
+    keystore_password=${TIMESLAY_KEYSTORE_PASSWORD:-}
+    key_alias=${TIMESLAY_KEY_ALIAS:-}
+    key_password=${TIMESLAY_KEY_PASSWORD:-$keystore_password}
 
     [ -n "$keystore" ] && [ -n "$keystore_password" ] && [ -n "$key_alias" ] || fail \
-        "--release needs TIME_SLAY_KEYSTORE, TIME_SLAY_KEYSTORE_PASSWORD and TIME_SLAY_KEY_ALIAS (see --help)"
+        "--release needs TIMESLAY_KEYSTORE, TIMESLAY_KEYSTORE_PASSWORD and TIMESLAY_KEY_ALIAS (see --help)"
     [ -f "$keystore" ] || fail "keystore not found: $keystore"
     keystore=$(realpath -- "$keystore")
     for value in "$keystore_password" "$key_alias" "$key_password" "$keystore"; do
@@ -276,9 +276,9 @@ fi
 # --- Build -----------------------------------------------------------------
 cd "$repo_root"
 if [ "$profile" = release ]; then
-    dx build --android --package time-slay-dioxus --target "$triple" --release
+    dx build --android --package timeslay-dioxus --target "$triple" --release
 else
-    dx build --android --package time-slay-dioxus --target "$triple"
+    dx build --android --package timeslay-dioxus --target "$triple"
 fi
 
 # --- Locate and copy the APK ----------------------------------------------
@@ -315,7 +315,7 @@ if [ "$profile" = release ]; then
     # Verify the actual signer, rather than accepting any non-debug signature.
     release_cert=$(mktemp)
     "$JAVA_HOME/bin/keytool" -exportcert -keystore "$keystore" -alias "$key_alias" \
-        -storepass:env TIME_SLAY_KEYSTORE_PASSWORD -file "$release_cert" >/dev/null 2>&1 || \
+        -storepass:env TIMESLAY_KEYSTORE_PASSWORD -file "$release_cert" >/dev/null 2>&1 || \
         fail "could not read the configured signing certificate"
     expected_digest=$(sha256sum "$release_cert" | cut -d' ' -f1)
     signer_count=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest:' "$apk.certs" || true)
@@ -326,7 +326,7 @@ if [ "$profile" = release ]; then
     echo "Verified: release APK is not debuggable and matches the configured signing key"
 fi
 mkdir -p "$output_dir"
-destination=$output_dir/time-slay-$abi_name-$profile.apk
+destination=$output_dir/timeslay-$abi_name-$profile.apk
 cp "$apk" "$destination"
 
 echo

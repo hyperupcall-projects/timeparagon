@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_audio_is_a_decode_error() {
-        let path = std::env::temp_dir().join("time-slay-not-audio.wav");
+        let path = std::env::temp_dir().join("timeslay-not-audio.wav");
         std::fs::write(&path, b"this is definitely not a wav file").unwrap();
 
         let error = load(&path).unwrap_err();

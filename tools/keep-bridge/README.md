@@ -22,20 +22,20 @@ the window; the helper then verifies that Keep loads. `keep-fetch` runs
 headlessly. Task browser commands are not supported.
 
 New profiles use
-`$XDG_DATA_HOME/time-slay/keep-bridge/chrome-profile` (or the equivalent
+`$XDG_DATA_HOME/timeslay/keep-bridge/chrome-profile` (or the equivalent
 `~/.local/share` path). If that profile does not exist, an existing
-`time-slay/tasks-bridge/chrome-profile` is reused in place, preserving
+`timeslay/tasks-bridge/chrome-profile` is reused in place, preserving
 sign-in and the shared profile lock. No profile or cookies are moved or deleted.
 
 | Variable | Meaning |
 | --- | --- |
-| `TIME_SLAY_KEEP_BRIDGE` | Explicit helper executable path. |
+| `TIMESLAY_KEEP_BRIDGE` | Explicit helper executable path. |
 | `KEEP_BRIDGE_CHROME` | Chrome executable for Keep sign-in. |
 | `KEEP_BRIDGE_PROFILE` | Override the persistent browser profile. |
 | `KEEP_BRIDGE_TIMEZONE` | Override the browser time zone. |
 | `KEEP_BRIDGE_NO_SANDBOX` | Set to `1` when the host requires Chrome's sandbox to be disabled. |
 
-The older `TIME_SLAY_TASKS_BRIDGE` and `TASKS_BRIDGE_*` names remain
+The older `TIMESLAY_TASKS_BRIDGE` and `TASKS_BRIDGE_*` names remain
 fallback aliases. New names take precedence. An explicit executable path must
 point to an existing executable; update it if it points into the old source
 directory.

@@ -1,6 +1,6 @@
 //! Task metadata and the pure time-block rules.
 //!
-//! Shared verbatim by the iced crate and `time-slay-core` via `#[path]`, so
+//! Shared verbatim by the iced crate and `timeslay-core` via `#[path]`, so
 //! both resolve `crate::calendar` and `crate::config` to their own copies.
 
 use chrono::{Local, NaiveDate};

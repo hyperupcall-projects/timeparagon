@@ -156,7 +156,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                         Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
                         (0, 0),
                         -1,
-                        "time-slay-flash".to_owned(),
+                        "timeslay-flash".to_owned(),
                     )
                 } else {
                     panel.id = Some(id);
@@ -170,7 +170,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                         anchor(side),
                         (width, 0),
                         exclusive_zone(&panel.app.config.views, width),
-                        crate::window_effect::prepare(&panel.app.config.views, "time-slay-panel"),
+                        crate::window_effect::prepare(&panel.app.config.views, "timeslay-panel"),
                     )
                 };
                 panel.opening.insert(id, sender);
@@ -275,7 +275,7 @@ fn subscription(panel: &Panel) -> Subscription<Message> {
 }
 
 pub fn run() -> iced_layershell::Result {
-    iced_layershell::daemon(boot, "time-slay-panel", update, view)
+    iced_layershell::daemon(boot, "timeslay-panel", update, view)
         .theme(|panel: &Panel, id| app::active_theme(&panel.app, id))
         .style(|_panel: &Panel, theme: &iced::Theme| {
             let mut style = iced::theme::default(theme);

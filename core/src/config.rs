@@ -194,7 +194,7 @@ impl CalendarSettings {
 }
 
 pub fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("dev", "TimeSlay", "time-slay")
+    ProjectDirs::from("dev", "TimeSlay", "timeslay")
 }
 
 pub fn config_path() -> Option<PathBuf> {

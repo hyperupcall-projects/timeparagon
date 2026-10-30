@@ -1,4 +1,4 @@
-//! The browser native-messaging host (`time-slay --webextension`) and the
+//! The browser native-messaging host (`timeslay --webextension`) and the
 //! inbox request the Slack app shares with it.
 //!
 //! The browser starts this process for one message and expects one answer on
@@ -265,7 +265,7 @@ pub struct Handled {
 /// Runs the native-messaging host for one message.
 pub fn run() -> anyhow::Result<()> {
     let _ = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("time_slay=info"),
+        env_logger::Env::default().default_filter_or("timeslay=info"),
     )
     .try_init();
 

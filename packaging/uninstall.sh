@@ -46,20 +46,23 @@ say() { printf '%s\n' "$*"; }
 
 # --- Stop and disable the service ------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user disable --now time-slay.service >/dev/null 2>&1 || true
-    systemctl --user disable --now time-slay-shortcuts.service >/dev/null 2>&1 || true
-    systemctl --user disable --now time-slay-panel.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeslay.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeslay-shortcuts.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeslay-slack.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeslay-panel.service >/dev/null 2>&1 || true
 fi
 
 # --- Remove installed files ------------------------------------------------
-rm -f "$config_home/systemd/user/time-slay.service"
-rm -f "$config_home/systemd/user/time-slay-shortcuts.service"
-rm -f "$config_home/systemd/user/time-slay-panel.service"
-rm -f "$data_home/applications/time-slay.desktop"
-rm -f "$data_home/icons/hicolor/512x512/apps/time-slay.png"
-rm -f "$prefix/bin/time-slay"
-rm -f "$prefix/bin/time-slay-panel"
-rm -f "$prefix/bin/time-slay-dock"
+rm -f "$config_home/systemd/user/timeslay.service"
+rm -f "$config_home/systemd/user/timeslay-shortcuts.service"
+rm -f "$config_home/systemd/user/timeslay-slack.service"
+rm -rf "$data_home/timeslay/slack"
+rm -f "$config_home/systemd/user/timeslay-panel.service"
+rm -f "$data_home/applications/timeslay.desktop"
+rm -f "$data_home/icons/hicolor/512x512/apps/timeslay.png"
+rm -f "$prefix/bin/timeslay"
+rm -f "$prefix/bin/timeslay-panel"
+rm -f "$prefix/bin/timeslay-dock"
 rm -f "$prefix/bin/keep-bridge"
 # Also clean up a helper installed before the rename.
 rm -f "$prefix/bin/tasks-bridge"
@@ -93,8 +96,8 @@ fi
 
 # --- Optionally remove user data -------------------------------------------
 if [ "$purge" -eq 1 ]; then
-    rm -rf "$config_home/time-slay"
-    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/time-slay"
+    rm -rf "$config_home/timeslay"
+    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/timeslay"
     say "Purged config and cache."
 fi
 

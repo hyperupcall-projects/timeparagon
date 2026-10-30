@@ -1,6 +1,6 @@
 use iced::{Size, widget::Id};
 use iced_test::{Simulator, core::Settings};
-use time_slay::{
+use timeslay::{
     app::{self, Message, Sidebar, State},
     calendar,
     config::Config,
@@ -25,7 +25,7 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
             let mut ui = Simulator::with_size(
                 Settings::default(),
                 state.main_size,
-                time_slay::ui::view(&state),
+                timeslay::ui::view(&state),
             );
             let original = ui.find(Id::new("panel-add-task")).unwrap().bounds();
             let body = ui.find(Id::new("sidebar-body")).unwrap().bounds();
@@ -52,7 +52,7 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
                 let mut ui = Simulator::with_size(
                     Settings::default(),
                     Size::new(base + editor + detail, 700.0),
-                    time_slay::ui::view(&state),
+                    timeslay::ui::view(&state),
                 );
                 assert_eq!(
                     ui.find(Id::new("panel-add-task")).unwrap().bounds(),
@@ -69,7 +69,7 @@ fn panel_plus_opens_the_inbox_task_form() {
     let mut ui = Simulator::with_size(
         Settings::default(),
         state.main_size,
-        time_slay::ui::view(&state),
+        timeslay::ui::view(&state),
     );
     ui.click(Id::new("panel-add-task")).unwrap();
     let messages: Vec<_> = ui.into_messages().collect();
@@ -85,7 +85,7 @@ fn panel_plus_opens_the_inbox_task_form() {
     let mut ui = Simulator::with_size(
         Settings::default(),
         state.main_size,
-        time_slay::ui::view(&state),
+        timeslay::ui::view(&state),
     );
     for label in [
         "Task, or paste a link",

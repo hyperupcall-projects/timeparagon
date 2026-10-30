@@ -1,4 +1,4 @@
-use time_slay::config::Config;
+use timeslay::config::Config;
 
 #[test]
 fn old_configs_keep_overlays_and_reservations_round_trip_independently() {
@@ -21,7 +21,7 @@ fn old_configs_keep_overlays_and_reservations_round_trip_independently() {
 
 #[test]
 fn radii_and_reservation_shortcut_are_independent_and_persist() {
-    use time_slay::{
+    use timeslay::{
         app::{self, Message, State},
         panel::Action,
         theme::Catalog,
@@ -47,7 +47,7 @@ fn radii_and_reservation_shortcut_are_independent_and_persist() {
 
 #[test]
 fn shortcut_command_toggles_only_panel_reservation() {
-    use time_slay::{
+    use timeslay::{
         app::{self, Message, PanelCommand, State},
         theme::Catalog,
     };

@@ -8,10 +8,10 @@ mod day;
 
 use chrono::Datelike;
 use dioxus::prelude::*;
-use time_slay_core::calendar::{self, Event};
-use time_slay_core::config::CalendarSettings;
-use time_slay_core::config_sync;
-use time_slay_core::timeblocking as tb;
+use timeslay_core::calendar::{self, Event};
+use timeslay_core::config::CalendarSettings;
+use timeslay_core::config_sync;
+use timeslay_core::timeblocking as tb;
 
 use day::{AssignedTask, BlockRef, DayModel, TaskGroup, TaskRow, Theme, TimeBlock, TimedEvent};
 
@@ -126,7 +126,7 @@ fn App() -> Element {
     let mut config = use_signal(day::load_config);
     let settings = config.read().calendar.clone();
     let mut config_status = use_signal(config_sync::status);
-    let config_hint = time_slay_core::config::config_path()
+    let config_hint = timeslay_core::config::config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "config.toml".to_owned());
 
@@ -145,7 +145,7 @@ fn App() -> Element {
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
         let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
-        store.cache_days_in(time_slay_core::config::cache_days_dir());
+        store.cache_days_in(timeslay_core::config::cache_days_dir());
         store
     });
     // Navigation only changes the cached view. It never restarts the resource.
@@ -1087,7 +1087,7 @@ fn event_style(timed: &TimedEvent) -> String {
     )
 }
 
-fn css_color(color: time_slay_core::Color) -> String {
+fn css_color(color: timeslay_core::Color) -> String {
     let red = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
     let green = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
     let blue = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;

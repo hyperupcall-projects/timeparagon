@@ -373,7 +373,7 @@ mod tests {
     fn habit(id: &str, rule: &str) -> Habit {
         Habit {
             id: id.into(),
-            calendar_id: "time-slay".into(),
+            calendar_id: "timeslay".into(),
             title: "Stretch".into(),
             notes: String::new(),
             start: crate::calendar::at_clock(

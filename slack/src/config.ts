@@ -2,6 +2,14 @@ import { fileURLToPath } from "node:url";
 
 export type Config = {
   botToken: string;
+  allowedUserId?: string;
+  oauth?: {
+    clientId: string;
+    clientSecret: string;
+    redirectUri: string;
+    port: number;
+    installationsFile: string;
+  };
   appToken: string;
   appRotation?: {
     refreshToken: string;
@@ -41,8 +49,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (appToken.startsWith("xoxe.") && !refreshToken) {
     throw new Error("Rotating app tokens require SLACK_APP_REFRESH_TOKEN.");
   }
+  const redirectUri = env.SLACK_REDIRECT_URI?.trim();
+  let oauth: Config["oauth"];
+  if (redirectUri) {
+    const url = new URL(redirectUri);
+    if (url.protocol !== "https:" || url.pathname !== "/slack/oauth/callback" ||
+        url.search || url.hash || url.username || url.password) {
+      throw new Error("SLACK_REDIRECT_URI must be https://your-host/slack/oauth/callback.");
+    }
+    const port = Number(env.SLACK_OAUTH_PORT ?? "3000");
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("SLACK_OAUTH_PORT must be between 1 and 65535.");
+    }
+    oauth = {
+      clientId: required(env, "SLACK_CLIENT_ID"),
+      clientSecret: required(env, "SLACK_CLIENT_SECRET"),
+      redirectUri, port,
+      installationsFile: env.SLACK_INSTALLATIONS_FILE?.trim() ||
+        fileURLToPath(new URL("../.slack-installations.json", import.meta.url)),
+    };
+  }
   return {
-    botToken: required(env, "SLACK_BOT_TOKEN"),
+    botToken: oauth ? "" : required(env, "SLACK_BOT_TOKEN"),
+    allowedUserId: env.SLACK_ALLOWED_USER_ID?.trim() || undefined,
+    oauth,
     appToken,
     ...(refreshToken ? {
       appRotation: {
@@ -53,7 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
           fileURLToPath(new URL("../.slack-app-tokens.json", import.meta.url)),
       },
     } : {}),
-    timeslayBin: env.TIMESLAY_BIN?.trim() || "time-slay",
+    timeslayBin: env.TIMESLAY_BIN?.trim() || "timeslay",
     timeslayTimeoutMs: timeout(env),
   };
 }

@@ -5,19 +5,21 @@ Slay the day with TimeSlay.
 There's currently two implementations:
 
 - An [Iced](https://iced.rs) desktop application.
-- A [Dioxus](https://dioxuslabs.com) mobile and desktop application.
+- A [Dioxus](https://dioxuslabs.com) mobile and desktop application (WIP).
 
-## Preview
+## Overview
 
-I love docked mode. Your day is always at a glance. You can still hover over, and edit, events and tasks from this mode.
+There's a plethora of nifty features; I'll be listing some of my favorites (TODO).
+
+Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and edit events/tasks from this view:
 
 ![Dock view](./assets/timeslay-dock.png)
 
-A larger panel to plan and read the day.
+But you'll typically plan the day within the larger panel:
 
 ![Day view](./assets/timeslay-day.png)
 
-Same for the week. Notice how yesterday can be included in this view.
+We have week and month views, just like any other calendar app:
 
 ![Week view](./assets/timeslay-week.png)
 
@@ -70,83 +72,14 @@ Same for the week. Notice how yesterday can be included in this view.
 
 ```sh
 # Iced desktop app.
-cargo run -p time-slay --release
+cargo run -p timeslay --release
 
 # Dioxus desktop app (minimal).
-cargo run -p time-slay-dioxus
+cargo run -p timeslay-dioxus
 
 # Dioxus mobile app (minimal).
 ./scripts/build-android.sh
 ```
-
-### Add links from a browser or Slack
-
-The `time-slay` binary doubles as a native-messaging host (`time-slay
---webextension`), which the browser extension and the Slack app both use to add
-the current page or a Slack message to the inbox.
-
-- Browser extension: [`webextension/`](./webextension) — load it unpacked and
-  run `./webextension/install.sh` to register the native host.
-- Slack app: [`slack/`](./slack) — a socket-mode Bolt app run without a build
-  step (`npm start`).
-
-When a TimeSlay window, panel or dock is running it writes the task and shows it
-immediately; otherwise the host writes straight to Google Tasks.
-
-## Remote metadata and migration
-
-SQLite remains local (`tasks.sqlite3`), caching task metadata and allocating IDs.
-Google is the source of truth after migration: Calendar uses
-`extendedProperties.private`; Tasks uses a versioned footer at the end of notes:
-
-```text
-normal thing
----
-tt-version: 1
-tt-id: 100
-tt-legacy_key: null
-tt-deadline: null
-tt-block: null
-tt-ignored: false
-tt-minutes: 45
-tt-order: 0
-```
-
-Values are JSON so lists, strings, booleans, and scheduling links round-trip.
-Projects, labels, priority, location, and schedule are included when set.
-Human notes stay above the separator. Existing work-history keys are preserved.
-Task metadata is uploaded on edit and at scheduling checkpoints; fresh syncs
-rebuild the SQLite cache from remote metadata instead of overwriting it.
-Oversized, malformed, and unsupported-version footers fail without replacement.
-
-**Temporary backwards compatibility:** search for `LEGACY_METADATA_COMPAT`.
-On sync, tasks without a footer export their existing SQLite values (or older
-`tt-timeblocking:`/`ttid:` notes). Old `DUE:`/`DEADLINE:` lines move into the footer.
-Calendar `Type:` footers move into private properties. Failed exports are retried
-on the next sync; legacy sources are retained until the remote write succeeds.
-Once migration support is no longer needed, remove the marked legacy readers,
-SQLite fallback branch in `calendar::task_metadata::load`, and Calendar footer
-migration helper. Keep the cache, allocator, aliases, and versioned footer codec.
-The shared core crate also supplies these rules to the Dioxus app.
-
-## Cached views and automatic sync
-
-Day, week, and month navigation reads the local cache immediately and never
-starts a Google refresh. A request already in progress can fill the cache for
-the view it fetched without navigating back or starting another request.
-Dates without cached data stay empty until a scheduled or manual refresh.
-
-Automatic refresh defaults to **one hour**. In **Settings → Google Calendar →
-Automatic sync**, choose an interval from one minute to 24 hours. Existing saved
-intervals are preserved. The last successful refresh time and calendar source
-names persist with the event cache, so restarting with fresh data avoids an
-immediate refresh. Manual sync and writes you explicitly make still run immediately.
-The Dioxus day view follows the same cache and interval policy.
-
-SQLite remains the task metadata cache, ID allocator, and legacy migration
-source. Its small schema is retained while migration is supported; event
-snapshots continue to use the existing month files. No additional database or
-migration is needed for the new refresh policy.
 
 ## Next Up
 
@@ -177,5 +110,3 @@ The design of this app is, in part, constrainted by the fact that:
 - Google Task API does not allow writing the deadline field (only due date).
 - Google Keep API cannot be used by non-workspace users.
 - Integrates only with the KDE Plasma desktop environment on Linux.
-
-Dock and side-panel corner radii can be set independently in Settings. Bind **Toggle Space Reservation** under Keyboard shortcuts to toggle only the currently visible shape; it does nothing while both shapes are hidden. Margin changes update the reserved space live, and popup areas are excluded.

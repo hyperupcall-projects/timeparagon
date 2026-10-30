@@ -1,4 +1,4 @@
-//! The command line of the one `time-slay` binary.
+//! The command line of the one `timeslay` binary.
 //!
 //! The window, the side panel, the dock and the shortcut daemon are all this
 //! binary; the flag picks which one runs. With no flags it is the window.
@@ -32,7 +32,7 @@ pub enum Action {
 pub const HELP: &str = "\
 TimeSlay: slay the day with TimeSlay.
 
-Usage: time-slay [OPTIONS]
+Usage: timeslay [OPTIONS]
 
 With no options, TimeSlay opens its regular window.
 

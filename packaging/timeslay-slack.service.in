@@ -1,0 +1,18 @@
+[Unit]
+Description=TimeSlay Slack inbox bridge
+After=network-online.target
+ConditionPathExists=@ENV_PATH@
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKDIR@
+ExecStart="@NODE@" --experimental-strip-types "--env-file=@ENV_FILE@" "@SLACK_DIR@/src/app.ts"
+Environment="TIMESLAY_BIN=@EXEC@"
+Environment="SLACK_APP_TOKEN_FILE=@TOKEN_FILE@"
+Environment="SLACK_INSTALLATIONS_FILE=@INSTALLATIONS_FILE@"
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=default.target

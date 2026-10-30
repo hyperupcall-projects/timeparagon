@@ -44,9 +44,9 @@ class AndroidReleaseTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         JAVA_HOME=str(java), ANDROID_HOME=str(sdk),
                         ANDROID_NDK_HOME=str(sdk / "ndk/test"),
-                        TIME_SLAY_KEYSTORE=str(keystore),
-                        TIME_SLAY_KEYSTORE_PASSWORD="synthetic-password",
-                        TIME_SLAY_KEY_PASSWORD="synthetic-password", TIME_SLAY_KEY_ALIAS="fixture")
+                        TIMESLAY_KEYSTORE=str(keystore),
+                        TIMESLAY_KEYSTORE_PASSWORD="synthetic-password",
+                        TIMESLAY_KEY_PASSWORD="synthetic-password", TIMESLAY_KEY_ALIAS="fixture")
         self.tool(self.bin / "dx", "pass")
         self.tool(self.bin / "rustup", "print('aarch64-linux-android')")
         self.tool(java / "bin/java", "print('openjdk version \"21.0.1\"')")
@@ -72,10 +72,10 @@ print('Signer #1 certificate SHA-256 digest: ' + os.environ.get('SIGNER_DIGEST',
                                 env=dict(self.env, **environment), capture_output=True, text=True)
         self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
         self.assertEqual((self.root / "dioxus/Dioxus.toml").read_text(), self.config_text)
-        self.assertEqual((self.output / "time-slay-arm64-v8a-release.apk").exists(), accepted)
+        self.assertEqual((self.output / "timeslay-arm64-v8a-release.apk").exists(), accepted)
 
     def test_missing_signing_key_is_rejected(self):
-        self.build(TIME_SLAY_KEYSTORE="")
+        self.build(TIMESLAY_KEYSTORE="")
 
     def test_debuggable_apk_is_rejected(self):
         self.build(DEBUGGABLE="1")

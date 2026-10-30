@@ -238,12 +238,12 @@ pub fn local_at(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Local>> {
     Local.from_local_datetime(&date.and_time(time)).earliest()
 }
 
-/// The alarms file: `$XDG_STATE_HOME/time-slay/alarms.json`.
+/// The alarms file: `$XDG_STATE_HOME/timeslay/alarms.json`.
 pub fn path() -> Option<PathBuf> {
     Some(
         BaseDirs::new()?
             .state_dir()?
-            .join("time-slay")
+            .join("timeslay")
             .join("alarms.json"),
     )
 }
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn alarms_survive_the_file() {
         let path = std::env::temp_dir().join(format!(
-            "time-slay-alarms-{}-{}.json",
+            "timeslay-alarms-{}-{}.json",
             std::process::id(),
             line!()
         ));
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn an_alarm_long_overdue_at_startup_is_dropped() {
         let path = std::env::temp_dir().join(format!(
-            "time-slay-alarms-{}-{}.json",
+            "timeslay-alarms-{}-{}.json",
             std::process::id(),
             line!()
         ));

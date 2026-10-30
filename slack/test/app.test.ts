@@ -41,10 +41,10 @@ test("resultText reports a failure with the whole trace", () => {
   const text = resultText({
     ok: false,
     error: "Could not read the link",
-    trace: "Steps:\nasking time-slay-window.sock",
+    trace: "Steps:\nasking timeslay-window.sock",
   });
   assert.match(text, /:x: Could not read the link/);
-  assert.match(text, /time-slay-window\.sock/);
+  assert.match(text, /timeslay-window\.sock/);
 });
 
 test("contextFor builds the Slack link and author", () => {

@@ -3,8 +3,8 @@
 //! namespace: it
 //! fades the panel in and out or shows it at once, and skips KWin's own pop-in.
 //!
-//! The panel's mode travels in its application ID or namespace (`time-slay-instant`,
-//! `time-slay-fade-300`), which KWin sees when the window maps, so there is no
+//! The panel's mode travels in its application ID or namespace (`timeslay-instant`,
+//! `timeslay-fade-300`), which KWin sees when the window maps, so there is no
 //! race with a later D-Bus message. Anything but KWin just gets the desktop
 //! default.
 
@@ -16,15 +16,15 @@ use std::sync::Mutex;
 use crate::config::{ViewSettings, WindowAnimation};
 
 const SCRIPT: &str = include_str!("window_effect.js");
-const PREFIX: &str = "time-slay-opening-";
+const PREFIX: &str = "timeslay-opening-";
 
 /// The application ID for a window that should open with `mode`.
 pub fn application_id(mode: WindowAnimation, duration_ms: u32, desktop_default: &str) -> String {
     match mode {
         WindowAnimation::DesktopDefault => desktop_default.to_owned(),
-        WindowAnimation::Instant => "time-slay-instant".to_owned(),
+        WindowAnimation::Instant => "timeslay-instant".to_owned(),
         WindowAnimation::FadeIn => format!(
-            "time-slay-fade-{}",
+            "timeslay-fade-{}",
             duration_ms.min(ViewSettings::MAX_FADE_DURATION_MS)
         ),
     }
@@ -196,20 +196,20 @@ mod tests {
     #[test]
     fn the_mode_and_duration_ride_in_the_application_id() {
         assert_eq!(
-            application_id(WindowAnimation::DesktopDefault, 300, "time-slay"),
-            "time-slay"
+            application_id(WindowAnimation::DesktopDefault, 300, "timeslay"),
+            "timeslay"
         );
         assert_eq!(
-            application_id(WindowAnimation::Instant, 300, "time-slay"),
-            "time-slay-instant"
+            application_id(WindowAnimation::Instant, 300, "timeslay"),
+            "timeslay-instant"
         );
         assert_eq!(
-            application_id(WindowAnimation::FadeIn, 300, "time-slay"),
-            "time-slay-fade-300"
+            application_id(WindowAnimation::FadeIn, 300, "timeslay"),
+            "timeslay-fade-300"
         );
         assert_eq!(
-            application_id(WindowAnimation::FadeIn, 99_999, "time-slay"),
-            "time-slay-fade-5000"
+            application_id(WindowAnimation::FadeIn, 99_999, "timeslay"),
+            "timeslay-fade-5000"
         );
     }
 }

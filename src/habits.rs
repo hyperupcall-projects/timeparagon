@@ -604,7 +604,7 @@ mod tests {
         ] {
             let habit = Habit {
                 id: "1".into(),
-                calendar_id: "time-slay".into(),
+                calendar_id: "timeslay".into(),
                 title: "Stretch".into(),
                 notes: String::new(),
                 start: calendar::at_clock(date("2026-10-28"), 9, 0),
@@ -668,7 +668,7 @@ mod tests {
         ]);
         let habit = Habit {
             id: "1".into(),
-            calendar_id: "time-slay".into(),
+            calendar_id: "timeslay".into(),
             title: "Stretch".into(),
             notes: String::new(),
             start: calendar::at_clock(date("2026-10-28"), 9, 0),
@@ -706,7 +706,7 @@ mod tests {
         let recurrence = Recurrence::from_lines(&lines);
         let habit = Habit {
             id: "1".into(),
-            calendar_id: "time-slay".into(),
+            calendar_id: "timeslay".into(),
             title: "Stretch".into(),
             notes: String::new(),
             start: calendar::at_clock(date("2026-10-28"), 9, 0),
@@ -762,7 +762,7 @@ mod tests {
     fn the_recurrence_label_is_readable_without_rfc_details() {
         let habit = Habit {
             id: "1".into(),
-            calendar_id: "time-slay".into(),
+            calendar_id: "timeslay".into(),
             title: "Stretch".into(),
             notes: String::new(),
             start: calendar::at_clock(date("2026-10-28"), 9, 0),

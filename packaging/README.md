@@ -3,30 +3,33 @@
 `install.sh` builds the debug binaries and registers TimeSlay with your
 desktop session:
 
-- the binary goes to `~/.local/bin/time-slay` (override with `--prefix`);
-- a desktop entry goes to `~/.local/share/applications/time-slay.desktop`,
+- the binary goes to `~/.local/bin/timeslay` (override with `--prefix`);
+- a desktop entry goes to `~/.local/share/applications/timeslay.desktop`,
   so it appears in the application menu;
-- the icon goes to `~/.local/share/icons/hicolor/512x512/apps/time-slay.png`;
+- the icon goes to `~/.local/share/icons/hicolor/512x512/apps/timeslay.png`;
 - a systemd **user** service goes to
-  `~/.config/systemd/user/time-slay.service` and is enabled so the timer
+  `~/.config/systemd/user/timeslay.service` and is enabled so the timer
   daemon starts with your graphical session;
-- a second service, `time-slay-shortcuts.service`, runs
-  `time-slay --daemon` so the global shortcuts (below) are ready and
-  listening.
+- a second service, `timeslay-shortcuts.service`, runs
+  `timeslay --daemon` so the global shortcuts (below) are ready and
+  listening;
+- `timeslay-slack.service` runs the Slack inbox bridge at login and restarts
+  it on failure. The installer requires Node **22.18+** and npm and installs
+  the bridge's production dependencies automatically.
 
-There is a single `time-slay` binary. The side panel, the dock and the
-shortcut daemon are modes of it, chosen by a flag (`time-slay --help` lists
+There is a single `timeslay` binary. The side panel, the dock and the
+shortcut daemon are modes of it, chosen by a flag (`timeslay --help` lists
 them):
 
 | Command | What it runs |
 | --- | --- |
-| `time-slay` | The regular window |
-| `time-slay --sidebar` | The side panel: the full app in a wide strip down a screen edge |
-| `time-slay --dock` | The dock: a very thin strip of today along a screen edge |
-| `time-slay --daemon` | The background process that owns the global shortcuts |
+| `timeslay` | The regular window |
+| `timeslay --sidebar` | The side panel: the full app in a wide strip down a screen edge |
+| `timeslay --dock` | The dock: a very thin strip of today along a screen edge |
+| `timeslay --daemon` | The background process that owns the global shortcuts |
 
-The installer removes the separate `time-slay-panel` and `time-slay-dock`
-binaries and the `time-slay-panel.service` that earlier versions installed.
+The installer removes the separate `timeslay-panel` and `timeslay-dock`
+binaries and the `timeslay-panel.service` that earlier versions installed.
 
 Nothing needs root; everything lives under your home directory.
 
@@ -42,7 +45,7 @@ packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 The installer does not launch the TimeSlay application. Open it from the
 application menu when ready; its service will start with your next graphical
 session. The installer restarts the background shortcut daemon,
-`time-slay-shortcuts.service`, so the shortcuts are ready immediately,
+`timeslay-shortcuts.service`, and the Slack bridge, so both are ready immediately,
 unless `--no-enable` is passed.
 
 Google Tasks and Calendar sync use the public Google APIs and require no
@@ -74,7 +77,7 @@ packaging/uninstall.sh --purge    # also delete config and cache
 
 ## The systemd unit
 
-`time-slay.service.in` is a template; `@EXEC@` is replaced with the absolute
+`timeslay.service.in` is a template; `@EXEC@` is replaced with the absolute
 path of the installed binary. It is a user unit bound to
 `graphical-session.target`, so it starts and stops with the desktop session.
 
@@ -86,10 +89,43 @@ yours does not, uncomment the `Environment=` line in the unit (or run
 Useful commands:
 
 ```sh
-systemctl --user status time-slay.service
-systemctl --user restart time-slay.service
-journalctl --user -u time-slay.service -f
+systemctl --user status timeslay.service
+systemctl --user restart timeslay.service
+journalctl --user -u timeslay.service -f
 ```
+
+### Slack service
+
+The installer copies the Slack runtime to
+`~/.local/share/timeslay/slack` (or `$XDG_DATA_HOME/timeslay/slack`).
+The service uses an absolute Node path and the installed `timeslay` binary;
+it does not need a shell, an open terminal, or this checkout after installation.
+It starts with the systemd user manager at login, independently of the GUI.
+
+Credentials and the rotating token cache live under
+`~/.config/timeslay/slack/` (or `$XDG_CONFIG_HOME/timeslay/slack/`):
+
+- `.env`: Slack tokens, client ID, and client secret.
+- `.slack-app-tokens.json`: the current access/refresh pair; retain it across
+  restarts because the original refresh token is consumed after use.
+
+On first installation, the installer copies `slack/.env` and the latest
+`slack/.slack-app-tokens.json` from the checkout if present. Later installs
+preserve the installed credentials and cache. Stop any manually started
+checkout bridge before installing; use the service afterward so only one
+process owns the rotating tokens. For a fresh setup, fill in the installed
+`.env.example` and save it as `.env`; the service waits until `.env` exists.
+The service sets `TIMESLAY_BIN` and `SLACK_APP_TOKEN_FILE` itself.
+
+```sh
+systemctl --user status timeslay-slack.service
+systemctl --user restart timeslay-slack.service
+journalctl --user -u timeslay-slack.service -f
+```
+
+`--no-enable` installs the service without enabling or starting it.
+Uninstalling removes the service and runtime; credentials and token state
+remain unless `packaging/uninstall.sh --purge` is used.
 
 ## The side panel
 
@@ -123,14 +159,14 @@ on the right rather than over the view: the window widens by `detail_width`
 beside the calendar or backlog. When the time block editor is open too, the
 details pane sits to the right of it. `detail_width` is the pane's default width.
 
-`time-slay --sidebar` opens **TimeSlay itself** as a slim panel — 200px
+`timeslay --sidebar` opens **TimeSlay itself** as a slim panel — 200px
 wide by default — down the **left** edge of the screen. It is a separate
 instance of the real application, not a second, cut-down view: the same clock,
 calendar, todos and settings, just in a narrow window.
 
 ### Shortcuts
 
-The shortcuts are owned by `time-slay --daemon`, a small process that does
+The shortcuts are owned by `timeslay --daemon`, a small process that does
 nothing but register the keys through KDE's KGlobalAccel and show, hide or
 reshape the panel and the dock. There are two actions:
 
@@ -149,12 +185,12 @@ The actions also appear in KDE **System Settings → Shortcuts**. The daemon mus
 be running for the shortcuts to exist:
 
 ```sh
-systemctl --user status time-slay-shortcuts.service
-systemctl --user restart time-slay-shortcuts.service
-journalctl --user -u time-slay-shortcuts.service -f
+systemctl --user status timeslay-shortcuts.service
+systemctl --user restart timeslay-shortcuts.service
+journalctl --user -u timeslay-shortcuts.service -f
 ```
 
-Its settings live in the `[panel]` table of `~/.config/time-slay/config.toml`
+Its settings live in the `[panel]` table of `~/.config/timeslay/config.toml`
 (an older standalone `panel.toml` is still read until `config.toml` has a
 `[panel]` table, and the next save carries its values over):
 
@@ -203,7 +239,7 @@ cargo run --release -- --daemon
 
 ## Dock strip
 
-`time-slay --dock` is a much thinner companion than the panel: a thin line
+`timeslay --dock` is a much thinner companion than the panel: a thin line
 (the **Dock width** setting, 10px by default) down the left edge of the screen
 showing today. It is a real `zwlr_layer_shell_v1` surface, so it needs no window rule. KDE Plasma, Sway,
 Hyprland, niri and COSMIC provide that protocol; GNOME does not.
@@ -237,14 +273,14 @@ from and closes the dock. The dock is told where it came from with
 `--from window|sidebar`, which defaults to `window`.
 
 ```sh
-time-slay --dock
+timeslay --dock
 cargo run --release -- --dock   # from a checkout
 ```
 
 The **Toggle Shape** shortcut switches between the panel and the dock without
 going through the menu.
 
-It reads `$XDG_CONFIG_HOME/time-slay/dock.toml` at start-up; every key is
+It reads `$XDG_CONFIG_HOME/timeslay/dock.toml` at start-up; every key is
 optional:
 
 ```toml
@@ -267,3 +303,14 @@ Google Keep support. The installer copies the compiled
 reuses the dedicated Google browser profile. See
 [the helper README](../tools/keep-bridge/README.md#google-keep) for sign-in,
 runtime permissions, and the read-only Keep integration.
+
+### Multiple Slack workspaces
+
+The bridge supports one unlisted Slack app connected to multiple workspaces.
+Follow the [multi-workspace setup](../slack/README.md#connect-multiple-workspaces-with-one-app)
+to configure its HTTPS OAuth endpoint and authorize each workspace. The service
+keeps workspace bot tokens and permitted user IDs in
+`~/.config/timeslay/slack/.slack-installations.json`, separately from its
+app-level token cache. Installation copies a development installation file only
+when the destination does not exist; upgrades preserve it. Ordinary uninstall
+preserves credentials; `--purge` removes them.

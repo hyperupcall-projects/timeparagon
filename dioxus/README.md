@@ -6,20 +6,20 @@ and Google Tasks data the iced application uses.
 
 The iced application is still the root package of this repository and is
 untouched. Both apps share data through the renderer-agnostic
-`time-slay-core` crate:
+`timeslay-core` crate:
 
-- the config at `~/.config/time-slay/config.toml`,
-- the OAuth token at `~/.config/time-slay/google-token.toml`,
+- the config at `~/.config/timeslay/config.toml`,
+- the OAuth token at `~/.config/timeslay/google-token.toml`,
 - the local task database and time-block metadata,
 - the calendar sync and Google Tasks code in `core/` / `src/calendar/`.
 
-`time-slay-core` contains no iced UI, which is what lets it cross-compile for
+`timeslay-core` contains no iced UI, which is what lets it cross-compile for
 Android.
 
 ## Run it
 
 ```sh
-cargo run -p time-slay-dioxus
+cargo run -p timeslay-dioxus
 ```
 
 Dioxus desktop needs the usual WebKitGTK and GTK 3 development packages on
@@ -29,7 +29,7 @@ dependencies.
 The iced app still builds and runs with the normal command:
 
 ```sh
-cargo run -p time-slay --release
+cargo run -p timeslay --release
 ```
 
 ## Android APK
@@ -45,24 +45,24 @@ Useful options:
 ./scripts/build-android.sh --abi x86_64
 
 # Release profile, signed with your own keystore (see below)
-TIME_SLAY_KEYSTORE=~/keys/time-slay.jks \
-TIME_SLAY_KEYSTORE_PASSWORD=... \
-TIME_SLAY_KEY_ALIAS=time-slay \
+TIMESLAY_KEYSTORE=~/keys/timeslay.jks \
+TIMESLAY_KEYSTORE_PASSWORD=... \
+TIMESLAY_KEY_ALIAS=timeslay \
 ./scripts/build-android.sh --release
 
 # Build, install and launch on a connected device
 ./scripts/build-android.sh --install
 ```
 
-The APK is copied to `dist/time-slay-<abi>-<profile>.apk`.
+The APK is copied to `dist/timeslay-<abi>-<profile>.apk`.
 
 The default (debug) APK is debuggable and debug-signed: use it for development
 only. `--release` builds Gradle's release variant, signs it with the keystore
-named by `TIME_SLAY_KEYSTORE`, `TIME_SLAY_KEYSTORE_PASSWORD`,
-`TIME_SLAY_KEY_ALIAS` and (optionally) `TIME_SLAY_KEY_PASSWORD`, and fails
+named by `TIMESLAY_KEYSTORE`, `TIMESLAY_KEYSTORE_PASSWORD`,
+`TIMESLAY_KEY_ALIAS` and (optionally) `TIMESLAY_KEY_PASSWORD`, and fails
 unless the result is non-debuggable and not signed with the Android debug key.
 Create a keystore once with `keytool -genkeypair -v -keystore
-~/keys/time-slay.jks -alias time-slay -keyalg RSA -keysize 4096 -validity
+~/keys/timeslay.jks -alias timeslay -keyalg RSA -keysize 4096 -validity
 10000` and keep it outside the repository. Passwords must avoid the characters
 `" ' \` $ \ & < > =`. The signing block is added to `dioxus/Dioxus.toml` only
 while the build runs.
@@ -98,7 +98,7 @@ concurrent builds are rejected while signing settings are in use.
   ```
 
 The Android build does **not** compile iced or any desktop-only crates; it uses
-`time-slay-core` only.
+`timeslay-core` only.
 
 ### Config on the device
 
@@ -107,7 +107,7 @@ launch the app asks for the Google OAuth client ID and secret and saves them to
 its private storage (`config.toml`, readable only by the app):
 
 ```text
-/data/user/0/dev.timeslay.day/files/config/time-slay/config.toml
+/data/user/0/dev.timeslay.day/files/config/timeslay/config.toml
 ```
 
 After **Save and connect**, sign in with Google in the browser. The rest of the

@@ -2,7 +2,7 @@ use chrono::{Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
-use time_slay::{
+use timeslay::{
     app::{self, Message, Screen, State},
     calendar::{self, Store},
     config::Config,
@@ -88,7 +88,7 @@ fn week_range_has_previous_day_and_seven_or_eight_selected_days() {
 #[test]
 fn expanded_window_fits_every_weekly_heading() {
     use iced_test::runtime::{Action, task, window::Action as WindowAction};
-    use time_slay::{app::Sidebar, panel::Side};
+    use timeslay::{app::Sidebar, panel::Side};
 
     for (days, width, sidebar) in [(7, 100, false), (8, 200, false), (8, 150, true)] {
         let mut state = State::new(Config::default(), Catalog::built_in());
@@ -132,14 +132,14 @@ fn expanded_window_fits_every_weekly_heading() {
 
 #[test]
 fn weekly_settings_round_trip_and_clamp_old_or_invalid_values() {
-    let defaults: time_slay::config::CalendarSettings = toml::from_str("").unwrap();
+    let defaults: timeslay::config::CalendarSettings = toml::from_str("").unwrap();
     assert_eq!(defaults.weekly_days(), 8);
     assert_eq!(defaults.weekly_day_width(), 150);
     let mut settings = defaults;
     settings.weekly_days = 7;
     settings.weekly_day_width = 220;
     let saved = toml::to_string(&settings).unwrap();
-    let loaded: time_slay::config::CalendarSettings = toml::from_str(&saved).unwrap();
+    let loaded: timeslay::config::CalendarSettings = toml::from_str(&saved).unwrap();
     assert_eq!((loaded.weekly_days(), loaded.weekly_day_width()), (7, 220));
     settings.weekly_days = 99;
     settings.weekly_day_width = 0;
@@ -248,7 +248,7 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
     task.title = "Renamed task".into();
     let _ = app::update(
         &mut state,
-        Message::TimeBlocking(time_slay::timeblocking::Action::Saved(
+        Message::TimeBlocking(timeslay::timeblocking::Action::Saved(
             "task:thursday".into(),
             Ok(task.clone()),
         )),
@@ -280,7 +280,7 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
         &mut state,
         Message::TaskCompletionSaved(
             "task:thursday".into(),
-            time_slay::timeblocking::TaskStatus::Active,
+            timeslay::timeblocking::TaskStatus::Active,
             Ok(task),
         ),
     );
@@ -365,9 +365,9 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
     let mut state = state();
     state.calendar.set_day(date(14), date(15));
     let task = state.calendar.event_mut("task:thursday").unwrap();
-    task.details.task_data = Some(time_slay::task_db::TaskData {
+    task.details.task_data = Some(timeslay::task_db::TaskData {
         id: 1,
-        metadata: time_slay::timeblocking::Metadata {
+        metadata: timeslay::timeblocking::Metadata {
             block: Some("work/standup".into()),
             ..Default::default()
         },
@@ -383,7 +383,7 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
     let _ = ui.click("Close")?;
     assert!(ui.into_messages().any(|message| matches!(
         message,
-        Message::TimeBlocking(time_slay::timeblocking::Action::Close)
+        Message::TimeBlocking(timeslay::timeblocking::Action::Close)
     )));
     Ok(())
 }

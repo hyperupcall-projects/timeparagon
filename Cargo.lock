@@ -7183,7 +7183,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "time-slay"
+name = "timeslay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -7224,7 +7224,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "time-slay-core"
+name = "timeslay-core"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -7248,14 +7248,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "time-slay-dioxus"
+name = "timeslay-dioxus"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "dioxus",
  "jni 0.21.1",
  "ndk-context",
- "time-slay-core",
+ "timeslay-core",
  "tokio",
 ]
 

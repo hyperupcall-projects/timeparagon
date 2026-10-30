@@ -28,13 +28,13 @@ export type AddResult = {
 };
 
 export type AddOptions = {
-  /** The time-slay binary. Defaults to TIMESLAY_BIN or `time-slay` on PATH. */
+  /** The timeslay binary. Defaults to TIMESLAY_BIN or `timeslay` on PATH. */
   bin?: string;
   timeoutMs?: number;
 };
 
 function binary(options: AddOptions): string {
-  return options.bin?.trim() || process.env.TIMESLAY_BIN?.trim() || "time-slay";
+  return options.bin?.trim() || process.env.TIMESLAY_BIN?.trim() || "timeslay";
 }
 
 function timeout(options: AddOptions): number {
@@ -76,7 +76,7 @@ function isAddResult(value: unknown): value is AddResult {
 }
 
 /**
- * Runs `time-slay --webextension` for one message. The binary is the same
+ * Runs `timeslay --webextension` for one message. The binary is the same
  * native host the browser uses, so the Slack app and the extension share one
  * code path (including the Gmail-aware link handling and the running-app IPC).
  */
@@ -113,7 +113,7 @@ export async function addToInbox(
         `url: ${request.url}`,
         `timeout: ${limit}ms`,
         extra,
-        stderr ? `\n--- time-slay stderr ---\n${stderr}` : "",
+        stderr ? `\n--- timeslay stderr ---\n${stderr}` : "",
       ]
         .filter(Boolean)
         .join("\n"),
@@ -147,7 +147,7 @@ export async function addToInbox(
     child.on("error", (error) => {
       finish(
         failure(
-          `Could not run ${bin}: ${error.message}. Set TIMESLAY_BIN to the time-slay binary.`,
+          `Could not run ${bin}: ${error.message}. Set TIMESLAY_BIN to the timeslay binary.`,
           error.stack ?? "",
         ),
       );

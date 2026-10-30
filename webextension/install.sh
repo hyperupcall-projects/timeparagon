@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Registers the TimeSlay native-messaging host for the browsers installed for
-# this user. Run it after building time-slay and loading the extension.
+# this user. Run it after building timeslay and loading the extension.
 set -euo pipefail
 
 HOST="com.timeslay.webextension"
@@ -17,13 +17,13 @@ find_binary() {
     printf '%s\n' "$TIMESLAY_BIN"
     return
   fi
-  if command -v time-slay >/dev/null 2>&1; then
-    command -v time-slay
+  if command -v timeslay >/dev/null 2>&1; then
+    command -v timeslay
     return
   fi
   for candidate in \
-    "$repo_root/target/release/time-slay" \
-    "$repo_root/target/debug/time-slay"; do
+    "$repo_root/target/release/timeslay" \
+    "$repo_root/target/debug/timeslay"; do
     if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return
@@ -34,8 +34,8 @@ find_binary() {
 
 if ! BIN="$(find_binary)"; then
   cat >&2 <<'EOF'
-Could not find the time-slay binary.
-Build it first (cargo build --release) or set TIMESLAY_BIN=/path/to/time-slay.
+Could not find the timeslay binary.
+Build it first (cargo build --release) or set TIMESLAY_BIN=/path/to/timeslay.
 EOF
   exit 1
 fi
@@ -51,7 +51,7 @@ fi
 # does not need it, so it is dropped rather than forwarded.
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/timeslay"
 mkdir -p -- "$DATA_DIR"
-WRAPPER="$DATA_DIR/time-slay-webextension"
+WRAPPER="$DATA_DIR/timeslay-webextension"
 cat > "$WRAPPER" <<EOF
 #!/bin/sh
 exec "$BIN" --webextension

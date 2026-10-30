@@ -1,7 +1,7 @@
 //! TimeSlay: slay the day with TimeSlay.
 
-use time_slay::cli::{self, Mode};
-use time_slay::{app, dock, panel, webextension};
+use timeslay::cli::{self, Mode};
+use timeslay::{app, dock, panel, webextension};
 
 fn main() -> iced::Result {
     let (mode, origin) = match cli::parse(std::env::args().skip(1)) {
@@ -11,11 +11,11 @@ fn main() -> iced::Result {
             return Ok(());
         }
         Ok(cli::Action::Version) => {
-            println!("time-slay {}", env!("CARGO_PKG_VERSION"));
+            println!("timeslay {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Err(error) => {
-            eprintln!("time-slay: {error}\nTry 'time-slay --help'.");
+            eprintln!("timeslay: {error}\nTry 'timeslay --help'.");
             std::process::exit(2);
         }
     };
@@ -30,20 +30,20 @@ fn main() -> iced::Result {
     };
     if let Some(result) = result {
         if let Err(error) = result {
-            eprintln!("time-slay: {error:#}");
+            eprintln!("timeslay: {error:#}");
             std::process::exit(1);
         }
         return Ok(());
     }
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("time_slay=info"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
         .init();
 
     if mode == Mode::Sidebar {
         let result = panel::layer::run();
-        time_slay::window_effect::shutdown();
+        timeslay::window_effect::shutdown();
         if let Err(error) = result {
-            eprintln!("time-slay: {error}");
+            eprintln!("timeslay: {error}");
             std::process::exit(1);
         }
         return Ok(());
@@ -64,6 +64,6 @@ fn main() -> iced::Result {
         .subscription(app::subscription)
         .run();
 
-    time_slay::window_effect::shutdown();
+    timeslay::window_effect::shutdown();
     result
 }

@@ -16,7 +16,7 @@ use std::sync::mpsc::Sender;
 use super::config::{Action, PanelConfig};
 
 /// Component (application) id used with KGlobalAccel.
-pub const COMPONENT: &str = "time-slay";
+pub const COMPONENT: &str = "timeslay";
 const COMPONENT_FRIENDLY: &str = "TimeSlay";
 
 /// `KGlobalAccelD::SetShortcutFlag` values (see `kglobalacceld.h`).
@@ -99,7 +99,7 @@ pub fn rebind(action: Action, specs: &[String]) -> Result<()> {
     // Do not create an action owned by this temporary connection: the daemon
     // must already own it and be listening for presses.
     kga.get_component(COMPONENT)
-        .context("Shortcut daemon unavailable. Start time-slay-shortcuts.service and try again")?;
+        .context("Shortcut daemon unavailable. Start timeslay-shortcuts.service and try again")?;
     let id = action_id(action);
     let previous = kga
         .shortcut_keys(&id)
