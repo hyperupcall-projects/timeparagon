@@ -147,11 +147,15 @@ fn App() -> Element {
         store.cache_days_in(timeslay_core::config::cache_days_dir());
         store
     });
-    // Navigation only changes the cached view. It never restarts the resource.
+    // Paint cached data immediately, fetching missing or empty days on navigation.
     use_effect(move || {
         let day = current_day();
         let today = day::today(&config.peek().calendar);
         cached_days.write().set_day(day, today);
+        if !cached_days.peek().has_calendar_events_on(day) {
+            let next = *revision.peek() + 1;
+            revision.set(next);
+        }
     });
 
     let data = use_resource(move || {
@@ -327,7 +331,13 @@ fn App() -> Element {
             }
             div { class: "day-titles",
                 h1 { class: "day-title", "{heading}" }
-                div { class: "day-sub", "{selected_day.year()} · {stats}" }
+                div { class: "day-sub",
+                    if pending {
+                        "Loading..."
+                    } else {
+                        "{selected_day.year()} · {stats}"
+                    }
+                }
             }
             div { class: "spacer" }
             div { class: "controls",

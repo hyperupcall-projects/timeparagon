@@ -5,6 +5,7 @@ pub mod api;
 pub mod colors;
 mod day_cache;
 pub mod deadline;
+pub mod event_options;
 pub mod layout;
 pub mod notes;
 pub mod oauth;
@@ -197,6 +198,9 @@ pub enum DraftKind {
 /// throw away the last valid time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
+    /// The type chooser has handed this draft to the details pane.
+    pub editor_open: bool,
+    pub options: event_options::EventOptions,
     pub projects: projects::Selection,
     /// Whether this is an ordinary event or a time block.
     pub kind: DraftKind,
@@ -222,6 +226,8 @@ impl Draft {
     /// A draft on `calendar_id` spanning `start` to `end`.
     pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
         Self {
+            options: Default::default(),
+            editor_open: false,
             kind: DraftKind::Event,
             projects: projects::Selection::default(),
             title: String::new(),
@@ -283,8 +289,20 @@ impl Draft {
 /// It carries the event's id so the update knows which event to patch, and
 /// starts from the event's current values so the user only changes what they
 /// want to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveScope {
+    Current,
+    CurrentAndFuture,
+    All,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditDraft {
+    pub options: event_options::EventOptions,
+    pub save_menu_open: bool,
+    pub delete_menu_open: bool,
+    pub saving: bool,
+    pub recurrence_changed: bool,
     pub loading: bool,
     pub series_id: Option<String>,
     pub editing_title: bool,
@@ -314,6 +332,11 @@ impl EditDraft {
     /// Build an edit draft from an existing event.
     pub fn from_event(event: &Event) -> Self {
         Self {
+            options: event.details.options.clone(),
+            save_menu_open: false,
+            delete_menu_open: false,
+            saving: false,
+            recurrence_changed: false,
             loading: false,
             series_id: None,
             editing_title: false,
@@ -408,6 +431,7 @@ pub(crate) fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Details {
+    pub options: event_options::EventOptions,
     /// Last modification instant reported by Google Tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_updated_at: Option<DateTime<Utc>>,
@@ -614,6 +638,7 @@ pub struct Store {
     /// card is replaced by an "are you sure" prompt so a stray click cannot
     /// wipe an event.
     pub pending_delete: Option<String>,
+    pub pending_delete_scope: SaveScope,
 }
 
 impl Store {
@@ -651,6 +676,7 @@ impl Store {
             draft: None,
             edit_draft: None,
             pending_delete: None,
+            pending_delete_scope: SaveScope::Current,
         }
     }
 
@@ -688,6 +714,7 @@ impl Store {
             draft: None,
             edit_draft: None,
             pending_delete: None,
+            pending_delete_scope: SaveScope::Current,
         }
     }
 
@@ -1037,6 +1064,14 @@ impl Store {
         } else {
             self.cache.get(&day).map(Vec::as_slice).unwrap_or(&[])
         }
+    }
+
+    /// Shared backlog tasks and off-day linked blocks do not establish that
+    /// this day's calendar data has been loaded.
+    pub fn has_calendar_events_on(&self, day: NaiveDate) -> bool {
+        self.events_on(day)
+            .iter()
+            .any(|event| !event.is_task() && event_on_day(event, day, self.day_end_hour))
     }
 
     pub fn replace_cached_task(&mut self, previous_id: &str, task: &Event) {
@@ -1740,6 +1775,7 @@ pub fn create_habit(
         &draft.recurrence_lines()?,
         color_id,
     );
+    draft.options.write(&mut body)?;
     projects::write(&mut body, &draft.projects.ids)?;
     body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(&draft.labels)
         .map_err(|error| error.to_string())?
@@ -2001,6 +2037,7 @@ pub fn create_event(
     end: DateTime<Local>,
     recurrence: &[String],
     projects: &[u64],
+    options: Option<&event_options::EventOptions>,
 ) -> Result<String, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -2016,6 +2053,7 @@ pub fn create_event(
         end,
         recurrence,
         projects,
+        options,
     )
     .map_err(describe_event_write_error)
 }
@@ -2036,6 +2074,7 @@ pub fn update_event(
     projects: &[u64],
     all_day: bool,
     labels: &[String],
+    options: Option<&event_options::EventOptions>,
 ) -> Result<(), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -2054,6 +2093,31 @@ pub fn update_event(
         projects,
         all_day,
         labels,
+        options,
+    )
+    .map_err(describe_event_write_error)
+}
+
+/// Save an occurrence or a selected portion of its recurring series.
+pub fn save_event_scope(
+    client_id: &str,
+    client_secret: &str,
+    original: &Event,
+    draft: &EditDraft,
+    scope: SaveScope,
+    description: &str,
+    color_id: Option<&str>,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::save_event_scope(
+        &tokens.access_token,
+        original,
+        draft,
+        scope,
+        description,
+        color_id,
     )
     .map_err(describe_event_write_error)
 }
@@ -2073,6 +2137,20 @@ pub fn delete_event(
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
     api::delete_event(&tokens.access_token, calendar_id, event_id)
+        .map_err(describe_event_write_error)
+}
+
+/// Delete an occurrence or a selected portion of its series.
+pub fn delete_event_scope(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+    scope: SaveScope,
+) -> Result<(), String> {
+    let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::delete_event_scope(&tokens.access_token, calendar_id, event_id, scope)
         .map_err(describe_event_write_error)
 }
 
@@ -2317,6 +2395,26 @@ mod tests {
             std::time::Duration::from_secs(3600),
             snapshot.fetched_at + chrono::Duration::minutes(60)
         ));
+    }
+
+    #[test]
+    fn calendar_cache_coverage_ignores_shared_tasks_and_off_day_events() {
+        let snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let mut store = Store::with_snapshot(snapshot);
+        assert!(store.has_calendar_events_on(day));
+        for event in &mut store.events {
+            event.id = format!("task:{}", event.id);
+        }
+        assert!(!store.has_calendar_events_on(day));
+        for event in &mut store.events {
+            event.id = event.id.trim_start_matches("task:").to_owned();
+            event.start += chrono::Duration::days(5);
+            event.end += chrono::Duration::days(5);
+        }
+        assert!(!store.has_calendar_events_on(day));
+        store.events.clear();
+        assert!(!store.has_calendar_events_on(day));
     }
 
     #[test]

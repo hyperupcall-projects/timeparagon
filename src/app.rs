@@ -307,6 +307,8 @@ pub struct State {
     pub notepad: text_editor::Content<iced::Renderer>,
 
     pub calendar: calendar::Store,
+    /// Visible empty days awaiting an in-flight calendar request.
+    calendar_fetch_pending: Vec<chrono::NaiveDate>,
     pub timeblocking: crate::timeblocking::Workspace,
     /// The Brain dump screen and the page open in its editor.
     pub brain_dump: crate::brain_dump::Workspace,
@@ -469,6 +471,8 @@ pub enum Message {
     /// The user clicked Delete on an event's details card. The confirmation
     /// prompt opens before anything is sent to Google.
     EventDeleteRequested(String),
+    EventDeleteScoped(String, calendar::SaveScope),
+    EventEditDeleteMenuToggled,
     /// The user confirmed the deletion prompt.
     EventDeleteConfirmed(String),
     /// The user dismissed the deletion prompt without deleting.
@@ -540,6 +544,8 @@ pub enum Message {
     },
     /// The new event's title was edited.
     EventDraftTitleChanged(String),
+    EventDraftOptions(calendar::event_options::Action),
+    EventEditOptions(calendar::event_options::Action),
     EventDraftProjects(calendar::projects::Action),
     /// The new event's description was edited.
     EventDraftDescriptionChanged(String),
@@ -585,6 +591,8 @@ pub enum Message {
     EventEditCancelled,
     /// Write the edited event to Google.
     EventEditSaveRequested,
+    EventEditSaveMenuToggled,
+    EventEditSaveScoped(calendar::SaveScope),
     /// Google's answer to updating the event.
     EventEditSaved(Result<(), String>),
 
@@ -663,6 +671,7 @@ impl State {
             notepad,
             keep: crate::keep::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
+            calendar_fetch_pending: Vec::new(),
             timeblocking: crate::timeblocking::Workspace::default(),
             brain_dump: crate::brain_dump::Workspace::default(),
             habits: crate::habits::Store::default(),
@@ -704,6 +713,10 @@ impl State {
 
     pub fn floating_editors(&self) -> bool {
         !self.task_creation_window && shows_details(self.screen) && !self.range_view_active()
+    }
+
+    pub(crate) fn calendar_loading(&self) -> bool {
+        self.calendar.is_busy() || !self.calendar_fetch_pending.is_empty()
     }
 
     fn range_view_active(&self) -> bool {
@@ -981,7 +994,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     };
     state.details_pane_open = detail_pane_visible(state);
     let editor = reconcile_editor_window(state);
-    Task::batch([task, editor, travel])
+    let fetch = if !state.calendar_fetch_pending.is_empty()
+        && !state.calendar.is_busy()
+        && state.timeblocking.busy.is_empty()
+    {
+        show_cached_calendar(state)
+    } else {
+        Task::none()
+    };
+    Task::batch([task, editor, travel, fetch])
 }
 
 /// Keep editor lifetime separate from the panel's geometry and reservation.
@@ -1037,7 +1058,10 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
 }
 
 fn detail_pane_visible(state: &State) -> bool {
-    state.calendar.open_event.is_some() && shows_details(state.screen) && !state.range_view_active()
+    (state.calendar.open_event.is_some()
+        || state.calendar.draft.as_ref().is_some_and(|d| d.editor_open))
+        && shows_details(state.screen)
+        && !state.range_view_active()
 }
 
 fn resize_for_week_transition(
@@ -2299,6 +2323,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     state.calendar.cache_fetched_snapshot(snapshot, &dates);
                     state.calendar.apply_task_colors(&state.config.calendar);
                     let reconcile = reconcile_completed_task(state);
+                    let fetch = fetch_pending_calendar_days(state, &dates);
+                    let reconcile = Task::batch([reconcile, fetch]);
                     if remember {
                         Task::batch([queue_save(state), reconcile])
                     } else {
@@ -2320,6 +2346,8 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.cache_fetched_snapshot(snapshot, &[day]);
             state.calendar.apply_task_colors(&state.config.calendar);
             let reconcile = reconcile_completed_task(state);
+            let fetch = fetch_pending_calendar_days(state, &[day]);
+            let reconcile = Task::batch([reconcile, fetch]);
             if remember {
                 Task::batch([queue_save(state), reconcile])
             } else {
@@ -2530,7 +2558,12 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::EventDeleteRequested(id) => {
+        request @ (Message::EventDeleteRequested(_) | Message::EventDeleteScoped(_, _)) => {
+            let (id, scope) = match request {
+                Message::EventDeleteScoped(id, scope) => (id, scope),
+                Message::EventDeleteRequested(id) => (id, calendar::SaveScope::Current),
+                _ => unreachable!(),
+            };
             // Only calendar events can be deleted this way; Google Tasks live
             // under the Tasks API and are ticked off instead.
             let is_task = state
@@ -2541,11 +2574,20 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             if is_task {
                 return Task::none();
             }
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.delete_menu_open = false;
+                draft.save_menu_open = false;
+            }
+            state.calendar.pending_delete_scope = scope;
             state.calendar.pending_delete = Some(id);
             Task::none()
         }
 
         Message::EventDeleteConfirmed(id) => {
+            if state.calendar.pending_delete.as_deref() != Some(id.as_str()) {
+                return Task::none();
+            }
+            let scope = state.calendar.pending_delete_scope;
             let Some(calendar_id) = state
                 .calendar
                 .event(&id)
@@ -2562,7 +2604,13 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             state.calendar.error = None;
 
             blocking::run(move || {
-                calendar::delete_event(&client_id, &client_secret, &calendar_id, &request_id)
+                calendar::delete_event_scope(
+                    &client_id,
+                    &client_secret,
+                    &calendar_id,
+                    &request_id,
+                    scope,
+                )
             })
             .map(move |result| Message::EventDeleted(id.clone(), result))
         }
@@ -2595,7 +2643,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             if state.screen == Screen::Habits {
                 state.habits.habits.retain(|habit| habit.id != id);
             }
-            Task::batch([close, refresh_week_after_write(state)])
+            Task::batch([close, Task::done(Message::CalendarSyncRequested)])
         }
 
         Message::EventDeleted(_id, Err(error)) => {
@@ -3012,6 +3060,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
             state.calendar.error = None;
             state.calendar.begin_draft(calendar_id, start, end);
+            state.calendar.day = calendar::day_at(start, state.config.calendar.day_start_hour());
             Task::none()
         }
 
@@ -3027,6 +3076,20 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDraftOptions(action) => {
+            if let Some(draft) = &mut state.calendar.draft {
+                draft.options.update(action);
+            }
+            Task::none()
+        }
+        Message::EventEditOptions(action) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                if !draft.loading && !draft.saving {
+                    draft.options.update(action);
+                }
+            }
+            Task::none()
+        }
         Message::EventDraftTitleChanged(title) => {
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.title = title;
@@ -3091,7 +3154,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 color_id,
                 draft.rule.clone(),
             );
-            crate::habits::open_new(state, habit)
+            let task = crate::habits::open_new(state, habit);
+            if let Some(edit) = &mut state.calendar.edit_draft {
+                edit.options = draft.options;
+            }
+            task
         }
 
         Message::EventDraftKindSelected(kind) => {
@@ -3099,6 +3166,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let default_calendar = state.calendar.default_calendar_id(&state.config.calendar);
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.kind = kind;
+                draft.editor_open = true;
                 // A time block always lives on the app's TimeSlay calendar;
                 // switching back to an event returns to the normal default.
                 if let Some(calendar_id) = match kind {
@@ -3196,6 +3264,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     draft.end,
                     &recurrence,
                     &draft.projects.ids,
+                    Some(&draft.options),
                 )?;
 
                 Ok(calendar::Event {
@@ -3212,6 +3281,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     color,
                     completed: false,
                     details: calendar::Details {
+                        options: draft.options.clone(),
                         projects: draft.projects.ids.clone(),
                         description,
                         recurrence: recurrence.clone(),
@@ -3286,6 +3356,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 
         Message::EventEditRecurrence(action) => {
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.recurrence_changed = true;
                 if matches!(&action, crate::recurrence::Action::SkipAdd) {
                     match draft.rule.add_skip() {
                         Ok(()) => state.calendar.error = None,
@@ -3338,12 +3409,36 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::EventEditSaveRequested => {
+        Message::EventEditDeleteMenuToggled => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.delete_menu_open = !draft.delete_menu_open;
+                draft.save_menu_open = false;
+            }
+            Task::none()
+        }
+
+        Message::EventEditSaveMenuToggled => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.save_menu_open = !draft.save_menu_open;
+                draft.delete_menu_open = false;
+            }
+            Task::none()
+        }
+
+        request @ (Message::EventEditSaveRequested | Message::EventEditSaveScoped(_)) => {
+            let scope = match request {
+                Message::EventEditSaveScoped(scope) => scope,
+                _ => calendar::SaveScope::Current,
+            };
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.save_menu_open = false;
+                draft.delete_menu_open = false;
+            }
             let Some(draft) = state.calendar.edit_draft.clone() else {
                 return Task::none();
             };
 
-            if draft.loading {
+            if draft.loading || draft.saving {
                 return Task::none();
             }
             if draft.title.trim().is_empty() {
@@ -3402,6 +3497,30 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     return Task::none();
                 }
             };
+            if let Some(original) = state
+                .calendar
+                .event(&draft.id)
+                .filter(|event| !event.details.habit)
+                .cloned()
+            {
+                let settings = state.config.calendar.clone();
+                state.calendar.error = None;
+                if let Some(draft) = &mut state.calendar.edit_draft {
+                    draft.saving = true;
+                }
+                return blocking::run(move || {
+                    calendar::save_event_scope(
+                        &settings.client_id,
+                        &settings.client_secret,
+                        &original,
+                        &draft,
+                        scope,
+                        &description,
+                        color_id,
+                    )
+                })
+                .map(Message::EventEditSaved);
+            }
             // An expanded occurrence belongs to a series. Editing it must not
             // rewrite the series' recurrence, so leave that field untouched.
             let recurrence = state
@@ -3430,6 +3549,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                     &draft.projects.ids,
                     draft.all_day,
                     &draft.labels,
+                    Some(&draft.options),
                 )?;
                 Ok(())
             })
@@ -3439,6 +3559,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::EventEditSaved(Ok(())) => {
             if let Some(draft) = &mut state.calendar.edit_draft {
                 draft.editing_title = false;
+                draft.saving = false;
             }
             // Keep the inline draft as the user left it until the calendar
             // sync brings the saved event back, so fields do not flicker.
@@ -3450,6 +3571,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::EventEditSaved(Err(error)) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.saving = false;
+            }
             // The popup stays open so the half-filled edit is not lost.
             log::warn!("could not update the event: {error}");
             state.calendar.error = Some(error);
@@ -4066,14 +4190,49 @@ fn remember_app_calendar(state: &mut State, snapshot: &calendar::Snapshot) -> bo
     }
 }
 
-fn show_cached_calendar(state: &mut State) -> Task<Message> {
+fn load_cached_calendar(state: &mut State) {
     if state.screen == Screen::Calendar && (state.weekly || state.monthly) {
         let days = state.calendar_dates();
         state.calendar.load_cached_days(&days);
     } else {
         state.calendar.load_cached_days(&[]);
     }
-    Task::none()
+}
+
+fn empty_calendar_days(state: &State) -> Vec<chrono::NaiveDate> {
+    let days = if state.range_view_active() {
+        state.calendar_dates()
+    } else {
+        vec![state.calendar.day]
+    };
+    days.into_iter()
+        .filter(|&day| !state.calendar.has_calendar_events_on(day))
+        .collect()
+}
+
+fn show_cached_calendar(state: &mut State) -> Task<Message> {
+    load_cached_calendar(state);
+    if !state.calendar.is_signed_in() {
+        return Task::none();
+    }
+    let missing = empty_calendar_days(state);
+    if missing.is_empty() {
+        state.calendar_fetch_pending.clear();
+        return Task::none();
+    }
+    state.calendar_fetch_pending = missing;
+    sync_calendar(state)
+}
+
+fn fetch_pending_calendar_days(state: &mut State, fetched: &[chrono::NaiveDate]) -> Task<Message> {
+    let pending = std::mem::take(&mut state.calendar_fetch_pending);
+    // Only navigation to dates outside the completed request needs a follow-up.
+    // A successful, genuinely empty day must not start an endless fetch loop.
+    if pending.iter().any(|day| !fetched.contains(day)) {
+        show_cached_calendar(state)
+    } else {
+        Task::none()
+    }
 }
 
 fn auto_sync_calendar(state: &mut State) -> Task<Message> {
@@ -4088,7 +4247,7 @@ fn auto_sync_calendar(state: &mut State) -> Task<Message> {
 }
 
 fn sync_calendar(state: &mut State) -> Task<Message> {
-    let _ = show_cached_calendar(state);
+    load_cached_calendar(state);
     if !state.calendar.is_signed_in()
         || state.calendar.is_busy()
         || !state.timeblocking.busy.is_empty()
@@ -4096,6 +4255,7 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
         return Task::none();
     }
 
+    state.calendar_fetch_pending.clear();
     state.calendar.sync = SyncState::Syncing;
     state.calendar.error = None;
 
@@ -4246,6 +4406,38 @@ mod tests {
             window: window::Id::unique(),
             started: Instant::now(),
             settings,
+        }
+    }
+
+    #[test]
+    fn event_and_time_block_choices_open_the_creation_pane_without_saving() {
+        for kind in [calendar::DraftKind::Event, calendar::DraftKind::TimeBlock] {
+            let mut state = State::new(
+                crate::config::Config::default(),
+                crate::theme::Catalog::built_in(),
+            );
+            state.config.calendar.app_calendar = Some("timeslay".into());
+            let start =
+                calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+            let end = start + chrono::Duration::minutes(45);
+            state.calendar.begin_draft("primary".into(), start, end);
+            let _ = update(
+                &mut state,
+                Message::EventDraftTitleChanged("Planning".into()),
+            );
+            let _ = update(&mut state, Message::EventDraftKindSelected(kind));
+            let draft = state.calendar.draft.as_ref().unwrap();
+            assert!(draft.editor_open);
+            assert!(state.details_pane_open);
+            assert_eq!(draft.title, "Planning");
+            assert_eq!((draft.start, draft.end), (start, end));
+            assert_eq!(draft.kind, kind);
+            if kind == calendar::DraftKind::TimeBlock {
+                assert_eq!(draft.calendar_id, "timeslay");
+            }
+            let _ = update(&mut state, Message::EventDraftCancelled);
+            assert!(state.calendar.draft.is_none());
+            assert!(!state.details_pane_open);
         }
     }
 
@@ -5124,27 +5316,80 @@ mod tests {
     }
 
     #[test]
-    fn calendar_navigation_uses_cache_without_syncing_even_when_stale() {
+    fn populated_day_navigation_uses_cache_even_when_stale() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         state.calendar.connection = Connection::SignedIn;
         state.calendar.last_sync = Some(Local::now() - chrono::Duration::hours(3));
         let day = state.calendar.day;
         let count = state.calendar.events.len();
+        let _ = update(&mut state, Message::CalendarDaySelected(day));
+        assert_eq!(state.calendar.sync, SyncState::Idle);
+        assert_eq!(state.calendar.events.len(), count);
+        let _ = update(&mut state, Message::CalendarAutoSyncRequested);
+        assert_eq!(state.calendar.sync, SyncState::Syncing);
+    }
+
+    #[test]
+    fn switching_to_uncached_views_fetches_despite_a_recent_sync() {
         for message in [
             Message::CalendarModeSelected(true),
             Message::CalendarMonthViewSelected,
-            Message::CalendarModeSelected(false),
             Message::CalendarDayShift(1),
-            Message::CalendarDaySelected(day),
         ] {
+            let mut state = State::new(Config::default(), Catalog::built_in());
+            state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+            state.calendar.connection = Connection::SignedIn;
+            state.calendar.last_sync = Some(Local::now());
             let _ = update(&mut state, message);
-            assert_eq!(state.calendar.sync, SyncState::Idle);
+            assert_eq!(state.calendar.sync, SyncState::Syncing);
         }
-        assert_eq!(state.calendar.events.len(), count);
-        // Automatic refresh is separate and does fetch when its interval is due.
-        let _ = update(&mut state, Message::CalendarAutoSyncRequested);
+    }
+
+    #[test]
+    fn empty_cached_days_are_fetched_again_on_navigation() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut snapshot = calendar::sample_snapshot();
+        snapshot.events.clear();
+        let day = snapshot.day;
+        state.calendar = calendar::Store::with_snapshot(snapshot);
+        state.calendar.connection = Connection::SignedIn;
+        state.calendar.last_sync = Some(Local::now());
+        let _ = update(&mut state, Message::CalendarDaySelected(day));
         assert_eq!(state.calendar.sync, SyncState::Syncing);
+    }
+
+    #[test]
+    fn navigation_during_a_fetch_loads_the_new_view_after_completion() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let snapshot = calendar::sample_snapshot();
+        state.calendar = calendar::Store::with_snapshot(snapshot.clone());
+        state.calendar.connection = Connection::SignedIn;
+        state.calendar.sync = SyncState::Syncing;
+        let _ = update(&mut state, Message::CalendarModeSelected(true));
+        assert!(!state.calendar_fetch_pending.is_empty());
+        let _ = update(&mut state, Message::CalendarSynced(Ok(snapshot)));
+        assert_eq!(state.calendar.sync, SyncState::Syncing);
+        assert!(state.calendar_fetch_pending.is_empty());
+    }
+
+    #[test]
+    fn an_empty_range_result_does_not_fetch_forever() {
+        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut snapshot = calendar::sample_snapshot();
+        state.calendar = calendar::Store::with_snapshot(snapshot.clone());
+        state.calendar.connection = Connection::SignedIn;
+        state.calendar.sync = SyncState::Syncing;
+        let _ = update(&mut state, Message::CalendarModeSelected(true));
+        let dates = state.calendar_dates();
+        snapshot.events.clear();
+        let revision = state.timeblocking.revision;
+        let _ = update(
+            &mut state,
+            Message::CalendarRangeSynced(revision, dates, Ok(snapshot)),
+        );
+        assert_eq!(state.calendar.sync, SyncState::Idle);
+        assert!(state.calendar_fetch_pending.is_empty());
     }
 
     #[test]

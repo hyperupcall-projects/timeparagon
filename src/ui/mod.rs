@@ -5,6 +5,7 @@
 //! That is what lets the same code look deliberate at 180px and at 900px.
 
 pub mod alarms;
+mod anchored_menu;
 pub mod brain_dump;
 pub mod calendar;
 pub mod controls;
@@ -54,7 +55,9 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
             let metrics = Metrics::of(Size::new(width, size.height));
             panes = panes.push(container(timeblocking::panel(state, &metrics)).width(width));
         }
-        if state.calendar.open_event.is_some() {
+        if state.calendar.open_event.is_some()
+            || state.calendar.draft.as_ref().is_some_and(|d| d.editor_open)
+        {
             let block = if state.timeblocking.block.is_some() {
                 state.config.views.time_block_width()
             } else {

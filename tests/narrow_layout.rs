@@ -723,7 +723,7 @@ fn opening_an_event_shows_its_google_details() {
         "Room 4",
         "Start Time",
         "End Time",
-        "Save changes",
+        "Save current event",
         "Does not repeat",
         "Ada",
         "Grace (accepted)",
@@ -1219,7 +1219,7 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     assert!(state.calendar.open_event.is_none());
     let mut ui = render(&state, Size::new(660.0, 720.0));
     for label in [
-        "Save changes",
+        "Save current event",
         "Start Time",
         "Delete",
         "Close",
@@ -1315,7 +1315,7 @@ fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error
     assert!(state.calendar.open_event.is_some());
 
     let mut ui = render(&state, Size::new(400.0 + 360.0, 900.0));
-    let block = ui.find("Save changes")?.bounds();
+    let block = ui.find("Save current event")?.bounds();
     let details = ui.find("Complete task")?.bounds();
 
     assert!(

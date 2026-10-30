@@ -60,10 +60,13 @@ The shared core crate also supplies these rules to the Dioxus app.
 
 ## Cached views and automatic sync
 
-Day, week, and month navigation reads the local cache immediately and never
-starts a Google refresh. A request already in progress can fill the cache for
-the view it fetched without navigating back or starting another request.
-Dates without cached data stay empty until a scheduled or manual refresh.
+Day, week, and month navigation reads the local cache immediately. If any
+visible day has missing or empty calendar data, it fetches the displayed range
+without waiting for the automatic refresh interval. Shared task backlog entries
+do not count as loaded calendar data. Populated cached days keep using the cache.
+Navigation during a request queues a fetch for newly visible dates after that
+request finishes; late results do not move the view back. Empty results do not
+trigger a refresh loop, but revisiting an empty day fetches it again.
 
 Automatic refresh defaults to **one hour**. In **Settings → Google Calendar →
 Automatic sync**, choose an interval from one minute to 24 hours. Existing saved

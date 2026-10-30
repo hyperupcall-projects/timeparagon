@@ -117,6 +117,8 @@ struct CalendarListEntry {
 
 #[derive(Debug, Deserialize)]
 struct EventList {
+    #[serde(default, rename = "defaultReminders")]
+    default_reminders: Vec<super::event_options::Reminder>,
     #[serde(default)]
     items: Vec<EventEntry>,
     #[serde(default, rename = "nextPageToken")]
@@ -125,6 +127,8 @@ struct EventList {
 
 #[derive(Debug, Default, Deserialize)]
 struct EventEntry {
+    #[serde(flatten)]
+    options: super::event_options::EventOptions,
     #[serde(default)]
     id: String,
     #[serde(default)]
@@ -440,6 +444,7 @@ fn fetch_events(
         let list: EventList = get(&url, access_token)?;
 
         for mut entry in list.items {
+            entry.options.default_reminders = list.default_reminders.clone();
             migrate_calendar_metadata(access_token, &calendar.id, &mut entry)?;
             if entry.status.as_deref() == Some("cancelled") {
                 continue;
@@ -562,6 +567,7 @@ fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec
         }
         let page: EventList = get(&url, access_token)?;
         for mut entry in page.items {
+            entry.options.default_reminders = page.default_reminders.clone();
             migrate_calendar_metadata(access_token, &calendar.id, &mut entry)?;
             if entry.status.as_deref() != Some("cancelled") {
                 if let Some(event) = parse_event(entry, calendar, Local::now().date_naive()) {
@@ -614,6 +620,7 @@ pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<Ha
         }
         let page: EventList = get(&url, access_token)?;
         for mut entry in page.items {
+            entry.options.default_reminders = page.default_reminders.clone();
             migrate_calendar_metadata(access_token, &calendar_id, &mut entry)?;
             if entry.status.as_deref() != Some("cancelled")
                 && let Some(habit) = parse_habit(entry, &calendar_id)
@@ -1256,7 +1263,8 @@ pub fn fetch_event(access_token: &str, original: &Event, id: &str) -> Result<Eve
         urlencoding::encode(&original.calendar_id),
         urlencoding::encode(id)
     );
-    let entry: EventEntry = get(&url, access_token)?;
+    let mut entry: EventEntry = get(&url, access_token)?;
+    entry.options.default_reminders = original.details.options.default_reminders.clone();
     let calendar = Calendar {
         id: original.calendar_id.clone(),
         name: String::new(),
@@ -1281,17 +1289,48 @@ pub fn patch_event(
     projects: &[u64],
     all_day: bool,
     labels: &[String],
+    options: Option<&super::event_options::EventOptions>,
 ) -> Result<(), String> {
     let url = format!(
         "{EVENTS}/{}/events/{}",
         urlencoding::encode(calendar_id),
         urlencoding::encode(event_id),
     );
+    let body = event_patch_body(
+        title,
+        description,
+        color_id,
+        start,
+        end,
+        recurrence,
+        projects,
+        all_day,
+        labels,
+        options,
+    )?;
+    patch(&url, access_token, &body.to_string(), "Google Calendar")
+}
+
+fn event_patch_body(
+    title: &str,
+    description: &str,
+    color_id: Option<&str>,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+    recurrence: Option<&[String]>,
+    projects: &[u64],
+    all_day: bool,
+    labels: &[String],
+    options: Option<&super::event_options::EventOptions>,
+) -> Result<serde_json::Value, String> {
     let mut body = serde_json::json!({
         "summary": title,
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
         "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
     });
+    if let Some(options) = options {
+        options.write(&mut body)?;
+    }
     body["description"] = serde_json::Value::String(description.to_owned());
     super::projects::write(&mut body, projects)?;
     body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
@@ -1317,7 +1356,280 @@ pub fn patch_event(
         );
     }
 
-    patch(&url, access_token, &body.to_string(), "Google Calendar")
+    Ok(body)
+}
+
+/// Writes a single occurrence, its whole series, or a new series from here.
+pub fn save_event_scope(
+    access_token: &str,
+    original: &Event,
+    draft: &super::EditDraft,
+    scope: super::SaveScope,
+    description: &str,
+    color_id: Option<&str>,
+) -> Result<(), String> {
+    use super::SaveScope;
+    let url = format!(
+        "{EVENTS}/{}/events",
+        urlencoding::encode(&draft.calendar_id)
+    );
+    let instance_url = format!("{url}/{}", urlencoding::encode(&original.id));
+    let instance: serde_json::Value = get(&instance_url, access_token)?;
+    let series_id = instance["recurringEventId"].as_str();
+    let recurrence = draft.recurrence_lines()?;
+    let mut changes = event_patch_body(
+        &draft.title,
+        description,
+        color_id,
+        draft.start,
+        draft.end,
+        if series_id.is_none() {
+            Some(&recurrence)
+        } else {
+            None
+        },
+        &draft.projects.ids,
+        draft.all_day,
+        &draft.labels,
+        Some(&draft.options),
+    )?;
+    if scope == SaveScope::Current || series_id.is_none() {
+        return patch(
+            &instance_url,
+            access_token,
+            &changes.to_string(),
+            "Google Calendar",
+        );
+    }
+    let master_url = format!("{url}/{}", urlencoding::encode(series_id.unwrap()));
+    let master: serde_json::Value = get(&master_url, access_token)?;
+    let master_start = json_event_start(&master["start"])?;
+    let boundary = json_event_start(&instance["originalStartTime"])?;
+    let all = scope == SaveScope::All || boundary <= master_start;
+    let original_lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
+        .map_err(|error| format!("Could not read series recurrence: {error}"))?;
+    let mut future_lines = if draft.recurrence_changed {
+        recurrence
+    } else {
+        original_lines.clone()
+    };
+    let mut past_lines = Vec::new();
+    if !all {
+        let prior_count = if original_lines.iter().any(|line| line.contains("COUNT=")) {
+            count_prior_instances(access_token, &master_url, boundary)?
+        } else {
+            0
+        };
+        let split = split_recurrence(&original_lines, boundary, prior_count, original.all_day)?;
+        past_lines = split.0;
+        if !draft.recurrence_changed {
+            future_lines = split.1;
+        }
+    }
+    changes["recurrence"] = serde_json::json!(future_lines);
+    let start = if scope == SaveScope::All {
+        Local
+            .from_local_datetime(
+                &(master_start.naive_local()
+                    + (draft.start.naive_local() - original.start.naive_local())),
+            )
+            .earliest()
+            .ok_or("The new series time does not exist in this timezone")?
+    } else {
+        draft.start
+    };
+    let end = start + (draft.end - draft.start);
+    if draft.all_day {
+        changes["start"] = serde_json::json!({"date": start.date_naive().to_string()});
+        changes["end"] = serde_json::json!({"date": end.date_naive().to_string()});
+    } else {
+        // A recurring event needs an IANA zone to keep its wall time over DST.
+        let zone = master["start"]["timeZone"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into()));
+        changes["start"] = serde_json::json!({"dateTime": start.to_rfc3339(), "timeZone": zone});
+        changes["end"] = serde_json::json!({"dateTime": end.to_rfc3339(), "timeZone": zone});
+    }
+    // Preserve private metadata belonging to other features and integrations.
+    let mut properties = master["extendedProperties"].clone();
+    if !properties.is_object() {
+        properties = serde_json::json!({});
+    }
+    for (key, value) in changes["extendedProperties"]["private"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        properties["private"][key] = value.clone();
+    }
+    changes["extendedProperties"] = properties;
+    if all {
+        return patch(
+            &master_url,
+            access_token,
+            &changes.to_string(),
+            "Google Calendar",
+        );
+    }
+    // Clone writable fields so guests, location, reminders and conferencing survive.
+    let mut replacement = master.clone();
+    for key in [
+        "id",
+        "etag",
+        "kind",
+        "htmlLink",
+        "created",
+        "updated",
+        "iCalUID",
+        "sequence",
+        "organizer",
+        "creator",
+        "recurringEventId",
+        "originalStartTime",
+        "hangoutLink",
+        "status",
+    ] {
+        replacement.as_object_mut().unwrap().remove(key);
+    }
+    for (key, value) in changes.as_object().unwrap() {
+        replacement[key] = value.clone();
+    }
+    let response = post(
+        &url,
+        access_token,
+        &replacement.to_string(),
+        "Google Calendar",
+    )?;
+    let created: CreatedEvent =
+        serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    if created.id.is_empty() {
+        return Err("Google Calendar did not return the new series".into());
+    }
+    let truncated = serde_json::json!({"recurrence": past_lines});
+    if let Err(error) = patch(
+        &master_url,
+        access_token,
+        &truncated.to_string(),
+        "Google Calendar",
+    ) {
+        if let Err(rollback) = delete_event(access_token, &draft.calendar_id, &created.id) {
+            return Err(format!(
+                "{error}. Could not remove the replacement series: {rollback}. Refresh before retrying."
+            ));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn json_event_start(value: &serde_json::Value) -> Result<DateTime<Local>, String> {
+    if let Some(time) = value["dateTime"].as_str() {
+        return DateTime::parse_from_rfc3339(time)
+            .map(|time| time.with_timezone(&Local))
+            .map_err(|error| error.to_string());
+    }
+    let date = value["date"]
+        .as_str()
+        .ok_or("Google Calendar did not return the original event time")?;
+    let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|error| error.to_string())?;
+    Local
+        .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+        .earliest()
+        .ok_or_else(|| "The event date does not exist in this timezone".into())
+}
+
+fn count_prior_instances(
+    token: &str,
+    master_url: &str,
+    boundary: DateTime<Local>,
+) -> Result<u64, String> {
+    let mut count = 0;
+    let mut page = String::new();
+    loop {
+        let url = format!(
+            "{master_url}/instances?showDeleted=true&maxResults=2500&pageToken={}",
+            urlencoding::encode(&page)
+        );
+        let response: serde_json::Value = get(&url, token)?;
+        for event in response["items"].as_array().into_iter().flatten() {
+            if json_event_start(&event["originalStartTime"])? < boundary {
+                count += 1;
+            }
+        }
+        match response["nextPageToken"].as_str() {
+            Some(next) => page = next.to_owned(),
+            None => return Ok(count),
+        }
+    }
+}
+
+/// Trim the old RRULE and retain the remaining COUNT for the replacement.
+fn split_recurrence(
+    lines: &[String],
+    boundary: DateTime<Local>,
+    prior_count: u64,
+    all_day: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    if lines
+        .iter()
+        .filter(|line| line.starts_with("RRULE:"))
+        .count()
+        != 1
+        || (lines.iter().any(|line| line.contains("COUNT="))
+            && lines.iter().any(|line| line.starts_with("EXDATE")))
+    {
+        return Err(
+            "This custom series cannot be split here. Use Save current event or Save all events."
+                .into(),
+        );
+    }
+    let mut past = Vec::new();
+    let mut future = Vec::new();
+    for line in lines {
+        if line.starts_with("EXDATE") {
+            // Exclusions outside a series' range have no effect.
+            past.push(line.clone());
+            future.push(line.clone());
+            continue;
+        }
+        let rule = line.strip_prefix("RRULE:").ok_or(
+            "This custom series cannot be split here. Use Save current event or Save all events.",
+        )?;
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for part in rule.split(';') {
+            if let Some(count) = part.strip_prefix("COUNT=") {
+                let count: u64 = count.parse().map_err(|_| "Invalid series repeat count")?;
+                let remaining = count
+                    .checked_sub(prior_count)
+                    .filter(|count| *count > 0)
+                    .ok_or("Could not determine the remaining series repeat count")?;
+                new.push(format!("COUNT={remaining}"));
+            } else {
+                new.push(part.to_owned());
+            }
+            if !part.starts_with("COUNT=") && !part.starts_with("UNTIL=") {
+                old.push(part.to_owned());
+            }
+        }
+        let until = if all_day {
+            boundary
+                .date_naive()
+                .pred_opt()
+                .ok_or("Invalid series date")?
+                .format("%Y%m%d")
+                .to_string()
+        } else {
+            (boundary.with_timezone(&Utc) - chrono::Duration::seconds(1))
+                .format("%Y%m%dT%H%M%SZ")
+                .to_string()
+        };
+        old.push(format!("UNTIL={until}"));
+        past.push(format!("RRULE:{}", old.join(";")));
+        future.push(format!("RRULE:{}", new.join(";")));
+    }
+    Ok((past, future))
 }
 
 /// Creates a timed event on Google and returns its id.
@@ -1335,6 +1647,7 @@ pub fn insert_event(
     end: DateTime<Local>,
     recurrence: &[String],
     projects: &[u64],
+    options: Option<&super::event_options::EventOptions>,
 ) -> Result<String, String> {
     let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
     let mut body = serde_json::json!({
@@ -1342,6 +1655,9 @@ pub fn insert_event(
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
         "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
     });
+    if let Some(options) = options {
+        options.write(&mut body)?;
+    }
     body["description"] = serde_json::Value::String(description.to_owned());
     super::projects::write(&mut body, projects)?;
     if let Some(color_id) = color_id {
@@ -1364,6 +1680,54 @@ pub fn insert_event(
         return Err("Google Calendar did not return the new event".to_owned());
     }
     Ok(created.id)
+}
+
+/// Delete the selected instance, truncate its series, or delete its master.
+pub fn delete_event_scope(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    scope: super::SaveScope,
+) -> Result<(), String> {
+    use super::SaveScope;
+    if scope == SaveScope::Current {
+        return delete_event(access_token, calendar_id, event_id);
+    }
+    let base = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
+    let instance_url = format!("{base}/{}", urlencoding::encode(event_id));
+    let instance: serde_json::Value = get(&instance_url, access_token)?;
+    let Some(series_id) = instance["recurringEventId"].as_str() else {
+        return delete_event(access_token, calendar_id, event_id);
+    };
+    if scope == SaveScope::All {
+        return delete_event(access_token, calendar_id, series_id);
+    }
+    let master_url = format!("{base}/{}", urlencoding::encode(series_id));
+    let master: serde_json::Value = get(&master_url, access_token)?;
+    let boundary = json_event_start(&instance["originalStartTime"])?;
+    if boundary <= json_event_start(&master["start"])? {
+        return delete_event(access_token, calendar_id, series_id);
+    }
+    let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
+        .map_err(|error| format!("Could not read series recurrence: {error}"))?;
+    let prior_count = if lines.iter().any(|line| line.contains("COUNT=")) {
+        count_prior_instances(access_token, &master_url, boundary)?
+    } else {
+        0
+    };
+    let (past, _) = split_recurrence(
+        &lines,
+        boundary,
+        prior_count,
+        master["start"]["date"].is_string(),
+    )
+    .map_err(|_| "This custom series cannot be split here. Use Delete or Delete all events.")?;
+    patch(
+        &master_url,
+        access_token,
+        &serde_json::json!({"recurrence": past}).to_string(),
+        "Google Calendar",
+    )
 }
 
 /// Deletes a single event on Google. A successful call returns `204 No
@@ -1524,6 +1888,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
     };
 
     crate::calendar::Details {
+        options: entry.options.clone(),
         task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
         task_data: None,
@@ -1806,6 +2171,44 @@ pub fn color_or_default(value: Option<Color>) -> Color {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn splitting_a_series_keeps_past_dates_and_the_remaining_count() {
+        let boundary = DateTime::parse_from_rfc3339("2026-10-30T09:00:00-07:00")
+            .unwrap()
+            .with_timezone(&Local);
+        let (past, future) =
+            super::split_recurrence(&["RRULE:FREQ=DAILY;COUNT=10".into()], boundary, 4, false)
+                .unwrap();
+        assert_eq!(past, ["RRULE:FREQ=DAILY;UNTIL=20261030T155959Z"]);
+        assert_eq!(future, ["RRULE:FREQ=DAILY;COUNT=6"]);
+    }
+
+    #[test]
+    fn splitting_an_all_day_series_uses_a_date_until_and_preserves_the_end() {
+        let boundary = super::json_event_start(&serde_json::json!({"date": "2026-10-30"})).unwrap();
+        let lines = vec![
+            "RRULE:FREQ=WEEKLY;UNTIL=20261231".into(),
+            "EXDATE;VALUE=DATE:20261106".into(),
+        ];
+        let (past, future) = super::split_recurrence(&lines, boundary, 0, true).unwrap();
+        assert_eq!(past[0], "RRULE:FREQ=WEEKLY;UNTIL=20261029");
+        assert_eq!(future, lines);
+        assert_eq!(past[1], lines[1]);
+    }
+
+    #[test]
+    fn unsupported_custom_splits_fail_before_writing() {
+        let boundary = Local::now();
+        assert!(
+            super::split_recurrence(&["RDATE:20261101T090000Z".into()], boundary, 0, false)
+                .is_err()
+        );
+        assert!(
+            super::split_recurrence(&["RRULE:FREQ=DAILY;COUNT=3".into()], boundary, 3, false)
+                .is_err()
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1932,6 +2335,82 @@ mod tests {
         let event = parse_event(entry, &calendar, day).unwrap();
         assert!(!event.all_day);
         assert_eq!(event.color, colors::event("11").unwrap());
+    }
+
+    #[test]
+    fn event_options_keep_inherited_notifications_when_customizing() {
+        use super::super::event_options::Action;
+        let list: EventList = serde_json::from_value(serde_json::json!({
+            "defaultReminders": [{"method":"popup", "minutes":30}, {"method":"email", "minutes":1440}],
+            "items": [{"reminders":{"useDefault":true}}]
+        })).unwrap();
+        let mut options = list.items.into_iter().next().unwrap().options;
+        options.default_reminders = list.default_reminders;
+        options.update(Action::Add);
+        assert_eq!(options.reminders.overrides.len(), 3);
+        let mut body = serde_json::json!({});
+        options.write(&mut body).unwrap();
+        assert_eq!(body["reminders"]["overrides"][0]["minutes"], 30);
+        assert_eq!(body["reminders"]["useDefault"], false);
+        assert!(body.get("default_reminders").is_none());
+    }
+
+    #[test]
+    fn event_options_survive_google_sync_cache_edit_and_patch() {
+        use super::super::event_options::{Action, Availability, Visibility};
+        let entry: EventEntry = serde_json::from_value(serde_json::json!({
+            "reminders": {"useDefault": false, "overrides": [
+                {"method": "popup", "minutes": 10},
+                {"method": "email", "minutes": 1440}
+            ]},
+            "transparency": "transparent", "visibility": "private"
+        }))
+        .unwrap();
+        let cached = serde_json::to_string(&details_of(&entry)).unwrap();
+        let mut event = super::super::sample_snapshot().events.remove(0);
+        event.details = serde_json::from_str(&cached).unwrap();
+        let mut draft = super::super::EditDraft::from_event(&event);
+        assert_eq!(draft.options.transparency, Availability::Free);
+        assert_eq!(draft.options.visibility, Visibility::Private);
+        assert_eq!(draft.options.reminders.overrides.len(), 2);
+        let body = event_patch_body(
+            &draft.title,
+            &draft.description,
+            None,
+            draft.start,
+            draft.end,
+            None,
+            &[],
+            false,
+            &[],
+            Some(&draft.options),
+        )
+        .unwrap();
+        assert_eq!(body["reminders"]["overrides"][1]["minutes"], 1440);
+        assert_eq!(body["reminders"]["overrides"][1]["method"], "email");
+        assert_eq!(body["transparency"], "transparent");
+        assert_eq!(body["visibility"], "private");
+        draft.options.update(Action::Remove(1));
+        draft.options.update(Action::Remove(0));
+        let mut body = serde_json::json!({});
+        draft.options.write(&mut body).unwrap();
+        assert_eq!(
+            body["reminders"],
+            serde_json::json!({"useDefault": false, "overrides": []})
+        );
+        draft.options.update(Action::Defaults(true));
+        draft
+            .options
+            .update(Action::Availability(Availability::Busy));
+        draft
+            .options
+            .update(Action::Visibility(Visibility::Default));
+        draft.options.write(&mut body).unwrap();
+        assert_eq!(body["reminders"], serde_json::json!({"useDefault": true}));
+        assert_eq!(body["transparency"], "opaque");
+        assert_eq!(body["visibility"], "default");
+        let old: super::super::Details = serde_json::from_str("{}").unwrap();
+        assert!(old.options.reminders.use_default);
     }
 
     #[test]

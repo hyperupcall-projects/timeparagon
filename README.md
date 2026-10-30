@@ -35,8 +35,9 @@ There's week and month views, just like any other calendar app:
 		- Based on search or query; omit private event details (TODO).
 - Manage your time:
 	- Events
-		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, and project name.
+		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
 		- Integrates with meeting software like Zoom and Google Meet.
+			- See people/contact info (TODO).
 		- Integrates with guest/event/RSVP going/not going feature (TODO)
 		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP).
 	- Time blocks
@@ -72,7 +73,7 @@ There's week and month views, just like any other calendar app:
 		- But, also keep track of subtasks (TODO)?
 		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
 - Notes (TODO)
-	- Associate notes and files with events, tasks, goals, objectives, and projects.
+	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
 - Autolaunchers
 	- Save configure presets for launching and positioning application windows (TODO).
@@ -86,7 +87,10 @@ There's week and month views, just like any other calendar app:
 	- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
 	- View as list, kanban, or calendar (TODO).
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
-- Stores data in Google Calendar, Tasks and Drive to get cross-device syncing for free.
+- People (TODO).
+	- Associate people with events, tasks, and projects (TODO).
+	- One-click contact methos for email, Slack (TODO).
+- Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
 	- Uses local database as cache to keep UI performant/responsive.
 - Activity monitoring
 	- Project allocation
@@ -118,11 +122,9 @@ cargo run -p timeslay-dioxus
 
 ## Roadmap
 
-- when editing tasks/calendar events, edit current/current + future/all events
 - meal planning/grocery list
 	- lists in general
 - meeting agenda
-- Reminders (use Google Calendar)
 - Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
 - People/contacts
 - Start/shutdown/review rituals for day/week/month

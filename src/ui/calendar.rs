@@ -4,8 +4,8 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
 use iced::font::Weight;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
-    Space, button, canvas as canvas_widget, column, container, mouse_area, responsive, row,
-    scrollable, stack, text, text_input, toggler,
+    Space, button, canvas as canvas_widget, checkbox, column, container, mouse_area, pick_list,
+    responsive, row, scrollable, stack, text, text_input, toggler,
 };
 use iced::{
     Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -61,7 +61,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     if let Some(all_day) = all_day_row(state, metrics) {
         body = body.push(all_day);
     }
-    let body = pointer_watch(body.push(grid));
+    let body = body.push(grid);
 
     let mut content = column![heading_with_alarm_hint(state, metrics), body]
         .spacing(metrics.spacing)
@@ -77,7 +77,12 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // The root stays a stack whether or not a card is open. Swapping the root
     // widget throws away the day grid's scroll state, which jumps the bar.
     // Event details are no longer an overlay: they are a pane beside the view.
-    let overlay = if state.calendar.draft.is_some() {
+    let overlay = if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|d| !d.editor_open)
+    {
         draft_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
@@ -89,7 +94,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         iced::widget::Space::new().width(0.0).height(0.0).into()
     };
 
-    stack![content, overlay].into()
+    pointer_watch(stack![content, overlay])
 }
 
 /// A month overview with whole Monday–Sunday weeks. Each date opens its
@@ -239,9 +244,13 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     };
     let mut content = column![
         heading,
-        text("Select a date to open its timeline.")
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
+        text(if state.calendar_loading() {
+            "Loading..."
+        } else {
+            "Select a date to open its timeline."
+        })
+        .size(metrics.label() - 1.0)
+        .style(text::secondary),
         grid,
     ]
     .spacing(metrics.spacing)
@@ -298,7 +307,12 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .into(),
         );
     }
-    let overlay = if state.calendar.draft.is_some() {
+    let overlay = if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|d| !d.editor_open)
+    {
         draft_overlay(state, metrics)
     } else if state.calendar.month_open {
         month_overlay(state, metrics)
@@ -381,7 +395,9 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .width(Fill)
     .height(Fill);
 
-    let panel_open = state.calendar.open_event.is_some() || state.timeblocking.block.is_some();
+    let draft_open = state.calendar.draft.as_ref().is_some_and(|d| d.editor_open);
+    let panel_open =
+        draft_open || state.calendar.open_event.is_some() || state.timeblocking.block.is_some();
     let mut grid_layers: Vec<Element<'a, Message>> = vec![grid.into()];
     if panel_open && let Some(index) = days.iter().position(|day| *day == state.calendar.day) {
         let viewport = (metrics.size.width - metrics.padding * 2.0).max(1.0);
@@ -391,7 +407,9 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         let x = index as f32 * width - scroll_x;
         let left = x.clamp(0.0, viewport);
         let right = (x + width).clamp(0.0, viewport);
-        let dismiss = if state.calendar.open_event.is_some() {
+        let dismiss = if draft_open {
+            Message::EventDraftCancelled
+        } else if state.calendar.open_event.is_some() {
             Message::EventClosed
         } else {
             Message::TimeBlocking(crate::timeblocking::Action::Close)
@@ -418,7 +436,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .into(),
         );
 
-        let requested_width = if state.calendar.open_event.is_some() {
+        let requested_width = if draft_open || state.calendar.open_event.is_some() {
             state.config.views.detail_width()
         } else {
             state.config.views.time_block_width()
@@ -438,7 +456,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             (left - panel_width).max(0.0)
         };
         let pane = responsive(move |size| {
-            if state.calendar.open_event.is_some() {
+            if draft_open || state.calendar.open_event.is_some() {
                 let height = size.height.max(480.0);
                 let panel_metrics = Metrics::of(Size::new(panel_width, height));
                 scrollable(
@@ -474,11 +492,9 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
     let mut content = column![
         heading_with_alarm_hint(state, metrics),
-        pointer_watch(
-            iced::widget::Stack::with_children(grid_layers)
-                .width(Fill)
-                .height(Fill)
-        ),
+        iced::widget::Stack::with_children(grid_layers)
+            .width(Fill)
+            .height(Fill),
     ]
     .spacing(metrics.spacing)
     .padding(metrics.padding)
@@ -487,7 +503,12 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     if let Some(dismiss) = dismiss_bar(state, metrics) {
         content = content.push(dismiss);
     }
-    let overlay = if state.calendar.draft.is_some() {
+    let overlay = if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|d| !d.editor_open)
+    {
         draft_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
@@ -498,7 +519,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     } else {
         Space::new().width(0.0).height(0.0).into()
     };
-    stack![content, overlay].into()
+    pointer_watch(stack![content, overlay])
 }
 
 /// The top of the calendar: the month picker, the day in view and the way
@@ -686,6 +707,13 @@ fn header_offset(metrics: &Metrics) -> f32 {
 /// Keep the heading's position stable when alarm setting mode changes.
 fn heading_with_alarm_hint<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut hint = column![];
+    if state.calendar_loading() {
+        hint = hint.push(
+            text("Loading...")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
     if state.alarms.mode {
         hint = hint.push(
             text("Click a time to set an alarm. Esc cancels.")
@@ -1548,11 +1576,20 @@ pub fn event_editor<'a>(
     let mut body = column![
         title,
         super::description::preview(&event.id, &draft.description, metrics),
-        event_projects(state, &draft.projects, metrics, Message::EventEditProjects),
-        start,
     ]
     .spacing(metrics.spacing)
     .width(Fill);
+    for meeting in super::meetings::links(event) {
+        body = body.push(super::meetings::join_button(meeting, metrics));
+    }
+    body = body
+        .push(event_projects(
+            state,
+            &draft.projects,
+            metrics,
+            Message::EventEditProjects,
+        ))
+        .push(start);
     if event.details.habit {
         body = body.push(super::recurrence::editor(
             &draft.rule,
@@ -1615,19 +1652,260 @@ pub fn event_editor<'a>(
     }
 
     if state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
-        body = body.push(
-            button(
-                text("Save changes")
-                    .size(metrics.label())
-                    .center()
-                    .width(Fill),
-            )
-            .width(Fill)
-            .on_press(Message::EventEditSaveRequested)
-            .style(super::controls::primary),
-        );
+        if let Some(draft) = &state.calendar.edit_draft {
+            body = body.push(event_options(
+                &draft.options,
+                metrics,
+                Message::EventEditOptions,
+            ));
+        }
+        body = body.push(event_save_control(state, event, metrics));
     }
     body.into()
+}
+
+/// Google-style notification rows followed by availability and visibility.
+fn event_options<'a>(
+    options: &'a calendar::event_options::EventOptions,
+    metrics: &Metrics,
+    message: fn(calendar::event_options::Action) -> Message,
+) -> Element<'a, Message> {
+    use calendar::event_options::{Action, Availability, Method, Unit, Visibility};
+    let size = metrics.label();
+    let mut notifications = column![
+        text("Notifications").size(size).style(text::secondary),
+        checkbox(options.reminders.use_default)
+            .label("Use calendar default notifications")
+            .on_toggle(move |v| message(Action::Defaults(v)))
+            .text_size(size),
+    ]
+    .spacing(8)
+    .width(Fill);
+    if options.reminders.use_default {
+        for reminder in &options.default_reminders {
+            notifications = notifications.push(
+                text(format!(
+                    "{} · {} minutes before",
+                    reminder.method, reminder.minutes
+                ))
+                .size(size)
+                .style(text::secondary),
+            );
+        }
+    }
+    if !options.reminders.use_default {
+        if options.reminders.overrides.is_empty() {
+            notifications =
+                notifications.push(text("No notifications").size(size).style(text::secondary));
+        }
+        for (i, reminder) in options.reminders.overrides.iter().enumerate() {
+            notifications = notifications.push(
+                column![
+                    row![
+                        pick_list(
+                            [Method::Notification, Method::Email],
+                            Some(reminder.method),
+                            move |v| message(Action::Method(i, v))
+                        )
+                        .text_size(size)
+                        .width(Fill),
+                        button(text("×").size(size))
+                            .on_press(message(Action::Remove(i)))
+                            .style(button::text),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    row![
+                        text_input(
+                            "10",
+                            &reminder.input.clone().unwrap_or_else(|| (reminder.minutes
+                                / reminder.unit.factor())
+                            .to_string())
+                        )
+                        .on_input(move |v| message(Action::Minutes(i, v)))
+                        .size(size)
+                        .width(80),
+                        pick_list(
+                            [Unit::Minutes, Unit::Hours, Unit::Days, Unit::Weeks],
+                            Some(reminder.unit),
+                            move |v| message(Action::Unit(i, v))
+                        )
+                        .text_size(size),
+                        text("before").size(size),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                ]
+                .spacing(6),
+            );
+        }
+    }
+    notifications = notifications.push(
+        button(text("Add notification").size(size))
+            .on_press_maybe((options.reminders.overrides.len() < 5).then_some(message(Action::Add)))
+            .style(button::text),
+    );
+    column![
+        notifications,
+        text("Availability").size(size).style(text::secondary),
+        pick_list(
+            [Availability::Busy, Availability::Free],
+            Some(options.transparency),
+            move |v| message(Action::Availability(v))
+        )
+        .text_size(size)
+        .width(Fill),
+        text("Visibility").size(size).style(text::secondary),
+        pick_list(
+            [Visibility::Default, Visibility::Public, Visibility::Private],
+            Some(options.visibility),
+            move |v| message(Action::Visibility(v))
+        )
+        .text_size(size)
+        .width(Fill),
+    ]
+    .spacing(10)
+    .width(Fill)
+    .into()
+}
+
+/// Split save button with independent, generously sized pointer targets.
+fn event_save_control<'a>(
+    state: &'a State,
+    event: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    event_scope_control(state, event, metrics, false)
+}
+
+fn event_scope_control<'a>(
+    state: &'a State,
+    event: &Event,
+    metrics: &Metrics,
+    deleting: bool,
+) -> Element<'a, Message> {
+    if event.details.habit && !deleting {
+        return button(
+            text(if state.habits.busy {
+                "Saving…"
+            } else {
+                "Save changes"
+            })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+        )
+        .width(Fill)
+        .on_press_maybe((!state.habits.busy).then_some(Message::EventEditSaveRequested))
+        .style(super::controls::primary)
+        .into();
+    }
+    let saving = state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .is_some_and(|draft| draft.saving);
+    let toggle = if deleting {
+        Message::EventEditDeleteMenuToggled
+    } else {
+        Message::EventEditSaveMenuToggled
+    };
+    let request = if deleting {
+        Message::EventDeleteRequested(event.id.clone())
+    } else {
+        Message::EventEditSaveRequested
+    };
+    let scoped = |scope| {
+        if deleting {
+            Message::EventDeleteScoped(event.id.clone(), scope)
+        } else {
+            Message::EventEditSaveScoped(scope)
+        }
+    };
+    let height = 40.0;
+    let main = button(
+        text(if deleting {
+            "Delete"
+        } else if saving {
+            "Saving…"
+        } else {
+            "Save current event"
+        })
+        .size(metrics.label())
+        .center()
+        .width(Fill),
+    )
+    .width(Fill)
+    .height(height)
+    .on_press_maybe((!saving).then_some(request))
+    .style(super::view_half_style(!deleting));
+    let arrow = button(text("▾").size(metrics.label()).center().width(Fill))
+        .width(48.0)
+        .height(height)
+        .on_press_maybe((!saving).then_some(toggle.clone()))
+        .style(super::view_half_style(!deleting));
+    let divider = container(Space::new().height(24.0))
+        .width(1.0)
+        .style(|theme: &Theme| container::Style {
+            background: Some(
+                theme
+                    .extended_palette()
+                    .primary
+                    .base
+                    .text
+                    .scale_alpha(0.35)
+                    .into(),
+            ),
+            ..Default::default()
+        });
+    let split = container(
+        row![main, divider, arrow]
+            .spacing(0)
+            .align_y(Alignment::Center),
+    )
+    .clip(true)
+    .style(super::view_button_style(!deleting));
+    let open = state.calendar.edit_draft.as_ref().is_some_and(|draft| {
+        if deleting {
+            draft.delete_menu_open
+        } else {
+            draft.save_menu_open
+        }
+    });
+    let choices = column![
+        button(
+            text(if deleting {
+                "Delete current and future events"
+            } else {
+                "Save current and future events"
+            })
+            .size(metrics.label())
+            .width(Fill)
+        )
+        .width(Fill)
+        .padding(10)
+        .on_press(scoped(calendar::SaveScope::CurrentAndFuture))
+        .style(super::controls::secondary),
+        button(
+            text(if deleting {
+                "Delete all events"
+            } else {
+                "Save all events"
+            })
+            .size(metrics.label())
+            .width(Fill)
+        )
+        .width(Fill)
+        .padding(10)
+        .on_press(scoped(calendar::SaveScope::All))
+        .style(super::controls::secondary),
+    ]
+    .spacing(4);
+    let menu = container(choices)
+        .padding(6)
+        .width(Fill)
+        .style(super::controls::surface);
+    super::anchored_menu::anchored_menu(split, menu, open, toggle)
 }
 
 /// The same add/search/remove flow used for task projects, staged until Save.
@@ -1746,6 +2024,9 @@ fn event_projects<'a>(
 /// column of its own rather than over the calendar, so the day grid and the
 /// backlog both keep their full width.
 pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    if state.calendar.draft.as_ref().is_some_and(|d| d.editor_open) {
+        return draft_editor(state, metrics);
+    }
     let Some(event) = state
         .calendar
         .open_event
@@ -1800,23 +2081,13 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         }
     }
     if !is_task(event) {
-        body = body.push(
-            button(
-                text(if new_habit && state.habits.busy {
-                    "Saving…"
-                } else {
-                    "Save changes"
-                })
-                .size(metrics.label())
-                .center()
-                .width(Fill),
-            )
-            .width(Fill)
-            .on_press_maybe(
-                (!new_habit || !state.habits.busy).then_some(Message::EventEditSaveRequested),
-            )
-            .style(super::controls::primary),
-        );
+        if let Some(draft) = &state.calendar.edit_draft {
+            body = body.push(event_options(
+                &draft.options,
+                metrics,
+                Message::EventEditOptions,
+            ));
+        }
     }
     if !details.organizer.is_empty() {
         body = body.push(detail_line("Organizer", details.organizer.clone(), metrics));
@@ -1834,8 +2105,10 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         buttons.push(super::timeblocking::task_actions(state, event, metrics));
     }
 
-    for meeting in super::meetings::links(event) {
-        buttons.push(super::meetings::join_button(meeting, metrics));
+    if is_task(event) {
+        for meeting in super::meetings::links(event) {
+            buttons.push(super::meetings::join_button(meeting, metrics));
+        }
     }
     if let Some(source) = crate::integrations::source_in(&details.description) {
         buttons.push(
@@ -1850,6 +2123,12 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .style(crate::ui::controls::secondary)
             .into(),
         );
+    }
+    if !is_task(event) {
+        buttons.push(event_save_control(state, event, metrics));
+        if !new_habit {
+            buttons.push(event_scope_control(state, event, metrics, true));
+        }
     }
     // Tasks are managed here now; only events get a link back to Google.
     if !is_task(event) && !details.link.is_empty() {
@@ -1867,16 +2146,6 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .into(),
         );
     }
-    if !is_task(event) && !new_habit {
-        let id = event.id.clone();
-        buttons.push(
-            button(text("Delete").size(metrics.label()).center().width(Fill))
-                .width(Fill)
-                .on_press(Message::EventDeleteRequested(id))
-                .style(crate::ui::controls::secondary)
-                .into(),
-        );
-    }
     buttons.push(
         button(text("Close").size(metrics.label()).center().width(Fill))
             .width(Fill)
@@ -1888,7 +2157,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     // The actions are a fixed footer. The scroll is capped so the footer keeps
     // the room it needs, however long the description above it runs; the
     // buttons come first in the budget, so they can never be squeezed out.
-    let button_height = metrics.button;
+    let button_height = metrics.button.max(40.0);
     let button_count = buttons.len() + if event.is_task() { 3 } else { 0 };
     let reserved = button_height * button_count as f32
         + metrics.spacing * button_count.saturating_sub(1) as f32;
@@ -1939,7 +2208,12 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
     let title = if is_task {
         text("Are you sure you want to delete this task?").size(metrics.label() + 1.0)
     } else {
-        text("Delete this event?").size(metrics.label() + 1.0)
+        text(match state.calendar.pending_delete_scope {
+            calendar::SaveScope::Current => "Delete this event?",
+            calendar::SaveScope::CurrentAndFuture => "Delete this and future events?",
+            calendar::SaveScope::All => "Delete all events in this series?",
+        })
+        .size(metrics.label() + 1.0)
     };
     let event_title = text(event.title.clone())
         .size(metrics.label())
@@ -1975,7 +2249,11 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
                 text(if is_task {
                     "This removes the task from Google Tasks and its planned time."
                 } else {
-                    "This removes the event from Google Calendar."
+                    match state.calendar.pending_delete_scope {
+                        calendar::SaveScope::Current => "This removes the event from Google Calendar.",
+                        calendar::SaveScope::CurrentAndFuture => "This removes this event and future events in its series from Google Calendar.",
+                        calendar::SaveScope::All => "This removes every event in this series from Google Calendar.",
+                    }
                 })
                 .size(metrics.label()),
                 buttons
@@ -1994,24 +2272,11 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
     stack![dismiss, card].into()
 }
 
-/// The add-event popup, opened by a click or a drag on empty grid space.
-///
-/// It follows the shape of Google Calendar's own dialog: a title, the entry
-/// kind, the time, the calendar and a description, with Save at the foot. The
-/// kind switches between an ordinary event and a time block; a time block is
-/// always written to the app's TimeSlay calendar.
-fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+/// The complete creation form, shown in the details pane after choosing a type.
+fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(draft) = state.calendar.draft.as_ref() else {
         return iced::widget::Space::new().width(0.0).height(0.0).into();
     };
-
-    // Clicking outside the card puts the draft away, the way the menu closes.
-    let dismiss = mouse_area(
-        container(iced::widget::Space::new())
-            .width(Fill)
-            .height(Fill),
-    )
-    .on_press(Message::EventDraftCancelled);
 
     let header = row![
         text("New event").size(metrics.label() + 1.0).width(Fill),
@@ -2028,26 +2293,6 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
         .on_input(Message::EventDraftTitleChanged)
         .size(metrics.label() + 2.0)
         .width(Fill);
-
-    let kind_button = |label: &'static str, kind: calendar::DraftKind| {
-        let selected = draft.kind == kind;
-        button(text(label).size(metrics.label()).center())
-            .width(Fill)
-            .on_press(Message::EventDraftKindSelected(kind))
-            .style(if selected {
-                crate::ui::controls::primary
-            } else {
-                crate::ui::controls::secondary
-            })
-    };
-    let kinds: Element<'a, Message> = row![
-        kind_button("Event", calendar::DraftKind::Event),
-        kind_button("Time Block", calendar::DraftKind::TimeBlock),
-        kind_button("Habit", calendar::DraftKind::Habit),
-    ]
-    .spacing(6.0)
-    .width(Fill)
-    .into();
 
     let when = column![
         row![
@@ -2124,7 +2369,6 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     let fields = column![
         title,
-        kinds,
         when,
         draft_calendar_picker(state, metrics),
         event_projects(state, &draft.projects, metrics, Message::EventDraftProjects),
@@ -2136,37 +2380,103 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
             false,
             Message::EventDraftRecurrence,
         ),
+        event_options(&draft.options, metrics, Message::EventDraftOptions),
     ]
     .spacing(metrics.spacing)
     .width(Fill);
 
-    let panel = column![
-        header,
-        container(scrollable(fields).height(Length::Shrink))
-            .max_height((metrics.size.height - 150.0).max(80.0)),
-        actions,
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
-
-    let card = container(panel)
-        .padding(metrics.padding)
-        .width(Fill)
-        .style(crate::ui::controls::surface);
-
-    // Swallow presses on the card so a click on its blank area cannot fall
-    // through to the dismiss layer and close the draft.
-    let card = mouse_area(card).on_press(Message::Ignored);
-
-    let aligned = column![
-        iced::widget::Space::new().height(Fill),
-        container(card).padding(metrics.padding).width(Fill),
-        iced::widget::Space::new().height(Fill),
-    ]
+    container(
+        column![header, scrollable(fields).height(Fill), actions]
+            .spacing(metrics.spacing)
+            .height(Fill)
+            .width(Fill),
+    )
+    .padding(metrics.padding)
     .width(Fill)
-    .height(Fill);
+    .height(Fill)
+    .style(crate::ui::controls::surface)
+    .into()
+}
 
-    stack![dismiss, aligned].into()
+/// Only the title and type chooser float over the selected calendar range.
+fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(draft) = state.calendar.draft.as_ref() else {
+        return Space::new().into();
+    };
+    let weekly = state.screen == crate::app::Screen::Calendar && state.weekly;
+    let metrics = *metrics;
+    let overlay = responsive(move |size| {
+        let title = text_input("Add title", &draft.title)
+            .on_input(Message::EventDraftTitleChanged)
+            .size(metrics.label() + 2.0)
+            .width(Fill);
+        let kind_button = |label: &'static str, kind: calendar::DraftKind| {
+            let selected = draft.kind == kind;
+            button(text(label).size(metrics.label()).center())
+                .width(Fill)
+                .on_press(Message::EventDraftKindSelected(kind))
+                .style(if selected {
+                    crate::ui::controls::primary
+                } else {
+                    crate::ui::controls::secondary
+                })
+        };
+        let kinds: Element<'a, Message> = row![
+            kind_button("Event", calendar::DraftKind::Event),
+            kind_button("Time Block", calendar::DraftKind::TimeBlock),
+            kind_button("Habit", calendar::DraftKind::Habit),
+        ]
+        .spacing(6.0)
+        .width(Fill)
+        .into();
+
+        let card = mouse_area(
+            container(column![title, kinds].spacing(metrics.spacing))
+                .padding(metrics.padding)
+                .width(Fill)
+                .height(Fill)
+                .style(crate::ui::controls::surface),
+        )
+        .on_press(Message::Ignored);
+
+        let width = 340.0_f32.min((size.width - 16.0).max(1.0));
+        let height = (metrics.label() * 2.0 + 64.0).min(size.height);
+        let anchor = CREATE_ANCHOR.with(|a| a.get());
+        let root = ROOT_BOUNDS.with(|r| r.get());
+        let anchor = Rectangle {
+            x: anchor.x - root.x,
+            y: anchor.y - root.y,
+            ..anchor
+        };
+        let position = draft_position(anchor, size, Size::new(width, height), weekly);
+        container(container(card).width(width).height(height))
+            .padding(iced::Padding {
+                top: position.y,
+                left: position.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .width(Fill)
+            .height(Fill)
+            .into()
+    });
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+        .on_press(Message::EventDraftCancelled);
+    stack![dismiss, overlay].into()
+}
+
+fn draft_position(anchor: Rectangle, viewport: Size, card: Size, weekly: bool) -> Point {
+    let gap = 8.0;
+    let max_x = (viewport.width - card.width - gap).max(0.0);
+    let max_y = (viewport.height - card.height - gap).max(0.0);
+    let x = anchor.x.clamp(gap.min(max_x), max_x);
+    if anchor.y - gap - card.height >= gap {
+        Point::new(x, (anchor.y - gap - card.height).min(max_y))
+    } else if weekly && anchor.x - gap - card.width >= gap {
+        Point::new(anchor.x - gap - card.width, anchor.y.clamp(0.0, max_y))
+    } else {
+        Point::new(x, (anchor.y + anchor.height + gap).clamp(0.0, max_y))
+    }
 }
 
 /// A calendar offered in the add-event popup's calendar picker.
@@ -2431,6 +2741,8 @@ struct PointerSample {
 }
 
 thread_local! {
+    static ROOT_BOUNDS: std::cell::Cell<Rectangle> = const { std::cell::Cell::new(Rectangle::new(Point::ORIGIN, Size::ZERO)) };
+    static CREATE_ANCHOR: std::cell::Cell<Rectangle> = const { std::cell::Cell::new(Rectangle::new(Point::ORIGIN, Size::ZERO)) };
     /// The last cursor position seen inside the day view. Kept per-thread so
     /// it needs no locking and never leaks across a test's simulations.
     static SAMPLE: std::cell::Cell<PointerSample> = const {
@@ -2522,6 +2834,7 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for PointerWatch<'
         shell: &mut iced::advanced::Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        ROOT_BOUNDS.with(|root| root.set(layout.bounds()));
         if let Some(point) = cursor.position_in(layout.bounds()) {
             record_pointer(point.y, layout.bounds().height);
         }
@@ -3031,6 +3344,14 @@ impl canvas::Program<Message> for DayCanvas {
                 // pointer with a move or resize.
                 if let Some(create) = state.create.take() {
                     let (start, end) = self.create_range(&create);
+                    CREATE_ANCHOR.with(|anchor| {
+                        anchor.set(Rectangle {
+                            x: bounds.x + self.gutter,
+                            y: bounds.y + start as f32 * self.hour_height / 60.0,
+                            width: (bounds.width - self.gutter).max(1.0),
+                            height: (end - start) as f32 * self.hour_height / 60.0,
+                        })
+                    });
                     return Some(
                         canvas::Action::publish(Message::EventDraftStarted {
                             start: self.time_at(start),
@@ -4391,6 +4712,62 @@ mod tests {
     use chrono::Timelike;
 
     #[test]
+    fn creation_chooser_prefers_above_then_weekly_left_then_below() {
+        let viewport = Size::new(900.0, 600.0);
+        let card = Size::new(340.0, 90.0);
+        let anchor = Rectangle {
+            x: 500.0,
+            y: 250.0,
+            width: 180.0,
+            height: 60.0,
+        };
+        for weekly in [false, true] {
+            assert_eq!(
+                draft_position(anchor, viewport, card, weekly),
+                Point::new(500.0, 152.0)
+            );
+        }
+        let top = Rectangle { y: 20.0, ..anchor };
+        assert_eq!(
+            draft_position(top, viewport, card, true),
+            Point::new(152.0, 20.0)
+        );
+        assert_eq!(
+            draft_position(top, viewport, card, false),
+            Point::new(500.0, 88.0)
+        );
+        let left = Rectangle { x: 40.0, ..top };
+        assert_eq!(
+            draft_position(left, viewport, card, true),
+            Point::new(40.0, 88.0)
+        );
+        let narrow = Size::new(220.0, 300.0);
+        let position = draft_position(anchor, narrow, Size::new(204.0, 90.0), true);
+        assert!(position.x >= 0.0 && position.x + 204.0 <= narrow.width);
+        assert!(position.y >= 0.0 && position.y + 90.0 <= narrow.height);
+    }
+
+    #[test]
+    fn event_options_show_fields_and_emit_notification_changes() {
+        let mut options = calendar::event_options::EventOptions::default();
+        options.update(calendar::event_options::Action::Add);
+        options.update(calendar::event_options::Action::Add);
+        let metrics = Metrics::of(Size::new(360.0, 700.0));
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(360.0, 700.0),
+            event_options(&options, &metrics, Message::EventEditOptions),
+        );
+        assert!(ui.find("Availability").is_ok());
+        assert!(ui.find("Visibility").is_ok());
+        ui.click("Add notification").unwrap();
+        assert!(ui.into_messages().any(|m| matches!(
+            m,
+            Message::EventEditOptions(calendar::event_options::Action::Add)
+        )));
+    }
+
+    #[test]
     fn the_new_event_popup_offers_a_habit() {
         let mut state = State::new(
             crate::config::Config::default(),
@@ -4412,6 +4789,9 @@ mod tests {
         assert!(ui.find("Event").is_ok());
         assert!(ui.find("Time Block").is_ok());
         assert!(ui.find("Habit").is_ok());
+        for field in ["Repeat", "Calendar", "Description", "Save", "New event"] {
+            assert!(ui.find(field).is_err(), "{field} belongs in the pane");
+        }
         ui.click("Habit").unwrap();
         assert!(ui.into_messages().any(|message| matches!(
             message,
@@ -4451,6 +4831,259 @@ mod tests {
     }
 
     #[test]
+    fn event_footer_and_delete_menu_keep_their_layout() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let event = state
+            .calendar
+            .events
+            .iter_mut()
+            .find(|e| e.id == "standup")
+            .unwrap();
+        event.details.description = "Meeting notes".into();
+        event.details.meeting = "https://zoom.us/j/123456789".into();
+        event.details.link = "https://calendar.google.com/event?eid=1".into();
+        state.calendar.open_event = Some("standup".into());
+        state.calendar.edit_draft = Some(calendar::EditDraft::from_event(
+            state.calendar.event("standup").unwrap(),
+        ));
+        for width in [200.0, 360.0] {
+            let metrics = Metrics::of(Size::new(width, 600.0));
+            let mut ui = iced_test::Simulator::with_size(
+                Default::default(),
+                metrics.size,
+                details_pane(&state, &metrics),
+            );
+            let description = ui.find("View / edit description").unwrap().bounds();
+            let zoom = ui.find("Open in Zoom").unwrap().bounds();
+            let projects = ui.find("Projects").unwrap().bounds();
+            assert!(description.y < zoom.y && zoom.y < projects.y);
+            let labels = [
+                "Save current event",
+                "Delete",
+                "Open in Google Calendar",
+                "Close",
+            ];
+            let bounds: Vec<_> = labels
+                .iter()
+                .map(|label| ui.find(*label).unwrap().bounds())
+                .collect();
+            assert!(
+                bounds
+                    .windows(2)
+                    .all(|pair| pair[0].y + pair[0].height <= pair[1].y)
+            );
+            assert!(
+                bounds.last().unwrap().y + bounds.last().unwrap().height <= metrics.size.height
+            );
+            assert!(ui.find("Delete all events").is_err());
+            drop(ui);
+            let _ = crate::app::update(&mut state, Message::EventEditDeleteMenuToggled);
+            let mut ui = iced_test::Simulator::with_size(
+                Default::default(),
+                metrics.size,
+                details_pane(&state, &metrics),
+            );
+            for (label, expected) in labels.iter().zip(&bounds) {
+                assert_eq!(ui.find(*label).unwrap().bounds(), *expected);
+            }
+            ui.click("Delete all events").unwrap();
+            let message = ui.into_messages().next().unwrap();
+            assert!(matches!(
+                message,
+                Message::EventDeleteScoped(_, calendar::SaveScope::All)
+            ));
+            let _ = crate::app::update(&mut state, message);
+            assert_eq!(state.calendar.pending_delete.as_deref(), Some("standup"));
+            assert_eq!(
+                state.calendar.pending_delete_scope,
+                calendar::SaveScope::All
+            );
+            assert!(!state.calendar.edit_draft.as_ref().unwrap().delete_menu_open);
+            let mut confirmation = iced_test::Simulator::with_size(
+                Default::default(),
+                metrics.size,
+                delete_confirmation(&state, &metrics),
+            );
+            assert!(
+                confirmation
+                    .find("Delete all events in this series?")
+                    .is_ok()
+            );
+            drop(confirmation);
+            let _ = crate::app::update(&mut state, Message::EventDeleteCancelled);
+        }
+        for scope in [
+            calendar::SaveScope::CurrentAndFuture,
+            calendar::SaveScope::Current,
+        ] {
+            let _ = crate::app::update(
+                &mut state,
+                Message::EventDeleteScoped("standup".into(), scope),
+            );
+            assert_eq!(state.calendar.pending_delete_scope, scope);
+            assert!(state.calendar.event("standup").is_some());
+            let _ = crate::app::update(&mut state, Message::EventDeleteCancelled);
+        }
+    }
+
+    #[test]
+    fn save_split_button_keeps_the_arrow_target_separate_and_opens_scoped_actions() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let event = state.calendar.event("standup").unwrap().clone();
+        state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
+        for width in [200.0, 300.0] {
+            let metrics = Metrics::of(Size::new(width, 160.0));
+            // Check both edges and the middle of the 48px arrow target.
+            for x in [width - 46.0, width - 24.0, width - 2.0] {
+                let mut ui = iced_test::Simulator::with_size(
+                    Default::default(),
+                    metrics.size,
+                    event_save_control(&state, &event, &metrics),
+                );
+                assert!(ui.find("Save current and future events").is_err());
+                ui.point_at(Point::new(x, 20.0));
+                ui.simulate(iced_test::simulator::click());
+                let messages: Vec<_> = ui.into_messages().collect();
+                assert_eq!(messages.len(), 1);
+                assert!(matches!(messages[0], Message::EventEditSaveMenuToggled));
+            }
+            let mut ui = iced_test::Simulator::with_size(
+                Default::default(),
+                metrics.size,
+                event_save_control(&state, &event, &metrics),
+            );
+            ui.click("Save current event").unwrap();
+            assert!(
+                ui.into_messages()
+                    .any(|message| matches!(message, Message::EventEditSaveRequested))
+            );
+        }
+        let _ = crate::app::update(&mut state, Message::EventEditSaveMenuToggled);
+        for (label, expected) in [
+            (
+                "Save current and future events",
+                calendar::SaveScope::CurrentAndFuture,
+            ),
+            ("Save all events", calendar::SaveScope::All),
+        ] {
+            let metrics = Metrics::of(Size::new(300.0, 200.0));
+            let mut ui = iced_test::Simulator::with_size(
+                Default::default(),
+                metrics.size,
+                event_save_control(&state, &event, &metrics),
+            );
+            ui.click(label).unwrap();
+            assert!(ui.into_messages().any(|message| matches!(message, Message::EventEditSaveScoped(scope) if scope == expected)));
+        }
+    }
+
+    #[test]
+    fn save_menu_overlays_the_scroll_pane_without_changing_layout() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let event = state.calendar.event("standup").unwrap().clone();
+        state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
+        let metrics = Metrics::of(Size::new(400.0, 400.0));
+        fn form<'a>(state: &'a State, event: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+            iced::widget::column![
+                row![
+                    scrollable(iced::widget::column![
+                        Space::new().height(90.0),
+                        event_save_control(state, &event, &metrics)
+                    ])
+                    .width(280.0)
+                    .height(140.0),
+                    text("Beside the pane"),
+                ],
+                button("Below the pane").on_press(Message::EventClosed),
+            ]
+            .into()
+        }
+        let mut closed = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            form(&state, &event, &metrics),
+        );
+        let below = closed.find("Below the pane").unwrap().bounds();
+        let beside = closed.find("Beside the pane").unwrap().bounds();
+        let save = closed.find("Save current event").unwrap().bounds();
+        let snapshots =
+            std::env::temp_dir().join(format!("timeslay-save-overlay-{}", std::process::id()));
+        std::fs::create_dir_all(&snapshots).unwrap();
+        let closed_image = snapshots.join("closed.png");
+        closed
+            .snapshot(&Theme::Light)
+            .unwrap()
+            .matches_image(&closed_image)
+            .unwrap();
+        closed.click("▾").unwrap();
+        let toggle = closed
+            .into_messages()
+            .find(|message| matches!(message, Message::EventEditSaveMenuToggled))
+            .unwrap();
+        let _ = crate::app::update(&mut state, toggle);
+        let mut open = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            form(&state, &event, &metrics),
+        );
+        assert_eq!(open.find("Below the pane").unwrap().bounds(), below);
+        assert_eq!(open.find("Beside the pane").unwrap().bounds(), beside);
+        assert_eq!(open.find("Save current event").unwrap().bounds(), save);
+        assert!(
+            !open
+                .snapshot(&Theme::Light)
+                .unwrap()
+                .matches_image(&closed_image)
+                .unwrap(),
+            "The open menu must actually paint over the unchanged pane"
+        );
+        std::fs::remove_dir_all(snapshots).unwrap();
+        // The menu extends below the scroll pane's 140px clip, yet stays interactive.
+        assert!(open.find("Save all events").unwrap().bounds().y > 140.0);
+        open.click("Save all events").unwrap();
+        let messages: Vec<_> = open.into_messages().collect();
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(
+            messages[0],
+            Message::EventEditSaveScoped(calendar::SaveScope::All)
+        ));
+        // Clicking outside dismisses the menu without activating the pane beneath it.
+        let mut open = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            form(&state, &event, &metrics),
+        );
+        open.point_at(Point::new(380.0, 350.0));
+        open.simulate(iced_test::simulator::click());
+        assert!(matches!(
+            open.into_messages().next(),
+            Some(Message::EventEditSaveMenuToggled)
+        ));
+        let mut open = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            form(&state, &event, &metrics),
+        );
+        open.tap_key(iced::keyboard::key::Named::Escape);
+        assert!(matches!(
+            open.into_messages().next(),
+            Some(Message::EventEditSaveMenuToggled)
+        ));
+    }
+
+    #[test]
     fn an_open_event_is_edited_in_the_pane_without_an_edit_popup() {
         let mut state = State::new(
             crate::config::Config::default(),
@@ -4468,7 +5101,7 @@ mod tests {
         );
         assert!(ui.find("Start Time").is_ok());
         assert!(ui.find("End Time").is_ok());
-        assert!(ui.find("Save changes").is_ok());
+        assert!(ui.find("Save current event").is_ok());
         assert!(ui.find("Labels").is_ok());
         assert!(ui.find("View / edit description").is_ok() || ui.find("Add description").is_ok());
         assert!(ui.find("Edit").is_err());
@@ -4554,13 +5187,13 @@ mod tests {
             Size::new(400.0, 800.0),
             crate::ui::timeblocking::panel(&state, &metrics),
         );
-        assert!(ui.find("Save changes").is_ok());
+        assert!(ui.find("Save current event").is_ok());
         assert!(ui.find("Planned Tasks").is_ok());
         assert!(ui.find("Edit").is_err());
     }
 
     #[test]
-    fn the_new_event_popup_shows_the_shared_repeat_controls() {
+    fn the_new_event_pane_shows_the_shared_repeat_controls() {
         let mut state = State::new(
             crate::config::Config::default(),
             crate::theme::Catalog::built_in(),
@@ -4576,7 +5209,7 @@ mod tests {
         let mut ui = iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
             Size::new(800.0, 600.0),
-            draft_overlay(&state, &metrics),
+            draft_editor(&state, &metrics),
         );
         assert!(ui.find("Repeat").is_ok());
         assert!(ui.find("Does not repeat").is_ok());
