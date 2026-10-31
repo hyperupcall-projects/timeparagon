@@ -1,5 +1,6 @@
 //! Google Calendar day view, drawn to resemble the web UI.
 
+use crate::calendar::time_format::TimeFormat;
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
 use iced::font::Weight;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
@@ -63,7 +64,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
     let body = body.push(grid);
 
-    let mut content = column![heading_with_alarm_hint(state, metrics), body]
+    let mut content = column![heading_with_alarm_hint(state, metrics, false), body]
         .spacing(metrics.spacing)
         .padding(metrics.padding)
         .width(Fill)
@@ -77,7 +78,9 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // The root stays a stack whether or not a card is open. Swapping the root
     // widget throws away the day grid's scroll state, which jumps the bar.
     // Event details are no longer an overlay: they are a pane beside the view.
-    let overlay = if state
+    let overlay = if state.range_view_active() {
+        Space::new().width(0).height(0).into()
+    } else if state
         .calendar
         .draft
         .as_ref()
@@ -97,8 +100,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     pointer_watch(stack![content, overlay])
 }
 
-/// A month overview with whole Monday–Sunday weeks. Each date opens its
-/// timeline; event and task actions keep the month anchored in place.
+/// A month overview with whole Monday–Sunday weeks. Selecting a date updates
+/// the day panel while keeping the month overview anchored in place.
 pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dates = calendar::month_grid(state.week_anchor);
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
@@ -150,7 +153,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             for event in state.calendar.timed_events_on(day, &state.config.calendar) {
                 let label = format!(
                     "{} {}",
-                    calendar::time_format::clock(event.start, state.config.appearance.use_24_hour),
+                    calendar::time_format::clock(event.start, state.config.appearance.time_format),
                     event.title
                 );
                 let color = event.display_color(&state.config.calendar);
@@ -191,8 +194,16 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                                 .into(),
                             ),
                             border: iced::Border {
-                                color: palette.background.strong.color,
-                                width: 0.5,
+                                color: if state.timeblocking.dragging.is_some() {
+                                    palette.primary.strong.color
+                                } else {
+                                    palette.background.strong.color
+                                },
+                                width: if state.timeblocking.dragging.is_some() {
+                                    1.5
+                                } else {
+                                    0.5
+                                },
                                 ..Default::default()
                             },
                             ..Default::default()
@@ -325,15 +336,42 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     iced::widget::Stack::with_children(layers).into()
 }
 
+pub(crate) fn scroll_week_drag(state: &State) -> iced::Task<Message> {
+    super::weekly_task_list::auto_scroll(state)
+}
+
 pub(crate) fn weekly_view_width(settings: &crate::config::CalendarSettings) -> f32 {
-    let columns = (settings.weekly_days() + 1) as f32 * settings.weekly_day_width() as f32;
-    let padding = Metrics::of(Size::new(columns, 0.0)).padding;
+    let columns = settings.weekly_days() as f32 * weekly_column_width(settings);
+    let padding = if settings.weekly_task_list {
+        0.0
+    } else {
+        Metrics::of(Size::new(columns, 0.0)).padding
+    };
     columns + padding * 2.0
 }
 
+fn weekly_column_width(settings: &crate::config::CalendarSettings) -> f32 {
+    let width = settings.weekly_day_width() as f32;
+    if settings.weekly_task_list {
+        width.max(240.0)
+    } else {
+        width
+    }
+}
+
 pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let board_metrics = Metrics {
+        padding: 0.0,
+        spacing: 0.0,
+        ..*metrics
+    };
+    let metrics = if state.config.calendar.weekly_task_list {
+        &board_metrics
+    } else {
+        metrics
+    };
     let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
-    let width = state.config.calendar.weekly_day_width() as f32;
+    let width = weekly_column_width(&state.config.calendar);
     let day_metrics = Metrics::of(Size::new(width, metrics.size.height));
     let now = Local::now();
     let all_day_height = if days.iter().any(|&day| {
@@ -347,53 +385,67 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     } else {
         0.0
     };
-    let headings: Vec<Element<'a, Message>> = days
-        .iter()
-        .map(|&day| {
-            let all_day = all_day_row_on(state, &day_metrics, day, true)
-                .unwrap_or_else(|| Space::new().width(Fill).into());
-            let heading = text(day.format("%a %b %-d").to_string())
-                .size(day_metrics.label())
-                .center()
-                .width(Fill);
-            let content = column![
-                heading,
-                container(all_day)
-                    .height(Length::Fixed(all_day_height))
-                    .width(Fill),
-            ]
-            .width(Length::Fixed(width));
-            Element::from(content)
+    let grid: Element<'a, Message> = if state.config.calendar.weekly_task_list {
+        super::weekly_task_list::view(state, metrics, &days, width)
+    } else {
+        let headings: Vec<Element<'a, Message>> = days
+            .iter()
+            .map(|&day| {
+                let all_day = all_day_row_on(state, &day_metrics, day, true)
+                    .unwrap_or_else(|| Space::new().width(Fill).into());
+                let heading = text(day.format("%a %b %-d").to_string())
+                    .size(day_metrics.label())
+                    .center()
+                    .width(Fill);
+                let content = column![
+                    heading,
+                    container(all_day)
+                        .height(Length::Fixed(all_day_height))
+                        .width(Fill),
+                ]
+                .width(Length::Fixed(width));
+                Element::from(
+                    mouse_area(container(content).style(move |theme| {
+                        drop_zone_style(theme, state.timeblocking.dragging.is_some())
+                    }))
+                    .on_release(if state.timeblocking.dragging.is_some() {
+                        Message::TimeBlocking(crate::timeblocking::Action::DropDay)
+                    } else {
+                        Message::Ignored
+                    }),
+                )
                 .map(move |message| Message::WeekDayAction(day, Box::new(message)))
-        })
-        .collect();
+            })
+            .collect();
 
-    let grids: Vec<Element<'a, Message>> = days
-        .iter()
-        .map(|&day| {
-            Element::from(
-                container(day_canvas(state, &day_metrics, now, day, true))
-                    .width(Length::Fixed(width)),
-            )
-            .map(move |message| Message::WeekDayAction(day, Box::new(message)))
-        })
-        .collect();
-    let time_grid = scrollable(row(grids))
-        .id(iced::widget::Id::new(DAY_SCROLL))
+        let grids: Vec<Element<'a, Message>> = days
+            .iter()
+            .map(|&day| {
+                Element::from(
+                    container(day_canvas(state, &day_metrics, now, day, true))
+                        .width(Length::Fixed(width)),
+                )
+                .map(move |message| Message::WeekDayAction(day, Box::new(message)))
+            })
+            .collect();
+        let time_grid = scrollable(row(grids))
+            .id(iced::widget::Id::new(WEEK_DAY_SCROLL))
+            .width(Fill)
+            .height(Fill);
+        scrollable(
+            column![row(headings), time_grid]
+                .width(Length::Fixed(width * days.len() as f32))
+                .height(Fill),
+        )
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new(),
+        ))
+        .id(iced::widget::Id::new(WEEK_SCROLL))
+        .on_scroll(|viewport| Message::WeekScrolled(viewport.absolute_offset().x))
         .width(Fill)
-        .height(Fill);
-    let grid = scrollable(
-        column![row(headings), time_grid]
-            .width(Length::Fixed(width * days.len() as f32))
-            .height(Fill),
-    )
-    .direction(scrollable::Direction::Horizontal(
-        scrollable::Scrollbar::new(),
-    ))
-    .id(iced::widget::Id::new(WEEK_SCROLL))
-    .on_scroll(|viewport| Message::WeekScrolled(viewport.absolute_offset().x))
-    .width(Fill)
-    .height(Fill);
+        .height(Fill)
+        .into()
+    };
 
     let draft_open = state.calendar.draft.as_ref().is_some_and(|d| d.editor_open);
     let panel_open =
@@ -490,8 +542,13 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         );
     }
 
+    let heading = if state.config.calendar.weekly_task_list {
+        super::weekly_task_list::toolbar(state, metrics)
+    } else {
+        heading_with_alarm_hint(state, metrics, true)
+    };
     let mut content = column![
-        heading_with_alarm_hint(state, metrics),
+        heading,
         iced::widget::Stack::with_children(grid_layers)
             .width(Fill)
             .height(Fill),
@@ -529,9 +586,8 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 /// is left over, so the whole date is readable even when the text is large.
 /// The settings are reached through the menu rather than from here, because a
 /// narrow window has room for one button beside the day and not for two.
-fn header<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+fn header<'a>(state: &'a State, metrics: &Metrics, weekly: bool) -> Element<'a, Message> {
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    let weekly = state.weekly && state.screen == crate::app::Screen::Calendar;
     let day = if weekly {
         state.week_anchor
     } else {
@@ -705,7 +761,11 @@ fn header_offset(metrics: &Metrics) -> f32 {
 }
 
 /// Keep the heading's position stable when alarm setting mode changes.
-fn heading_with_alarm_hint<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+fn heading_with_alarm_hint<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    weekly: bool,
+) -> Element<'a, Message> {
     let mut hint = column![];
     if state.calendar_loading() {
         hint = hint.push(
@@ -721,7 +781,7 @@ fn heading_with_alarm_hint<'a>(state: &'a State, metrics: &Metrics) -> Element<'
                 .color(colors::ALARM),
         );
     }
-    column![header(state, metrics), hint].into()
+    column![header(state, metrics, weekly), hint].into()
 }
 
 /// The foot of the calendar while an alarm is ringing: the way to silence it.
@@ -741,6 +801,20 @@ fn dismiss_bar<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Me
 
 fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
     all_day_row_on(state, metrics, state.calendar.day, false)
+}
+
+/// A day task needs a slot unless its linked block is present on that day.
+fn task_needs_slot(state: &State, event: &Event, day: NaiveDate) -> bool {
+    crate::timeblocking::metadata(event)
+        .block
+        .as_ref()
+        .is_none_or(|key| {
+            !state
+                .calendar
+                .events_on(day)
+                .iter()
+                .any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)
+        })
 }
 
 fn all_day_row_on<'a>(
@@ -764,41 +838,52 @@ fn all_day_row_on<'a>(
             crate::timeblocking::metadata(e).order,
         )
     });
+    events.retain(|event| {
+        !event.is_task()
+            || task_needs_slot(state, event, day)
+            || crate::timeblocking::overdue(event)
+    });
+    let unslotted = events.iter().filter(|event| event.is_task()).count();
     let chips: Vec<Element<'a, Message>> = events
         .into_iter()
-        .filter(|event| {
-            !event.is_task()
-                || crate::timeblocking::metadata(event)
-                    .block
-                    .as_ref()
-                    .is_none_or(|key| {
-                        !state.calendar.events_on(day).iter().any(|block| {
-                            !block.is_task() && crate::timeblocking::block_key(block) == *key
-                        })
-                    })
-                || crate::timeblocking::overdue(event)
-        })
+        .filter(|event| weekly || !event.is_task())
         .map(|event| {
             if event.is_task() {
-                if weekly {
-                    weekly_task_chip(state, event, metrics)
-                } else {
-                    super::timeblocking::task_row(state, event, metrics, false)
-                }
+                weekly_task_chip(state, event, metrics)
             } else {
                 all_day_chip(state, event, metrics)
             }
         })
         .collect();
 
-    if chips.is_empty() {
+    if weekly && chips.is_empty() {
         return None;
     }
+
+    let mut content = column![].spacing(4.0).width(Fill);
+    if !weekly {
+        let overdue = crate::inbox::overdue_tasks(state).len();
+        let inbox = crate::inbox::tasks(state).len();
+        let mut summary = text(format!(
+            "{overdue} overdue.  {inbox} in inbox.  {unslotted} not slotted in"
+        ))
+        .size(metrics.label());
+        if overdue > 0 || inbox > 0 || unslotted > 0 {
+            summary = summary
+                .font(Font {
+                    weight: Weight::Bold,
+                    ..Font::DEFAULT
+                })
+                .style(text::danger);
+        }
+        content = content.push(summary);
+    }
+    content = content.extend(chips);
 
     let dragging = state.timeblocking.dragging.is_some();
     Some(
         mouse_area(
-            container(scrollable(column(chips).spacing(4.0).width(Fill)))
+            container(scrollable(content))
                 .max_height(180)
                 .style(move |theme: &Theme| drop_zone_style(theme, dragging)),
         )
@@ -1061,7 +1146,7 @@ fn day_canvas<'a>(
             } else {
                 event.title.clone()
             },
-            when: calendar::time_format::event(event, state.config.appearance.use_24_hour),
+            when: calendar::time_format::event(event, state.config.appearance.time_format),
             start_min: span.start_min,
             end_min: span.end_min,
             column: slot.column,
@@ -1116,7 +1201,7 @@ fn day_canvas<'a>(
             (0..=DAY_MINUTES).contains(&minutes).then(|| AlarmMark {
                 id: alarm.id,
                 minutes,
-                label: alarm_label(alarm, state.config.appearance.use_24_hour),
+                label: alarm_label(alarm, state.config.appearance.time_format),
             })
         })
         .collect();
@@ -1142,7 +1227,7 @@ fn day_canvas<'a>(
         });
 
     canvas_widget(DayCanvas {
-        use_24_hour: state.config.appearance.use_24_hour,
+        time_format: state.config.appearance.time_format,
         blocks,
         travel,
         needle,
@@ -1168,8 +1253,8 @@ const DAY_MINUTES: i32 = 24 * 60;
 
 /// What an alarm's needle says beside it: its time, and its label if it has
 /// one.
-fn alarm_label(alarm: &alarms::Alarm, use_24_hour: bool) -> String {
-    let time = calendar::time_format::clock(alarm.at, use_24_hour);
+fn alarm_label(alarm: &alarms::Alarm, time_format: TimeFormat) -> String {
+    let time = calendar::time_format::clock(alarm.at, time_format);
     let label = alarm.label.trim();
 
     if label.is_empty() {
@@ -1191,6 +1276,7 @@ fn minutes_into_day(when: DateTime<Local>, day: chrono::NaiveDate, offset: i32) 
 }
 
 const DAY_SCROLL: &str = "cal-day";
+const WEEK_DAY_SCROLL: &str = "cal-week-day";
 const WEEK_SCROLL: &str = "cal-week";
 
 pub fn scroll_week_to_start() -> iced::Task<Message> {
@@ -1203,12 +1289,20 @@ pub fn scroll_week_to_start() -> iced::Task<Message> {
 /// Scrolls the day grid so the needle sits a little below the top, the way
 /// Google Calendar opens on "now" rather than the start of the day.
 pub fn scroll_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
+    scroll_now(DAY_SCROLL, hour_height, day_end_minutes)
+}
+
+pub fn scroll_week_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
+    scroll_now(WEEK_DAY_SCROLL, hour_height, day_end_minutes)
+}
+
+fn scroll_now(id: &'static str, hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
     let minutes =
         (calendar::minutes_from_midnight(Local::now()) - day_end_minutes).rem_euclid(DAY_MINUTES);
     let y = ((minutes - 90) as f32 * (hour_height / 60.0)).max(0.0);
 
     iced::widget::operation::scroll_to(
-        iced::widget::Id::new(DAY_SCROLL),
+        iced::widget::Id::new(id),
         iced::widget::operation::AbsoluteOffset { x: 0.0, y },
     )
 }
@@ -1369,7 +1463,7 @@ fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
 
     let month = state.calendar.month;
     let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-    let weekly = state.weekly && state.screen == crate::app::Screen::Calendar;
+    let weekly = state.weekly;
     let selected = if state.monthly {
         state.week_anchor
     } else if weekly {
@@ -1504,7 +1598,7 @@ pub fn event_editor<'a>(
     else {
         return column![
             super::links::text(event.title.clone(), metrics.label() + 2.0),
-            text(schedule_line(event, state.config.appearance.use_24_hour))
+            text(schedule_line(event, state.config.appearance.time_format))
                 .size(metrics.label())
                 .style(text::secondary),
         ]
@@ -1555,7 +1649,7 @@ pub fn event_editor<'a>(
             "Start Time"
         }),
         super::controls::date(
-            state.config.appearance.use_24_hour,
+            state.config.appearance.time_format,
             &draft.date_text,
             false,
             false,
@@ -1564,7 +1658,7 @@ pub fn event_editor<'a>(
             Message::EventEditDateChanged
         ),
         super::controls::time(
-            state.config.appearance.use_24_hour,
+            state.config.appearance.time_format,
             &draft.start_text,
             true,
             metrics.label(),
@@ -1603,7 +1697,7 @@ pub fn event_editor<'a>(
             column![
                 label("End Time"),
                 super::controls::date(
-                    state.config.appearance.use_24_hour,
+                    state.config.appearance.time_format,
                     &draft.end_date_text,
                     false,
                     false,
@@ -1612,7 +1706,7 @@ pub fn event_editor<'a>(
                     Message::EventEndDateChanged
                 ),
                 super::controls::time(
-                    state.config.appearance.use_24_hour,
+                    state.config.appearance.time_format,
                     &draft.end_text,
                     true,
                     metrics.label(),
@@ -2297,7 +2391,7 @@ fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     let when = column![
         row![
             super::controls::date(
-                state.config.appearance.use_24_hour,
+                state.config.appearance.time_format,
                 &draft.date_text,
                 false,
                 false,
@@ -2311,7 +2405,7 @@ fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         .align_y(Alignment::Center),
         row![
             container(super::controls::time(
-                state.config.appearance.use_24_hour,
+                state.config.appearance.time_format,
                 &draft.start_text,
                 true,
                 metrics.label(),
@@ -2320,7 +2414,7 @@ fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
             .width(Fill),
             text("–").size(metrics.label()),
             container(super::controls::time(
-                state.config.appearance.use_24_hour,
+                state.config.appearance.time_format,
                 &draft.end_text,
                 true,
                 metrics.label(),
@@ -2403,7 +2497,7 @@ fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message
     let Some(draft) = state.calendar.draft.as_ref() else {
         return Space::new().into();
     };
-    let weekly = state.screen == crate::app::Screen::Calendar && state.weekly;
+    let weekly = state.weekly;
     let metrics = *metrics;
     let overlay = responsive(move |size| {
         let title = text_input("Add title", &draft.title)
@@ -2716,20 +2810,20 @@ fn detail_line<'a>(label: &'a str, value: String, metrics: &Metrics) -> Element<
     .into()
 }
 
-fn schedule_line(event: &Event, use_24_hour: bool) -> String {
+fn schedule_line(event: &Event, time_format: TimeFormat) -> String {
     let date = event.start.format("%A, %B %d, %Y");
     if event.all_day {
         format!("{date} · All day")
     } else if event.start.date_naive() != event.end.date_naive() {
         format!(
             "{date} · {} – {}",
-            calendar::time_format::event(event, use_24_hour),
+            calendar::time_format::event(event, time_format),
             event.end.format("%A, %B %d")
         )
     } else {
         format!(
             "{date} · {}",
-            calendar::time_format::event(event, use_24_hour)
+            calendar::time_format::event(event, time_format)
         )
     }
 }
@@ -2974,7 +3068,7 @@ fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> Vec<TravelBo
 }
 
 struct DayCanvas {
-    use_24_hour: bool,
+    time_format: TimeFormat,
     blocks: Vec<Block>,
     travel: Vec<TravelBox>,
     needle: Option<i32>,
@@ -3268,21 +3362,14 @@ impl canvas::Program<Message> for DayCanvas {
                         continue;
                     }
                     let rect = self.block_rect(block, bounds.width);
-                    if let Some((view, open)) = block_actions(rect) {
-                        if open.contains(point) {
-                            return Some(
-                                canvas::Action::publish(Message::EventOpened(block.id.clone()))
-                                    .and_capture(),
-                            );
-                        }
-                        if view.contains(point) {
-                            return Some(
-                                canvas::Action::publish(Message::TimeBlocking(
-                                    crate::timeblocking::Action::View(block.id.clone()),
-                                ))
-                                .and_capture(),
-                            );
-                        }
+                    let (view, _) = block_actions(rect);
+                    if view.contains(point) {
+                        return Some(
+                            canvas::Action::publish(Message::TimeBlocking(
+                                crate::timeblocking::Action::View(block.id.clone()),
+                            ))
+                            .and_capture(),
+                        );
                     }
                 }
 
@@ -3426,9 +3513,8 @@ impl canvas::Program<Message> for DayCanvas {
 
         if let Some(point) = cursor.position_in(bounds) {
             for block in self.blocks.iter().filter(|block| block.time_block) {
-                if let Some((view, open)) = block_actions(self.block_rect(block, bounds.width))
-                    && (view.contains(point) || open.contains(point))
-                {
+                let (view, _) = block_actions(self.block_rect(block, bounds.width));
+                if view.contains(point) {
                     return mouse::Interaction::Pointer;
                 }
             }
@@ -3484,7 +3570,7 @@ impl canvas::Program<Message> for DayCanvas {
         .wrapping_mul(31)
         .wrapping_add(travel_key(&self.travel))
         .wrapping_mul(31)
-        .wrapping_add(u64::from(self.use_24_hour))
+        .wrapping_add(self.time_format as u64)
         // A task row in the air leaves its row behind, so the cached grid has
         // to retrace when the drag starts and when it ends.
         .wrapping_mul(31)
@@ -3562,7 +3648,7 @@ impl DayCanvas {
                 Text {
                     content: calendar::time_format::hour(
                         (self.day_start_hour + hour) % 24,
-                        self.use_24_hour,
+                        self.time_format,
                     ),
                     position: Point::new(self.gutter - 6.0, y + 2.0),
                     color: colors::GUTTER_TEXT,
@@ -3659,12 +3745,7 @@ impl DayCanvas {
             let title_size = if self.compact { 11.0 } else { 12.0 };
             let mut label_bounds = block_bounds;
             if block.time_block {
-                if block_bounds.width >= 160.0 {
-                    label_bounds.width -= 78.0;
-                } else if block_bounds.width >= 90.0 {
-                    label_bounds.y += 22.0;
-                    label_bounds.height = (label_bounds.height - 22.0).max(0.0);
-                }
+                label_bounds = block_actions(block_bounds).1;
             }
             if label_bounds.height >= 14.0 {
                 draw_block_label(
@@ -3676,21 +3757,23 @@ impl DayCanvas {
                     title_size,
                 );
             }
-            if block.time_block
-                && let Some((view, open)) = block_actions(block_bounds)
-            {
-                for (label, bounds) in [("View", view), ("Open", open)] {
-                    frame.fill(
-                        &Path::rounded_rectangle(bounds.position(), bounds.size(), 3.0.into()),
-                        Color::WHITE.scale_alpha(0.27),
-                    );
+            if block.time_block {
+                let (view, _) = block_actions(block_bounds);
+                frame.fill(
+                    &Path::rounded_rectangle(view.position(), view.size(), EVENT_RADIUS.into()),
+                    Color::WHITE.scale_alpha(0.27),
+                );
+                // Keep the label inside its third even in overlapping columns.
+                let size =
+                    10.0 * ((view.width - 2.0).max(0.0) / text_width_of("View", 10.0)).min(1.0);
+                if size > 0.0 {
                     fill_glyphs(
                         frame,
                         Text {
-                            content: label.into(),
-                            position: Point::new(bounds.center_x(), bounds.center_y()),
+                            content: "View".into(),
+                            position: Point::new(view.center_x(), view.center_y()),
                             color: ink,
-                            size: Pixels(10.0),
+                            size: Pixels(size),
                             align_x: iced::alignment::Horizontal::Center.into(),
                             align_y: iced::alignment::Vertical::Center,
                             ..Text::default()
@@ -4219,7 +4302,7 @@ impl DayCanvas {
         let total = (self.day_start_hour as i32 * 60 + minutes).rem_euclid(DAY_MINUTES);
         calendar::time_format::clock(
             chrono::NaiveTime::from_hms_opt((total / 60) as u32, (total % 60) as u32, 0).unwrap(),
-            self.use_24_hour,
+            self.time_format,
         )
     }
 
@@ -4302,27 +4385,20 @@ fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color: Color) {
     );
 }
 
-/// "View" opens the focused timeline for the block; "Open" opens the same
-/// editable panel a click anywhere else on the block opens. They share the
-/// event's top-right corner, in that order. A narrow block has no chips: two
-/// of them would leave almost none of the block itself clickable.
-fn block_actions(bounds: Rectangle) -> Option<(Rectangle, Rectangle)> {
-    if bounds.width < 90.0 {
-        return None;
-    }
-    let width = 30.0_f32.min(((bounds.width - 6.0) / 2.0).max(1.0));
-    let height = 18.0_f32.min((bounds.height - 4.0).max(1.0));
-    let open = Rectangle {
-        x: bounds.x + bounds.width - width - 2.0,
-        y: bounds.y + 2.0,
-        width,
-        height,
-    };
+/// The full-height left third opens the focused time-block view at every
+/// width. The remaining two thirds show the title and open the editable panel
+/// through the usual click/drag handling.
+fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
     let view = Rectangle {
-        x: open.x - width - 2.0,
-        ..open
+        width: bounds.width / 3.0,
+        ..bounds
     };
-    Some((view, open))
+    let edit = Rectangle {
+        x: bounds.x + view.width,
+        width: bounds.width - view.width,
+        ..bounds
+    };
+    (view, edit)
 }
 
 /// Blends a color toward white, for the lighter shade an unconfirmed time
@@ -5292,25 +5368,39 @@ mod tests {
     }
 
     #[test]
-    fn time_block_view_and_open_chips_dispatch_different_actions() {
-        for view in [true, false] {
+    fn time_block_full_height_regions_dispatch_different_actions() {
+        for (width, columns, height_fraction, view) in [
+            (600.0, 1, 0.05, true),
+            (600.0, 1, 0.95, false),
+            (240.0, 3, 0.05, true),
+            (240.0, 3, 0.95, true),
+            (240.0, 3, 0.05, false),
+            (240.0, 3, 0.95, false),
+        ] {
             let mut canvas = canvas_with_one_block();
             canvas.blocks[0].time_block = true;
-            let bounds = canvas.block_rect(&canvas.blocks[0], 240.0);
-            let (view_rect, open_rect) = block_actions(bounds).unwrap();
-            assert!(view_rect.x < open_rect.x);
+            canvas.blocks[0].columns = columns;
+            let bounds = canvas.block_rect(&canvas.blocks[0], width);
+            let (view_rect, open_rect) = block_actions(bounds);
+            assert_eq!(view_rect.height, bounds.height);
+            assert_eq!(open_rect.height, bounds.height);
+            assert_eq!(view_rect.width, bounds.width / 3.0);
+            assert_eq!(view_rect.x, bounds.x);
+            assert_eq!(open_rect.x, bounds.x + bounds.width / 3.0);
             let element: Element<'_, Message> =
-                canvas_widget(canvas).width(240).height(1440).into();
+                canvas_widget(canvas).width(width).height(1440).into();
             let mut ui = iced_test::Simulator::with_size(
                 iced_test::core::Settings::default(),
-                Size::new(240.0, 1440.0),
+                Size::new(width, 1440.0),
                 element,
             );
-            ui.point_at(if view {
-                view_rect.center()
-            } else {
-                open_rect.center()
-            });
+            // Click physical left/right positions independently of block_actions,
+            // so swapping the regions cannot silently swap the test targets too.
+            let width_fraction = if view { 1.0 / 6.0 } else { 2.0 / 3.0 };
+            ui.point_at(Point::new(
+                bounds.x + bounds.width * width_fraction,
+                bounds.y + bounds.height * height_fraction,
+            ));
             ui.simulate([
                 iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
@@ -5323,7 +5413,7 @@ mod tests {
                         Message::TimeBlocking(crate::timeblocking::Action::View(id))
                             if id == "standup"
                     )),
-                    "the View chip must open focused mode"
+                    "the left third must open focused mode"
                 );
             } else {
                 assert!(
@@ -5482,7 +5572,7 @@ mod tests {
     /// A canvas with one 9:00–9:30 block, for the drag tests.
     fn canvas_with_one_block() -> DayCanvas {
         DayCanvas {
-            use_24_hour: true,
+            time_format: TimeFormat::TwentyFourHour,
             blocks: vec![Block {
                 id: "standup".into(),
                 title: "Standup".into(),
@@ -5817,7 +5907,7 @@ mod tests {
 
     fn canvas_clone(canvas: &DayCanvas) -> DayCanvas {
         DayCanvas {
-            use_24_hour: canvas.use_24_hour,
+            time_format: canvas.time_format,
             blocks: canvas.blocks.clone(),
             alarms: canvas.alarms.clone(),
             ..alarm_canvas(canvas.day, canvas.alarm_mode)

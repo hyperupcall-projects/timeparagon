@@ -82,6 +82,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
 
         Action::Edit(id) => {
+            // Clicking the selected row must not reset unsaved edits.
+            if state
+                .projects
+                .editing
+                .as_ref()
+                .is_some_and(|draft| draft.id == id)
+            {
+                return Task::none();
+            }
             let Some(project) = state.config.projects.get(id) else {
                 return Task::none();
             };
@@ -102,6 +111,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 
         Action::CancelEdit => {
             state.projects.editing = None;
+            state.projects.confirm_remove = None;
             Task::none()
         }
 
@@ -228,7 +238,9 @@ fn save(state: &mut State) -> Task<Message> {
         project.directory = directory;
     }
     state.config.projects.sort();
+    // Refresh normalized values while keeping the overview selected.
     state.projects.editing = None;
+    let _ = update(state, Action::Edit(draft.id));
 
     queue_save(state)
 }
@@ -349,7 +361,7 @@ mod tests {
         );
         let _ = update(&mut state, Action::Save);
 
-        assert!(state.projects.editing.is_none());
+        assert_eq!(state.projects.editing.as_ref().unwrap().id, id);
         let project = state.config.projects.get(id).unwrap();
         assert_eq!(project.name, "Zebra Work");
         assert_eq!(project.color(), Some(red));

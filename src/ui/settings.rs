@@ -1,5 +1,6 @@
 //! The settings tab and the timer-hits-zero menu.
 
+use crate::calendar::time_format::TimeFormat;
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };
@@ -29,6 +30,45 @@ impl std::fmt::Display for CalendarOption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct WeeklyDays(u32);
+
+impl std::fmt::Display for WeeklyDays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 == 7 {
+            "7 days starting today"
+        } else {
+            "8 days starting yesterday"
+        })
+    }
+}
+
+fn week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.calendar;
+    column![
+        choice(
+            "Days shown",
+            vec![WeeklyDays(7), WeeklyDays(8)],
+            Some(WeeklyDays(settings.weekly_days())),
+            |days| Message::CalendarWeeklyDaysChanged(days.0),
+            metrics,
+        ),
+        field(
+            format!("Weekly day width: {} px", settings.weekly_day_width()),
+            slider(
+                100..=400,
+                settings.weekly_day_width(),
+                Message::CalendarWeeklyWidthChanged,
+            )
+            .into(),
+            metrics,
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill)
+    .into()
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -69,6 +109,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         calendar(state, metrics),
         heading("Travel", metrics),
         super::travel::settings_section(state, metrics),
+        heading("Voice input", metrics),
+        crate::voice::settings(state),
         heading("Account integrations", metrics),
         integrations(state, metrics),
     ]
@@ -184,10 +226,11 @@ fn next_option<T: PartialEq + Clone>(options: &[T], selected: Option<&T>) -> Opt
 }
 
 fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    container(switch(
-        "Use 24-hour time",
-        state.config.appearance.use_24_hour,
-        Message::Use24HourToggled,
+    container(choice(
+        "Time format",
+        TimeFormat::ALL.to_vec(),
+        Some(state.config.appearance.time_format),
+        Message::TimeFormatSelected,
         metrics,
     ))
     .id("time-format")
@@ -347,6 +390,7 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             state,
             metrics
         ),
+        week_view(state, metrics),
         subsection("Month", metrics),
         layout_number(
             "Calendar month width (px)",
@@ -438,12 +482,6 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ));
     }
     section
-        .push(switch(
-            "Always on top",
-            state.config.window.always_on_top,
-            Message::AlwaysOnTopToggled,
-            metrics,
-        ))
         .push(switch(
             "Dock hour lines",
             views.dock_hour_lines,
@@ -746,33 +784,12 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     section = section.push(field(
         day_end_label(
             settings.day_start_hour(),
-            state.config.appearance.use_24_hour,
+            state.config.appearance.time_format,
         ),
         slider(
             0..=config::CalendarSettings::MAX_DAY_END_HOUR,
             settings.day_start_hour(),
             Message::CalendarDayEndChanged,
-        )
-        .into(),
-        metrics,
-    ));
-
-    section = section.push(field(
-        format!("Weekly days: {} (+ previous day)", settings.weekly_days()),
-        slider(
-            7..=8,
-            settings.weekly_days(),
-            Message::CalendarWeeklyDaysChanged,
-        )
-        .into(),
-        metrics,
-    ));
-    section = section.push(field(
-        format!("Weekly day width: {} px", settings.weekly_day_width()),
-        slider(
-            100..=400,
-            settings.weekly_day_width(),
-            Message::CalendarWeeklyWidthChanged,
         )
         .into(),
         metrics,
@@ -1128,13 +1145,13 @@ fn sync_label(minutes: u32) -> String {
     }
 }
 
-fn day_end_label(hour: u32, use_24_hour: bool) -> String {
+fn day_end_label(hour: u32, time_format: TimeFormat) -> String {
     if hour == 0 {
         "Day ends at midnight".to_owned()
     } else {
         format!(
             "Day ends at {}",
-            calendar::time_format::hour(hour, use_24_hour)
+            calendar::time_format::hour(hour, time_format)
         )
     }
 }
@@ -1179,6 +1196,28 @@ pub(super) fn indent<'a>(content: Element<'a, Message>, metrics: &Metrics) -> El
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn week_day_choices_show_the_start_day_and_switch_in_a_narrow_panel() {
+        use crate::{config::Config, theme::Catalog};
+        use iced_test::{Simulator, core::Settings};
+
+        let size = iced::Size::new(200.0, 400.0);
+        let metrics = Metrics::of(size);
+        for (days, label, next) in [
+            (7, "7 days starting today", 8),
+            (8, "8 days starting yesterday", 7),
+        ] {
+            let mut state = State::new(Config::default(), Catalog::built_in());
+            state.config.calendar.weekly_days = days;
+            let mut ui =
+                Simulator::with_size(Settings::default(), size, week_view(&state, &metrics));
+            ui.click(label).unwrap();
+            assert!(ui.into_messages().any(|message| matches!(
+                message, Message::CalendarWeeklyDaysChanged(value) if value == next
+            )));
+        }
+    }
 
     #[test]
     fn reservation_switches_are_reachable_and_independent_at_narrow_widths() {
@@ -1295,29 +1334,56 @@ mod tests {
     }
 
     #[test]
-    fn time_format_toggle_updates_and_persists_the_preference() {
-        use crate::{app, config::Config, theme::Catalog};
+    fn time_format_choices_update_and_persist_the_preference() {
+        use crate::{app, calendar::time_format::TimeFormat, config::Config, theme::Catalog};
         use iced_test::{Simulator, core::Settings};
 
         let old: Config = toml::from_str("[appearance]\ntheme = 'Sakura'\n").unwrap();
-        assert!(old.appearance.use_24_hour);
+        assert_eq!(old.appearance.time_format, TimeFormat::TwentyFourHour);
+        for (legacy, expected) in [
+            (false, TimeFormat::TwelveHour),
+            (true, TimeFormat::TwentyFourHour),
+        ] {
+            let migrated: Config =
+                toml::from_str(&format!("[appearance]\nuse_24_hour = {legacy}\n")).unwrap();
+            assert_eq!(migrated.appearance.time_format, expected);
+        }
+        let mut state = State::new(old, Catalog::built_in());
+        for expected in TimeFormat::ALL {
+            let _ = app::update(&mut state, Message::TimeFormatSelected(expected));
+            assert_eq!(state.config.appearance.time_format, expected);
+            let saved = toml::to_string(&state.config).unwrap();
+            let restored: Config = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.appearance.time_format, expected);
+        }
         for width in [180.0, 420.0] {
-            let mut state = State::new(old.clone(), Catalog::built_in());
-            for expected in [false, true] {
-                let size = iced::Size::new(width, 400.0);
-                let mut ui = Simulator::with_size(
-                    Settings::default(),
-                    size,
-                    preferences(&state, &Metrics::of(size)),
-                );
-                ui.click(iced::widget::Id::from("time-format")).unwrap();
-                for message in ui.into_messages() {
-                    let _ = app::update(&mut state, message);
-                }
-                assert_eq!(state.config.appearance.use_24_hour, expected);
-                let saved = toml::to_string(&state.config).unwrap();
-                let restored: Config = toml::from_str(&saved).unwrap();
-                assert_eq!(restored.appearance.use_24_hour, expected);
+            let size = iced::Size::new(width, 400.0);
+            let mut ui = Simulator::with_size(
+                Settings::default(),
+                size,
+                preferences(&state, &Metrics::of(size)),
+            );
+            if width < 200.0 {
+                ui.click("Compact Time").unwrap();
+                assert!(ui.into_messages().any(|message| matches!(
+                    message,
+                    Message::TimeFormatSelected(TimeFormat::TwelveHour)
+                )));
+            } else {
+                // Pick lists draw their labels directly, so operate the control by position.
+                ui.point_at(iced::Point::new(width - 30.0, 15.0));
+                ui.simulate([
+                    iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(
+                        iced::keyboard::Modifiers::CTRL,
+                    )),
+                    iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+                        delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+                    }),
+                ]);
+                assert!(ui.into_messages().any(|message| matches!(
+                    message,
+                    Message::TimeFormatSelected(TimeFormat::TwentyFourHour)
+                )));
             }
         }
     }
@@ -1409,8 +1475,11 @@ mod tests {
 
     #[test]
     fn day_end_labels_read_naturally() {
-        assert_eq!(day_end_label(0, false), "Day ends at midnight");
-        assert_eq!(day_end_label(3, false), "Day ends at 3 AM");
-        assert_eq!(day_end_label(5, false), "Day ends at 5 AM");
+        assert_eq!(
+            day_end_label(0, TimeFormat::TwelveHour),
+            "Day ends at midnight"
+        );
+        assert_eq!(day_end_label(3, TimeFormat::TwelveHour), "Day ends at 3 AM");
+        assert_eq!(day_end_label(5, TimeFormat::TwelveHour), "Day ends at 5 AM");
     }
 }

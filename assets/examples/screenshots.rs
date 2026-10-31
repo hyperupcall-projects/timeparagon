@@ -15,8 +15,8 @@ use timeslay::theme::Catalog;
 /// The widths the layout is designed around.
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
 
-/// The themes worth looking at: ours, plus one built-in of each tone.
-const THEMES: [&str; 7] = [
+/// Our palettes, the curated dark themes, and representative built-ins.
+const THEMES: [&str; 12] = [
     "Sakura",
     "Peony",
     "Matcha",
@@ -24,6 +24,11 @@ const THEMES: [&str; 7] = [
     "Sage",
     "Catppuccin Latte",
     "Dark",
+    "Absolute Black",
+    "GitHub Dark",
+    "GitHub Dark High Contrast",
+    "Nord",
+    "Dracula",
 ];
 
 fn main() {

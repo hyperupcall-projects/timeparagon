@@ -28,9 +28,8 @@ There's week and month views, just like any other calendar app:
 	- Configure dock or panel to either show above exisitng windows or take up space like other apps.
 - Intuitive to use (WIP).
 - View your time:
-	- By day
-	- By week/month
-		- Should always have day, toggle week and month/two week to the right side. when clicking, month it shpws on day (TODO) 
+	- By day, week, 2 weeks (TODO), month
+	- Work/plan modes (TODO)?
 	- Including a custom sort (TODO).
 		- Based on search or query; omit private event details (TODO).
 - Manage your time:
@@ -46,19 +45,19 @@ There's week and month views, just like any other calendar app:
 		- Brain dump.
 		- Pomodoro timer.
 		- Record distractions (TODO).
+		- Reschedule in bulk (TODO)
 	- Habits
 		- These are standard calendar events that are colored differently.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
 	- Sleep (TODO)
 		- These are standard calendar events that are automatically calculated from the next day's first event.
 		- Automatic shutdown.
-- Manage tasks:
+- Capture and manage tasks:
 	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
 	- Create tasks:
-		- With Todoist-like syntax (TODO).
-		- With voice input (local transcription) (TODO).
-			- NuExtract3, Qwen3.5-4B, GLiNER2?
-		- From Gmail URLs
+		- By typing; interprets keywords as metadata [like Todoist](https://www.todoist.com/help/todoist/features/use-task-quick-add-in-todoist-va4Lhpzz).
+		- With voice input.
+		- By pasting Gmail URLs
 		- From a web page with the browser extension
 		- From a Slack message with the Slack app
 	- Inbox section for new tasks that have yet to be triaged.
@@ -88,6 +87,7 @@ There's week and month views, just like any other calendar app:
 	- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
 	- View as list, kanban, or calendar (TODO).
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
+	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - People (TODO).
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
@@ -123,6 +123,8 @@ cargo run -p timeslay-dioxus
 
 ## Roadmap
 
+- Finalize flow
+- Fix UI panel bugs and stuff.
 - meal planning/grocery list
 	- lists in general
 - meeting agenda
@@ -132,6 +134,12 @@ cargo run -p timeslay-dioxus
 - Offline write queue
 - Eisenhower matrix
 - Theme/project days
+- Daily/weekly highlights
+
+## Terminology
+
+- Overdue tasks are tasks not marked as "completed" or "ignored" that were due before the current day.
+- Inboxed tasks are tasks that the user still needs to organize.
 
 ## Design Constraints
 

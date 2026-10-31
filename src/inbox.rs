@@ -23,6 +23,7 @@ const MAX_TITLE_CHARS: usize = 1024;
 
 #[derive(Default)]
 pub struct Inbox {
+    pub voice: crate::voice::Session,
     /// The new-task popup, while it is open.
     pub draft: Option<Draft>,
     /// The task whose day chooser is open.
@@ -55,12 +56,31 @@ pub struct Draft {
     pub error: Option<String>,
     lookup: u64,
     pub syntax_help: bool,
+    quick_ignored: Vec<std::ops::Range<usize>>,
     quick_base: Option<(tb::Metadata, String, String)>,
     quick_applied: Option<(tb::Metadata, String, String)>,
 }
 
+impl Draft {
+    pub(crate) fn quick_tokens(
+        &self,
+        projects: &crate::config::ProjectsSettings,
+    ) -> Vec<crate::task_input::Token> {
+        crate::task_input::detect(&self.title, Local::now().date_naive(), projects)
+            .into_iter()
+            .filter(|token| !self.quick_ignored.contains(&token.range))
+            .collect()
+    }
+
+    fn set_title(&mut self, title: String) {
+        crate::task_input::remap_ignored(&self.title, &title, &mut self.quick_ignored);
+        self.title = title;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Action {
+    Voice(crate::voice::Action),
     Sort(InboxSort),
     OverdueSort(InboxSort),
     /// Open the new-task popup.
@@ -69,6 +89,7 @@ pub enum Action {
     Title(String),
     SyntaxHelp(bool),
     AcceptToken(std::ops::Range<usize>),
+    DismissToken(std::ops::Range<usize>),
     Description(iced::widget::text_editor::Action),
     Deadline(String),
     Due(String),
@@ -221,6 +242,7 @@ pub fn triaged_tasks(state: &State) -> Vec<&Event> {
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
+        Action::Voice(action) => return crate::voice::update(state, action),
         Action::Sort(sort) => {
             state.config.calendar.inbox_sort = sort;
             crate::app::queue_save(state)
@@ -240,7 +262,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 state.calendar.error = None;
                 state.task_description = iced::widget::text_editor::Content::new();
             }
-            operation::focus(Id::new(TITLE_FIELD))
+            let focus = operation::focus(Id::new(TITLE_FIELD));
+            if state.inbox.voice.discovery_needed() {
+                Task::batch([
+                    focus,
+                    crate::voice::update(state, crate::voice::Action::Refresh),
+                ])
+            } else {
+                focus
+            }
         }
         Action::Cancel => {
             // A task being saved cannot be taken back, so keep its popup up
@@ -257,11 +287,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::SyntaxHelp(open) => edit(state, |draft| draft.syntax_help = open),
         Action::AcceptToken(range) => {
             if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
-                let tokens = crate::task_input::detect(
-                    &draft.title,
-                    Local::now().date_naive(),
-                    &state.config.projects,
-                );
+                let tokens = draft.quick_tokens(&state.config.projects);
                 if let Some(token) = tokens.into_iter().find(|t| t.range == range) {
                     preview(
                         draft,
@@ -272,7 +298,25 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     if let Some((metadata, due, deadline)) = draft.quick_base.as_mut() {
                         apply_value(metadata, due, deadline, token.value);
                     }
-                    draft.title = crate::task_input::remove(&draft.title, [range]);
+                    draft.set_title(crate::task_input::remove(&draft.title, [range]));
+                    preview(
+                        draft,
+                        &mut state.timeblocking.date,
+                        &mut state.timeblocking.deadline,
+                        &state.config.projects,
+                    );
+                }
+            }
+            Task::none()
+        }
+        Action::DismissToken(range) => {
+            if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
+                if draft
+                    .quick_tokens(&state.config.projects)
+                    .iter()
+                    .any(|t| t.range == range)
+                {
+                    draft.quick_ignored.push(range);
                     preview(
                         draft,
                         &mut state.timeblocking.date,
@@ -389,6 +433,7 @@ fn blank_event() -> Event {
 }
 
 fn close_draft(state: &mut State) {
+    state.inbox.voice.cancel();
     state.inbox.draft = None;
     state.travel.picker = None;
     state.picker = None;
@@ -413,7 +458,7 @@ fn title_changed(state: &mut State, value: String) -> Task<Message> {
         return Task::none();
     };
     let pasted = value.len() >= draft.title.len() + 2;
-    draft.title = value;
+    draft.set_title(value);
     draft.error = None;
     preview(
         draft,
@@ -446,6 +491,7 @@ fn preview(
     deadline: &mut String,
     projects: &crate::config::ProjectsSettings,
 ) {
+    let tokens = draft.quick_tokens(projects);
     let Some(data) = draft
         .event
         .as_mut()
@@ -482,7 +528,7 @@ fn preview(
     data.metadata.labels = base.0.labels.clone();
     *due = base.1.clone();
     *deadline = base.2.clone();
-    for token in crate::task_input::detect(&draft.title, Local::now().date_naive(), projects) {
+    for token in tokens {
         apply_value(&mut data.metadata, due, deadline, token.value);
     }
     draft.due = due.clone();
@@ -536,7 +582,7 @@ fn fetched(state: &mut State, lookup: u64, result: Result<integrations::Details,
                     .as_ref()
                     .is_some_and(|source| source.url == draft.title.trim());
             if still_the_link {
-                draft.title = details.title;
+                draft.set_title(details.title);
             }
             if let Some(deadline) = details
                 .deadline
@@ -604,18 +650,20 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
 }
 
 fn create(state: &mut State) -> Task<Message> {
+    if state.inbox.voice.active() {
+        return Task::none();
+    }
     if let Some(draft) = state
         .inbox
         .draft
         .as_mut()
         .filter(|d| !d.saving && !d.fetching)
     {
-        let tokens = crate::task_input::detect(
+        let tokens = draft.quick_tokens(&state.config.projects);
+        draft.set_title(crate::task_input::remove(
             &draft.title,
-            Local::now().date_naive(),
-            &state.config.projects,
-        );
-        draft.title = crate::task_input::remove(&draft.title, tokens.into_iter().map(|t| t.range));
+            tokens.into_iter().map(|t| t.range),
+        ));
         draft.quick_base = None;
         draft.quick_applied = None;
     }
@@ -911,6 +959,76 @@ mod tests {
         assert_eq!(
             tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
             None
+        );
+    }
+
+    #[test]
+    fn dismissed_quick_add_words_survive_edits_tab_and_save_without_metadata() {
+        let mut state = state();
+        let _ = update(&mut state, Action::NewTask);
+        let _ = update(&mut state, Action::Title("Café @home tomorrow !1".into()));
+        let _ = update(&mut state, Action::DismissToken(6..11));
+        let _ = update(&mut state, Action::DismissToken(12..20));
+        let draft = state.inbox.draft.as_ref().unwrap();
+        assert_eq!(draft.title, "Café @home tomorrow !1");
+        assert!(
+            tb::metadata(draft.event.as_ref().unwrap())
+                .labels
+                .is_empty()
+        );
+        assert!(state.timeblocking.date.is_empty());
+        assert_eq!(draft.quick_tokens(&state.config.projects).len(), 1);
+
+        let _ = update(
+            &mut state,
+            Action::Title("Plan Café @home tomorrow !1".into()),
+        );
+        let _ = update(
+            &mut state,
+            Action::Title("Plan Café @home tomorrow !1 @home".into()),
+        );
+        // The second occurrence still applies; accepting it must preserve the
+        // dismissal on the first occurrence as its byte position changes.
+        let _ = update(&mut state, Action::AcceptToken(0..4)); // stale/invalid: ignored
+        let draft = state.inbox.draft.as_ref().unwrap();
+        let tokens = draft.quick_tokens(&state.config.projects);
+        assert_eq!(tokens.len(), 2);
+        let _ = update(&mut state, Action::AcceptToken(tokens[0].range.clone()));
+        let _ = update(&mut state, Action::Create);
+        let draft = state.inbox.draft.as_ref().unwrap();
+        assert_eq!(draft.title, "Plan Café @home tomorrow");
+        let metadata = tb::metadata(draft.event.as_ref().unwrap());
+        assert_eq!(metadata.labels, ["home"]); // from the second occurrence
+        assert_eq!(metadata.priority, Some(tb::Priority::P1));
+        assert!(draft.due.is_empty());
+    }
+
+    #[test]
+    fn editing_a_dismissed_occurrence_allows_detection_again() {
+        let mut state = state();
+        let _ = update(&mut state, Action::NewTask);
+        let _ = update(&mut state, Action::Title("Plan tomorrow tomorrow".into()));
+        let _ = update(&mut state, Action::DismissToken(5..13));
+        assert_eq!(
+            state
+                .inbox
+                .draft
+                .as_ref()
+                .unwrap()
+                .quick_tokens(&state.config.projects)
+                .len(),
+            1
+        );
+        let _ = update(&mut state, Action::DismissToken(14..22));
+        assert!(state.timeblocking.date.is_empty());
+        let _ = update(&mut state, Action::Title("Plan today tomorrow".into()));
+        let draft = state.inbox.draft.as_ref().unwrap();
+        let tokens = draft.quick_tokens(&state.config.projects);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(&draft.title[tokens[0].range.clone()], "today");
+        assert_eq!(
+            state.timeblocking.date,
+            Local::now().date_naive().to_string()
         );
     }
 
@@ -1440,4 +1558,106 @@ mod tests {
         let _ = update(&mut state, Action::List(None));
         assert_eq!(state.config.calendar.inbox_list, None);
     }
+}
+
+/// Apply a fully validated voice patch as a new quick-add baseline.
+pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
+    let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
+        return;
+    };
+    // Compute the schedule before changing fields so invalid combinations are atomic.
+    let schedule = if patch.due.is_some() || patch.due_time.is_some() {
+        let day = patch.due.as_deref().unwrap_or(&draft.due);
+        let old = draft.event.as_ref();
+        let time = patch.due_time.clone().unwrap_or_else(|| {
+            old.filter(|e| !e.all_day)
+                .map(|e| e.start.format("%H:%M").to_string())
+                .unwrap_or_default()
+        });
+        let result = if day.is_empty() || time.is_empty() {
+            let day = if day.is_empty() {
+                Some(UNDATED)
+            } else {
+                chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+            };
+            day.map(|day| {
+                let start = calendar::at_clock(day, 0, 0);
+                (start, start + Duration::days(1), true)
+            })
+        } else {
+            crate::voice::due_start(day, &time).ok().map(|start| {
+                let duration = old
+                    .filter(|e| !e.all_day)
+                    .map(|e| e.end - e.start)
+                    .filter(|d| *d > Duration::zero())
+                    .unwrap_or_else(|| {
+                        Duration::minutes(
+                            patch
+                                .minutes
+                                .or_else(|| old.map(|e| tb::metadata(e).minutes))
+                                .filter(|m| *m > 0)
+                                .unwrap_or(30) as i64,
+                        )
+                    });
+                (start, start + duration, false)
+            })
+        };
+        let Some(result) = result else {
+            draft.error = Some("Invalid due date or time in your time zone".into());
+            return;
+        };
+        Some(result)
+    } else {
+        None
+    };
+    if let Some(value) = patch.title {
+        draft.set_title(value);
+    }
+    if let Some(value) = patch.due {
+        draft.due = value.clone();
+        state.timeblocking.date = value;
+    }
+    if let Some(value) = patch.deadline {
+        draft.deadline = value.clone();
+        state.timeblocking.deadline = value;
+    }
+    if let Some(event) = draft.event.as_mut() {
+        if let Some((start, end, all_day)) = schedule {
+            event.start = start;
+            event.end = end;
+            event.all_day = all_day;
+            state.timeblocking.start_time = if all_day {
+                String::new()
+            } else {
+                start.format("%H:%M").to_string()
+            };
+            state.timeblocking.end_time = if all_day {
+                String::new()
+            } else {
+                end.format("%H:%M").to_string()
+            };
+            state.timeblocking.editing_due_time = false;
+        }
+        if let Some(value) = patch.description {
+            event.details.description = value.clone();
+            state.task_description = iced::widget::text_editor::Content::with_text(&value);
+        }
+        if let Some(data) = event.details.task_data.as_mut() {
+            if let Some(value) = patch.priority {
+                data.metadata.priority = value;
+            }
+            if let Some(value) = patch.minutes {
+                data.metadata.minutes = value;
+            }
+            if let Some(value) = patch.labels {
+                data.metadata.labels = value;
+            }
+            if let Some(value) = patch.projects {
+                data.metadata.projects = value;
+            }
+        }
+    }
+    draft.quick_base = None;
+    draft.quick_applied = None;
+    draft.error = None;
 }

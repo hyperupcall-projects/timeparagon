@@ -23,10 +23,12 @@ pub mod recurrence;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;
+pub(crate) mod task_drop;
 mod task_input;
 pub mod timeblocking;
 mod timeblocking_focus;
 pub mod travel;
+mod weekly_task_list;
 
 use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text, tooltip};
 use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
@@ -35,20 +37,53 @@ use crate::app::{Message, Screen, State};
 
 use layout::Metrics;
 
-/// Match the editor's previous position below the navigation.
+/// Align the floating editor with the panel's visible top edge.
 pub fn editor_window_top(state: &State) -> f32 {
-    let width = state.main_size.width - state.screen_margin_width();
     state.screen_margin()
-        + tabs_height(
-            state,
-            &Metrics::of(Size::new(width, state.main_size.height)),
-        )
 }
 
 pub fn editor_window(state: &State) -> Element<'_, Message> {
-    responsive(move |size| {
+    let content = responsive(move |size| {
         if state.travel.map.active {
             return crate::travel::map::view(state);
+        }
+        if state.range_view_active() {
+            let metrics = Metrics::of(size);
+            let content = if state.monthly {
+                calendar::monthly_view(state, &metrics)
+            } else {
+                calendar::weekly_view(state, &metrics)
+            };
+            let mut view_header =
+                row![text(if state.monthly { "Month" } else { "Week" }).size(metrics.label()),]
+                    .spacing(12)
+                    .align_y(Alignment::Center);
+            if state.weekly && !state.monthly {
+                view_header = view_header.push(
+                    iced::widget::toggler(state.config.calendar.weekly_task_list)
+                        .label("Show task list")
+                        .text_size(metrics.label())
+                        .on_toggle(Message::CalendarTaskListToggled),
+                );
+            }
+            let body: Element<'_, Message> =
+                if state.weekly && state.config.calendar.weekly_task_list {
+                    content
+                } else {
+                    column![view_header.padding([4, 8]), content]
+                        .height(Fill)
+                        .into()
+                };
+            let mut layers = vec![body];
+            push_dialogs(&mut layers, state, &metrics);
+            if let Some((task, pointer)) = range_drag_ghost(state) {
+                layers.push(drag_ghost(state, task, &metrics, pointer, size));
+            }
+            return container(iced::widget::stack(layers))
+                .width(Fill)
+                .height(Fill)
+                .style(controls::surface)
+                .into();
         }
         let mut panes = row![];
         if state.timeblocking.block.is_some() {
@@ -74,38 +109,57 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         }
         let metrics = Metrics::of(size);
         let mut layers = vec![panes.height(Fill).into()];
-        if state.inbox.draft.is_some() {
-            layers.push(inbox::new_task_overlay(state, &metrics));
-        }
-        if state.timeblocking.focus.is_some() {
-            layers.push(timeblocking::focus_overlay(state, &metrics));
-        }
-        if state.timeblocking.session_edit.is_some() {
-            layers.push(timeblocking::session_editor(state, &metrics));
-        }
-        if state.calendar.pending_delete.is_some() {
-            layers.push(calendar::delete_confirmation(state, &metrics));
-        }
-        if state.description_popup.is_some() {
-            layers.push(description::overlay(state, &metrics));
-        }
-        if state.timeblocking.estimate_task.is_some() {
-            layers.push(timeblocking::estimate_overlay(state, &metrics));
-        }
-        if let Some(picker) = &state.picker {
-            layers.push(controls::overlay(
-                picker,
-                &metrics,
-                state.config.appearance.use_24_hour,
-            ));
-        }
+        push_dialogs(&mut layers, state, &metrics);
         container(iced::widget::stack(layers))
             .width(Fill)
             .height(Fill)
             .style(controls::surface)
             .into()
-    })
-    .into()
+    });
+    task_drop::host(window_frame(state, content.into(), "editor-body"))
+}
+
+/// All application dialogs share a single host: the floating editor when it
+/// exists, otherwise the main view. Keep this list shared so new dialogs cannot
+/// accidentally be rendered in both windows.
+fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, metrics: &Metrics) {
+    if state.timeblocking.focus.is_some() {
+        layers.push(timeblocking::focus_overlay(state, metrics));
+    }
+    if state.timeblocking.session_edit.is_some() {
+        layers.push(timeblocking::session_editor(state, metrics));
+    }
+    if state.brain_dump.open.is_some() {
+        layers.push(brain_dump::editor_overlay(state, metrics));
+    }
+    if state.inbox.draft.is_some() {
+        layers.push(inbox::new_task_overlay(state, metrics));
+    }
+    if state.timeblocking.estimate_task.is_some() {
+        layers.push(timeblocking::estimate_overlay(state, metrics));
+    }
+    if state.calendar.pending_delete.is_some() {
+        layers.push(calendar::delete_confirmation(state, metrics));
+    }
+    if state.travel.open.is_some() {
+        layers.push(travel::leg_overlay(state, metrics));
+    }
+    if state.description_popup.is_some() {
+        layers.push(description::overlay(state, metrics));
+    }
+    if state.habits.confirm_delete.is_some() {
+        layers.push(habits::delete_confirmation(state, metrics));
+    }
+    if let Some(picker) = &state.picker {
+        layers.push(controls::overlay(
+            picker,
+            metrics,
+            state.config.appearance.time_format,
+        ));
+    }
+    if state.inbox.voice.debug_open {
+        layers.push(crate::voice::debug_overlay(state, metrics));
+    }
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
@@ -135,8 +189,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 layers.push(controls::overlay(
                     picker,
                     &metrics,
-                    state.config.appearance.use_24_hour,
+                    state.config.appearance.time_format,
                 ));
+            }
+            if state.inbox.voice.debug_open {
+                layers.push(crate::voice::debug_overlay(state, &metrics));
             }
             return iced::widget::stack(layers).into();
         }
@@ -160,13 +217,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Travel, _) => travel::view(state, &main_metrics),
             (Screen::Habits, _) => habits::view(state, &main_metrics),
             (Screen::Calendar, _) => {
-                if state.monthly {
-                    calendar::monthly_view(state, &main_metrics)
-                } else if state.weekly {
-                    calendar::weekly_view(state, &main_metrics)
-                } else {
-                    row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
-                }
+                row![container(calendar::view(state, &main_metrics)).width(Fill)].into()
             }
         };
 
@@ -188,7 +239,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     tooltip(
                         button(text("+").size(14).center().width(Fill))
                             .width(Fill)
-                            .height(22)
+                            .height(PANEL_ACTION_HEIGHT)
                             .padding(0)
                             .style(crate::ui::controls::secondary)
                             .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
@@ -199,7 +250,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 )
                 .id("panel-add-task")
                 .width(Length::Fixed(footer_width))
-                .height(22),
+                .height(PANEL_ACTION_HEIGHT),
             );
         }
         // Adding/removing a wrapper resets the state of all its descendants.
@@ -211,32 +262,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
         if state.more_menu_open {
             layers.push(more_menu(state, &nav_metrics));
         }
-        if state.timeblocking.focus.is_some() {
-            layers.push(timeblocking::focus_overlay(state, &metrics));
-        }
-        if state.timeblocking.session_edit.is_some() {
-            layers.push(timeblocking::session_editor(state, &metrics));
-        }
-        if state.brain_dump.open.is_some() {
-            layers.push(brain_dump::editor_overlay(state, &metrics));
-        }
-        if state.inbox.draft.is_some() {
-            layers.push(inbox::new_task_overlay(state, &metrics));
-        }
-        if state.timeblocking.estimate_task.is_some() {
-            layers.push(timeblocking::estimate_overlay(state, &metrics));
-        }
-        if state.calendar.pending_delete.is_some() {
-            layers.push(calendar::delete_confirmation(state, &metrics));
-        }
-        if state.travel.open.is_some() {
-            layers.push(travel::leg_overlay(state, &metrics));
-        }
-        if state.description_popup.is_some() {
-            layers.push(description::overlay(state, &metrics));
-        }
-        if state.habits.confirm_delete.is_some() {
-            layers.push(habits::delete_confirmation(state, &metrics));
+        // Shared state is visible to both windows, but dialogs have one owner.
+        // Fall back to the main view when there is no floating editor.
+        if state.editor_window.is_none() {
+            push_dialogs(&mut layers, state, &metrics);
         }
         // The floating task card is drawn last so it is never hidden, and it is
         // only added while a task is actually in the air.
@@ -245,7 +274,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
             .dragging
             .as_deref()
             .and_then(|id| state.calendar.event(id))
-            .filter(|_| state.timeblocking.drag_pointer.is_some())
+            .filter(|_| {
+                state.timeblocking.drag_pointer.is_some_and(|point| {
+                    state.timeblocking.drag_window.or(state.main_window) == state.main_window
+                        && iced::Rectangle::with_size(state.main_size).contains(point)
+                })
+            })
         {
             let pointer = state.timeblocking.drag_pointer.unwrap_or_default();
             // The sidebar body is inset from the window, and the pointer is in
@@ -264,18 +298,38 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 size,
             ));
         }
-        if let Some(picker) = &state.picker {
-            layers.push(controls::overlay(
-                picker,
-                &metrics,
-                state.config.appearance.use_24_hour,
-            ));
-        }
         iced::widget::stack(layers).into()
     });
     if state.task_creation_window {
         return content.into();
     }
+    let body = window_frame(
+        state,
+        content.into(),
+        if state.sidebar.is_some() {
+            "sidebar-body"
+        } else {
+            "application-body"
+        },
+    );
+    if state.sidebar.is_some() {
+        let margin = state.screen_margin();
+        container(body)
+            .padding(margin)
+            .width(Fill)
+            .height(Fill)
+            .into()
+    } else {
+        body
+    }
+}
+
+/// Shared nested borders keep the panel and every floating editor in sync.
+fn window_frame<'a>(
+    state: &State,
+    content: Element<'a, Message>,
+    id: &'static str,
+) -> Element<'a, Message> {
     let radius = if state.sidebar.is_some() {
         state.config.views.panel_border_radius()
     } else {
@@ -317,11 +371,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             });
 
         container(inner)
-            .id(if state.sidebar.is_some() {
-                "sidebar-body"
-            } else {
-                "application-body"
-            })
+            .id(id)
             .width(Fill)
             .height(Fill)
             .clip(true)
@@ -336,16 +386,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
             })
             .into()
     };
-    if state.sidebar.is_some() {
-        let margin = state.screen_margin();
-        container(body)
-            .padding(margin)
-            .width(Fill)
-            .height(Fill)
-            .into()
-    } else {
-        body
-    }
+    body
+}
+
+fn range_drag_ghost(state: &State) -> Option<(&crate::calendar::Event, iced::Point)> {
+    let task = state
+        .calendar
+        .event(state.timeblocking.dragging.as_deref()?)?;
+    let point = task_drop::range_position(
+        state,
+        state.timeblocking.drag_window.or(state.main_window)?,
+        state.timeblocking.drag_pointer?,
+    )?;
+    Some((task, point))
 }
 
 /// Places the floating task card just under the pointer, clamped to the window
@@ -377,38 +430,24 @@ fn drag_ghost<'a>(
         .into()
 }
 
-/// How many top-level navigation items there are: the Day/Week/Month switcher,
-/// Tasks/Projects, then Note/More/Settings.
+/// The six main navigation destinations.
 const TAB_COUNT: usize = 6;
+const TAB_LABELS: [&str; TAB_COUNT] = ["Schedule", "Tasks", "Projects", "Note", "More", "Settings"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Schedule", "Tasks", "Proj", "Note", "More", "Set"];
+const TAB_WIDEST_LABELS: [&str; TAB_COUNT] = TAB_LABELS;
+const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] = TAB_SHORT_LABELS;
 
-/// The visible top-level names, in the order they appear. The first item is the
-/// calendar view switcher, which shows the current view rather than a fixed name.
-const TAB_LABELS: [&str; TAB_COUNT] = ["Day", "Tasks", "Projects", "Note", "More", "Settings"];
+/// Shared height for the overview toggles and the bottom add-task button.
+const PANEL_ACTION_HEIGHT: f32 = 22.0;
 
-/// Short names for windows too narrow to fit the full ones legibly.
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Day", "Tasks", "Proj", "Note", "More", "Set"];
-
-/// The longest labels the menu can show, used to reserve room for the switcher
-/// whatever view it is currently displaying.
-const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
-    ["Month", "Tasks", "Projects", "Note", "More", "Settings"];
-const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-    ["Month", "Tasks", "Proj", "Note", "More", "Set"];
-
-/// The label for the calendar view switcher: the view currently on show.
-pub fn calendar_view_label(state: &State) -> &'static str {
-    if state.monthly {
-        "Month"
-    } else if state.weekly {
-        "Week"
-    } else {
-        "Day"
-    }
+/// The schedule destination always opens the day view.
+pub fn calendar_view_label(_state: &State) -> &'static str {
+    "Schedule"
 }
 
 /// The tabs that live inside Tasks, shown beneath the top menu while any of
 /// them is open.
-pub const TASKS_LABELS: [&str; 4] = ["Overdue", "Inbox", "Triaged", "Backlog"];
+pub const TASKS_LABELS: [&str; 3] = ["Overdue", "Inbox", "Backlog"];
 
 /// The destinations kept inside the More menu.
 pub const MORE_LABELS: [&str; 4] = ["Travel", "Habits", "Keep", "Brain dump"];
@@ -455,12 +494,9 @@ fn tab_fit(metrics: Metrics) -> TabFit {
         let chars: usize = labels
             .iter()
             .map(|label| label.chars().count())
-            .sum::<usize>()
-            // The switcher's chevron is a glyph of its own, plus a little slack.
-            + 4;
-        // Six tabs, the switcher's second half, the gaps within the three
-        // groups, and the two gaps between them.
-        let fixed = 14.0 * pad + 3.0 * gap + 2.0 * (gap * 2.0).max(4.0) + 1.0;
+            .sum::<usize>();
+        // Six tabs, the gaps within each group, and the two group gaps.
+        let fixed = 12.0 * pad + 3.0 * gap + 2.0 * (gap * 2.0).max(4.0) + 1.0;
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_WIDEST_LABELS);
@@ -482,7 +518,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// the Day/Week/Month switcher, then Tasks/Projects, then Note/More/Settings.
+/// Schedule, then Tasks/Projects, then Note/More/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
 /// While a Tasks screen is open, a second row with the task-list tabs
@@ -504,15 +540,10 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             Screen::Travel | Screen::Habits | Screen::KeepNotes | Screen::BrainDump
         );
 
-    let select_view = if state.monthly {
-        Message::CalendarMonthViewSelected
-    } else {
-        Message::CalendarModeSelected(state.weekly)
-    };
-    let view = view_tab(
-        calendar_view_label(state),
-        select_view,
-        state.screen == Screen::Calendar || state.view_menu_open,
+    let view = tab(
+        labels[0],
+        state.screen == Screen::Calendar,
+        Message::ScreenSelected(Screen::Calendar),
         metrics,
         fit,
     );
@@ -578,18 +609,62 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     })
     .width(Fill);
 
+    let overview_button = |label, active, message| {
+        button(text(label).size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .height(PANEL_ACTION_HEIGHT)
+            .padding(0)
+            .on_press(message)
+            .style(if active {
+                controls::primary
+            } else {
+                controls::secondary
+            })
+    };
+    let week_active = state.range_view_active() && state.weekly;
+    let month_active = state.range_view_active() && state.monthly;
+    let overviews = container(
+        row![
+            overview_button(
+                if week_active {
+                    "Hide week"
+                } else {
+                    "Show week"
+                },
+                week_active,
+                Message::CalendarModeSelected(!week_active),
+            ),
+            overview_button(
+                if month_active {
+                    "Hide month"
+                } else {
+                    "Show month"
+                },
+                month_active,
+                if month_active {
+                    Message::CalendarModeSelected(false)
+                } else {
+                    Message::CalendarMonthViewSelected
+                },
+            ),
+        ]
+        .spacing(metrics.spacing),
+    )
+    .padding(Padding {
+        top: TAB_TOP_MARGIN,
+        left: metrics.padding,
+        right: metrics.padding,
+        bottom: 0.0,
+    })
+    .width(Fill);
+    let navigation = column![overviews, bar].width(Fill);
     if !tasks_open {
-        return bar.into();
+        return navigation.into();
     }
 
     let subtabs = row(TASKS_LABELS
         .iter()
-        .zip([
-            Screen::Overdue,
-            Screen::Inbox,
-            Screen::Triaged,
-            Screen::Backlog,
-        ])
+        .zip([Screen::Overdue, Screen::Inbox, Screen::Backlog])
         .map(|(label, screen)| {
             tab(
                 label,
@@ -602,7 +677,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .spacing(fit.gap);
 
     column![
-        bar,
+        navigation,
         container(subtabs).padding(Padding {
             left: metrics.padding,
             right: metrics.padding,
@@ -624,7 +699,7 @@ fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
     } else {
         0.0
     };
-    TAB_TOP_MARGIN + tab_height(metrics) + tasks_row
+    TAB_TOP_MARGIN + PANEL_ACTION_HEIGHT + TAB_TOP_MARGIN + tab_height(metrics) + tasks_row
 }
 
 fn tab_height(metrics: &Metrics) -> f32 {
@@ -658,53 +733,6 @@ fn tab<'a>(
         crate::ui::controls::secondary
     })
     .into()
-}
-
-/// The single Day/Week/Month switcher. Its two halves share one button shape:
-/// the name selects the current view, while the chevron opens the dropdown.
-fn view_tab<'a>(
-    label: &'a str,
-    select_view: Message,
-    active: bool,
-    metrics: &Metrics,
-    fit: TabFit,
-) -> Element<'a, Message> {
-    let name = button(
-        text(label)
-            .size(fit.size)
-            .wrapping(text::Wrapping::None)
-            .center(),
-    )
-    .height(tab_height(metrics))
-    .padding(Padding::from([0.0, fit.pad]))
-    .on_press(select_view)
-    .style(view_half_style(active));
-
-    let arrow = button(text("▾").size(fit.size).center())
-        .height(tab_height(metrics))
-        .padding(Padding::from([0.0, fit.pad.max(4.0)]))
-        .on_press(Message::ViewMenuToggled)
-        .style(view_half_style(active));
-
-    let divider = container(Space::new().height(tab_height(metrics) * 0.6))
-        .width(1.0)
-        .style(|theme: &iced::Theme| container::Style {
-            background: Some(
-                theme
-                    .extended_palette()
-                    .background
-                    .strong
-                    .color
-                    .scale_alpha(0.35)
-                    .into(),
-            ),
-            ..Default::default()
-        });
-
-    container(row![name, divider, arrow].spacing(0.0).align_y(Center))
-        .clip(true)
-        .style(view_button_style(active))
-        .into()
 }
 
 /// The shared background, border and shadow behind both halves of the switcher.
@@ -768,9 +796,9 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut panel = column![].spacing(4.0).width(Fill);
     for (label, selected, message) in [
         (
-            "Day",
-            !state.weekly && !state.monthly,
-            Message::CalendarModeSelected(false),
+            "Schedule",
+            state.screen == Screen::Calendar,
+            Message::ScreenSelected(Screen::Calendar),
         ),
         ("Week", state.weekly, Message::CalendarModeSelected(true)),
         ("Month", state.monthly, Message::CalendarMonthViewSelected),

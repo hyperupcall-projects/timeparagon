@@ -7437,6 +7437,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smithay-client-toolkit 0.20.0",
+ "tempfile",
  "tiny-skia",
  "toml 1.1.6+spec-1.1.0",
  "ureq 2.12.1",

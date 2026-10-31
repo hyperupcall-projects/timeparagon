@@ -1401,6 +1401,39 @@ impl Store {
         )
     }
 
+    /// Agenda entries include tasks normally tucked into their time blocks.
+    pub fn task_list_events_on<'a>(
+        &'a self,
+        day: NaiveDate,
+        settings: &'a CalendarSettings,
+    ) -> Vec<&'a Event> {
+        let start = at_clock(day, settings.day_start_hour(), 0);
+        let end = at_clock(day.succ_opt().unwrap_or(day), settings.day_start_hour(), 0);
+        let mut events: Vec<_> = self
+            .events_on(day)
+            .iter()
+            .filter(|event| self.calendar_enabled(event.source_id(), settings))
+            .filter(|event| {
+                event
+                    .details
+                    .scheduled
+                    .as_ref()
+                    .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
+            })
+            .filter(|event| {
+                if event.all_day && event.is_task() {
+                    event.start.date_naive() == day
+                } else if event.all_day {
+                    event_on_day(event, day, settings.day_start_hour())
+                } else {
+                    event.start < end && event.end > start
+                }
+            })
+            .collect();
+        events.sort_by(|a, b| (a.start, a.end, &a.id).cmp(&(b.start, b.end, &b.id)));
+        events
+    }
+
     /// The timed events of `day` that the grid would draw, in start order,
     /// for any day that has been loaded, not only the one in view. Empty for
     /// a day that was never visited.
@@ -1662,9 +1695,10 @@ pub fn sync_range(
     )
 }
 
-/// The selected day and the following days, with one preceding day for context.
+/// Seven days starting at the selected day, or eight starting one day earlier.
 pub fn week_dates(anchor: NaiveDate, days: u32) -> Vec<NaiveDate> {
-    (-1..i64::from(days.clamp(7, 8)))
+    let start = if days.clamp(7, 8) == 8 { -1 } else { 0 };
+    (start..7)
         .filter_map(|offset| anchor.checked_add_signed(chrono::Duration::days(offset)))
         .collect()
 }

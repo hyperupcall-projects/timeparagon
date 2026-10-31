@@ -22,6 +22,61 @@ struct QuickInput<'a> {
     tokens: Vec<Token>,
     size: f32,
 }
+impl QuickInput<'_> {
+    // Drawing and hit testing share the same shaping and horizontal scroll offset.
+    fn highlights(
+        &self,
+        tree: &iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        renderer: &Renderer,
+    ) -> Vec<(std::ops::Range<usize>, Rectangle)> {
+        use iced::advanced::text::{Paragraph as _, Renderer as _};
+        let bounds = layout.children().next().unwrap().bounds();
+        let paragraph = <iced::Renderer as iced::advanced::text::Renderer>::Paragraph::with_text(
+            iced::advanced::Text {
+                content: self.value,
+                bounds: iced::Size::new(f32::INFINITY, bounds.height),
+                size: self.size.into(),
+                line_height: iced::advanced::text::LineHeight::default(),
+                font: renderer.default_font(),
+                align_x: iced::advanced::text::Alignment::Default,
+                align_y: iced::alignment::Vertical::Center,
+                shaping: iced::advanced::text::Shaping::Advanced,
+                wrapping: iced::advanced::text::Wrapping::None,
+            },
+        );
+        let value = iced::widget::text_input::Value::new(self.value);
+        let state = tree.state.downcast_ref::<InputState>();
+        let index = match state.cursor().state(&value) {
+            iced::widget::text_input::cursor::State::Index(i) => i,
+            iced::widget::text_input::cursor::State::Selection { end, .. } => end,
+        };
+        let position = |i| paragraph.grapheme_position(0, i).unwrap_or_default().x;
+        let offset = if state.is_focused() {
+            (position(index) + 5.0 - bounds.width).max(0.0)
+        } else {
+            0.0
+        };
+        self.tokens
+            .iter()
+            .map(|token| {
+                let start =
+                    iced::widget::text_input::Value::new(&self.value[..token.range.start]).len();
+                let end =
+                    iced::widget::text_input::Value::new(&self.value[..token.range.end]).len();
+                (
+                    token.range.clone(),
+                    Rectangle {
+                        x: bounds.x + position(start) - offset,
+                        y: bounds.y,
+                        width: position(end) - position(start),
+                        height: bounds.height,
+                    },
+                )
+            })
+            .collect()
+    }
+}
 impl iced::advanced::widget::Widget<Message, Theme, Renderer> for QuickInput<'_> {
     fn children(&self) -> Vec<iced::advanced::widget::Tree> {
         vec![iced::advanced::widget::Tree::new(&self.content)]
@@ -107,6 +162,25 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for QuickInput<'_>
                 }
             }
         }
+        let dismissed = if matches!(
+            event,
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+        ) {
+            cursor
+                .position()
+                .filter(|point| {
+                    viewport.contains(*point)
+                        && layout.children().next().unwrap().bounds().contains(*point)
+                })
+                .and_then(|point| {
+                    self.highlights(&tree.children[0], layout, renderer)
+                        .into_iter()
+                        .find(|(_, bounds)| bounds.contains(point))
+                        .map(|(range, _)| range)
+                })
+        } else {
+            None
+        };
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
@@ -117,6 +191,10 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for QuickInput<'_>
             shell,
             viewport,
         );
+        if let Some(range) = dismissed {
+            shell.publish(Message::Inbox(crate::inbox::Action::DismissToken(range)));
+            shell.capture_event();
+        }
     }
 
     fn draw(
@@ -138,52 +216,14 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for QuickInput<'_>
             cursor,
             viewport,
         );
-        use iced::advanced::{
-            Renderer as _,
-            text::{Paragraph as _, Renderer as _},
-        };
+        use iced::advanced::Renderer as _;
         let bounds = layout.children().next().unwrap().bounds();
-        let paragraph = <iced::Renderer as iced::advanced::text::Renderer>::Paragraph::with_text(
-            iced::advanced::Text {
-                content: self.value,
-                bounds: iced::Size::new(f32::INFINITY, bounds.height),
-                size: self.size.into(),
-                line_height: iced::advanced::text::LineHeight::default(),
-                font: renderer.default_font(),
-                align_x: iced::advanced::text::Alignment::Default,
-                align_y: iced::alignment::Vertical::Center,
-                shaping: iced::advanced::text::Shaping::Advanced,
-                wrapping: iced::advanced::text::Wrapping::None,
-            },
-        );
-        let value = iced::widget::text_input::Value::new(self.value);
-        let state = tree.children[0].state.downcast_ref::<InputState>();
-        let index = match state.cursor().state(&value) {
-            iced::widget::text_input::cursor::State::Index(i) => i,
-            iced::widget::text_input::cursor::State::Selection { end, .. } => end,
-        };
-        let position = |i| paragraph.grapheme_position(0, i).unwrap_or_default().x;
-        let offset = if state.is_focused() {
-            (position(index) + 5.0 - bounds.width).max(0.0)
-        } else {
-            0.0
-        };
         if let Some(clip) = bounds.intersection(viewport) {
             renderer.with_layer(clip, |renderer| {
-                for token in &self.tokens {
-                    let start =
-                        iced::widget::text_input::Value::new(&self.value[..token.range.start])
-                            .len();
-                    let end =
-                        iced::widget::text_input::Value::new(&self.value[..token.range.end]).len();
+                for (_, bounds) in self.highlights(&tree.children[0], layout, renderer) {
                     renderer.fill_quad(
                         iced::advanced::renderer::Quad {
-                            bounds: Rectangle {
-                                x: bounds.x + position(start) - offset,
-                                y: bounds.y,
-                                width: position(end) - position(start),
-                                height: bounds.height,
-                            },
+                            bounds,
                             border: iced::Border::default().rounded(3),
                             ..Default::default()
                         },
@@ -207,6 +247,16 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for QuickInput<'_>
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        if cursor.position().is_some_and(|point| {
+            viewport.contains(point)
+                && layout.children().next().unwrap().bounds().contains(point)
+                && self
+                    .highlights(&tree.children[0], layout, renderer)
+                    .iter()
+                    .any(|(_, bounds)| bounds.contains(point))
+        }) {
+            return mouse::Interaction::Pointer;
+        }
         self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
@@ -226,6 +276,41 @@ mod tests {
         widget::{Id, text_input},
     };
     use iced_test::{Simulator, core::Settings};
+
+    #[test]
+    fn clicking_a_highlight_dismisses_it_including_after_horizontal_scroll() {
+        for title in ["tomorrow", "Café and a very long title before tomorrow"] {
+            let tokens = crate::task_input::detect(
+                title,
+                chrono::Local::now().date_naive(),
+                &Default::default(),
+            );
+            let range = tokens[0].range.clone();
+            let input = quick_input(
+                text_input("Task", title)
+                    .id(Id::new("test-title"))
+                    .on_input(|v| Message::Inbox(crate::inbox::Action::Title(v))),
+                title,
+                tokens,
+                20.0,
+            );
+            let mut ui = Simulator::with_size(Settings::default(), Size::new(160.0, 60.0), input);
+            // Focus outside the highlight, then reveal the end of long input.
+            ui.point_at((155.0, 15.0));
+            ui.simulate([
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
+            ui.tap_key(Named::End);
+            ui.point_at((if title == "tomorrow" { 40.0 } else { 140.0 }, 15.0));
+            ui.simulate([
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
+            let messages: Vec<_> = ui.into_messages().collect();
+            assert!(messages.iter().any(|m| matches!(m, Message::Inbox(crate::inbox::Action::DismissToken(r)) if *r == range)), "{title}");
+        }
+    }
 
     #[test]
     fn tab_accepts_only_the_highlight_at_the_cursor_and_enter_submits() {

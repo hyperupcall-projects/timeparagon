@@ -138,8 +138,8 @@ pub fn run() -> Result<()> {
                     dock.draw();
                 }
                 dock.app_config.views = config.views;
-                if dock.app_config.appearance.use_24_hour != config.appearance.use_24_hour {
-                    dock.app_config.appearance.use_24_hour = config.appearance.use_24_hour;
+                if dock.app_config.appearance.time_format != config.appearance.time_format {
+                    dock.app_config.appearance.time_format = config.appearance.time_format;
                     dock.refresh_segments();
                     dock.draw();
                 }
@@ -502,7 +502,7 @@ impl Dock {
             &self.store,
             &self.app_config.calendar,
             self.day,
-            self.app_config.appearance.use_24_hour,
+            self.app_config.appearance.time_format,
         );
         self.pinned = pinned.and_then(|(start, end, title)| {
             self.segments.iter().position(|segment| {

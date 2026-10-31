@@ -1,5 +1,4 @@
-//! The Projects tab: the list of projects, with adding, renaming, a color and
-//! a folder for each, and removing.
+//! The Projects tab: a selectable list with an editable overview beside it.
 
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Color, Element, Fill, Length};
@@ -23,17 +22,9 @@ fn msg(action: Action) -> Message {
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let mut items = column![
-        super::controls::page_heading(
-            "Projects",
-            "Group your tasks and keep related work together",
-            Some(state.config.projects.items.len()),
-            metrics
-        ),
-        add_box(state, metrics)
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
+    let mut items = column![add_box(state, metrics)]
+        .spacing(metrics.spacing)
+        .width(Fill);
 
     for project in state.config.projects.sorted() {
         items = items.push(project_row(state, project, metrics));
@@ -47,12 +38,54 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         );
     }
 
-    container(
-        scrollable(container(items).padding(iced::Padding {
-            right: SCROLLBAR_GUTTER,
-            ..iced::Padding::ZERO
-        }))
+    let list = scrollable(container(items).padding(iced::Padding {
+        right: SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    }))
+    .width(Fill)
+    .height(Fill);
+
+    let body: Element<'a, Message> = if let Some(draft) = &state.projects.editing {
+        let overview = container(
+            scrollable(
+                container(overview(state, draft, metrics)).padding(iced::Padding {
+                    right: SCROLLBAR_GUTTER,
+                    ..iced::Padding::ZERO
+                }),
+            )
+            .height(Fill),
+        )
+        .padding(metrics.padding)
         .width(Fill)
+        .height(Fill)
+        .style(super::controls::card_surface);
+
+        if metrics.size.width >= 680.0 {
+            row![
+                container(list).width(Length::FillPortion(2)),
+                container(overview).width(Length::FillPortion(3)),
+            ]
+            .spacing(metrics.spacing)
+            .height(Fill)
+            .into()
+        } else {
+            overview.into()
+        }
+    } else {
+        list.into()
+    };
+
+    container(
+        column![
+            super::controls::page_heading(
+                "Projects",
+                "Select a project to view and edit its details",
+                Some(state.config.projects.items.len()),
+                metrics,
+            ),
+            body,
+        ]
+        .spacing(metrics.spacing)
         .height(Fill),
     )
     .padding(metrics.padding)
@@ -88,76 +121,90 @@ fn project_row<'a>(
     project: &'a Project,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let editing = state
+    let selected = state
         .projects
         .editing
         .as_ref()
-        .filter(|draft| draft.id == project.id);
-
-    let content: Element<'a, Message> = match editing {
-        Some(draft) => editor(draft, metrics),
-        None => summary(state, project, metrics),
-    };
-
-    container(content)
-        .padding([6, 8])
-        .width(Fill)
-        .style(super::controls::card_surface)
-        .into()
-}
-
-/// A project as listed: color, name, folder, and the buttons for it.
-fn summary<'a>(state: &State, project: &'a Project, metrics: &Metrics) -> Element<'a, Message> {
-    let header = row![
-        color_circle(project.color().unwrap_or(NO_COLOR)),
-        text(&project.name)
-            .wrapping(text::Wrapping::WordOrGlyph)
-            .size(metrics.label() + 1.0)
-            .font(iced::Font {
-                weight: iced::font::Weight::Semibold,
-                ..iced::Font::DEFAULT
-            })
-            .width(Fill),
-        button(text("Edit").size(metrics.label()))
-            .on_press(msg(Action::Edit(project.id)))
-            .padding([2, 6])
-            .style(button::text),
-        button(text("✕").size(metrics.label()))
-            .on_press(msg(Action::Remove(project.id)))
-            .padding([2, 6])
-            .style(button::text),
+        .is_some_and(|draft| draft.id == project.id);
+    let mut content = column![
+        row![
+            color_circle(project.color().unwrap_or(NO_COLOR)),
+            text(&project.name)
+                .wrapping(text::Wrapping::WordOrGlyph)
+                .size(metrics.label() + 1.0)
+                .width(Fill),
+            text("›").size(metrics.label() + 2.0),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
     ]
-    .spacing(6)
-    .align_y(Alignment::Center);
-
-    let mut content = column![header].spacing(2).width(Fill);
+    .spacing(4)
+    .width(Fill);
 
     if let Some(directory) = &project.directory {
         content = content.push(
             text(directory.display().to_string())
+                .wrapping(text::Wrapping::WordOrGlyph)
                 .size(metrics.label() - 1.0)
                 .style(text::secondary),
         );
     }
 
-    if state.projects.confirm_remove == Some(project.id) {
+    button(content)
+        .on_press(msg(Action::Edit(project.id)))
+        .padding([10, 12])
+        .width(Fill)
+        .style(if selected {
+            super::controls::primary
+        } else {
+            super::controls::secondary
+        })
+        .into()
+}
+
+fn overview<'a>(state: &State, draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
+    let mut content = column![
+        row![
+            text("Project overview")
+                .size(metrics.label() + 3.0)
+                .width(Fill),
+            button(text("Close").size(metrics.label()))
+                .on_press(msg(Action::CancelEdit))
+                .style(button::text),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+        text(format!("Project ID: {}", draft.id))
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+        editor(draft, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    if state.projects.confirm_remove == Some(draft.id) {
         content = content.push(
             column![
-                text(format!("Remove {}?", project.name)).size(metrics.label()),
+                text("Remove this project?").size(metrics.label()),
                 row![
-                    button(text("Remove").size(metrics.label()).center())
-                        .on_press(msg(Action::ConfirmRemove(project.id)))
+                    button(text("Remove").size(metrics.label()))
+                        .on_press(msg(Action::ConfirmRemove(draft.id)))
                         .style(button::danger),
-                    button(text("Keep").size(metrics.label()).center())
+                    button(text("Keep").size(metrics.label()))
                         .on_press(msg(Action::CancelRemove))
-                        .style(crate::ui::controls::secondary),
+                        .style(super::controls::secondary),
                 ]
                 .spacing(6),
             ]
             .spacing(4),
         );
+    } else {
+        content = content.push(
+            button(text("Remove project").size(metrics.label()))
+                .on_press(msg(Action::Remove(draft.id)))
+                .style(button::danger),
+        );
     }
-
     content.into()
 }
 
@@ -176,7 +223,7 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
         .width(Fill);
 
     let mut swatches = column![].spacing(6);
-    for chunk in colors::palette().chunks(6) {
+    for chunk in colors::palette().chunks(if metrics.size.width < 300.0 { 3 } else { 6 }) {
         let mut line = row![].spacing(6);
         for &color in chunk {
             line = line.push(swatch_button(
@@ -201,18 +248,22 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
         crate::ui::controls::secondary
     });
 
-    let directory = row![
-        text_input("/path/to/project/files", &draft.directory)
-            .on_input(|directory| msg(Action::Directory(directory)))
-            .on_submit(msg(Action::Save))
-            .size(metrics.label())
-            .width(Fill),
-        button(text("Browse…").size(metrics.label()).center())
-            .on_press(msg(Action::Browse))
-            .style(crate::ui::controls::secondary),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
+    let path = text_input("/path/to/project/files", &draft.directory)
+        .on_input(|directory| msg(Action::Directory(directory)))
+        .on_submit(msg(Action::Save))
+        .size(metrics.label())
+        .width(Fill);
+    let browse = button(text("Browse…").size(metrics.label()).center())
+        .on_press(msg(Action::Browse))
+        .style(crate::ui::controls::secondary);
+    let directory: Element<'a, Message> = if metrics.size.width < 420.0 {
+        column![path, browse].spacing(6).into()
+    } else {
+        row![path, browse]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+    };
 
     let mut content = column![
         label("Name"),
@@ -220,7 +271,7 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
         label("Color"),
         swatches,
         no_color,
-        label("Folder"),
+        label("Folder path"),
         directory,
     ]
     .spacing(4)

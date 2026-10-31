@@ -9,6 +9,7 @@
 //! updates that change them. Drawing lives in `ui::calendar` and
 //! `ui::alarms`.
 
+use crate::calendar::time_format::TimeFormat;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -53,7 +54,7 @@ impl Alarm {
     /// A label becomes the notification's headline, and the body always says
     /// what time was asked for, so the notification never falls back to the
     /// timer wording.
-    pub fn firing_profile(&self, use_24_hour: bool) -> AlarmProfile {
+    pub fn firing_profile(&self, time_format: TimeFormat) -> AlarmProfile {
         let mut profile = self.profile.clone();
 
         if !self.label.trim().is_empty() {
@@ -62,7 +63,7 @@ impl Alarm {
         if profile.notification.body.trim().is_empty() {
             profile.notification.body = format!(
                 "Alarm for {}",
-                crate::calendar::time_format::clock(self.at, use_24_hour)
+                crate::calendar::time_format::clock(self.at, time_format)
             );
         }
 
@@ -584,7 +585,7 @@ fn ring_due(state: &mut State) -> Task<Message> {
 
         tasks.push(app::fire(
             state,
-            &alarm.firing_profile(state.config.appearance.use_24_hour),
+            &alarm.firing_profile(state.config.appearance.time_format),
         ));
     }
 
@@ -702,7 +703,10 @@ mod tests {
         let id = alarms.add(at(8, 5, 0), AlarmProfile::default());
         alarms.get_mut(id).unwrap().label = "  Stand up ".to_owned();
 
-        let profile = alarms.get(id).unwrap().firing_profile(true);
+        let profile = alarms
+            .get(id)
+            .unwrap()
+            .firing_profile(TimeFormat::TwentyFourHour);
 
         assert_eq!(profile.notification.summary, "Stand up");
         assert_eq!(profile.notification.body, "Alarm for 08:05");

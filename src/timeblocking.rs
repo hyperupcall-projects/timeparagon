@@ -58,10 +58,14 @@ pub struct Workspace {
     pub available_all: bool,
     /// Include tasks that already have a due time or calendar schedule.
     pub available_planned: bool,
+    /// Placement is committed only after a cross-day schedule write succeeds.
+    pub pending_week_drop: Option<WeekListPlacement>,
     pub dragging: Option<String>,
     /// Where the pointer is while a task is being dragged, so the floating
     /// card can follow it. Only meaningful while `dragging` is set.
     pub drag_pointer: Option<iced::Point>,
+    /// The surface whose coordinates `drag_pointer` uses.
+    pub drag_window: Option<iced::window::Id>,
     pub busy: std::collections::HashSet<String>,
     /// A task whose fields are being saved without closing its details pane.
     pub keep_open: Option<String>,
@@ -73,10 +77,20 @@ pub struct Workspace {
     pub project_query: String,
     /// The task whose project picker is open.
     pub project_picker: Option<String>,
+    /// The task whose backlog destination choices are open.
+    pub backlog_picker: Option<String>,
     /// The label being typed for the open task, before it is added.
     pub label_draft: String,
     pub label_error: Option<String>,
 }
+#[derive(Debug, Clone)]
+pub struct WeekListPlacement {
+    pub task: String,
+    pub day: NaiveDate,
+    pub target: Option<String>,
+    pub after: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum Action {
     View(String),
@@ -129,6 +143,10 @@ pub enum Action {
     Date(String),
     SaveEstimate(String),
     Backlog(String),
+    BacklogPicker(String),
+    MoveToBacklog(String, BacklogSection),
+    /// Return a task to the inbox for review, clearing its schedule.
+    MoveToInbox(String),
     /// Drop the dragged task into a backlog planning horizon.
     DropBacklogSection(BacklogSection),
     SetBacklogSection(String, BacklogSection),
@@ -187,10 +205,24 @@ pub enum Action {
     DragMoved(iced::Point),
     DropBlock(String),
     DropTask(String),
+    /// A task row in the calendar, independent of the selected sidebar tab.
+    DropCalendarTask(String),
     DropDay,
+    /// Insert before/after a board card, or at the end of an empty/day column.
+    DropWeekList {
+        target: Option<String>,
+        after: bool,
+    },
+    NewWeekTask,
     Saved(String, Result<Event, String>),
     SavedMany(String, Result<Vec<Event>, String>),
 }
+fn take_drag(state: &mut State) -> Option<String> {
+    state.timeblocking.drag_pointer = None;
+    state.timeblocking.drag_window = None;
+    state.timeblocking.dragging.take()
+}
+
 pub fn assigned_all<'a>(state: &'a State, block: &Event) -> Vec<&'a Event> {
     let key = block_key(block);
     let mut tasks: Vec<_> = state
@@ -699,8 +731,24 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
             (id, Change::Deadline(date))
         }
+        Action::NewWeekTask => {
+            let day = state.calendar.day;
+            let open = crate::inbox::update(state, crate::inbox::Action::NewTask);
+            let start = calendar::at_clock(day, 9, 0);
+            let due = crate::inbox::update(state, crate::inbox::Action::Due(day.to_string()));
+            let schedule = update(
+                state,
+                Action::Schedule(
+                    crate::inbox::DRAFT_ID.into(),
+                    start,
+                    start + chrono::Duration::minutes(30),
+                ),
+            );
+            return Task::batch([open, due, schedule]);
+        }
+        Action::DropWeekList { target, after } => return drop_week_list(state, target, after),
         Action::DropTime(start) => {
-            let Some(id) = state.timeblocking.dragging.take() else {
+            let Some(id) = take_drag(state) else {
                 return Task::none();
             };
             let minutes = event(state, &id).map(|t| metadata(t).minutes).unwrap_or(0);
@@ -749,8 +797,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::Close => return close(state),
         Action::CancelDrag => {
-            state.timeblocking.dragging = None;
-            state.timeblocking.drag_pointer = None;
+            take_drag(state);
             return Task::none();
         }
         Action::Details(id) => {
@@ -794,6 +841,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::Drag(id, position) => {
+            state.timeblocking.drag_window = None;
             state.timeblocking.dragging = Some(id);
             state.timeblocking.drag_pointer = Some(position);
             return Task::none();
@@ -805,13 +853,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::DropBlock(block) => {
-            if let Some(id) = state.timeblocking.dragging.take() {
+            if let Some(id) = take_drag(state) {
                 return update(state, Action::Assign(id, block));
             }
             return Task::none();
         }
         Action::DropBacklogSection(section) => {
-            let Some(id) = state.timeblocking.dragging.take() else {
+            let Some(id) = take_drag(state) else {
                 return Task::none();
             };
             state.timeblocking.drag_pointer = None;
@@ -831,6 +879,18 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             (id, Change::BacklogSection(section))
         }
+        Action::DropCalendarTask(target) => {
+            let block = event(state, &target).and_then(|task| metadata(task).block);
+            let block = block.and_then(|key| {
+                state
+                    .calendar
+                    .events
+                    .iter()
+                    .find(|event| !event.is_task() && block_key(event) == key)
+                    .map(|event| event.id.clone())
+            });
+            return update(state, block.map_or(Action::DropDay, Action::DropBlock));
+        }
         Action::DropTask(target) => {
             if state.screen == crate::app::Screen::Backlog {
                 let Some(task) = event(state, &target) else {
@@ -841,7 +901,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     Action::DropBacklogSection(metadata(task).backlog_section),
                 );
             }
-            let Some(id) = state.timeblocking.dragging.take() else {
+            let Some(id) = take_drag(state) else {
                 return Task::none();
             };
             if id == target {
@@ -869,7 +929,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             )
         }
         Action::DropDay => {
-            let Some(id) = state.timeblocking.dragging.take() else {
+            let Some(id) = take_drag(state) else {
                 return Task::none();
             };
             (id, Change::Day(state.calendar.day))
@@ -910,6 +970,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 .is_some();
             match result {
                 Ok(event) => {
+                    let saved_id = event.id.clone();
                     if renaming {
                         state.timeblocking.renaming = None;
                         state.timeblocking.title_error = None;
@@ -941,12 +1002,26 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         .events
                         .retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
                     state.calendar.replace_cached_task(&id, &event);
-                    if state.screen == crate::app::Screen::Calendar
-                        && (state.weekly || state.monthly)
-                    {
+                    if state.range_view_active() {
                         refresh_week = true;
                     }
                     state.calendar.add_event(event);
+                    if let Some(placement) = state
+                        .timeblocking
+                        .pending_week_drop
+                        .take_if(|p| p.task == id)
+                    {
+                        for order in state.config.calendar.weekly_task_order.values_mut() {
+                            order.retain(|old| old != &id);
+                        }
+                        place_week_card(
+                            state,
+                            &saved_id,
+                            placement.day,
+                            placement.target.as_deref(),
+                            placement.after,
+                        );
+                    }
                     if editing_estimate {
                         state.timeblocking.estimate_task = None;
                         state.timeblocking.estimate_error = None;
@@ -969,6 +1044,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 }
                 Err(error) => state.calendar.error = Some(error),
             }
+            state
+                .timeblocking
+                .pending_week_drop
+                .take_if(|p| p.task == id);
             let save = crate::app::queue_save(state);
             return if refresh_week {
                 Task::batch([save, crate::app::refresh_week_after_write(state)])
@@ -992,7 +1071,31 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             (id, Change::Estimate(minutes))
         }
-        Action::Backlog(id) => (id, Change::Backlog),
+        Action::BacklogPicker(id) => {
+            if !state.timeblocking.busy.is_empty()
+                || !event(state, &id).is_some_and(|task| task.is_task())
+            {
+                return Task::none();
+            }
+            state.timeblocking.backlog_picker =
+                (state.timeblocking.backlog_picker.as_deref() != Some(id.as_str())).then_some(id);
+            return Task::none();
+        }
+        Action::Backlog(id) => (id, Change::Backlog(None)),
+        Action::MoveToBacklog(id, section) => {
+            if !state.timeblocking.busy.is_empty() {
+                return Task::none();
+            }
+            state.timeblocking.backlog_picker = None;
+            (id, Change::Backlog(Some(section)))
+        }
+        Action::MoveToInbox(id) => {
+            if !state.timeblocking.busy.is_empty() {
+                return Task::none();
+            }
+            state.timeblocking.backlog_picker = None;
+            (id, Change::Inbox)
+        }
         Action::Triage(id) => (id, Change::Triaged),
         Action::Unassign(id) => (id, Change::Unassign),
         Action::Reschedule(id) if state.timeblocking.date.is_empty() => (id, Change::ClearSchedule),
@@ -1267,6 +1370,113 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         .map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone(), result)))
 }
 
+/// Timed tasks and calendar events, with locally saved board placement applied.
+/// This ordering belongs to the board; it never changes time-block membership.
+pub fn weekly_list_events(state: &State, day: NaiveDate) -> Vec<&Event> {
+    let mut events = state
+        .calendar
+        .task_list_events_on(day, &state.config.calendar);
+    events.retain(|event| !event.is_task() || !event.all_day);
+    if let Some(order) = state
+        .config
+        .calendar
+        .weekly_task_order
+        .get(&day.to_string())
+    {
+        events.sort_by_key(|event| {
+            order
+                .iter()
+                .position(|id| id == &event.id)
+                .unwrap_or(usize::MAX)
+        });
+    }
+    events
+}
+
+fn place_week_card(state: &mut State, id: &str, day: NaiveDate, target: Option<&str>, after: bool) {
+    let mut order: Vec<_> = weekly_list_events(state, day)
+        .iter()
+        .filter(|event| event.id != id)
+        .map(|event| event.id.clone())
+        .collect();
+    let index = target
+        .and_then(|target| order.iter().position(|id| id == target))
+        .map_or(order.len(), |index| index + usize::from(after));
+    order.insert(index, id.to_owned());
+    for other in state.config.calendar.weekly_task_order.values_mut() {
+        other.retain(|other| other != id);
+    }
+    state
+        .config
+        .calendar
+        .weekly_task_order
+        .insert(day.to_string(), order);
+    let _ = crate::app::queue_save(state);
+}
+
+fn drop_week_list(state: &mut State, target: Option<String>, after: bool) -> Task<Message> {
+    let Some(id) = take_drag(state) else {
+        return Task::none();
+    };
+    if !state.timeblocking.busy.is_empty() || target.as_deref() == Some(&id) {
+        return Task::none();
+    }
+    let day = state.calendar.day;
+    if target
+        .as_ref()
+        .is_some_and(|id| !weekly_list_events(state, day).iter().any(|e| &e.id == id))
+    {
+        return Task::none();
+    }
+    let Some(task) = event(state, &id).filter(|task| task.is_task()).cloned() else {
+        return Task::none();
+    };
+    if !task.all_day && calendar::day_at(task.start, state.config.calendar.day_start_hour()) == day
+    {
+        place_week_card(state, &id, day, target.as_deref(), after);
+        return Task::none();
+    }
+    let Some((start, end)) = week_drop_times(&task, day, state.config.calendar.day_start_hour())
+    else {
+        state.calendar.error = Some("This time does not exist on the destination day".into());
+        return Task::none();
+    };
+    state.timeblocking.pending_week_drop = Some(WeekListPlacement {
+        task: id.clone(),
+        day,
+        target,
+        after,
+    });
+    update(state, Action::Schedule(id, start, end))
+}
+
+/// Keep local clock time and elapsed duration when crossing days, including
+/// the small hours assigned to the previous planning day.
+fn week_drop_times(
+    task: &Event,
+    day: NaiveDate,
+    boundary: u32,
+) -> Option<(DateTime<Local>, DateTime<Local>)> {
+    let (start, duration) = if task.all_day {
+        let minutes = metadata(task).minutes;
+        (
+            calendar::at_clock(day, 9, 0),
+            chrono::Duration::minutes(i64::from(if minutes == 0 { 30 } else { minutes })),
+        )
+    } else {
+        let source_day = calendar::day_at(task.start, boundary);
+        let offset = task.start.date_naive().signed_duration_since(source_day);
+        let date = day.checked_add_signed(offset)?;
+        (
+            date.and_time(task.start.time())
+                .and_local_timezone(Local)
+                .earliest()?,
+            task.end - task.start,
+        )
+    };
+    Some((start, start + duration))
+}
+
 /// Saves the typed line as a Google Task and assigns it to the open block.
 ///
 /// Time-block items are tasks, so a free-text todo is a task whose title is
@@ -1434,7 +1644,8 @@ enum Change {
     Priority(Option<Priority>),
     Location(Option<u64>),
     Deadline(Option<calendar::deadline::Deadline>),
-    Backlog,
+    Backlog(Option<BacklogSection>),
+    Inbox,
     BacklogSection(BacklogSection),
     /// Confirm a fully filled-in task and move it to the triaged list.
     Triaged,
@@ -1642,7 +1853,8 @@ fn save(
                 .map_err(|e| e.message)?;
             }
         }
-        Change::Backlog
+        Change::Backlog(_)
+        | Change::Inbox
         | Change::Triaged
         | Change::Unassign
         | Change::Day(_)
@@ -1651,8 +1863,10 @@ fn save(
                 Change::Day(day) => (Some(day), None),
                 Change::ClearSchedule => (None, None),
                 Change::Unassign => (Some(task.start.date_naive()), None),
+                Change::Inbox => (None, Some(Destination::Inbox)),
                 Change::Triaged => (None, Some(Destination::Triaged)),
-                _ => (None, Some(Destination::Backlog)),
+                Change::Backlog(section) => (None, Some(Destination::Backlog(section))),
+                _ => unreachable!(),
             };
             let token = access(settings)?;
             unschedule_with(
@@ -1734,15 +1948,15 @@ fn save(
     Ok(task)
 }
 
-/// The Google Tasks list a task leaves the schedule for: the backlog it was
-/// deliberately parked on, or the triaged list it was confirmed into.
+/// The Google Tasks list a task leaves the schedule for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Destination {
-    Backlog,
+    Inbox,
+    Backlog(Option<BacklogSection>),
     Triaged,
 }
 
-/// Remove the schedule, then move backlog or triaged tasks while retaining
+/// Remove the schedule, then move tasks to the destination while retaining
 /// their local ID. Day-only rescheduling keeps the current Google Tasks list.
 fn unschedule_with(
     task: &mut Event,
@@ -1753,9 +1967,16 @@ fn unschedule_with(
     day: Option<NaiveDate>,
     destination: Option<Destination>,
 ) -> Result<(), String> {
+    let section = match destination {
+        Some(Destination::Backlog(section)) => section,
+        _ => None,
+    };
     // Resolve/create the list before changing the task's existing schedule.
     let destination = match destination {
-        Some(Destination::Backlog) => Some(remote.backlog_list(settings.backlog_list.as_deref())?),
+        Some(Destination::Backlog(_)) => {
+            Some(remote.backlog_list(settings.backlog_list.as_deref())?)
+        }
+        Some(Destination::Inbox) => Some(remote.inbox_list(settings.inbox_list.as_deref())?),
         Some(Destination::Triaged) => Some(remote.triaged_list(settings.triaged_list.as_deref())?),
         None => None,
     };
@@ -1767,6 +1988,9 @@ fn unschedule_with(
         remote.remove_event(&link)?;
     }
     remote.set_day(&link, day)?;
+    if let Some(section) = section {
+        data.metadata.backlog_section = section;
+    }
     data.metadata.block = None;
     data.metadata.schedule = None;
     task.details.scheduled = None;
@@ -1936,6 +2160,87 @@ fn schedule_with(
 mod tests {
     use super::*;
 
+    #[test]
+    fn week_list_moves_keep_clock_duration_and_the_planning_day_boundary() {
+        use chrono::Timelike;
+        let mut state = estimate_state();
+        let task = state.calendar.event_mut("task:deep").unwrap();
+        let source = NaiveDate::from_ymd_opt(2026, 10, 14).unwrap();
+        let destination = source + chrono::Duration::days(3);
+        task.all_day = false;
+        task.start = calendar::at_clock(source, 23, 30);
+        task.end = task.start + chrono::Duration::minutes(90);
+        let (start, end) = week_drop_times(task, destination, 0).unwrap();
+        assert_eq!(start.date_naive(), destination);
+        assert_eq!(start.time(), task.start.time());
+        assert_eq!(end - start, task.end - task.start);
+        task.start = calendar::at_clock(source.succ_opt().unwrap(), 1, 30);
+        task.end = task.start + chrono::Duration::minutes(90);
+        let (start, end) = week_drop_times(task, destination, 3).unwrap();
+        assert_eq!(calendar::day_at(start, 3), destination);
+        assert_eq!(start.hour(), 1);
+        assert_eq!(end - start, task.end - task.start);
+        // Tasks dragged from the inbox become timed cards rather than disappearing.
+        task.all_day = true;
+        let (start, end) = week_drop_times(task, destination, 0).unwrap();
+        assert_eq!(start, calendar::at_clock(destination, 9, 0));
+        assert_eq!((end - start).num_minutes(), 35);
+    }
+
+    #[test]
+    fn week_list_cross_day_placement_commits_only_after_a_successful_save() {
+        for success in [false, true] {
+            let mut state = estimate_state();
+            let source = state.calendar.day;
+            let destination = source.succ_opt().unwrap();
+            let id = "task:deep".to_owned();
+            let original = state.calendar.event(&id).unwrap().clone();
+            state
+                .config
+                .calendar
+                .weekly_task_order
+                .insert(source.to_string(), vec![id.clone()]);
+            state.timeblocking.pending_week_drop = Some(WeekListPlacement {
+                task: id.clone(),
+                day: destination,
+                target: None,
+                after: true,
+            });
+            let result = if success {
+                let mut moved = original.clone();
+                let (start, end) = week_drop_times(&moved, destination, 0).unwrap();
+                moved.id = "task:new-list-id".into();
+                moved.start = start;
+                moved.end = end;
+                moved.all_day = false;
+                Ok(moved)
+            } else {
+                Err("Could not save".to_owned())
+            };
+            let _ = update(&mut state, Action::Saved(id.clone(), result));
+            assert!(state.timeblocking.pending_week_drop.is_none());
+            if success {
+                assert_eq!(
+                    state.config.calendar.weekly_task_order[&destination.to_string()],
+                    vec!["task:new-list-id"]
+                );
+                assert!(
+                    !state.config.calendar.weekly_task_order[&source.to_string()].contains(&id)
+                );
+            } else {
+                assert!(
+                    !state
+                        .config
+                        .calendar
+                        .weekly_task_order
+                        .contains_key(&destination.to_string())
+                );
+                assert_eq!(state.calendar.event(&id), Some(&original));
+                assert_eq!(state.calendar.error.as_deref(), Some("Could not save"));
+            }
+        }
+    }
+
     #[derive(Default)]
     struct FakeGoogle {
         calls: std::cell::RefCell<Vec<String>>,
@@ -1978,6 +2283,9 @@ mod tests {
         }
         fn backlog_list(&self, _list: Option<&str>) -> Result<String, String> {
             unreachable!("Scheduling does not use the backlog list")
+        }
+        fn inbox_list(&self, _list: Option<&str>) -> Result<String, String> {
+            unreachable!("Scheduling does not use the inbox list")
         }
         fn triaged_list(&self, _list: Option<&str>) -> Result<String, String> {
             unreachable!("Scheduling does not use the triaged list")
@@ -2108,6 +2416,7 @@ mod tests {
     #[derive(Default)]
     struct BacklogGoogle {
         calls: std::cell::RefCell<Vec<String>>,
+        metadata_writes: std::cell::RefCell<Vec<crate::task_db::TaskData>>,
         fail_move: std::cell::Cell<bool>,
         fail_remove: std::cell::Cell<bool>,
     }
@@ -2116,8 +2425,9 @@ mod tests {
         fn save_metadata(
             &self,
             _task: &Event,
-            _data: &crate::task_db::TaskData,
+            data: &crate::task_db::TaskData,
         ) -> Result<(), String> {
+            self.metadata_writes.borrow_mut().push(data.clone());
             Ok(())
         }
         fn destinations(
@@ -2131,6 +2441,11 @@ mod tests {
             let list = list
                 .unwrap_or("tasks:not-time-blocked")
                 .trim_start_matches("tasks:");
+            self.calls.borrow_mut().push(format!("list:{list}"));
+            Ok(list.to_owned())
+        }
+        fn inbox_list(&self, list: Option<&str>) -> Result<String, String> {
+            let list = list.unwrap_or("tasks:inbox").trim_start_matches("tasks:");
             self.calls.borrow_mut().push(format!("list:{list}"));
             Ok(list.to_owned())
         }
@@ -2182,8 +2497,70 @@ mod tests {
     }
 
     #[test]
+    fn moving_to_inbox_clears_the_schedule_and_preserves_task_details() {
+        for destination in [None, Some("tasks:custom-inbox")] {
+            let mut task = calendar::sample_snapshot().events.remove(0);
+            task.id = "task:original-task".into();
+            task.calendar_id = "tasks:has-time".into();
+            task.details.task_data = None;
+            let original = task.clone();
+            let mut database =
+                crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
+            let mut data = database.import(&task).unwrap();
+            data.metadata.minutes = 45;
+            data.metadata.block = Some("work/block".into());
+            data.metadata.schedule =
+                Some(calendar::scheduled::Link::new("calendar".into(), &task).unwrap());
+            let local_id = data.id;
+            let settings = CalendarSettings {
+                inbox_list: destination.map(str::to_owned),
+                ..Default::default()
+            };
+            let remote = BacklogGoogle::default();
+            unschedule_with(
+                &mut task,
+                &mut data,
+                &mut database,
+                &settings,
+                &remote,
+                None,
+                Some(Destination::Inbox),
+            )
+            .unwrap();
+            task.details.task_data = Some(data.clone());
+            assert_eq!(task.calendar_id, destination.unwrap_or("tasks:inbox"));
+            assert_eq!(task.title, original.title);
+            assert_eq!(task.details.description, original.details.description);
+            assert_eq!(data.id, local_id);
+            assert_eq!(data.metadata.minutes, 45);
+            assert!(data.metadata.schedule.is_none());
+            assert!(data.metadata.block.is_none());
+            assert!(task.details.scheduled.is_none());
+            assert_eq!(task.start.date_naive(), UNDATED);
+            let calls = remote.calls.borrow();
+            assert!(calls.iter().any(|call| call == "remove"));
+            assert!(calls.iter().any(|call| call == "day:original-task:None"));
+            let mut state = State::new(
+                crate::config::Config::default(),
+                crate::theme::Catalog::built_in(),
+            );
+            state.config.calendar = settings;
+            state.config.calendar.inbox_list = Some(task.calendar_id.clone());
+            assert!(crate::inbox::untriaged(&state, &task));
+        }
+    }
+
+    #[test]
     fn backlog_moves_scheduled_and_existing_backlog_tasks_to_the_default_or_custom_list() {
-        for (scheduled, destination) in [(true, None), (false, Some("tasks:custom-backlog"))] {
+        for (scheduled, destination, section) in
+            [(true, None), (false, Some("tasks:custom-backlog"))]
+                .into_iter()
+                .flat_map(|(scheduled, destination)| {
+                    std::iter::once(None)
+                        .chain(BacklogSection::ALL.into_iter().map(Some))
+                        .map(move |section| (scheduled, destination, section))
+                })
+        {
             let mut task = calendar::sample_snapshot().events.remove(0);
             task.id = "task:original-task".into();
             task.calendar_id = "tasks:has-time".into();
@@ -2215,7 +2592,7 @@ mod tests {
                 &settings,
                 &remote,
                 None,
-                Some(Destination::Backlog),
+                Some(Destination::Backlog(section)),
             )
             .unwrap();
             task.details.task_data = Some(data.clone());
@@ -2231,6 +2608,14 @@ mod tests {
             assert_eq!(task_key(&task), local_id.to_string());
             assert_eq!(data.metadata.minutes, 45);
             assert_eq!(data.metadata.order, 123);
+            assert_eq!(data.metadata.backlog_section, section.unwrap_or_default());
+            assert!(
+                remote
+                    .metadata_writes
+                    .borrow()
+                    .iter()
+                    .all(|data| { data.metadata.backlog_section == section.unwrap_or_default() })
+            );
             assert!(data.metadata.block.is_none());
             assert!(data.metadata.schedule.is_none());
             assert!(task.details.scheduled.is_none());
@@ -2253,7 +2638,7 @@ mod tests {
                 &settings,
                 &remote,
                 None,
-                Some(Destination::Backlog),
+                Some(Destination::Backlog(None)),
             )
             .unwrap();
             assert!(
@@ -2400,7 +2785,7 @@ mod tests {
                 &settings,
                 &remote,
                 None,
-                Some(Destination::Backlog)
+                Some(Destination::Backlog(None))
             )
             .is_err()
         );
@@ -2418,7 +2803,7 @@ mod tests {
                 &settings,
                 &remote,
                 None,
-                Some(Destination::Backlog)
+                Some(Destination::Backlog(None))
             )
             .is_err()
         );
@@ -2435,7 +2820,7 @@ mod tests {
             &settings,
             &remote,
             None,
-            Some(Destination::Backlog),
+            Some(Destination::Backlog(None)),
         )
         .unwrap();
         assert_eq!(task.calendar_id, "tasks:not-time-blocked");

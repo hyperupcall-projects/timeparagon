@@ -4,6 +4,7 @@
 //! so every read falls back to defaults and every write goes through a
 //! temporary file that is renamed into place.
 
+use crate::calendar::time_format::TimeFormat;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -25,6 +26,7 @@ pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub voice: crate::voice::Settings,
     pub appearance: Appearance,
     pub window: Window,
     pub views: ViewSettings,
@@ -57,6 +59,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            voice: crate::voice::Settings::default(),
             appearance: Appearance::default(),
             window: Window::default(),
             views: ViewSettings::default(),
@@ -82,8 +85,9 @@ pub struct Appearance {
     /// When set, the theme follows the system light/dark preference and
     /// `theme` is only remembered for when it is switched back off.
     pub follow_system: bool,
-    /// Display clock times in 24-hour format throughout the application.
-    pub use_24_hour: bool,
+    /// Display format for clock times throughout the application.
+    #[serde(alias = "use_24_hour")]
+    pub time_format: TimeFormat,
 }
 
 impl Default for Appearance {
@@ -91,7 +95,7 @@ impl Default for Appearance {
         Self {
             theme: "Sakura".to_owned(),
             follow_system: false,
-            use_24_hour: true,
+            time_format: TimeFormat::TwentyFourHour,
         }
     }
 }
@@ -925,10 +929,15 @@ pub struct CalendarSettings {
     /// real date and time, it is just drawn at the foot of the day it belongs
     /// to.
     pub day_end_hour: u32,
-    /// Days beginning with the selected day; the previous day is also shown.
+    /// Total visible days: 7 from the selected day, or 8 from the previous day.
     pub weekly_days: u32,
     /// Width of each day in the horizontally scrollable weekly view.
     pub weekly_day_width: u32,
+    /// Show task cards instead of the weekly time grid.
+    pub weekly_task_list: bool,
+    /// Card placement in each day of the week board. Unlisted cards follow in time order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weekly_task_order: BTreeMap<String, Vec<String>>,
     /// Custom colors for Google Tasks lists, keyed by the calendar id
     /// (`tasks:<list>`). Google hands every list back with the same blue, so
     /// this is where a list gets a color of its own. A missing key means the
@@ -978,6 +987,8 @@ impl Default for CalendarSettings {
             day_end_hour: 0,
             weekly_days: 8,
             weekly_day_width: 150,
+            weekly_task_list: false,
+            weekly_task_order: BTreeMap::new(),
             task_colors: BTreeMap::new(),
             calendar_colors: BTreeMap::new(),
             time_block_color: None,

@@ -79,7 +79,15 @@ fn preview_forms_in_light_and_dark_themes() {
     let Some(directory) = std::env::var_os("TIMESLAY_UI_PREVIEW_DIR") else {
         return;
     };
-    for theme in ["Sakura", "Dark"] {
+    for theme in [
+        "Sakura",
+        "Dark",
+        "Absolute Black",
+        "GitHub Dark",
+        "GitHub Dark High Contrast",
+        "Nord",
+        "Dracula",
+    ] {
         for width in [200.0, 420.0, 900.0] {
             let mut state = state();
             let _ = app::update(&mut state, Message::Inbox(timeslay::inbox::Action::NewTask));
@@ -119,8 +127,13 @@ fn preview_forms_in_light_and_dark_themes() {
 #[test]
 fn time_picker_retains_the_other_segment() {
     for (x, expected) in [(40.0, "22:47"), (160.0, "23:46")] {
-        let control =
-            ui::controls::time(true, "23:47", true, 13.0, Message::EventDraftStartChanged);
+        let control = ui::controls::time(
+            timeslay::calendar::time_format::TimeFormat::TwentyFourHour,
+            "23:47",
+            true,
+            13.0,
+            Message::EventDraftStartChanged,
+        );
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
             Size::new(320.0, 700.0),
@@ -151,7 +164,13 @@ fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
         ("13:47", 160.0, "13:46"),
         ("12:47", 260.0, "00:47"),
     ] {
-        let control = ui::controls::time(false, value, true, 13.0, Message::EventDraftStartChanged);
+        let control = ui::controls::time(
+            timeslay::calendar::time_format::TimeFormat::TwelveHour,
+            value,
+            true,
+            13.0,
+            Message::EventDraftStartChanged,
+        );
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
             Size::new(320.0, 700.0),
@@ -173,4 +192,32 @@ fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
             "{value} -> {expected}"
         );
     }
+}
+
+#[test]
+fn compact_picker_displays_short_periods_and_preserves_stored_time() {
+    let control = ui::controls::time(
+        timeslay::calendar::time_format::TimeFormat::Compact,
+        "13:30",
+        true,
+        13.0,
+        Message::EventDraftStartChanged,
+    );
+    let mut form: Simulator<'_, Message> = Simulator::with_size(
+        Settings::default(),
+        Size::new(320.0, 700.0),
+        iced::widget::container(control).width(300),
+    );
+    assert!(form.find(".").is_ok());
+    form.point_at(iced::Point::new(260.0, 15.0));
+    form.simulate([
+        iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(
+            iced::keyboard::Modifiers::CTRL,
+        )),
+        iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+            delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        }),
+    ]);
+    assert!(form.into_messages().any(|m| matches!(m,
+        Message::EventDraftStartChanged(value) if value == "01:30")));
 }

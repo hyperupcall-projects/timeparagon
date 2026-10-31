@@ -118,8 +118,8 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
     details = details.push(
         text(format!(
             "{} – {}",
-            crate::calendar::time_format::clock(habit.start, state.config.appearance.use_24_hour),
-            crate::calendar::time_format::clock(habit.end, state.config.appearance.use_24_hour)
+            crate::calendar::time_format::clock(habit.start, state.config.appearance.time_format),
+            crate::calendar::time_format::clock(habit.end, state.config.appearance.time_format)
         ))
         .size(metrics.label() - 1.0)
         .style(text::secondary),

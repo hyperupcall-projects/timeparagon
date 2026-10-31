@@ -75,7 +75,7 @@ const BUILT_IN_LIGHT: [Theme; 6] = [
     Theme::Light,
 ];
 
-/// A few dark themes, for whoever wants them.
+/// Existing dark themes, kept available under their original names.
 const BUILT_IN_DARK: [Theme; 4] = [
     Theme::Dark,
     Theme::CatppuccinMocha,
@@ -119,6 +119,16 @@ impl Catalog {
 
         entries.extend(user);
         entries.extend(BUILT_IN_LIGHT.iter().cloned().map(Entry::built_in));
+        entries.extend(palettes::DARK.iter().map(|(name, palette, surfaces)| {
+            let theme = Theme::custom_with_fn((*name).to_owned(), *palette, |palette| {
+                palettes::dark_extended(palette, *surfaces)
+            });
+            Entry {
+                name: (*name).to_owned(),
+                accents: Accents::derive(&theme),
+                theme,
+            }
+        }));
         entries.extend(BUILT_IN_DARK.iter().cloned().map(Entry::built_in));
 
         // A user theme sharing a name with an earlier entry would make the

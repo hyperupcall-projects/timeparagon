@@ -334,3 +334,29 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
     assert!(state.calendar.detail_event.is_none());
     assert_eq!(state.habits.habits[0].id, "created-master");
 }
+
+#[test]
+fn floating_editor_matches_panel_height_with_screen_margins() {
+    for side in [timeslay::panel::Side::Left, timeslay::panel::Side::Right] {
+        for margin in [0.0, 8.0, 30.0] {
+            let mut state = state();
+            state.sidebar = Some(app::Sidebar { width: 200.0, side });
+            state.config.views.margin = margin;
+            state.main_size = Size::new(200.0 + margin * 2.0, 900.0);
+            let task = app::update(&mut state, Message::EventOpened("all-day".into()));
+            iced::futures::executor::block_on(async {
+                let mut stream = runtime::task::into_stream(task).unwrap();
+                let mut opened = false;
+                while let Some(action) = stream.next().await {
+                    if let Action::Window(WindowAction::Open(id, settings, sender)) = action {
+                        assert_eq!(settings.size, Size::new(DETAIL, 900.0 - 2.0 * margin));
+                        assert_eq!(timeslay::ui::editor_window_top(&state), margin);
+                        let _ = sender.send(id);
+                        opened = true;
+                    }
+                }
+                assert!(opened);
+            });
+        }
+    }
+}

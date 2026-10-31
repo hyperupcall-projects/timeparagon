@@ -386,6 +386,7 @@ pub trait Remote {
         list: Option<&str>,
     ) -> Result<(String, String), String>;
     fn move_task(&self, link: &Link, destination: &str) -> Result<Value, String>;
+    fn inbox_list(&self, list: Option<&str>) -> Result<String, String>;
     fn backlog_list(&self, list: Option<&str>) -> Result<String, String>;
     fn triaged_list(&self, list: Option<&str>) -> Result<String, String>;
     fn set_day(&self, link: &Link, day: Option<chrono::NaiveDate>) -> Result<(), String>;
@@ -425,6 +426,9 @@ impl Remote for Google<'_> {
             None,
         )
         .map_err(|e| e.message)
+    }
+    fn inbox_list(&self, list: Option<&str>) -> Result<String, String> {
+        inbox_destination(self.token, list)
     }
     fn backlog_list(&self, list: Option<&str>) -> Result<String, String> {
         match list {

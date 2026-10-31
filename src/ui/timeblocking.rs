@@ -1,4 +1,5 @@
 use super::layout::Metrics;
+use crate::calendar::time_format::TimeFormat;
 use crate::{
     app::{Message, State},
     calendar::Event,
@@ -110,7 +111,7 @@ pub fn task_row<'a>(
         if let Some(due) = tb::due(task) {
             let late = due.is_past(chrono::Local::now().naive_local());
             content = content.push(
-                text(due_label(&due, state.config.appearance.use_24_hour))
+                text(due_label(&due, state.config.appearance.time_format))
                     .size(metrics.label() - 1.0)
                     .style(if late { text::danger } else { text::secondary }),
             );
@@ -214,7 +215,7 @@ pub(super) fn drag_ghost<'a>(
 
 /// "Due Today", "Due Tomorrow", or "Due Mon, Oct 26" (with the year when it
 /// isn't this one), followed by the time when the deadline has one.
-fn due_label(due: &crate::calendar::deadline::Deadline, use_24_hour: bool) -> String {
+fn due_label(due: &crate::calendar::deadline::Deadline, time_format: TimeFormat) -> String {
     let today = chrono::Local::now().date_naive();
     let day = if due.date == today {
         "Today".to_owned()
@@ -228,7 +229,7 @@ fn due_label(due: &crate::calendar::deadline::Deadline, use_24_hour: bool) -> St
     match due.time {
         Some(time) => format!(
             "Due {day} at {}",
-            crate::calendar::time_format::clock(time, use_24_hour)
+            crate::calendar::time_format::clock(time, time_format)
         ),
         None => format!("Due {day}"),
     }
@@ -300,6 +301,73 @@ pub(super) fn editable_title<'a>(
     body.into()
 }
 
+/// A compact reference with separate examples and controls so it remains readable
+/// at the width of the task popup.
+fn quick_add_help(metrics: &Metrics) -> Element<'static, Message> {
+    let size = metrics.label();
+    let bold = iced::Font {
+        weight: iced::font::Weight::Bold,
+        ..iced::Font::DEFAULT
+    };
+    let example = move |syntax: &'static str, description: &'static str| {
+        column![
+            text(syntax).size(size).font(bold),
+            text(description).size(size).style(text::secondary),
+        ]
+        .spacing(2)
+    };
+    let body = column![
+        text("Quick-add syntax").size(size + 2.0).font(bold),
+        text("Click a highlight to keep its words as regular title text instead of applying task details.")
+            .size(size),
+        text("Task details").size(size).font(bold),
+        example(
+            "@label   ·   {@deep work}",
+            "Add a label. Use braces for names with spaces."
+        ),
+        example("#Project   ·   {#Project name}", "Add an existing project."),
+        example("p1 / !1   ·   p2 / !2", "Set priority 1 or 2."),
+        example("~30m", "Set an estimate in minutes."),
+        iced::widget::rule::horizontal(1),
+        text("Dates").size(size).font(bold),
+        example(
+            "today   ·   tomorrow   ·   monday",
+            "Also: next monday, next week, in 3 days, in 2 weeks."
+        ),
+        example(
+            "oct 8   ·   October 8 2027",
+            "Also: 8 oct, 2027-10-08. Dates without a year use the next occurrence."
+        ),
+        example(
+            "{oct 8}",
+            "Braces set the deadline. Bare dates set the due date."
+        ),
+        iced::widget::rule::horizontal(1),
+        text("Editing highlights").size(size).font(bold),
+        example(
+            "Tab inside a highlight",
+            "Apply its task details and remove the words."
+        ),
+        example("Space", "Keep typing; detected words stay highlighted."),
+        example(
+            "Enter",
+            "Save the task and remove all remaining highlighted syntax."
+        ),
+        text("Unknown syntax stays in the title.")
+            .size(size)
+            .style(text::secondary),
+    ]
+    .spacing(10)
+    .padding(iced::Padding::from([0, 6]))
+    .width(Fill);
+    container(scrollable(body).height(Length::Shrink))
+        .max_height(460)
+        .padding(14)
+        .width(Fill)
+        .style(super::controls::surface)
+        .into()
+}
+
 /// The task fields used by details and every creation entry point.
 pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
     let draft = state
@@ -312,23 +380,31 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
             .id(iced::widget::Id::new(crate::inbox::TITLE_FIELD))
             .size(metrics.label() + 6.0);
         if !draft.saving {
-            input = input.on_input(|v| Message::Inbox(crate::inbox::Action::Title(v)))
+            input = input
+                .on_input(|v| Message::Inbox(crate::inbox::Action::Title(v)))
                 .on_submit(Message::Inbox(crate::inbox::Action::Create));
         }
-        let tokens = crate::task_input::detect(&draft.title, chrono::Local::now().date_naive(), &state.config.projects);
-        let input = super::task_input::quick_input(input, &draft.title, tokens, metrics.label() + 6.0);
+        let tokens = if draft.saving {
+            Vec::new()
+        } else {
+            draft.quick_tokens(&state.config.projects)
+        };
+        let input =
+            super::task_input::quick_input(input, &draft.title, tokens, metrics.label() + 6.0);
         let help = super::anchored_menu::anchored_menu(
-            row![field_label("Title", metrics), iced::widget::Space::new().width(Fill),
-                button("?").on_press(Message::Inbox(crate::inbox::Action::SyntaxHelp(!draft.syntax_help)))
-            ].align_y(iced::Center),
-            container(scrollable(column![
-                text("Quick-add syntax").size(metrics.label() + 2.0),
-                text("@label · {@deep work} for labels with spaces\n#Project · {#Project name} for existing projects\np1 / !1 · p2 / !2 for priority\n~30m for an estimate in minutes\nDates: today, tomorrow, monday, next monday, next week, in 3 days, in 2 weeks, oct 8, October 8 2027, 8 oct, 2027-10-08\n{oct 8} sets the deadline; bare dates set the regular due date\nTab inside a highlight applies and removes it.\nSpace leaves it in the title; Enter saves and removes all detected syntax.\nDates without a year use the next occurrence.\nUnknown syntax stays in the title.").size(metrics.label())
-            ].spacing(8)).height(360)).padding(12).width(Fill).style(super::controls::surface),
+            row![
+                field_label("Title", metrics),
+                iced::widget::Space::new().width(Fill),
+                button("?").on_press(Message::Inbox(crate::inbox::Action::SyntaxHelp(
+                    !draft.syntax_help
+                )))
+            ]
+            .align_y(iced::Center),
+            quick_add_help(metrics),
             draft.syntax_help,
             Message::Inbox(crate::inbox::Action::SyntaxHelp(false)),
         );
-        column![help, input]
+        column![help, crate::voice::input(state, input)]
             .spacing(6)
             .into()
     } else {
@@ -342,9 +418,13 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         if !draft.saving {
             input = input.on_action(|a| Message::Inbox(crate::inbox::Action::Description(a)));
         }
-        column![field_label("Description", metrics), input]
-            .spacing(6)
-            .into()
+        let mut description = column![field_label("Description", metrics), input].spacing(6);
+        if let Some(links) =
+            super::links::for_editor(&state.task_description.text(), metrics.label())
+        {
+            description = description.push(links);
+        }
+        description.into()
     } else {
         super::description::preview(
             &task.id,
@@ -436,7 +516,7 @@ fn date_field<'a>(
     let mut body = column![
         field_label(if deadline { "Deadline" } else { "Due Date" }, metrics),
         super::controls::date(
-            state.config.appearance.use_24_hour,
+            state.config.appearance.time_format,
             value,
             true,
             false,
@@ -461,7 +541,7 @@ fn date_field<'a>(
     if editing {
         let times: Element<'a, Message> = if deadline {
             super::controls::time(
-                state.config.appearance.use_24_hour,
+                state.config.appearance.time_format,
                 &state.timeblocking.deadline_time,
                 !busy,
                 metrics.label(),
@@ -470,7 +550,7 @@ fn date_field<'a>(
         } else {
             row![
                 container(super::controls::time(
-                    state.config.appearance.use_24_hour,
+                    state.config.appearance.time_format,
                     &state.timeblocking.start_time,
                     !busy,
                     metrics.label(),
@@ -478,7 +558,7 @@ fn date_field<'a>(
                 ))
                 .width(Fill),
                 container(super::controls::time(
-                    state.config.appearance.use_24_hour,
+                    state.config.appearance.time_format,
                     &state.timeblocking.end_time,
                     !busy,
                     metrics.label(),
@@ -791,7 +871,11 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
             },
             Message::TaskIgnoreToggled(task.id.clone()),
         ),
-        ("Move to backlog", msg(Action::Backlog(task.id.clone()))),
+        ("Move to inbox", msg(Action::MoveToInbox(task.id.clone()))),
+        (
+            "Move to backlog",
+            msg(Action::BacklogPicker(task.id.clone())),
+        ),
         ("Delete task", Message::TaskDeleteRequested(task.id.clone())),
     ] {
         let mut action_button = button(text(label).size(metrics.label()).center().width(Fill))
@@ -805,6 +889,21 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
             action_button = action_button.on_press(action);
         }
         actions = actions.push(action_button);
+        if label == "Move to backlog"
+            && state.timeblocking.backlog_picker.as_deref() == Some(task.id.as_str())
+        {
+            let mut choices = column![].spacing(4).width(Fill);
+            for section in tb::BacklogSection::ALL {
+                let mut choice = button(text(section.label()).size(metrics.label()))
+                    .width(Fill)
+                    .style(crate::ui::controls::secondary);
+                if state.timeblocking.busy.is_empty() {
+                    choice = choice.on_press(msg(Action::MoveToBacklog(task.id.clone(), section)));
+                }
+                choices = choices.push(choice);
+            }
+            actions = actions.push(container(choices).padding([0, 8]));
+        }
     }
     actions.into()
 }
@@ -826,8 +925,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let tasks = tb::assigned(state, block);
     let capacity = (block.end - block.start).num_minutes().max(0) as u32;
     let block_id = block.id.clone();
-    let compact_weekly =
-        state.weekly && state.screen == crate::app::Screen::Calendar && metrics.size.width < 240.0;
+    let compact_weekly = state.weekly && metrics.size.width < 240.0;
     let delete = button(text("Delete").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .on_press(Message::EventDeleteRequested(block_id.clone()))
@@ -848,8 +946,8 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         text(format!(
             "{} · {}–{}",
             block.start.format("%a, %b %-d"),
-            crate::calendar::time_format::clock(block.start, state.config.appearance.use_24_hour),
-            crate::calendar::time_format::clock(block.end, state.config.appearance.use_24_hour)
+            crate::calendar::time_format::clock(block.start, state.config.appearance.time_format),
+            crate::calendar::time_format::clock(block.end, state.config.appearance.time_format)
         ))
         .size(metrics.label())
         .style(text::secondary),
@@ -1260,7 +1358,73 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar;
     use iced::{Point, Size, mouse};
+
+    #[test]
+    fn inbox_button_moves_the_selected_task() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+        let size = Size::new(320.0, 900.0);
+        let metrics = Metrics::of(size);
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            task_actions(&state, state.calendar.event("task:deep").unwrap(), &metrics),
+        );
+        ui.click("Move to inbox").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(message,
+            Message::TimeBlocking(Action::MoveToInbox(id)) if id == "task:deep")));
+    }
+
+    #[test]
+    fn backlog_picker_offers_every_group_and_selects_the_task_destination() {
+        let mut state = State::new(
+            crate::config::Config::default(),
+            crate::theme::Catalog::built_in(),
+        );
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+        let size = Size::new(320.0, 900.0);
+        let metrics = Metrics::of(size);
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            task_actions(&state, state.calendar.event("task:deep").unwrap(), &metrics),
+        );
+        assert!(ui.find("Next week or two").is_err());
+        ui.click("Move to backlog").unwrap();
+        let message = ui.into_messages().next().unwrap();
+        assert!(
+            matches!(&message, Message::TimeBlocking(Action::BacklogPicker(id)) if id == "task:deep")
+        );
+        let _ = crate::app::update(&mut state, message);
+        assert!(state.timeblocking.busy.is_empty());
+        for section in tb::BacklogSection::ALL {
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                size,
+                task_actions(&state, state.calendar.event("task:deep").unwrap(), &metrics),
+            );
+            for group in tb::BacklogSection::ALL {
+                assert!(ui.find(group.label()).is_ok(), "{}", group.label());
+            }
+            ui.click(section.label()).unwrap();
+            assert!(ui.into_messages().any(|message| matches!(message,
+                Message::TimeBlocking(Action::MoveToBacklog(id, choice))
+                    if id == "task:deep" && choice == section)));
+        }
+        let _ = tb::update(&mut state, Action::BacklogPicker("task:deep".into()));
+        assert!(state.timeblocking.backlog_picker.is_none());
+    }
 
     #[test]
     fn task_title_click_starts_inline_editing() {

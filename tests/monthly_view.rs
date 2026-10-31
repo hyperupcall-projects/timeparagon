@@ -48,7 +48,7 @@ fn state() -> State {
 }
 
 fn render(state: &State, size: Size) -> Simulator<'_, Message> {
-    let view: Element<'_, Message> = app::view(state, iced::window::Id::unique());
+    let view: Element<'_, Message> = timeslay::ui::editor_window(state);
     Simulator::with_size(Settings::default(), size, view)
 }
 
@@ -105,7 +105,7 @@ fn month_event_click_selects_its_day_and_opens_details() {
     let mut ui = render(&state, Size::new(1100.0, 1100.0));
     let clock = calendar::time_format::clock(
         chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
-        state.config.appearance.use_24_hour,
+        state.config.appearance.time_format,
     );
     ui.click(format!("{clock} Meeting on {day}")).unwrap();
     let action = ui.into_messages().find(|m| matches!(m, Message::WeekDayAction(d, inner) if *d == day && matches!(inner.as_ref(), Message::EventOpened(_)))).unwrap();
@@ -117,11 +117,50 @@ fn month_event_click_selects_its_day_and_opens_details() {
 }
 
 #[test]
-fn date_opens_daily_timeline_and_modes_are_exclusive() {
+fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
     let mut state = state();
-    let day = date(2026, 9, 6);
-    let _ = app::update(&mut state, Message::CalendarDayOpened(day));
-    assert_eq!(state.calendar.day, day);
+    let anchor = state.week_anchor;
+    let dates = state.calendar_dates();
+    for (label, day) in [("16", date(2026, 8, 16)), ("Sep 6", date(2026, 9, 6))] {
+        let mut ui = render(&state, Size::new(1100.0, 1100.0));
+        ui.click(label).unwrap();
+        let action = ui
+            .into_messages()
+            .find(|m| {
+                matches!(m,
+                    Message::WeekDayAction(d, inner)
+                        if *d == day && matches!(inner.as_ref(), Message::CalendarDayOpened(_))
+                )
+            })
+            .unwrap();
+        let _ = app::update(&mut state, action);
+        assert_eq!(state.calendar.day, day);
+        assert!(state.monthly && !state.weekly);
+        assert_eq!(state.week_anchor, anchor);
+        assert_eq!(state.calendar_dates(), dates);
+        assert!(
+            state
+                .calendar
+                .events
+                .iter()
+                .any(|event| event.id == day.to_string())
+        );
+        let mut month = render(&state, Size::new(1100.0, 1100.0));
+        assert!(month.find("August 2026 ▾").is_ok());
+        assert!(month.find("Close view").is_err());
+        let mut panel = Simulator::with_size(
+            Settings::default(),
+            Size::new(400.0, 900.0),
+            timeslay::ui::view(&state),
+        );
+        assert!(panel.find(day.format("%a %b %-d").to_string()).is_ok());
+    }
+}
+
+#[test]
+fn calendar_modes_are_exclusive() {
+    let mut state = state();
+    let _ = app::update(&mut state, Message::CalendarModeSelected(false));
     assert!(!state.monthly && !state.weekly);
     let _ = app::update(&mut state, Message::CalendarMonthViewSelected);
     assert!(state.monthly && !state.weekly);
@@ -134,12 +173,7 @@ fn month_navigation_remains_reachable_at_small_widths() {
     let state = state();
     for width in [180.0, 260.0, 420.0, 1100.0] {
         let mut ui = render(&state, Size::new(width, 900.0));
-        for label in [
-            timeslay::ui::calendar_view_label(&state),
-            "Today",
-            "Menu",
-            "August 2026 ▾",
-        ] {
+        for label in ["Month", "Today", "Menu", "August 2026 ▾"] {
             let bounds = ui.find(label).unwrap().bounds();
             assert!(
                 bounds.x >= 0.0 && bounds.x + bounds.width <= width + 0.5,

@@ -185,12 +185,13 @@ fn task_popover(views: &ViewSettings) -> (Anchor, (u32, u32), (i32, i32, i32, i3
 fn editor_window_margin(panel: &Panel) -> (i32, i32, i32, i32) {
     let inset = panel.app.screen_margin().round() as i32;
     let top = crate::ui::editor_window_top(&panel.app).round() as i32;
-    // Zone 0 respects desktop panels and our own reservation. Only add
-    // the strip width when it has not already been reserved.
+    // The panel already contains a trailing gutter equal to `inset`.
+    // Start at the surface edge to keep that same gap beside the editor.
+    // Zone 0 already accounts for the panel when it reserves space.
     let offset = if panel.app.config.views.panel_reserve_space {
-        -inset
+        0
     } else {
-        panel.width as i32 - inset
+        panel.width as i32
     };
     match panel.app.sidebar.as_ref().map_or(Side::Left, |s| s.side) {
         Side::Left => (top, 0, inset, offset),
@@ -397,12 +398,19 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                 let flash = settings.fullscreen;
                 let width = settings.size.width.round().max(1.0) as u32;
                 let popover = panel.app.task_creation_window && !flash;
-                let editor_window = settings.platform_specific.application_id == "timeslay-editor";
+                // The app ID carries the animation choice, so identify the
+                // editor by its window ID rather than a fixed application ID.
+                let editor_window = panel.app.editor_window == Some(id);
                 let mut margin = (0, 0, 0, 0);
                 let (anchor, size, zone, namespace) = if editor_window {
                     let side = panel.app.sidebar.as_ref().map_or(Side::Left, |s| s.side);
                     margin = editor_window_margin(panel);
-                    (anchor(side), (width, 0), 0, "timeslay-editor".to_owned())
+                    (
+                        anchor(side),
+                        (width, 0),
+                        0,
+                        settings.platform_specific.application_id.clone(),
+                    )
                 } else if popover {
                     panel.id = Some(id);
                     let (anchor, size, margins) = task_popover(&panel.app.config.views);
@@ -845,42 +853,49 @@ mod tests {
     fn editor_window_floats_beside_the_panel_without_changing_its_reservation() {
         for side in [Side::Left, Side::Right] {
             for reserved in [false, true] {
-                let mut panel = panel();
-                panel.app.sidebar.as_mut().unwrap().side = side;
-                panel.app.config.views.panel_reserve_space = reserved;
-                let main = panel.id;
-                let id = window::Id::unique();
-                panel.app.editor_window = Some(id);
-                let (sender, _receiver) = oneshot::channel();
-                let messages = outputs(update(
-                    &mut panel,
-                    Message::Runtime(Action::Window(WindowAction::Open(
-                        id,
-                        window::Settings {
-                            size: iced::Size::new(360.0, 800.0),
-                            platform_specific: window::settings::PlatformSpecific {
-                                application_id: "timeslay-editor".into(),
+                for mode in crate::config::WindowAnimation::ALL {
+                    let application_id =
+                        crate::window_effect::application_id(mode, 240, "timeslay-editor");
+                    let mut panel = panel();
+                    panel.app.sidebar.as_mut().unwrap().side = side;
+                    panel.app.config.views.panel_reserve_space = reserved;
+                    let main = panel.id;
+                    let id = window::Id::unique();
+                    panel.app.editor_window = Some(id);
+                    let (sender, _receiver) = oneshot::channel();
+                    let messages = outputs(update(
+                        &mut panel,
+                        Message::Runtime(Action::Window(WindowAction::Open(
+                            id,
+                            window::Settings {
+                                size: iced::Size::new(360.0, 800.0),
+                                platform_specific: window::settings::PlatformSpecific {
+                                    application_id: application_id.clone(),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
-                            ..Default::default()
-                        },
-                        sender,
-                    ))),
-                ));
-                assert_eq!(panel.id, main);
-                assert_eq!(panel.width, 216);
-                assert!(matches!(messages.as_slice(),
-                    [Message::Layer(LayerShellCustomActionWithId(None, LayerAction::NewLayerShell { id: target, settings }))]
-                    if *target == id && settings.layer == Layer::Top
-                        && settings.exclusive_zone == Some(0)
-                        && settings.anchor == anchor(side)
-                        && settings.size == Some((360, 0))
-                        && settings.keyboard_interactivity == KeyboardInteractivity::Exclusive
-                        && settings.margin.is_some_and(|m| match side {
-                            Side::Left => m.3 == (if reserved { -8 } else { 208 }) && m.1 == 0,
-                            Side::Right => m.1 == (if reserved { -8 } else { 208 }) && m.3 == 0,
-                        })
-                ));
+                            sender,
+                        ))),
+                    ));
+                    assert_eq!(panel.id, main);
+                    assert_eq!(panel.width, 216);
+                    assert!(matches!(messages.as_slice(),
+                        [Message::Layer(LayerShellCustomActionWithId(None, LayerAction::NewLayerShell { id: target, settings }))]
+                        if *target == id && settings.layer == Layer::Top
+                            && settings.namespace.as_deref() == Some(application_id.as_str())
+                            && settings.exclusive_zone == Some(0)
+                            && settings.anchor == anchor(side)
+                            && settings.size == Some((360, 0))
+                            && settings.keyboard_interactivity == KeyboardInteractivity::Exclusive
+                            && settings.margin.is_some_and(|m| match side {
+                                Side::Left => m.3 == (if reserved { 0 } else { 216 }) && m.1 == 0
+                                    && m.0 == 8 && m.2 == 8,
+                                Side::Right => m.1 == (if reserved { 0 } else { 216 }) && m.3 == 0
+                                    && m.0 == 8 && m.2 == 8,
+                            })
+                    ));
+                }
             }
         }
     }

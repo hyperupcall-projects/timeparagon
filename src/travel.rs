@@ -508,7 +508,7 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
     let mut legs: Vec<Leg> = Vec::new();
 
     if state.travel.show {
-        if state.screen == crate::app::Screen::Calendar && (state.weekly || state.monthly) {
+        if state.range_view_active() {
             for day in state.calendar_dates() {
                 legs.extend(day_hops(state, day).into_iter().map(|hop| hop.leg));
             }

@@ -153,6 +153,36 @@ pub fn detect(text: &str, today: NaiveDate, projects: &ProjectsSettings) -> Vec<
     tokens
 }
 
+/// Keep dismissed occurrences attached to unchanged text through surrounding edits.
+/// Editing the occurrence itself makes it eligible for detection again.
+pub fn remap_ignored(old: &str, new: &str, ranges: &mut Vec<Range<usize>>) {
+    let prefix = old
+        .chars()
+        .zip(new.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    let suffix = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    let old_end = old.len() - suffix;
+    let new_end = new.len() - suffix;
+    ranges.retain_mut(|range| {
+        if range.end <= prefix {
+            true
+        } else if range.start >= old_end {
+            *range = (new_end + range.start - old_end)..(new_end + range.end - old_end);
+            true
+        } else {
+            false
+        }
+    });
+}
+
 pub fn remove(text: &str, ranges: impl IntoIterator<Item = Range<usize>>) -> String {
     let mut result = text.to_owned();
     let mut ranges: Vec<_> = ranges.into_iter().collect();
@@ -202,6 +232,17 @@ mod tests {
             );
         }
         assert!(date("feb 30", today).is_none());
+    }
+
+    #[test]
+    fn dismissed_ranges_follow_unicode_edits_and_drop_when_replaced() {
+        let mut ranges = vec![6..14, 15..20];
+        remap_ignored("Café tomorrow @home", "🍵 Café tomorrow @home", &mut ranges);
+        assert_eq!(ranges, [11..19, 20..25]);
+        remap_ignored("🍵 Café tomorrow @home", "🍵 Café today @home", &mut ranges);
+        assert_eq!(ranges, [17..22]);
+        remap_ignored("🍵 Café today @home", "🍵 Café today @home !1", &mut ranges);
+        assert_eq!(ranges, [17..22]);
     }
 
     #[test]

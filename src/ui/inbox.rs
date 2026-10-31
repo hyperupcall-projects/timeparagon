@@ -1,5 +1,6 @@
 //! The Inbox tab: tasks waiting to be triaged, and the popup that adds one.
 
+use crate::calendar::time_format::TimeFormat;
 use iced::widget::{
     Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
 };
@@ -48,7 +49,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
     let (heading, subtitle) = match list {
         List::Overdue => (
             "Overdue",
-            "Incomplete tasks with a past scheduled time or deadline",
+            "Incomplete tasks with a past scheduled time or deadline. This should be empty! Move tasks that you plan to do in inbox, schcedule them for later, or move them to the backlog.",
         ),
         List::Inbox => ("Inbox", "Tasks waiting to be triaged"),
         List::Triaged => (
@@ -155,7 +156,32 @@ fn task_card<'a>(
     );
 
     let mut card = column![heading].spacing(4);
-    if list != List::Overdue {
+    if list == List::Overdue {
+        let size = metrics.label() - 1.0;
+        let due = scheduled_label(task, state.config.appearance.time_format)
+            .unwrap_or_else(|| "None".into());
+        card = card.push(field_line("Due Date", text(due).size(size).into(), metrics));
+        if let Ok(Some(deadline)) =
+            crate::calendar::deadline::read_deadline(&task.details.description)
+        {
+            card = card.push(field_line(
+                "Deadline",
+                text(deadline.value()).size(size).into(),
+                metrics,
+            ));
+        }
+        let minutes = tb::metadata(task).minutes;
+        let estimate = if minutes == 0 {
+            "No estimate".into()
+        } else {
+            format_duration(minutes)
+        };
+        card = card.push(field_line(
+            "Estimate",
+            text(estimate).size(size).into(),
+            metrics,
+        ));
+    } else {
         for row in metadata_rows(state, task, metrics, list == List::Inbox) {
             card = card.push(row);
         }
@@ -164,7 +190,7 @@ fn task_card<'a>(
         card = card.push(actions(task, metrics, busy));
     }
 
-    container(card)
+    let card = container(card)
         .padding([6, 8])
         .width(Fill)
         .style(move |theme: &iced::Theme| {
@@ -182,8 +208,8 @@ fn task_card<'a>(
                 },
                 ..super::controls::card_surface(theme)
             }
-        })
-        .into()
+        });
+    super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref())
 }
 
 /// Every piece of metadata a task carries: the project, labels, priority,
@@ -205,8 +231,20 @@ fn metadata_rows<'a>(
     ] {
         let value = timestamp
             .map(|time| {
-                time.with_timezone(&Local)
-                    .format(if state.config.appearance.use_24_hour {
+                let local = time.with_timezone(&Local);
+                if state.config.appearance.time_format == TimeFormat::Compact {
+                    return format!(
+                        "{} {} {}",
+                        local.format("%Y-%m-%d"),
+                        crate::calendar::time_format::clock(
+                            local,
+                            state.config.appearance.time_format
+                        ),
+                        local.format("%Z")
+                    );
+                }
+                local
+                    .format(if state.config.appearance.time_format.is_24_hour() {
                         "%Y-%m-%d %H:%M:%S %Z"
                     } else {
                         "%Y-%m-%d %-I:%M:%S%p %Z"
@@ -328,7 +366,7 @@ fn metadata_rows<'a>(
     }
 
     // The scheduled day or time, once it has one.
-    if let Some(scheduled) = scheduled_label(task, state.config.appearance.use_24_hour) {
+    if let Some(scheduled) = scheduled_label(task, state.config.appearance.time_format) {
         rows.push(field_line(
             "Scheduled",
             text(scheduled).size(size).into(),
@@ -378,7 +416,7 @@ fn format_duration(minutes: u32) -> String {
 }
 
 /// The day or time a task has been scheduled for, if it has one.
-fn scheduled_label(task: &Event, use_24_hour: bool) -> Option<String> {
+fn scheduled_label(task: &Event, time_format: TimeFormat) -> Option<String> {
     let date = task.start.date_naive();
     if date == tb::UNDATED {
         return None;
@@ -389,7 +427,7 @@ fn scheduled_label(task: &Event, use_24_hour: bool) -> Option<String> {
         format!(
             "{} at {}",
             date.format("%a, %b %-d"),
-            crate::calendar::time_format::clock(task.start, use_24_hour)
+            crate::calendar::time_format::clock(task.start, time_format)
         )
     })
 }
@@ -650,7 +688,7 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         };
         return container(
             iced::widget::sensor(card.id("dock-task-card"))
-                .key(viewport_height.to_bits())
+                .key((viewport_height.to_bits(), state.inbox.voice.debug_open))
                 .on_show(bounds)
                 .on_resize(bounds),
         )
@@ -725,7 +763,7 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
         })
         .size(metrics.label()),
     );
-    if !draft.saving && !draft.fetching {
+    if !draft.saving && !draft.fetching && !state.inbox.voice.active() {
         add = add.on_press(msg(Action::Create));
     }
     let mut cancel = button(text("Cancel").size(metrics.label())).style(button::text);
@@ -915,7 +953,7 @@ mod tests {
             ui.find(
                 timestamp
                     .with_timezone(&Local)
-                    .format(if state.config.appearance.use_24_hour {
+                    .format(if state.config.appearance.time_format.is_24_hour() {
                         "%Y-%m-%d %H:%M:%S %Z"
                     } else {
                         "%Y-%m-%d %-I:%M:%S%p %Z"
@@ -927,17 +965,27 @@ mod tests {
     }
 
     #[test]
-    fn overdue_shows_sorting_and_only_clickable_titles() {
+    fn overdue_shows_due_date_and_estimate_with_clickable_titles() {
         for width in [320.0, 900.0] {
             let mut state = state_with_task("");
             state.screen = crate::app::Screen::Overdue;
             state.calendar.events[0].start =
                 calendar::at_clock(Local::now().date_naive().pred_opt().unwrap(), 0, 0);
+            state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
+                id: 100,
+                legacy_key: None,
+                metadata: tb::Metadata {
+                    minutes: 90,
+                    ..Default::default()
+                },
+            });
+            let due =
+                scheduled_label(&state.calendar.events[0], TimeFormat::TwentyFourHour).unwrap();
             let mut ui = simulator(&state, width);
-            assert!(ui.find("Sort by").is_ok());
-            for label in [
-                "Project", "Priority", "Estimate", "Created", "Modified", "New task",
-            ] {
+            for label in ["Sort by", "Due Date", &due, "Estimate", "1h 30m"] {
+                assert!(ui.find(label).is_ok(), "{label}");
+            }
+            for label in ["Project", "Priority", "Created", "Modified", "New task"] {
                 assert!(ui.find(label).is_err(), "{label}");
             }
             ui.click("Reply to Sam").unwrap();
@@ -946,6 +994,23 @@ mod tests {
             let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
             assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
             assert!(crate::app::shows_details(state.screen));
+        }
+    }
+
+    #[test]
+    fn overdue_without_a_due_date_or_estimate_shows_deadline_and_missing_values() {
+        let mut state = state_with_task("DUE: 2020-01-02");
+        state.screen = crate::app::Screen::Overdue;
+        let mut ui = simulator(&state, 320.0);
+        for label in [
+            "Due Date",
+            "None",
+            "Deadline",
+            "2020-01-02",
+            "Estimate",
+            "No estimate",
+        ] {
+            assert!(ui.find(label).is_ok(), "{label}");
         }
     }
 
