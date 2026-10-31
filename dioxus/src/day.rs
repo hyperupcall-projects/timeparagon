@@ -714,6 +714,7 @@ mod tests {
                 labels: Vec::new(),
                 priority: None,
                 location: None,
+                ..Metadata::default()
             },
             legacy_key: None,
         });

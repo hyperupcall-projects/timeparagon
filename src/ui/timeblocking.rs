@@ -312,9 +312,23 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
             .id(iced::widget::Id::new(crate::inbox::TITLE_FIELD))
             .size(metrics.label() + 6.0);
         if !draft.saving {
-            input = input.on_input(|v| Message::Inbox(crate::inbox::Action::Title(v)));
+            input = input.on_input(|v| Message::Inbox(crate::inbox::Action::Title(v)))
+                .on_submit(Message::Inbox(crate::inbox::Action::Create));
         }
-        column![field_label("Title", metrics), input]
+        let tokens = crate::task_input::detect(&draft.title, chrono::Local::now().date_naive(), &state.config.projects);
+        let input = super::task_input::quick_input(input, &draft.title, tokens, metrics.label() + 6.0);
+        let help = super::anchored_menu::anchored_menu(
+            row![field_label("Title", metrics), iced::widget::Space::new().width(Fill),
+                button("?").on_press(Message::Inbox(crate::inbox::Action::SyntaxHelp(!draft.syntax_help)))
+            ].align_y(iced::Center),
+            container(scrollable(column![
+                text("Quick-add syntax").size(metrics.label() + 2.0),
+                text("@label · {@deep work} for labels with spaces\n#Project · {#Project name} for existing projects\np1 / !1 · p2 / !2 for priority\n~30m for an estimate in minutes\nDates: today, tomorrow, monday, next monday, next week, in 3 days, in 2 weeks, oct 8, October 8 2027, 8 oct, 2027-10-08\n{oct 8} sets the deadline; bare dates set the regular due date\nTab inside a highlight applies and removes it.\nSpace leaves it in the title; Enter saves and removes all detected syntax.\nDates without a year use the next occurrence.\nUnknown syntax stays in the title.").size(metrics.label())
+            ].spacing(8)).height(360)).padding(12).width(Fill).style(super::controls::surface),
+            draft.syntax_help,
+            Message::Inbox(crate::inbox::Action::SyntaxHelp(false)),
+        );
+        column![help, input]
             .spacing(6)
             .into()
     } else {

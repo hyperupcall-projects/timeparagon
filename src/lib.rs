@@ -48,3 +48,4 @@ pub mod pomodoro;
 pub mod task_work;
 
 pub mod task_db;
+pub mod task_input;

@@ -1,6 +1,7 @@
 //! Exercise the dock editor against a real Wayland compositor.
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=debug")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=debug"))
+        .init();
     let (created, _rx) = smithay_client_toolkit::reexports::calloop::channel::channel();
     let editor = timeslay::panel::layer::spawn_task_popover(created).unwrap();
     std::thread::sleep(std::time::Duration::from_secs(2));

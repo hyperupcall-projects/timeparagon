@@ -54,6 +54,9 @@ pub struct Draft {
     pub saving: bool,
     pub error: Option<String>,
     lookup: u64,
+    pub syntax_help: bool,
+    quick_base: Option<(tb::Metadata, String, String)>,
+    quick_applied: Option<(tb::Metadata, String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +67,8 @@ pub enum Action {
     NewTask,
     Cancel,
     Title(String),
+    SyntaxHelp(bool),
+    AcceptToken(std::ops::Range<usize>),
     Description(iced::widget::text_editor::Action),
     Deadline(String),
     Due(String),
@@ -249,6 +254,35 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             Task::none()
         }
         Action::Title(value) => title_changed(state, value),
+        Action::SyntaxHelp(open) => edit(state, |draft| draft.syntax_help = open),
+        Action::AcceptToken(range) => {
+            if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
+                let tokens = crate::task_input::detect(
+                    &draft.title,
+                    Local::now().date_naive(),
+                    &state.config.projects,
+                );
+                if let Some(token) = tokens.into_iter().find(|t| t.range == range) {
+                    preview(
+                        draft,
+                        &mut state.timeblocking.date,
+                        &mut state.timeblocking.deadline,
+                        &state.config.projects,
+                    );
+                    if let Some((metadata, due, deadline)) = draft.quick_base.as_mut() {
+                        apply_value(metadata, due, deadline, token.value);
+                    }
+                    draft.title = crate::task_input::remove(&draft.title, [range]);
+                    preview(
+                        draft,
+                        &mut state.timeblocking.date,
+                        &mut state.timeblocking.deadline,
+                        &state.config.projects,
+                    );
+                }
+            }
+            Task::none()
+        }
         Action::Description(action) => {
             if state.inbox.draft.as_ref().is_some_and(|d| !d.saving) {
                 state.task_description.perform(action);
@@ -381,6 +415,12 @@ fn title_changed(state: &mut State, value: String) -> Task<Message> {
     let pasted = value.len() >= draft.title.len() + 2;
     draft.title = value;
     draft.error = None;
+    preview(
+        draft,
+        &mut state.timeblocking.date,
+        &mut state.timeblocking.deadline,
+        &state.config.projects,
+    );
     let Some(source) = integrations::recognize(&draft.title) else {
         return Task::none();
     };
@@ -398,6 +438,82 @@ fn title_changed(state: &mut State, value: String) -> Task<Message> {
     };
     blocking::run(move || integrations::fetch(&source, &auth))
         .map(move |result| Message::Inbox(Action::Fetched(lookup, result)))
+}
+
+fn preview(
+    draft: &mut Draft,
+    due: &mut String,
+    deadline: &mut String,
+    projects: &crate::config::ProjectsSettings,
+) {
+    let Some(data) = draft
+        .event
+        .as_mut()
+        .and_then(|e| e.details.task_data.as_mut())
+    else {
+        return;
+    };
+    let current = (data.metadata.clone(), due.clone(), deadline.clone());
+    let mut base = draft.quick_base.take().unwrap_or_else(|| current.clone());
+    if let Some(applied) = draft.quick_applied.take() {
+        // Keep changes made through the ordinary form controls during a preview.
+        if current.0.priority != applied.0.priority {
+            base.0.priority = current.0.priority;
+        }
+        if current.0.minutes != applied.0.minutes {
+            base.0.minutes = current.0.minutes;
+        }
+        if current.0.projects != applied.0.projects {
+            base.0.projects = current.0.projects;
+        }
+        if current.0.labels != applied.0.labels {
+            base.0.labels = current.0.labels;
+        }
+        if current.1 != applied.1 {
+            base.1 = current.1;
+        }
+        if current.2 != applied.2 {
+            base.2 = current.2;
+        }
+    }
+    data.metadata.priority = base.0.priority;
+    data.metadata.minutes = base.0.minutes;
+    data.metadata.projects = base.0.projects.clone();
+    data.metadata.labels = base.0.labels.clone();
+    *due = base.1.clone();
+    *deadline = base.2.clone();
+    for token in crate::task_input::detect(&draft.title, Local::now().date_naive(), projects) {
+        apply_value(&mut data.metadata, due, deadline, token.value);
+    }
+    draft.due = due.clone();
+    draft.deadline = deadline.clone();
+    draft.quick_base = Some(base);
+    draft.quick_applied = Some((data.metadata.clone(), due.clone(), deadline.clone()));
+}
+
+fn apply_value(
+    metadata: &mut tb::Metadata,
+    due: &mut String,
+    deadline: &mut String,
+    value: crate::task_input::Value,
+) {
+    use crate::task_input::Value;
+    match value {
+        Value::Due(day) => *due = day.to_string(),
+        Value::Deadline(day) => *deadline = day.to_string(),
+        Value::Priority(p) => metadata.priority = Some(p),
+        Value::Minutes(n) => metadata.minutes = n,
+        Value::Label(label) => {
+            if !metadata.labels.contains(&label) {
+                metadata.labels.push(label);
+            }
+        }
+        Value::Project(id) => {
+            if !metadata.projects.contains(&id) {
+                metadata.projects.push(id);
+            }
+        }
+    }
 }
 
 fn fetched(state: &mut State, lookup: u64, result: Result<integrations::Details, String>) {
@@ -468,7 +584,9 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
     let due = match draft.due.trim() {
         "" => None,
         text => Some(
-            deadline::parse_date(text).map_err(|_| "Enter a due date as YYYY-MM-DD".to_owned())?,
+            crate::task_input::date(text, Local::now().date_naive()).ok_or_else(|| {
+                "Enter a due date as YYYY-MM-DD or a date like tomorrow".to_owned()
+            })?,
         ),
     };
     // A link typed out in full is a source too, even if it was never pasted.
@@ -486,6 +604,21 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
 }
 
 fn create(state: &mut State) -> Task<Message> {
+    if let Some(draft) = state
+        .inbox
+        .draft
+        .as_mut()
+        .filter(|d| !d.saving && !d.fetching)
+    {
+        let tokens = crate::task_input::detect(
+            &draft.title,
+            Local::now().date_naive(),
+            &state.config.projects,
+        );
+        draft.title = crate::task_input::remove(&draft.title, tokens.into_iter().map(|t| t.range));
+        draft.quick_base = None;
+        draft.quick_applied = None;
+    }
     let deadline = state.timeblocking.deadline.clone();
     let due = state.timeblocking.date.clone();
     let Some(draft) = state.inbox.draft.as_mut() else {
@@ -719,6 +852,84 @@ mod tests {
 
     fn day(text: &str) -> NaiveDate {
         deadline::parse_date(text).unwrap()
+    }
+
+    #[test]
+    fn braced_dates_set_deadlines_and_plain_dates_set_due_dates() {
+        let mut state = state();
+        let _ = update(&mut state, Action::NewTask);
+        let _ = update(&mut state, Action::Title("Call tomorrow {oct 8}".into()));
+        assert_eq!(
+            state.timeblocking.date,
+            (Local::now().date_naive() + Duration::days(1)).to_string()
+        );
+        assert!(state.timeblocking.deadline.ends_with("-10-08"));
+        let title = &state.inbox.draft.as_ref().unwrap().title;
+        let range =
+            crate::task_input::detect(title, Local::now().date_naive(), &state.config.projects)
+                .pop()
+                .unwrap()
+                .range;
+        let _ = update(&mut state, Action::AcceptToken(range));
+        let _ = update(&mut state, Action::Title("Call".into()));
+        assert!(state.timeblocking.date.is_empty());
+        assert!(state.timeblocking.deadline.ends_with("-10-08"));
+        let mut draft = state.inbox.draft.as_ref().unwrap().clone();
+        draft.due = "tomorrow".into();
+        assert_eq!(
+            validate(&draft).unwrap().due,
+            Some(Local::now().date_naive() + Duration::days(1))
+        );
+    }
+
+    #[test]
+    fn quick_add_previews_roll_back_and_tab_commits_only_its_token() {
+        let mut state = state();
+        let _ = update(&mut state, Action::NewTask);
+        let _ = update(&mut state, Action::Title("Plan @home !1 tomorrow".into()));
+        let draft = state.inbox.draft.as_ref().unwrap();
+        assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
+        assert!(!state.timeblocking.date.is_empty());
+        let _ = update(&mut state, Action::AcceptToken(5..10));
+        assert_eq!(
+            state.inbox.draft.as_ref().unwrap().title,
+            "Plan  !1 tomorrow"
+        );
+        let _ = update(&mut state, Action::Title("Plan".into()));
+        let draft = state.inbox.draft.as_ref().unwrap();
+        let metadata = tb::metadata(draft.event.as_ref().unwrap());
+        assert_eq!(metadata.labels, ["home"]);
+        assert_eq!(metadata.priority, None);
+        assert!(state.timeblocking.date.is_empty());
+        let _ = update(&mut state, Action::Title("Plan !2".into()));
+        let _ = update(&mut state, Action::Title("Plan !1".into()));
+        assert_eq!(
+            tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
+            Some(tb::Priority::P1)
+        );
+        let _ = update(&mut state, Action::Title("Plan".into()));
+        assert_eq!(
+            tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
+            None
+        );
+    }
+
+    #[test]
+    fn saving_cleans_syntax_and_trailing_whitespace_before_validation() {
+        let mut state = state();
+        let _ = update(&mut state, Action::NewTask);
+        let _ = update(&mut state, Action::Title("  @home tomorrow !1  ".into()));
+        // Metadata alone cannot accidentally create a nameless task.
+        let _ = update(&mut state, Action::Create);
+        let draft = state.inbox.draft.as_ref().unwrap();
+        assert_eq!(draft.title, "");
+        assert_eq!(draft.error.as_deref(), Some("A task needs a name"));
+        assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
+        let _ = update(&mut state, Action::Title("Call bank   ".into()));
+        assert_eq!(
+            validate(state.inbox.draft.as_ref().unwrap()).unwrap().title,
+            "Call bank"
+        );
     }
 
     #[test]
@@ -1092,10 +1303,10 @@ mod tests {
         draft.deadline = "soon".into();
         assert!(validate(&draft).unwrap_err().contains("YYYY-MM-DD"));
         draft.deadline = "2026-11-01 09:00".into();
-        draft.due = "tomorrow".into();
+        draft.due = "nonsense".into();
         assert_eq!(
             validate(&draft).err().as_deref(),
-            Some("Enter a due date as YYYY-MM-DD")
+            Some("Enter a due date as YYYY-MM-DD or a date like tomorrow")
         );
         draft.due = "2026-10-30".into();
         let task = validate(&draft).unwrap();

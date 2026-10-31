@@ -23,6 +23,7 @@ pub mod recurrence;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;
+mod task_input;
 pub mod timeblocking;
 mod timeblocking_focus;
 pub mod travel;

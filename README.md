@@ -29,8 +29,8 @@ There's week and month views, just like any other calendar app:
 - Intuitive to use (WIP).
 - View your time:
 	- By day
-	- By week
-	- By month
+	- By week/month
+		- Should always have day, toggle week and month/two week to the right side. when clicking, month it shpws on day (TODO) 
 	- Including a custom sort (TODO).
 		- Based on search or query; omit private event details (TODO).
 - Manage your time:
@@ -56,12 +56,13 @@ There's week and month views, just like any other calendar app:
 	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
 	- Create tasks:
 		- With Todoist-like syntax (TODO).
-		- With voice input (TODO).
+		- With voice input (local transcription) (TODO).
+			- NuExtract3, Qwen3.5-4B, GLiNER2?
 		- From Gmail URLs
 		- From a web page with the browser extension
 		- From a Slack message with the Slack app
 	- Inbox section for new tasks that have yet to be triaged.
-	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled (WIP).
+	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled.
 	- Segmented backlog section for deferring tasks to next week, next month, and so on (WIP).
 	- Schedule tasks:
 		- Manually assign tasks to time blocks.
@@ -77,7 +78,7 @@ There's week and month views, just like any other calendar app:
 	- Local/url (TODO).
 - Autolaunchers
 	- Save configure presets for launching and positioning application windows (TODO).
-- Goals
+- Goals (TODO)
 	- Track long-term goals (year, decade).
 - Objectives (TODO)
 	- Implement your goals in a SMART way.
