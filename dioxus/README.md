@@ -164,6 +164,28 @@ Time blocks are read from the app's single TimeSlay calendar
 (`calendar.app_calendar`, discovered from the calendar list). A block referenced
 by a task's metadata is still recognized even if the id changes.
 
+## Home-screen widget (Android)
+
+Add **TimeSlay → Day** from the launcher's widget picker. It shows today's
+timeline, scrolled to the current time, with a live now line. Overlapping items
+share columns, and when too many overlap for the widget's width the rest collapse
+into a **+N** box. A time block lists its tasks beside its title, or under it on a
+narrow widget, with unfinished tasks first and **+N more** when they do not fit.
+All-day events and tasks without a time or block are chips above the timeline.
+Tapping anything, including **+**, opens the app for now.
+
+A widget cannot host the WebView, so it is native Kotlin in `android/`. `dx` has no
+option for extra Android sources, so `scripts/build-android.sh` copies them into
+its generated project before building. A plain `dx build --android` fails on a
+clean tree, because the manifest names the widget's resources.
+
+- `src/widget.rs` writes `files/widget-day.json`. The app does so whenever it shows
+  today, and `WidgetRefreshService` syncs about every 30 minutes while it is closed,
+  in a separate `:widget` process.
+- `DayRenderer.kt` draws the day and hands the widget's `ListView` one bitmap per
+  hour, because `RemoteViews` cannot place a view at a time of day on API 24.
+- Without Google sign-in nothing is synced, and the widget asks you to open the app.
+
 ## Notes
 
 - Only the Dioxus crate enables the desktop/mobile renderers; the root

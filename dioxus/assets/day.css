@@ -1276,6 +1276,11 @@ button {
         text-overflow: ellipsis;
     }
 
+    .controls {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
     .controls .btn.primary {
         padding: 7px 9px;
     }

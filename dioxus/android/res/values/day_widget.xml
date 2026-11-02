@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="day_widget_label">Day</string>
+    <string name="day_widget_description">Your calendar, time blocks and tasks for today</string>
+    <string name="day_widget_add">Add</string>
+    <string name="day_widget_empty">Open TimeSlay to load your day</string>
+    <!-- Keep in sync with HOUR_HEIGHT_DP and ALL_DAY_ROW_DP in DayRenderer.kt. -->
+    <dimen name="day_widget_hour_height">60dp</dimen>
+    <dimen name="day_widget_all_day_height">30dp</dimen>
+</resources>
