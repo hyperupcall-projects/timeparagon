@@ -11,6 +11,8 @@ pub(super) struct PointerSample {
 thread_local! {
     pub(super) static ROOT_BOUNDS: std::cell::Cell<Rectangle> = const { std::cell::Cell::new(Rectangle::new(Point::ORIGIN, Size::ZERO)) };
     pub(super) static CREATE_ANCHOR: std::cell::Cell<Rectangle> = const { std::cell::Cell::new(Rectangle::new(Point::ORIGIN, Size::ZERO)) };
+    /// The last cursor position seen by [`pointer_watch`], in window coordinates.
+    pub(super) static CURSOR: std::cell::Cell<Point> = const { std::cell::Cell::new(Point::ORIGIN) };
     /// The last cursor position seen inside the day view. Kept per-thread so
     /// it needs no locking and never leaks across a test's simulations.
     pub(super) static SAMPLE: std::cell::Cell<PointerSample> = const {
@@ -31,6 +33,13 @@ pub fn click_was_in_the_top_half() -> bool {
         let sample = sample.get();
         sample.height <= 0.0 || sample.y <= sample.height / 2.0
     })
+}
+
+/// Hangs the new-event popup from the cursor, for views without a time grid to
+/// anchor it to.
+pub(crate) fn anchor_draft_at_pointer() {
+    let cursor = CURSOR.with(|cursor| cursor.get());
+    CREATE_ANCHOR.with(|anchor| anchor.set(Rectangle::new(cursor, Size::ZERO)));
 }
 
 /// Remembers the cursor inside the day view without sending a message.
@@ -105,6 +114,9 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for PointerWatch<'
         ROOT_BOUNDS.with(|root| root.set(layout.bounds()));
         if let Some(point) = cursor.position_in(layout.bounds()) {
             record_pointer(point.y, layout.bounds().height);
+        }
+        if let Some(position) = cursor.position() {
+            CURSOR.with(|cursor| cursor.set(position));
         }
 
         self.content.as_widget_mut().update(

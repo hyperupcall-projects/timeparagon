@@ -167,44 +167,13 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     })
     .width(Fill)
     .height(Fill);
-    let title = button(text(state.week_anchor.format("%B %Y ▾").to_string()).size(metrics.label()))
-        .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled))
-        .style(crate::ui::controls::secondary);
-    let menu = button(text("Menu").size(metrics.label()))
-        .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
-        .style(crate::ui::controls::secondary);
-    let controls = row![
-        nav_button(
-            "◀",
-            Message::Calendar(CalendarMessage::CalendarViewMonthShift(-1)),
-            metrics
-        ),
-        button(text("Today").size(metrics.label()))
-            .on_press(Message::Calendar(CalendarMessage::CalendarDaySelected(
-                today
-            )))
-            .style(crate::ui::controls::secondary),
-        nav_button(
-            "▶",
-            Message::Calendar(CalendarMessage::CalendarViewMonthShift(1)),
-            metrics
-        ),
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
-    let heading: Element<'a, Message> = if metrics.size.width < 500.0 {
-        column![
-            row![title, Space::new().width(Fill), menu].align_y(Alignment::Center),
-            controls
-        ]
-        .spacing(metrics.spacing)
-        .into()
-    } else {
-        row![title, controls, Space::new().width(Fill), menu]
-            .spacing(metrics.spacing)
-            .align_y(Alignment::Center)
-            .into()
-    };
+    let heading = range_heading(
+        state,
+        state.week_anchor.format("%B %Y ▾").to_string(),
+        CalendarMessage::CalendarViewMonthShift(-1),
+        CalendarMessage::CalendarViewMonthShift(1),
+        metrics,
+    );
     let mut content = column![
         heading,
         text(if state.calendar_loading() {
@@ -238,10 +207,65 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     if let Some(dismiss) = dismiss_bar(state, metrics) {
         content = content.push(dismiss);
     }
-    let mut layers: Vec<Element<'a, Message>> = vec![content.into()];
-    if state.calendar.open_event.is_some() || state.timeblocking.block.is_some() {
-        let details = state.calendar.open_event.is_some();
-        let dismiss = if details {
+    range_layers(state, metrics, content.into())
+}
+
+/// The month picker, the steps back and forward and the menu above a month-shaped
+/// grid.
+pub(super) fn range_heading<'a>(
+    state: &'a State,
+    label: String,
+    back: CalendarMessage,
+    forward: CalendarMessage,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+    let title = button(text(label).size(metrics.label()))
+        .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled))
+        .style(crate::ui::controls::secondary);
+    let menu = button(text("Menu").size(metrics.label()))
+        .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
+        .style(crate::ui::controls::secondary);
+    let controls = row![
+        nav_button("◀", Message::Calendar(back), metrics),
+        button(text("Today").size(metrics.label()))
+            .on_press(Message::Calendar(CalendarMessage::CalendarDaySelected(
+                today
+            )))
+            .style(crate::ui::controls::secondary),
+        nav_button("▶", Message::Calendar(forward), metrics),
+    ]
+    .spacing(metrics.spacing)
+    .align_y(Alignment::Center);
+    if metrics.size.width < 500.0 {
+        column![
+            row![title, Space::new().width(Fill), menu].align_y(Alignment::Center),
+            controls
+        ]
+        .spacing(metrics.spacing)
+        .into()
+    } else {
+        row![title, controls, Space::new().width(Fill), menu]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center)
+            .into()
+    }
+}
+
+/// What floats over a month-shaped grid: the details pane or time block panel,
+/// the new-event popup, the month picker and the menu.
+pub(super) fn range_layers<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    content: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let mut layers: Vec<Element<'a, Message>> = vec![content];
+    let draft_open = state.calendar.draft.as_ref().is_some_and(|d| d.editor_open);
+    if state.calendar.open_event.is_some() || draft_open || state.timeblocking.block.is_some() {
+        let details = state.calendar.open_event.is_some() || draft_open;
+        let dismiss = if draft_open {
+            Message::EventDraft(EventDraftMessage::EventDraftCancelled)
+        } else if details {
             Message::Event(EventMessage::EventClosed)
         } else {
             Message::TimeBlocking(crate::timeblocking::Action::Close)
@@ -326,16 +350,23 @@ pub(super) fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
 
     let month = state.calendar.month;
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
-    let weekly = state.weekly();
     let selected = if state.monthly() {
         state.week_anchor
-    } else if weekly {
+    } else if state.weekly() || state.two_weekly() {
         state.week_hover.unwrap_or(state.week_anchor)
     } else {
         state.calendar.day
     };
-    let preview =
-        weekly.then(|| calendar::week_dates(selected, state.config.calendar.weekly_days()));
+    let preview = if state.weekly() {
+        Some(calendar::week_dates(
+            selected,
+            state.config.calendar.weekly_days(),
+        ))
+    } else if state.two_weekly() {
+        Some(calendar::two_week_dates(selected))
+    } else {
+        None
+    };
 
     let title = row![
         nav_button(

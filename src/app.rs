@@ -59,6 +59,7 @@ pub enum CalendarView {
     #[default]
     Day,
     Week,
+    TwoWeek,
     Month,
 }
 
@@ -325,13 +326,15 @@ pub struct State {
 
     pub screen: Screen,
     pub view: CalendarView,
-    /// Whether the Day/Week/Month dropdown under the left-hand navigation is open.
+    /// Whether the Day/Week/2 Weeks/Month dropdown under the left-hand navigation is open.
     pub view_menu_open: bool,
     /// Whether the More menu under the right-hand navigation group is open.
     pub more_menu_open: bool,
     pub week_anchor: chrono::NaiveDate,
     pub week_hover: Option<chrono::NaiveDate>,
     pub week_scroll_x: f32,
+    /// The day whose full list is open from its "N more" in the two-week view.
+    pub two_week_more: Option<chrono::NaiveDate>,
     /// What the Projects tab is in the middle of.
     pub projects: crate::projects::Workspace,
     /// Places, place searches and trips: the Travel tab and travel on the day view.
@@ -586,6 +589,11 @@ pub enum CalendarMessage {
     CalendarModeSelected(bool),
     CalendarTaskListToggled(bool),
     CalendarMonthViewSelected,
+    CalendarTwoWeekViewSelected,
+    /// Open a day's full list from the two-week view, or close it.
+    CalendarTwoWeekMore(Option<chrono::NaiveDate>),
+    /// A press on a two-week cell's empty space, which starts a new event.
+    CalendarTwoWeekCellPressed(chrono::NaiveDate),
     CalendarViewMonthShift(i32),
     CalendarDayOpened(chrono::NaiveDate),
     WeekDayAction(chrono::NaiveDate, Box<Message>),
@@ -803,6 +811,7 @@ impl State {
             week_anchor: calendar::day_at(crate::clock::now(), day_end_hour),
             week_hover: None,
             week_scroll_x: 0.0,
+            two_week_more: None,
             projects: Default::default(),
             travel: Default::default(),
             main_window: None,
@@ -897,27 +906,33 @@ impl State {
         self.view == CalendarView::Month
     }
 
+    pub fn two_weekly(&self) -> bool {
+        self.view == CalendarView::TwoWeek
+    }
+
     pub fn range_view_active(&self) -> bool {
         self.view != CalendarView::Day
     }
 
     pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
-        if self.monthly() {
-            calendar::month_grid(self.week_anchor)
-        } else {
-            calendar::week_dates(self.week_anchor, self.config.calendar.weekly_days())
+        match self.view {
+            CalendarView::Month => calendar::month_grid(self.week_anchor),
+            CalendarView::TwoWeek => calendar::two_week_dates(self.week_anchor),
+            _ => calendar::week_dates(self.week_anchor, self.config.calendar.weekly_days()),
         }
     }
 
     fn weekly_window_width(&self) -> f32 {
-        let view_width = if self.monthly() {
+        // The two-week grid has the month's seven columns, so it takes its width.
+        let month_shaped = self.monthly() || self.two_weekly();
+        let view_width = if month_shaped {
             self.config.views.calendar_month_width()
         } else {
             self.config
                 .views
                 .calendar_week_width(ui::calendar::weekly_view_width(&self.config.calendar))
         };
-        let configured = if self.monthly() {
+        let configured = if month_shaped {
             self.config.views.calendar_month_width
         } else {
             self.config.views.calendar_week_width
@@ -1706,6 +1721,12 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             Key::Named(Named::Escape) => Some(Message::Event(EventMessage::EventClosed)),
             _ => None,
         };
+    }
+    if state.two_week_more.is_some()
+        && state.calendar.open_event.is_none()
+        && key == Key::Named(Named::Escape)
+    {
+        return Some(Message::Calendar(CalendarMessage::CalendarTwoWeekMore(None)));
     }
     if modifiers.command() {
         return match key.as_ref() {

@@ -62,6 +62,39 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             let resize = range_view_transition(state, was_wide, Task::none());
             Task::batch([resize, show_cached_calendar(state)])
         }
+        CalendarMessage::CalendarTwoWeekViewSelected => {
+            state.habits.calendar_habit = None;
+            let was_wide = state.range_view_active();
+            let changed = !state.two_weekly();
+            // Overview controls must not navigate or reset the sidebar.
+            state.week_hover = None;
+            state.two_week_more = None;
+            state.view = CalendarView::TwoWeek;
+            if changed {
+                state.week_anchor = state.calendar.day;
+            }
+            let resize = range_view_transition(state, was_wide, Task::none());
+            Task::batch([resize, show_cached_calendar(state)])
+        }
+        CalendarMessage::CalendarTwoWeekMore(day) => {
+            state.two_week_more = day;
+            Task::none()
+        }
+        CalendarMessage::CalendarTwoWeekCellPressed(day) => {
+            ui::calendar::anchor_draft_at_pointer();
+            let hour = state.config.calendar.day_start_hour().max(9);
+            let start = calendar::at_clock(day, hour, 0);
+            dispatch(
+                state,
+                Message::Calendar(CalendarMessage::WeekDayAction(
+                    day,
+                    Box::new(Message::EventDraft(EventDraftMessage::EventDraftStarted {
+                        start,
+                        end: start + chrono::Duration::hours(1),
+                    })),
+                )),
+            )
+        }
         CalendarMessage::CalendarViewMonthShift(months) => {
             let first = calendar::first_of_month(state.week_anchor);
             let step = chrono::Months::new(months.unsigned_abs());
@@ -320,6 +353,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 state.calendar.day
             };
             let day = origin + chrono::Duration::days(days);
+            state.two_week_more = None;
             let close = if state.range_view_active() {
                 state.calendar.open_event = None;
                 crate::timeblocking::close(state)
@@ -341,6 +375,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             Task::batch([close, scroll, show_cached_calendar(state)])
         }
         CalendarMessage::CalendarDaySelected(day) => {
+            state.two_week_more = None;
             let today =
                 calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
             let close = if state.range_view_active() {

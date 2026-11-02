@@ -1,0 +1,382 @@
+//! The two-week grid: two rows of seven days, each a list of the day's events
+//! that fits without scrolling, the way Google Calendar's own two-week view does.
+
+use super::*;
+use iced::widget::column;
+
+/// The grid scrolls rather than squeezing its columns past this.
+const MIN_GRID_WIDTH: f32 = 840.0;
+/// The grid scrolls rather than squeezing its rows past this.
+const MIN_CELL_HEIGHT: f32 = 135.0;
+/// Every row in a cell is the same height, so how many fit is simple division.
+const ROW_HEIGHT: f32 = 22.0;
+const ROW_GAP: f32 = 2.0;
+const CELL_PADDING: f32 = 5.0;
+/// The date button at the top of a cell.
+const DATE_HEIGHT: f32 = 24.0;
+/// The weekday name above the dates of the first row.
+const WEEKDAY_HEIGHT: f32 = 18.0;
+const DOT_SIZE: f32 = 8.0;
+const POPUP_WIDTH: f32 = 300.0;
+/// How far an event that has already ended fades.
+const PAST_ALPHA: f32 = 0.45;
+
+pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let metrics = *metrics;
+    let dates = calendar::two_week_dates(state.week_anchor);
+    let grid = responsive(move |size| {
+        let width = size.width.max(MIN_GRID_WIDTH);
+        let height = size.height.max(MIN_CELL_HEIGHT * 2.0);
+        let cell = Size::new(width / 7.0, height / 2.0);
+        let weeks = dates.chunks(7).enumerate().map(|(index, week)| {
+            row(week
+                .iter()
+                .map(|&day| day_cell(state, day, index == 0, cell, &metrics)))
+            .into()
+        });
+        crate::ui::controls::scrollable(column(weeks).width(width).height(height))
+            .direction(scrollable::Direction::Both {
+                vertical: scrollable::Scrollbar::new(),
+                horizontal: scrollable::Scrollbar::new(),
+            })
+            .width(Fill)
+            .height(Fill)
+            .into()
+    });
+
+    let days = calendar::two_week_dates(state.week_anchor);
+    let (first, last) = (days[0], days[13]);
+    let label = if first.year() == last.year() {
+        format!(
+            "{} – {} ▾",
+            first.format("%b %-d"),
+            last.format("%b %-d, %Y")
+        )
+    } else {
+        format!(
+            "{} – {} ▾",
+            first.format("%b %-d, %Y"),
+            last.format("%b %-d, %Y")
+        )
+    };
+    let heading = range_heading(
+        state,
+        label,
+        CalendarMessage::CalendarDayShift(-14),
+        CalendarMessage::CalendarDayShift(14),
+        &metrics,
+    );
+    let mut content = column![
+        heading,
+        text(if state.calendar_loading() {
+            "Loading..."
+        } else {
+            "Select a date to open its timeline, or an empty space to add an event."
+        })
+        .size(metrics.label() - 1.0)
+        .style(text::secondary),
+        grid,
+    ]
+    .spacing(metrics.spacing)
+    .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill);
+    if let Some(dismiss) = dismiss_bar(state, &metrics) {
+        content = content.push(dismiss);
+    }
+    let content: Element<'a, Message> = match state.two_week_more {
+        Some(day) => stack![content, more_popup(state, day, &metrics)].into(),
+        None => content.into(),
+    };
+    pointer_watch(range_layers(state, &metrics, content))
+}
+
+/// How many rows fit under a cell's heading.
+fn rows_that_fit(cell_height: f32, heading_height: f32) -> usize {
+    let room = cell_height - CELL_PADDING * 2.0 - heading_height;
+    (((room + ROW_GAP) / (ROW_HEIGHT + ROW_GAP)).floor() as usize).max(1)
+}
+
+fn day_cell<'a>(
+    state: &'a State,
+    day: NaiveDate,
+    first_row: bool,
+    cell: Size,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+    // Only the first of a month says which month it is; the rest would crowd.
+    let label = if day.day() == 1 {
+        day.format("%b %-d").to_string()
+    } else {
+        day.format("%-d").to_string()
+    };
+    let date = button(text(label).size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .height(DATE_HEIGHT)
+        .padding(2)
+        .on_press(Message::Calendar(CalendarMessage::CalendarDayOpened(day)))
+        .style(if day == today {
+            crate::ui::controls::primary
+        } else if day == state.calendar.day {
+            crate::ui::controls::secondary
+        } else {
+            button::text
+        });
+    let mut heading_height = DATE_HEIGHT;
+    let mut body = column![].spacing(ROW_GAP).width(Fill);
+    if first_row {
+        heading_height += WEEKDAY_HEIGHT;
+        body = body.push(
+            text(day.format("%a").to_string().to_uppercase())
+                .size(metrics.label() - 1.0)
+                .height(WEEKDAY_HEIGHT)
+                .center()
+                .width(Fill)
+                .style(text::secondary),
+        );
+    }
+    body = body.push(date);
+
+    let mut items = day_items(state, day, metrics);
+    let fit = rows_that_fit(cell.height, heading_height);
+    if items.len() > fit {
+        // The "N more" row takes the place of the last event that would fit.
+        let hidden = items.len() - (fit - 1);
+        items.truncate(fit - 1);
+        items.push(
+            button(
+                text(format!("{hidden} more"))
+                    .size(metrics.label())
+                    .wrapping(text::Wrapping::None),
+            )
+            .width(Fill)
+            .height(ROW_HEIGHT)
+            .padding([2, 6])
+            .on_press(Message::Calendar(CalendarMessage::CalendarTwoWeekMore(
+                Some(day),
+            )))
+            .style(crate::ui::controls::ghost)
+            .into(),
+        );
+    }
+    let body = body.extend(items);
+
+    let dragging = state.timeblocking.dragging.is_some();
+    let cell: Element<'a, Message> = container(body)
+        .padding(CELL_PADDING)
+        .width(Length::Fixed(cell.width))
+        .height(Length::Fixed(cell.height))
+        .clip(true)
+        .style(move |theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.weakest.color.into()),
+                border: iced::Border {
+                    color: if dragging {
+                        palette.primary.strong.color
+                    } else {
+                        palette.background.strong.color
+                    },
+                    width: if dragging { 1.5 } else { 0.5 },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into();
+    Element::from(
+        mouse_area(cell)
+            .on_press(Message::Calendar(
+                CalendarMessage::CalendarTwoWeekCellPressed(day),
+            ))
+            .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay)),
+    )
+    .map(move |message| match message {
+        // It carries its own day, and wraps the draft it starts.
+        Message::Calendar(CalendarMessage::CalendarTwoWeekCellPressed(_)) => message,
+        message => Message::Calendar(CalendarMessage::WeekDayAction(day, Box::new(message))),
+    })
+}
+
+/// A day's events in reading order: all-day ones first, then by start time.
+fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Element<'a, Message>> {
+    let now = crate::clock::now();
+    let day_start_hour = state.config.calendar.day_start_hour();
+    let first_shown = calendar::two_week_dates(state.week_anchor)[0];
+    let mut items = Vec::new();
+    for event in state
+        .calendar
+        .all_day_events_on(day, &state.config.calendar)
+    {
+        // Overdue and undated tasks belong in the pending list rather than
+        // appearing on every date.
+        if event.is_task() {
+            if event.start.date_naive() == day {
+                items.push(task_row(state, event, metrics));
+            }
+        } else {
+            items.push(all_day_row(state, event, event.end <= now, metrics));
+        }
+    }
+    for event in state.calendar.timed_events_on(day, &state.config.calendar) {
+        // An event past midnight is listed where it starts, not on each day it
+        // touches, unless the day it started on is out of view.
+        if calendar::day_at(event.start, day_start_hour) == day || day == first_shown {
+            items.push(timed_row(state, event, event.end <= now, metrics));
+        }
+    }
+    items
+}
+
+/// A filled bar, so an all-day event stands apart from the timed list below it.
+fn all_day_row<'a>(
+    state: &State,
+    event: &Event,
+    past: bool,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let color = event.display_color(&state.config.calendar);
+    let ink = on_color(color);
+    let title = if event.completed {
+        format!("✓ {}", event.title)
+    } else {
+        event.title.clone()
+    };
+    let alpha = if past { PAST_ALPHA } else { 1.0 };
+    button(
+        text(title)
+            .size(metrics.label())
+            .wrapping(text::Wrapping::None),
+    )
+    .width(Fill)
+    .height(ROW_HEIGHT)
+    .padding([2, 6])
+    .clip(true)
+    .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
+    .style(move |_theme, status| {
+        let mut style = event_chip_style(color, ink, status);
+        style.background = style
+            .background
+            .map(|background| background.scale_alpha(alpha));
+        style.text_color = style.text_color.scale_alpha(alpha);
+        style.shadow = iced::Shadow::default();
+        style
+    })
+    .into()
+}
+
+/// A dot in the event's color, then its time and title.
+fn timed_row<'a>(
+    state: &State,
+    event: &Event,
+    past: bool,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let color = event.display_color(&state.config.calendar);
+    let alpha = if past { PAST_ALPHA } else { 1.0 };
+    let clock = calendar::time_format::clock(event.start, state.config.appearance.time_format);
+    let label = if event.completed {
+        format!("{clock} ✓ {}", event.title)
+    } else {
+        format!("{clock} {}", event.title)
+    };
+    let dot = container(Space::new())
+        .width(DOT_SIZE)
+        .height(DOT_SIZE)
+        .style(move |_theme: &Theme| container::Style {
+            background: Some(color.scale_alpha(alpha).into()),
+            border: iced::Border {
+                radius: (DOT_SIZE / 2.0).into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    button(
+        row![
+            dot,
+            text(label)
+                .size(metrics.label())
+                .wrapping(text::Wrapping::None),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    )
+    .width(Fill)
+    .height(ROW_HEIGHT)
+    .padding([2, 6])
+    .clip(true)
+    .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
+    .style(move |theme, status| {
+        let mut style = crate::ui::controls::ghost(theme, status);
+        style.text_color = style.text_color.scale_alpha(alpha);
+        style
+    })
+    .into()
+}
+
+/// A task with its checkbox. It can be dragged to another day, as in the week
+/// and month views.
+fn task_row<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let mut check = button(text(if task.completed { "●" } else { "○" }).size(metrics.label()))
+        .padding(0)
+        .style(crate::ui::controls::ghost);
+    if state.timeblocking.busy.is_empty() {
+        check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
+    }
+    let title = button(
+        text(crate::timeblocking::task_label(task))
+            .size(metrics.label())
+            .wrapping(text::Wrapping::None),
+    )
+    .padding(0)
+    .width(Fill)
+    .clip(true)
+    .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
+    .style(crate::ui::controls::ghost);
+    super::super::task_drag::task_drag(
+        container(row![check, title].spacing(4).align_y(Alignment::Center))
+            .width(Fill)
+            .height(ROW_HEIGHT)
+            .padding([0, 6])
+            .align_y(Alignment::Center)
+            .clip(true),
+        &task.id,
+        state.timeblocking.dragging.as_deref(),
+    )
+}
+
+/// Everything on one day, for when its cell has run out of room.
+fn more_popup<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Element<'a, Message> {
+    let close = Message::Calendar(CalendarMessage::CalendarTwoWeekMore(None));
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill)).on_press(close);
+    let title = button(
+        text(day.format("%a, %b %-d").to_string())
+            .size(metrics.label() + 1.0)
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .on_press(Message::Calendar(CalendarMessage::CalendarDayOpened(day)))
+    .style(button::text);
+    let items = column(day_items(state, day, metrics))
+        .spacing(ROW_GAP)
+        .width(Fill);
+    let list = Element::from(crate::ui::controls::scrollable(items)).map(move |message| {
+        Message::Calendar(CalendarMessage::WeekDayAction(day, Box::new(message)))
+    });
+    let card = container(column![title, list].spacing(metrics.spacing))
+        .padding(metrics.padding)
+        .width(POPUP_WIDTH.min(metrics.size.width))
+        .max_height((metrics.size.height - metrics.padding * 2.0).max(1.0))
+        .style(crate::ui::controls::surface);
+    stack![
+        dismiss,
+        container(card)
+            .width(Fill)
+            .height(Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center),
+    ]
+    .into()
+}

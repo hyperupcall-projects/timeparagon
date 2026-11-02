@@ -50,15 +50,16 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         }
         if state.range_view_active() {
             let metrics = Metrics::of(size);
-            let content = if state.monthly() {
-                calendar::monthly_view(state, &metrics)
+            let (content, name) = if state.monthly() {
+                (calendar::monthly_view(state, &metrics), "Month")
+            } else if state.two_weekly() {
+                (calendar::two_week_view(state, &metrics), "2 Weeks")
             } else {
-                calendar::weekly_view(state, &metrics)
+                (calendar::weekly_view(state, &metrics), "Week")
             };
-            let mut view_header =
-                row![text(if state.monthly() { "Month" } else { "Week" }).size(metrics.label()),]
-                    .spacing(12)
-                    .align_y(Alignment::Center);
+            let mut view_header = row![text(name).size(metrics.label()),]
+                .spacing(12)
+                .align_y(Alignment::Center);
             if state.weekly() && !state.monthly() {
                 view_header = view_header.push(
                     crate::ui::controls::toggler(state.config.calendar.weekly_task_list)
@@ -661,6 +662,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .into()
     };
     let week_active = state.range_view_active() && state.weekly();
+    let two_week_active = state.two_weekly();
     let month_active = state.range_view_active() && state.monthly();
     let overviews = container(
         row![
@@ -672,6 +674,19 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 },
                 week_active,
                 Message::Calendar(CalendarMessage::CalendarModeSelected(!week_active)),
+            ),
+            overview_button(
+                if two_week_active {
+                    "Hide 2 weeks"
+                } else {
+                    "Show 2 weeks"
+                },
+                two_week_active,
+                if two_week_active {
+                    Message::Calendar(CalendarMessage::CalendarModeSelected(false))
+                } else {
+                    Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected)
+                },
             ),
             overview_button(
                 if month_active {
@@ -826,7 +841,7 @@ fn view_half_style(active: bool) -> impl Fn(&iced::Theme, button::Status) -> but
     }
 }
 
-/// The calendar view switcher's menu: Day, Week and Month, in a card below the
+/// The calendar view switcher's menu: Day, Week, 2 Weeks and Month, in a card below the
 /// left-hand navigation group.
 fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
@@ -843,6 +858,11 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             "Week",
             state.weekly(),
             Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+        ),
+        (
+            "2 Weeks",
+            state.two_weekly(),
+            Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected),
         ),
         (
             "Month",

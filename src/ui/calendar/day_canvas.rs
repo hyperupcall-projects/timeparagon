@@ -11,6 +11,7 @@ pub(super) struct Block {
     pub(super) end_min: i32,
     pub(super) column: usize,
     pub(super) columns: usize,
+    pub(super) column_span: usize,
     pub(super) color: Color,
     /// Timed task blocks and calendar events can both be dragged.
     pub(super) editable: bool,
@@ -48,6 +49,7 @@ pub(super) struct TravelBox {
     /// Where the event it belongs to sits, so the box lines up with it.
     pub(super) column: usize,
     pub(super) columns: usize,
+    pub(super) column_span: usize,
     pub(super) time_block: bool,
 }
 
@@ -74,6 +76,7 @@ pub(super) fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> V
                 minutes,
                 column: block.column,
                 columns: block.columns,
+                column_span: block.column_span,
                 time_block: block.time_block,
             })
         })
@@ -872,7 +875,8 @@ impl DayCanvas {
         let columns = trip.columns.max(1) as f32;
         let height = (trip.minutes as f32 * minute_height).max(TRAVEL_MIN_HEIGHT);
         let anchor = trip.anchor_min as f32 * minute_height;
-        let mut box_width = (grid_width / columns - EVENT_GAP).max(8.0);
+        let span = trip.column_span.max(1) as f32;
+        let mut box_width = (span * grid_width / columns - EVENT_GAP).max(8.0);
         if trip.time_block {
             box_width = (box_width - 6.0) * 0.5;
         }
@@ -1399,7 +1403,8 @@ impl DayCanvas {
         let grid_width = (width - self.gutter).max(40.0);
         let columns = block.columns.max(1) as f32;
         let column = block.column as f32;
-        let block_width = (grid_width / columns) - EVENT_GAP;
+        let span = block.column_span.max(1) as f32;
+        let block_width = span * (grid_width / columns) - EVENT_GAP;
         Rectangle {
             x: self.gutter + column * (grid_width / columns) + EVENT_GAP / 2.0,
             y: start_min as f32 * minute_height,
