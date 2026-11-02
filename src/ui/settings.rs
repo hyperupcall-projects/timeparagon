@@ -1088,7 +1088,7 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let mut section = column![
         text("Gmail").size(metrics.label()),
-        text("Use to fetch the title and description of Gmail emails from their URL")
+        text("Use to fetch the title and description of Gmail emails from their URL, and to list contacts under People")
             .size(small)
             .style(text::secondary),
     ]

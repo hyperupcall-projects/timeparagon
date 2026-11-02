@@ -88,7 +88,8 @@ There's week and month views, just like any other calendar app:
 	- View as list, kanban, or calendar (TODO).
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
-- People (TODO).
+- People.
+	- Browse, search, and edit the contacts of every signed-in Google account, and search Google Workspace directories.
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
@@ -128,7 +129,6 @@ cargo run -p timeslay --release
 	- lists in general
 - meeting agenda?
 - Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
-- People/contacts
 - Start/shutdown/review rituals for day/week/month
 - Offline write queue
 - Eisenhower matrix
