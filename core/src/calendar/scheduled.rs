@@ -164,6 +164,11 @@ pub fn merge(
         task.start = event.start;
         task.end = event.end;
         task.all_day = false;
+        // A scheduled task lasts exactly as long as its estimate.
+        let minutes = crate::timeblocking::metadata(&task).minutes;
+        if minutes > 0 {
+            task.end = task.start + chrono::Duration::minutes(i64::from(minutes));
+        }
         task.color = event.color;
         task.details.scheduled = Some(link.clone());
         if let Some(data) = &mut task.details.task_data {

@@ -432,6 +432,11 @@ button {
 }
 
 .all-day-chip {
+    appearance: none;
+    width: 100%;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
     display: flex;
     align-items: center;
     gap: 9px;
@@ -507,6 +512,7 @@ button {
     border-radius: 7px;
     border: 1px solid transparent;
     min-width: 0;
+    cursor: pointer;
 }
 
 .task-row:hover {
@@ -729,6 +735,14 @@ button {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.grid-event.editable {
+    cursor: pointer;
+}
+
+.grid-event.editable:hover {
+    filter: brightness(1.08);
 }
 
 .grid-event.block {
@@ -1395,4 +1409,282 @@ button {
     font-size: 11px;
     color: var(--dim);
     margin: 4px 0 0;
+}
+
+/* ---------------------------------------------------------------- editors */
+
+.editor-backdrop {
+    z-index: 70;
+}
+
+.editor {
+    height: min(760px, 88vh);
+}
+
+.editor-body {
+    gap: 16px;
+}
+
+.editor-footer {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 20px 16px;
+    border-top: 1px solid var(--line);
+}
+
+.editor-field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+}
+
+.editor-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+}
+
+.editor-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.editor-row > .client-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.editor-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.editor-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.editor-inline > .client-input {
+    width: auto;
+    flex: 1;
+    min-width: 110px;
+}
+
+.editor-inline > .client-input.editor-short {
+    flex: none;
+    width: 72px;
+    min-width: 0;
+}
+
+.editor-grow {
+    flex: 1;
+    min-width: 0;
+}
+
+.editor-wide {
+    width: 100%;
+}
+
+.editor-more {
+    flex: none;
+    width: 44px;
+}
+
+.editor-notes {
+    resize: vertical;
+    min-height: 88px;
+}
+
+/* A phone needs a finger's width, and 16px stops Android zooming on focus. */
+.editor .btn {
+    min-height: 40px;
+}
+
+.editor .btn.small {
+    min-height: 34px;
+}
+
+.editor .client-input {
+    min-height: 40px;
+    font-size: 16px;
+    background: var(--panel-2);
+    border-color: var(--line);
+}
+
+.editor .client-input:disabled,
+.editor .btn:disabled,
+.editor-pick:disabled,
+.modal-close:disabled,
+.assigned-task .btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.modal .editor-wide:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.btn.danger {
+    background: var(--bad);
+    border-color: transparent;
+    color: #fff;
+}
+
+.editor-error {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--banner-error-detail);
+    background: linear-gradient(rgba(255, 111, 125, 0.08), rgba(255, 111, 125, 0.08)), var(--modal-bg);
+    border: 1px solid rgba(255, 111, 125, 0.2);
+}
+
+/* The actions that can fail sit far below it, so it stays in view. */
+.editor-body > .editor-error {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.editor-value {
+    margin: 0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.editor-status {
+    margin: 0;
+}
+
+.editor-field .hint,
+.editor-body > .hint {
+    margin: 0;
+    font-size: 11px;
+}
+
+.editor-check {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 36px;
+    font-size: 13px;
+}
+
+.editor-check input {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    accent-color: var(--accent-strong);
+}
+
+.editor-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 40px;
+    font-size: 13px;
+    min-width: 0;
+}
+
+.editor-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.editor-item-sub {
+    display: block;
+}
+
+.editor-pick {
+    appearance: none;
+    width: 100%;
+    padding: 6px 10px;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-2);
+}
+
+.editor-actions,
+.editor-choices,
+.editor-reminder {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.editor-choices {
+    padding: 0 8px;
+}
+
+.editor-choice {
+    white-space: normal;
+    text-align: left;
+}
+
+.editor-reminder {
+    padding: 10px;
+    border: 1px solid var(--card-line);
+    border-radius: 10px;
+    background: var(--card);
+}
+
+.editor-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--panel-2);
+}
+
+.editor-confirm p {
+    margin: 0;
+    font-size: 13px;
+}
+
+.editor-confirm .hint {
+    font-size: 11px;
+}
+
+.assigned-open {
+    appearance: none;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+@media (max-width: 820px) {
+    .editor {
+        height: 92vh;
+        height: 92dvh;
+        max-height: none;
+    }
+
+    .editor-footer {
+        padding: 10px 14px 14px;
+    }
 }

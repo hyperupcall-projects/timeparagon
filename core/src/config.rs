@@ -23,6 +23,146 @@ use iced_core::Color;
 #[serde(default)]
 pub struct Config {
     pub calendar: CalendarSettings,
+    pub projects: ProjectsSettings,
+    pub travel: crate::places::PlaceSettings,
+}
+
+/// A project that tasks can be filed under.
+///
+/// Tasks refer to a project by `id`, never by name, so a project can be
+/// renamed without losing track of what belongs to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: u64,
+    /// Slash-separated, so `School/Calculus` reads as a part of `School`.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<HexColor>,
+    /// Where the project's files are kept on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<PathBuf>,
+}
+
+impl Project {
+    pub fn color(&self) -> Option<Color> {
+        self.color.map(Color::from)
+    }
+}
+
+/// The projects shown in the Projects tab and offered when editing a task.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectsSettings {
+    pub items: Vec<Project>,
+}
+
+impl Default for ProjectsSettings {
+    fn default() -> Self {
+        // Fixed ids, so the defaults mean the same project on every machine.
+        let items = [
+            "Work",
+            "School/Homework",
+            "School/Calculus",
+            "Personal",
+            "Personal/Chores",
+        ]
+        .into_iter()
+        .zip(1..)
+        .map(|(name, id)| Project {
+            id,
+            name: name.to_owned(),
+            color: None,
+            directory: None,
+        })
+        .collect();
+
+        let mut settings = Self { items };
+        settings.sort();
+        settings
+    }
+}
+
+impl ProjectsSettings {
+    /// Keeps the projects in alphabetical order, ignoring case.
+    pub fn sort(&mut self) {
+        self.items
+            .sort_by_cached_key(|project| (project.name.to_lowercase(), project.id));
+    }
+
+    /// The projects in alphabetical order, whatever order the file lists them in.
+    pub fn sorted(&self) -> Vec<&Project> {
+        let mut projects: Vec<&Project> = self.items.iter().collect();
+        projects.sort_by_cached_key(|project| (project.name.to_lowercase(), project.id));
+        projects
+    }
+
+    pub fn get(&self, id: u64) -> Option<&Project> {
+        self.items.iter().find(|project| project.id == id)
+    }
+
+    /// Tidies `input` into a project name and checks that no other project
+    /// (`except` is the one being renamed) already has it.
+    ///
+    /// Spaces around a `/` are dropped and empty segments removed, so
+    /// `School / Physics/` is the same project as `School/Physics`.
+    pub fn clean_name(&self, input: &str, except: Option<u64>) -> Result<String, String> {
+        let name = input
+            .split('/')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+
+        if name.is_empty() {
+            return Err("A project needs a name".to_owned());
+        }
+
+        let taken = self.items.iter().any(|project| {
+            Some(project.id) != except && project.name.to_lowercase() == name.to_lowercase()
+        });
+
+        if taken {
+            return Err(format!("There is already a project named {name}"));
+        }
+
+        Ok(name)
+    }
+
+    /// Adds a project and returns its id.
+    pub fn add(&mut self, name: String) -> u64 {
+        let id = self.next_id();
+        self.items.push(Project {
+            id,
+            name,
+            color: None,
+            directory: None,
+        });
+        self.sort();
+        id
+    }
+
+    pub fn remove(&mut self, id: u64) {
+        self.items.retain(|project| project.id != id);
+    }
+
+    /// An id that no project has had before, as far as the file can tell.
+    ///
+    /// Ids are never handed out again after a removal that took the highest
+    /// one, so a task left pointing at a removed project does not suddenly
+    /// belong to a new one. The clock keeps them unique between runs.
+    fn next_id(&self) -> u64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64);
+        let highest = self
+            .items
+            .iter()
+            .map(|project| project.id)
+            .max()
+            .unwrap_or(0);
+
+        now.max(highest + 1)
+    }
 }
 
 /// Google Calendar connection and which calendars are shown on the calendar.
@@ -401,11 +541,94 @@ fn save_calendar_visibility_at(
     })
 }
 
+/// Saves a place Mapbox found and returns its id, reusing one already saved.
+pub fn save_found_place(found: &crate::places::Found) -> io::Result<u64> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_found_place_at(&path, found)
+}
+
+fn save_found_place_at(path: &std::path::Path, found: &crate::places::Found) -> io::Result<u64> {
+    let mut id = 0;
+    edit_table(path, "travel", |travel| {
+        let invalid = |error: String| io::Error::new(io::ErrorKind::InvalidData, error);
+        let mut places: Vec<crate::places::Place> = match travel.get("places") {
+            Some(places) => places
+                .clone()
+                .try_into()
+                .map_err(|error: toml::de::Error| invalid(error.to_string()))?,
+            None => Vec::new(),
+        };
+        id = crate::places::add_place(
+            &mut places,
+            &found.name,
+            &found.address,
+            &found.place_id,
+            found.lat,
+            found.lng,
+        );
+        let places = toml::Value::try_from(places)
+            .map_err(|error: toml::ser::Error| invalid(error.to_string()))?;
+        travel.insert("places".into(), places);
+        Ok(())
+    })?;
+    Ok(id)
+}
+
+/// Records the saved place a calendar event was given, or forgets it. The iced
+/// app prefers this over the event's location text, so a change has to reach it.
+pub fn save_event_place(event_id: &str, place: Option<u64>) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_event_place_at(&path, event_id, place)
+}
+
+fn save_event_place_at(
+    path: &std::path::Path,
+    event_id: &str,
+    place: Option<u64>,
+) -> io::Result<()> {
+    edit_table(path, "travel", |travel| {
+        let places = travel
+            .entry("event_places")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "event_places is not a table")
+            })?;
+        match place {
+            Some(place) => {
+                let place = i64::try_from(place)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                places.insert(event_id.to_owned(), place.into());
+            }
+            None => {
+                places.remove(event_id);
+            }
+        }
+        Ok(())
+    })
+}
+
+fn no_config_directory() -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, "no config directory available")
+}
+
 /// Rewrites only the given keys of `[calendar]`. The Dioxus app's [`Config`] is
 /// a subset of the file, so saving that struct would drop the desktop settings.
 fn edit_calendar_table(
     path: &std::path::Path,
     edit: impl FnOnce(&mut toml::Table),
+) -> io::Result<()> {
+    edit_table(path, "calendar", |calendar| {
+        edit(calendar);
+        Ok(())
+    })
+}
+
+/// Rewrites one table of the config, leaving the rest of the file alone.
+fn edit_table(
+    path: &std::path::Path,
+    name: &str,
+    edit: impl FnOnce(&mut toml::Table) -> io::Result<()>,
 ) -> io::Result<()> {
     crate::fsutil::locked(path, || {
         let mut document = match fs::read_to_string(path) {
@@ -414,14 +637,17 @@ fn edit_calendar_table(
             Err(error) if error.kind() == io::ErrorKind::NotFound => toml::Table::new(),
             Err(error) => return Err(error),
         };
-        let calendar = document
-            .entry("calendar")
+        let table = document
+            .entry(name)
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
             .as_table_mut()
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "[calendar] is not a table")
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("[{name}] is not a table"),
+                )
             })?;
-        edit(calendar);
+        edit(table)?;
 
         let text = toml::to_string_pretty(&document)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -492,6 +718,41 @@ mod tests {
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_places_keeps_the_rest_of_travel_and_reuses_a_saved_place() {
+        let dir = std::env::temp_dir().join(format!("tt-places-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "[window]\nwidth = 900\n\n[travel]\napi_key = \"pk\"\n",
+        )
+        .unwrap();
+        let found = crate::places::Found {
+            place_id: "mapbox-1".into(),
+            name: "Library".into(),
+            address: "1 Main St".into(),
+            lat: 1.5,
+            lng: 2.5,
+        };
+
+        let id = save_found_place_at(&path, &found).unwrap();
+        assert_eq!(save_found_place_at(&path, &found).unwrap(), id);
+        save_event_place_at(&path, "standup", Some(id)).unwrap();
+        save_event_place_at(&path, "other", Some(id)).unwrap();
+        save_event_place_at(&path, "other", None).unwrap();
+
+        let saved: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.travel.places.len(), 1);
+        assert_eq!(saved.travel.api_key, "pk");
+        assert_eq!(saved.travel.event_places.len(), 1);
+        assert_eq!(saved.travel.event_places["standup"], id);
+        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(table["window"]["width"].as_integer(), Some(900));
         let _ = fs::remove_dir_all(&dir);
     }
 

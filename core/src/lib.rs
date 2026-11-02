@@ -14,8 +14,10 @@ pub mod config;
 pub mod config_sync;
 pub mod fsutil;
 pub mod hex;
+pub mod places;
 pub mod recurrence;
 pub mod task_db;
+pub mod task_edit;
 pub mod timeblocking;
 
 /// The color type used by calendar events and settings.

@@ -1,10 +1,11 @@
 //! TimeSlay's Dioxus day view.
 //!
 //! This is deliberately just the day: a single screen showing every calendar
-//! event, every Google Task, and every time block for one day. Clicking a time
-//! block opens a popup with all of the tasks assigned to it.
+//! event, every Google Task, and every time block for one day. Tapping an item
+//! opens a sheet that edits it; a time block first lists its assigned tasks.
 
 mod day;
+mod editor;
 #[cfg(any(target_os = "android", test))]
 mod widget;
 
@@ -15,7 +16,7 @@ use timeslay_core::config::CalendarSettings;
 use timeslay_core::config_sync;
 use timeslay_core::timeblocking as tb;
 
-use day::{AssignedTask, BlockRef, DayModel, TaskGroup, TaskRow, Theme, TimeBlock, TimedEvent};
+use day::{BlockRef, DayModel, EditContext, TaskGroup, TaskRow, Theme, TimeBlock, TimedEvent};
 
 /// Height of one hour on the timeline, in pixels.
 const HOUR_HEIGHT: f32 = 64.0;
@@ -134,6 +135,8 @@ fn App() -> Element {
     let mut current_day = use_signal(|| day::today(&settings));
     let mut revision = use_signal(|| 0u32);
     let mut selected_block = use_signal(|| None::<String>);
+    let mut editing = use_signal(|| None::<Event>);
+    let block_writing = use_signal(|| false);
     let mut show_tasks = use_signal(|| false);
     let mut scrolled = use_signal(|| false);
     let mut follow_today = use_signal(|| true);
@@ -228,7 +231,8 @@ fn App() -> Element {
         let mut last_refresh = tokio::time::Instant::now();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            if follow_today() {
+            // Rolling over would take the day out from under an open editor.
+            if follow_today() && editing.peek().is_none() && !*block_writing.peek() {
                 let today = day::today(&config.peek().calendar);
                 if today != current_day() {
                     current_day.set(today);
@@ -243,9 +247,9 @@ fn App() -> Element {
         }
     });
 
-    // Follow the config file. Only the calendar settings drive this view, so
-    // anything else changing (the iced app saving its window size, say) does
-    // not trigger a reload of the day.
+    // Follow the config file. Only the calendar settings, projects and places
+    // drive this view, so anything else changing (the iced app saving its
+    // window size, say) does not trigger a re-render.
     use_future(move || async move {
         let mut seen = config_sync::generation();
         loop {
@@ -255,7 +259,7 @@ fn App() -> Element {
             if generation != seen {
                 seen = generation;
                 let reloaded = day::load_config();
-                if reloaded.calendar != config.peek().calendar {
+                if reloaded != *config.peek() {
                     config.set(reloaded);
                 }
             }
@@ -463,8 +467,8 @@ fn App() -> Element {
                 }
             }
             div { class: "day-body", "data-view": if show_tasks() { "tasks" } else { "calendar" },
-                {sidebar(model, selected_block)}
-                {timeline(model, selected_block)}
+                {sidebar(model, selected_block, editing)}
+                {timeline(model, selected_block, editing)}
             }
         },
         None if settings.client_id.trim().is_empty() && !pending => {
@@ -589,10 +593,40 @@ fn App() -> Element {
         }
     };
 
-    let modal = model.as_ref().and_then(|model| {
-        let id = selected_block()?;
-        let block = model.blocks.iter().find(|block| block.event.id == id)?;
-        Some(time_block_modal(block, selected_block))
+    let edit_context = snapshot
+        .as_ref()
+        .map(|snapshot| EditContext::new(&config.read(), snapshot));
+    let after_write = move |()| revision.set(revision() + 1);
+
+    let modal = model
+        .as_ref()
+        .zip(edit_context.as_ref())
+        .and_then(|(model, context)| {
+            let id = selected_block()?;
+            let block = model.blocks.iter().find(|block| block.event.id == id)?;
+            Some(time_block_modal(
+                block,
+                context,
+                selected_block,
+                editing,
+                block_writing,
+                after_write,
+            ))
+        });
+
+    // Keyed by what was opened: a task's id can change while it is being edited
+    // (moving lists renames it), and that must not reset the sheet.
+    let edit_sheet = editing().zip(edit_context).map(|(event, context)| {
+        rsx! {
+            editor::Editor {
+                key: "{event.id}",
+                event,
+                context,
+                on_close: move |()| editing.set(None),
+                on_saved: after_write,
+                on_config: move |saved| config.set(saved),
+            }
+        }
     });
 
     let settings_modal = show_settings().then(|| {
@@ -779,6 +813,7 @@ fn App() -> Element {
             {notice}
             {body}
             {modal}
+            {edit_sheet}
             {settings_modal}
             {calendars_modal}
         }
@@ -841,15 +876,23 @@ fn header_stats(model: &DayModel) -> String {
     format!("{events} {event_word} · {tasks} {task_word} · {blocks} {block_word}")
 }
 
-fn sidebar(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
+fn sidebar(
+    model: &DayModel,
+    open_block: Signal<Option<String>>,
+    editing: Signal<Option<Event>>,
+) -> Element {
     let all_day_empty = model.all_day.is_empty();
     let groups_empty = model.task_groups.is_empty();
 
-    let all_day_chips: Vec<Element> = model.all_day.iter().map(all_day_chip).collect();
+    let all_day_chips: Vec<Element> = model
+        .all_day
+        .iter()
+        .map(|event| all_day_chip(event, editing))
+        .collect();
     let groups: Vec<Element> = model
         .task_groups
         .iter()
-        .map(|group| task_group_view(group, open_block))
+        .map(|group| task_group_view(group, open_block, editing))
         .collect();
 
     rsx! {
@@ -889,14 +932,19 @@ fn sidebar(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
     }
 }
 
-fn all_day_chip(event: &Event) -> Element {
+fn all_day_chip(event: &Event, editing: Signal<Option<Event>>) -> Element {
+    let mut editing = editing;
+    let opened = event.clone();
     let dot = css_color(event.color);
     let title = event.title.clone();
     let completed = event.completed.then(|| {
         rsx! { span { class: "all-day-check", "✓" } }
     });
     rsx! {
-        div { class: "all-day-chip", title: "{title}",
+        button {
+            class: "all-day-chip",
+            title: "{title}",
+            onclick: move |_| editing.set(Some(opened.clone())),
             span { class: "day-dot", style: "background: {dot};" }
             span { class: "all-day-title", "{title}" }
             {completed}
@@ -904,7 +952,11 @@ fn all_day_chip(event: &Event) -> Element {
     }
 }
 
-fn task_group_view(group: &TaskGroup, open_block: Signal<Option<String>>) -> Element {
+fn task_group_view(
+    group: &TaskGroup,
+    open_block: Signal<Option<String>>,
+    editing: Signal<Option<Event>>,
+) -> Element {
     let dot = group
         .tasks
         .first()
@@ -920,7 +972,7 @@ fn task_group_view(group: &TaskGroup, open_block: Signal<Option<String>>) -> Ele
     let tasks: Vec<Element> = group
         .tasks
         .iter()
-        .map(|task| task_row_view(&list_name, task, open_block))
+        .map(|task| task_row_view(&list_name, task, open_block, editing))
         .collect();
 
     rsx! {
@@ -935,7 +987,14 @@ fn task_group_view(group: &TaskGroup, open_block: Signal<Option<String>>) -> Ele
     }
 }
 
-fn task_row_view(list_name: &str, task: &TaskRow, open_block: Signal<Option<String>>) -> Element {
+fn task_row_view(
+    list_name: &str,
+    task: &TaskRow,
+    open_block: Signal<Option<String>>,
+    editing: Signal<Option<Event>>,
+) -> Element {
+    let mut editing = editing;
+    let opened = task.event.clone();
     let status_class = match task.status {
         tb::TaskStatus::Active => "active",
         tb::TaskStatus::Completed => "done",
@@ -963,7 +1022,12 @@ fn task_row_view(list_name: &str, task: &TaskRow, open_block: Signal<Option<Stri
     let minutes = minutes.map(|minutes| rsx! { span { class: "meta-pill", "{minutes}" } });
 
     rsx! {
-        div { class: "task-row", title: "{tooltip}",
+        div {
+            class: "task-row",
+            role: "button",
+            tabindex: "0",
+            title: "{tooltip}",
+            onclick: move |_| editing.set(Some(opened.clone())),
             span { class: "task-status {status_class}", "{icon}" }
             div { class: "task-main",
                 div { class: "{title_class}", "{title}" }
@@ -985,13 +1049,21 @@ fn block_link_view(block: &BlockRef, open_block: Signal<Option<String>>) -> Elem
         button {
             class: "block-link",
             title: "Open this time block",
-            onclick: move |_| open.set(Some(id.clone())),
+            // The row around this link opens the task.
+            onclick: move |event| {
+                event.stop_propagation();
+                open.set(Some(id.clone()));
+            },
             "{label}"
         }
     }
 }
 
-fn timeline(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
+fn timeline(
+    model: &DayModel,
+    open_block: Signal<Option<String>>,
+    editing: Signal<Option<Event>>,
+) -> Element {
     let grid_height = 24.0 * HOUR_HEIGHT;
     let hours: Vec<Element> = (0..24u32)
         .map(|row| {
@@ -1019,7 +1091,7 @@ fn timeline(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
     let events: Vec<Element> = model
         .timed
         .iter()
-        .map(|timed| timed_event_view(timed, open_block))
+        .map(|timed| timed_event_view(timed, open_block, editing))
         .collect();
 
     let now_line = model.now_min.map(|minutes| {
@@ -1045,7 +1117,7 @@ fn timeline(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
         section { id: "calendar-pane", class: "timeline-pane", aria_label: "Calendar",
             div { class: "timeline-head",
                 h2 { "Schedule" }
-                span { class: "hint", "Click a time block to see every task assigned to it." }
+                span { class: "hint", "Click anything to edit it. A time block lists its tasks first." }
                 div { class: "spacer" }
                 span { class: "timeline-count", "{count} on the grid" }
             }
@@ -1058,7 +1130,7 @@ fn timeline(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
                         }
                         div { class: "all-day-list",
                             for event in &model.all_day {
-                                {all_day_chip(event)}
+                                {all_day_chip(event, editing)}
                             }
                         }
                     }
@@ -1082,7 +1154,13 @@ fn timeline(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
     }
 }
 
-fn timed_event_view(timed: &TimedEvent, open_block: Signal<Option<String>>) -> Element {
+fn timed_event_view(
+    timed: &TimedEvent,
+    open_block: Signal<Option<String>>,
+    editing: Signal<Option<Event>>,
+) -> Element {
+    let mut editing = editing;
+    let opened = timed.event.clone();
     let id = timed.event.id.clone();
     let title = timed.title.clone();
     let time = calendar::event_time_label(&timed.event);
@@ -1122,11 +1200,12 @@ fn timed_event_view(timed: &TimedEvent, open_block: Signal<Option<String>>) -> E
         }
     } else {
         rsx! {
-            div {
+            button {
                 key: "{id}",
-                class: "grid-event",
+                class: "grid-event editable",
                 style: "{style}",
                 title: "{tooltip}",
+                onclick: move |_| editing.set(Some(opened.clone())),
                 div { class: "event-title", "{title}" }
                 div { class: "event-time", "{time}" }
                 div { class: "event-cal", "{calendar_name}" }
@@ -1135,7 +1214,19 @@ fn timed_event_view(timed: &TimedEvent, open_block: Signal<Option<String>>) -> E
     }
 }
 
-fn time_block_modal(block: &TimeBlock, close: Signal<Option<String>>) -> Element {
+fn time_block_modal(
+    block: &TimeBlock,
+    context: &EditContext,
+    close: Signal<Option<String>>,
+    editing: Signal<Option<Event>>,
+    writing: Signal<bool>,
+    on_saved: impl FnMut(()) + 'static,
+) -> Element {
+    let mut editing = editing;
+    let edited_block = block.event.clone();
+    let planner = block.clone();
+    let planner_context = context.clone();
+    let on_saved = EventHandler::new(on_saved);
     let mut backdrop_close = close;
     let mut button_close = close;
     let title = block.event.title.clone();
@@ -1172,15 +1263,19 @@ fn time_block_modal(block: &TimeBlock, close: Signal<Option<String>>) -> Element
     } else {
         "tasks"
     };
-    let tasks: Vec<Element> = block.tasks.iter().map(assigned_task_row).collect();
-    let no_tasks = block.tasks.is_empty();
 
     rsx! {
         // Close on the press that starts outside the sheet. Using pointerdown
         // (rather than click) means the tap that opened the sheet cannot also
         // close it, which matters on Android where a synthesized click can
         // arrive after the modal has mounted.
-        div { class: "modal-backdrop", onpointerdown: move |_| backdrop_close.set(None),
+        div {
+            class: "modal-backdrop",
+            onpointerdown: move |_| {
+                if !writing() {
+                    backdrop_close.set(None);
+                }
+            },
             div {
                 class: "modal",
                 onpointerdown: move |event| event.stop_propagation(),
@@ -1194,11 +1289,17 @@ fn time_block_modal(block: &TimeBlock, close: Signal<Option<String>>) -> Element
                     button {
                         class: "modal-close",
                         title: "Close",
+                        disabled: writing(),
                         onclick: move |_| button_close.set(None),
                         "×"
                     }
                 }
                 div { class: "modal-body",
+                    button {
+                        class: "btn editor-wide",
+                        onclick: move |_| editing.set(Some(edited_block.clone())),
+                        "Edit block"
+                    }
                     div { class: "block-summary",
                         div { class: "summary-line",
                             span { "{summary}" }
@@ -1212,13 +1313,12 @@ fn time_block_modal(block: &TimeBlock, close: Signal<Option<String>>) -> Element
                         span { class: "section-title", "Assigned tasks" }
                         span { class: "count-pill", "{block.tasks.len()}" }
                     }
-                    if no_tasks {
-                        div { class: "modal-empty",
-                            p { "No tasks are assigned to this time block yet." }
-                            span { "Assign tasks to it from the iced app's block view." }
-                        }
-                    } else {
-                        div { class: "assigned-list", {tasks.into_iter()} }
+                    editor::BlockTasks {
+                        block: planner,
+                        context: planner_context,
+                        busy: writing,
+                        on_open: move |task| editing.set(Some(task)),
+                        on_saved,
                     }
                 }
             }
@@ -1226,43 +1326,7 @@ fn time_block_modal(block: &TimeBlock, close: Signal<Option<String>>) -> Element
     }
 }
 
-fn assigned_task_row(task: &AssignedTask) -> Element {
-    let status_class = match task.status {
-        tb::TaskStatus::Active => "active",
-        tb::TaskStatus::Completed => "done",
-        tb::TaskStatus::Ignored => "ignored",
-    };
-    let title_class = match task.status {
-        tb::TaskStatus::Active => "task-title",
-        tb::TaskStatus::Completed => "task-title done",
-        tb::TaskStatus::Ignored => "task-title ignored",
-    };
-    let icon = status_icon(task.status);
-    let title = task.event.title.clone();
-    let list_name = task.list_name.clone();
-    let minutes = day::duration_label(task.minutes);
-    let status_note = match task.status {
-        tb::TaskStatus::Active => "Open",
-        tb::TaskStatus::Completed => "Completed",
-        tb::TaskStatus::Ignored => "Ignored",
-    };
-
-    rsx! {
-        div { class: "assigned-task",
-            span { class: "task-status {status_class}", "{icon}" }
-            div { class: "task-main",
-                div { class: "{title_class}", "{title}" }
-                div { class: "task-meta",
-                    span { class: "meta-pill", "{list_name}" }
-                    span { class: "meta-pill", "{status_note}" }
-                }
-            }
-            span { class: "assigned-minutes", "{minutes}" }
-        }
-    }
-}
-
-fn status_icon(status: tb::TaskStatus) -> &'static str {
+pub(crate) fn status_icon(status: tb::TaskStatus) -> &'static str {
     match status {
         tb::TaskStatus::Active => "○",
         tb::TaskStatus::Completed => "✓",
@@ -1284,7 +1348,7 @@ fn event_style(timed: &TimedEvent) -> String {
     )
 }
 
-fn css_color(color: timeslay_core::Color) -> String {
+pub(crate) fn css_color(color: timeslay_core::Color) -> String {
     let red = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
     let green = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
     let blue = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;

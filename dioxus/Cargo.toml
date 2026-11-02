@@ -26,3 +26,6 @@ ndk-context = "0.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 dioxus = { version = "0.7.3", default-features = false, features = ["desktop", "lib", "launch"] }
+
+[dev-dependencies]
+dioxus-ssr = "0.7.3"
