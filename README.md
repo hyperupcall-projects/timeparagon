@@ -134,6 +134,11 @@ cargo run -p timeslay --release
 - Theme/project days
 - Daily/weekly highlights
 
+## Bugs
+
+- In plan, when searching for task, does not include habits
+- Application open/close transition settings not being respected, esp for the side panels
+
 ## Terminology
 
 - Overdue tasks are tasks not marked as "completed" or "ignored" that were due before the current day.

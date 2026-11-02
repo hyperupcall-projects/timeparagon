@@ -32,10 +32,9 @@
 #   ANDROID_NDK_HOME / NDK_HOME       NDK location
 #   JAVA_HOME                         JDK location
 #   For --release (keep the keystore outside the repository):
-#   TIMESLAY_KEYSTORE              Path to the .jks/.keystore file
-#   TIMESLAY_KEYSTORE_PASSWORD     Keystore password
-#   TIMESLAY_KEY_ALIAS             Key alias
-#   TIMESLAY_KEY_PASSWORD          Key password (default: keystore password)
+#   TIMESLAY_KEYSTORE_BASE64       Base64-encoded .jks/.keystore file
+#   TIMESLAY_KEYSTORE_PASSWORD     Keystore (and key) password
+#   TIMESLAY_KEYSTORE_KEYALIAS     Key alias
 #   Passwords must not contain the characters " ' ` $ \ & < > =
 
 set -eu
@@ -236,8 +235,10 @@ fi
 dioxus_toml=$repo_root/dioxus/Dioxus.toml
 toml_backup=
 release_cert=
+keystore_tmp=
 
 cleanup() {
+    [ -z "$keystore_tmp" ] || rm -f "$keystore_tmp"
     [ -z "$release_cert" ] || rm -f "$release_cert"
     if [ -n "$toml_backup" ] && [ -f "$toml_backup" ]; then
         cp -p "$toml_backup" "$dioxus_toml"
@@ -255,15 +256,18 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$profile" = release ]; then
-    keystore=${TIMESLAY_KEYSTORE:-}
+    keystore_base64=${TIMESLAY_KEYSTORE_BASE64:-}
     keystore_password=${TIMESLAY_KEYSTORE_PASSWORD:-}
-    key_alias=${TIMESLAY_KEY_ALIAS:-}
-    key_password=${TIMESLAY_KEY_PASSWORD:-$keystore_password}
+    key_alias=${TIMESLAY_KEYSTORE_KEYALIAS:-}
+    key_password=$keystore_password
 
-    [ -n "$keystore" ] && [ -n "$keystore_password" ] && [ -n "$key_alias" ] || fail \
-        "--release needs TIMESLAY_KEYSTORE, TIMESLAY_KEYSTORE_PASSWORD and TIMESLAY_KEY_ALIAS (see --help)"
-    [ -f "$keystore" ] || fail "keystore not found: $keystore"
-    keystore=$(realpath -- "$keystore")
+    [ -n "$keystore_base64" ] && [ -n "$keystore_password" ] && [ -n "$key_alias" ] || fail \
+        "--release needs TIMESLAY_KEYSTORE_BASE64, TIMESLAY_KEYSTORE_PASSWORD and TIMESLAY_KEYSTORE_KEYALIAS (see --help)"
+    keystore_tmp=$(mktemp)
+    chmod 600 "$keystore_tmp"
+    printf '%s' "$keystore_base64" | base64 -d >"$keystore_tmp" 2>/dev/null && [ -s "$keystore_tmp" ] || \
+        fail "TIMESLAY_KEYSTORE_BASE64 is not valid base64"
+    keystore=$(realpath -- "$keystore_tmp")
     for value in "$keystore_password" "$key_alias" "$key_password" "$keystore"; do
         case $value in
             *[\"\'\`\$\\\&\<\>=]*) fail "keystore settings must not contain any of: \" ' \` \$ \\ & < > =" ;;

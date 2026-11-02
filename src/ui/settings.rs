@@ -85,6 +85,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics
         ),
         section("Google Calendar", calendar(state, metrics), metrics),
+        section("Google Tasks", google_tasks(state, metrics), metrics),
+        section("Tasks", tasks(state, metrics), metrics),
         section("Sleep", sleep(state, metrics), metrics),
         section(
             "Travel",
@@ -227,13 +229,32 @@ fn next_option<T: PartialEq + Clone>(options: &[T], selected: Option<&T>) -> Opt
 }
 
 fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    container(choice(
-        "Time format",
-        TimeFormat::ALL.to_vec(),
-        Some(state.config.appearance.time_format),
-        |v0| Message::Settings(SettingsMessage::TimeFormatSelected(v0)),
-        metrics,
-    ))
+    let settings = &state.config.calendar;
+    container(
+        column![
+            choice(
+                "Time format",
+                TimeFormat::ALL.to_vec(),
+                Some(state.config.appearance.time_format),
+                |v0| Message::Settings(SettingsMessage::TimeFormatSelected(v0)),
+                metrics,
+            ),
+            field(
+                day_end_label(
+                    settings.day_start_hour(),
+                    state.config.appearance.time_format,
+                ),
+                crate::ui::controls::slider(
+                    0..=config::CalendarSettings::MAX_DAY_END_HOUR,
+                    settings.day_start_hour(),
+                    |v0| Message::Settings(SettingsMessage::CalendarDayEndChanged(v0)),
+                )
+                .into(),
+                metrics,
+            ),
+        ]
+        .spacing(metrics.spacing),
+    )
     .id("time-format")
     .width(Fill)
     .into()
@@ -865,20 +886,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
-    section = section.push(field(
-        day_end_label(
-            settings.day_start_hour(),
-            state.config.appearance.time_format,
-        ),
-        crate::ui::controls::slider(
-            0..=config::CalendarSettings::MAX_DAY_END_HOUR,
-            settings.day_start_hour(),
-            |v0| Message::Settings(SettingsMessage::CalendarDayEndChanged(v0)),
-        )
-        .into(),
-        metrics,
-    ));
-
     // The calendar new events are created on. Task lists are excluded since
     // they hold Google Tasks rather than calendar events.
     let options: Vec<calendar::Calendar> = state
@@ -918,66 +925,64 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
-    section = section.push(heading("Time Blocking", metrics));
-    {
-        let mut options = vec![CalendarOption {
-            id: String::new(),
-            name: format!(
-                "Default: {}",
-                crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST
-            ),
-        }];
-        options.extend(
-            state
-                .calendar
-                .calendars
-                .iter()
-                .filter(|c| c.is_task_list())
-                .map(|c| CalendarOption {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                }),
-        );
-        let selected = options
-            .iter()
-            .find(|o| settings.time_block_list.as_deref().unwrap_or("") == o.id)
-            .cloned();
-        section = section.push(field(
-            "Google Tasks list for time-blocked and scheduled tasks",
-            crate::ui::controls::pick_list(options, selected, |o: CalendarOption| {
-                Message::TimeBlocking(crate::timeblocking::Action::List(o.id))
-            })
-            .text_size(metrics.label())
-            .width(Fill)
-            .into(),
-            metrics,
-        ));
-    }
-    let mut backlog_options = vec![CalendarOption {
+    indent(section.into(), metrics)
+}
+
+/// The Google Tasks lists the app files tasks into. Each task list is chosen
+/// here: where scheduled tasks, backlog, triaged tasks and new tasks land.
+fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.calendar;
+    let task_lists: Vec<CalendarOption> = state
+        .calendar
+        .calendars
+        .iter()
+        .filter(|calendar| calendar.is_task_list())
+        .map(|calendar| CalendarOption {
+            id: calendar.id.clone(),
+            name: calendar.name.clone(),
+        })
+        .collect();
+
+    let mut section = column![].spacing(metrics.spacing);
+
+    let mut options = vec![CalendarOption {
+        id: String::new(),
+        name: format!(
+            "Default: {}",
+            crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST
+        ),
+    }];
+    options.extend(task_lists.clone());
+    let selected = options
+        .iter()
+        .find(|option| settings.time_block_list.as_deref().unwrap_or("") == option.id)
+        .cloned();
+    section = section.push(field(
+        "Google Tasks list for time-blocked and scheduled tasks",
+        crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
+            Message::TimeBlocking(crate::timeblocking::Action::List(option.id))
+        })
+        .text_size(metrics.label())
+        .width(Fill)
+        .into(),
+        metrics,
+    ));
+
+    let mut options = vec![CalendarOption {
         id: String::new(),
         name: format!(
             "Default: {}",
             crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST
         ),
     }];
-    backlog_options.extend(
-        state
-            .calendar
-            .calendars
-            .iter()
-            .filter(|c| c.is_task_list())
-            .map(|c| CalendarOption {
-                id: c.id.clone(),
-                name: c.name.clone(),
-            }),
-    );
-    let selected = backlog_options
+    options.extend(task_lists.clone());
+    let selected = options
         .iter()
         .find(|option| settings.backlog_list.as_deref().unwrap_or("") == option.id)
         .cloned();
     section = section.push(field(
         "Google Tasks list for backlog tasks",
-        crate::ui::controls::pick_list(backlog_options, selected, |option: CalendarOption| {
+        crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
             Message::TimeBlocking(crate::timeblocking::Action::BacklogDestination(
                 (!option.id.is_empty()).then_some(option.id),
             ))
@@ -987,31 +992,22 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
-    let mut triaged_options = vec![CalendarOption {
+
+    let mut options = vec![CalendarOption {
         id: String::new(),
         name: format!(
             "Default: {}",
             crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST
         ),
     }];
-    triaged_options.extend(
-        state
-            .calendar
-            .calendars
-            .iter()
-            .filter(|c| c.is_task_list())
-            .map(|c| CalendarOption {
-                id: c.id.clone(),
-                name: c.name.clone(),
-            }),
-    );
-    let selected = triaged_options
+    options.extend(task_lists.clone());
+    let selected = options
         .iter()
         .find(|option| settings.triaged_list.as_deref().unwrap_or("") == option.id)
         .cloned();
     section = section.push(field(
         "Google Tasks list for triaged tasks",
-        crate::ui::controls::pick_list(triaged_options, selected, |option: CalendarOption| {
+        crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
             Message::TimeBlocking(crate::timeblocking::Action::TriagedDestination(
                 (!option.id.is_empty()).then_some(option.id),
             ))
@@ -1021,28 +1017,19 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
-    let mut inbox_options = vec![CalendarOption {
+
+    let mut options = vec![CalendarOption {
         id: String::new(),
         name: format!("Default: {}", crate::inbox::DEFAULT_LIST),
     }];
-    inbox_options.extend(
-        state
-            .calendar
-            .calendars
-            .iter()
-            .filter(|c| c.is_task_list())
-            .map(|c| CalendarOption {
-                id: c.id.clone(),
-                name: c.name.clone(),
-            }),
-    );
-    let selected = inbox_options
+    options.extend(task_lists);
+    let selected = options
         .iter()
         .find(|option| settings.inbox_list.as_deref().unwrap_or("") == option.id)
         .cloned();
     section = section.push(field(
         "Google Tasks list for new tasks (the Inbox)",
-        crate::ui::controls::pick_list(inbox_options, selected, |option: CalendarOption| {
+        crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
             Message::Inbox(crate::inbox::Action::List(
                 (!option.id.is_empty()).then_some(option.id),
             ))
@@ -1052,14 +1039,22 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .into(),
         metrics,
     ));
-    section = section.push(heading("Inbox triage", metrics));
-    section = section.push(
+
+    indent(section.into(), metrics)
+}
+
+/// What a task needs before it can leave the Inbox. A task cannot be triaged
+/// until every field switched on here has been filled in.
+fn tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.calendar;
+    let mut section = column![
         text(
             "A task cannot leave the Inbox until every field switched on here has been filled in.",
         )
         .size(metrics.label())
         .style(text::secondary),
-    );
+    ]
+    .spacing(metrics.spacing);
     section = section.push(switch(
         "Require an estimated time",
         settings.triage.estimate,
@@ -1238,6 +1233,43 @@ mod tests {
 
         let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
         assert!(ui.find("Sleep goal: 8 hours").is_err());
+    }
+
+    #[test]
+    fn task_controls_live_in_their_sections() {
+        use iced_test::{Simulator, core::Settings};
+
+        let state = State::blank();
+        let size = iced::Size::new(420.0, 2400.0);
+        let metrics = Metrics::of(size);
+
+        // The default Google Tasks lists belong to the Google Tasks section.
+        let mut ui =
+            Simulator::with_size(Settings::default(), size, google_tasks(&state, &metrics));
+        for label in [
+            "Google Tasks list for time-blocked and scheduled tasks",
+            "Google Tasks list for backlog tasks",
+            "Google Tasks list for triaged tasks",
+            "Google Tasks list for new tasks (the Inbox)",
+        ] {
+            assert!(ui.find(label).is_ok(), "missing {label}");
+        }
+
+        // The triage requirements belong to the Tasks section.
+        let mut ui = Simulator::with_size(Settings::default(), size, tasks(&state, &metrics));
+        let triage_hint =
+            "A task cannot leave the Inbox until every field switched on here has been filled in.";
+        assert!(ui.find(triage_hint).is_ok(), "missing {triage_hint}");
+
+        // Neither is in Google Calendar, and the day end control moved out.
+        let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
+        assert!(ui.find("Google Tasks list for backlog tasks").is_err());
+        assert!(ui.find(triage_hint).is_err());
+        assert!(ui.find("Day ends at midnight").is_err());
+
+        let mut ui =
+            Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
+        assert!(ui.find("Day ends at midnight").is_ok());
     }
 
     #[test]

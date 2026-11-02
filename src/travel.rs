@@ -25,25 +25,15 @@ use crate::blocking;
 use crate::calendar::Event;
 use crate::config::{MapApp, Place, TravelMode, TravelSettings};
 use crate::timeblocking as tb;
+use timeslay_core::places::get;
+#[cfg(test)]
+use timeslay_core::places::search_url;
+pub use timeslay_core::places::{Found, location_text, parse_places, search_places};
 
-const SEARCH_URL: &str = "https://api.mapbox.com/search/searchbox/v1/forward";
 const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
-
-/// The most places a search offers.
-const MAX_RESULTS: u32 = 8;
 
 /// What the Travel tab calls the trip's start when it is Home.
 pub const START_OF_DAY: &str = "Start of day";
-
-/// A place Mapbox found, before it is saved.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Found {
-    pub place_id: String,
-    pub name: String,
-    pub address: String,
-    pub lat: f64,
-    pub lng: f64,
-}
 
 /// What a chosen place is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,7 +109,8 @@ pub struct Hop {
 #[derive(Debug, Default)]
 pub struct Workspace {
     pub map: map::Workspace,
-    /// Whether travel is shown on the day view.
+    /// Whether travel is shown on the calendar. Kept in the config, so the
+    /// switch in the calendar menu stays where it was left.
     pub show: bool,
     pub picker: Option<Picker>,
     pub routes: HashMap<RouteKey, RouteState>,
@@ -132,6 +123,14 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// A workspace already showing travel, or not, as the saved setting asks.
+    pub fn starting(show: bool) -> Self {
+        Self {
+            show,
+            ..Self::default()
+        }
+    }
+
     /// Keeps worked-out trips in `path`, and reads those already there. Only a
     /// real boot calls this: a state built by hand must not touch the user's
     /// cache.
@@ -189,6 +188,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Map(action) => map::update(state, action),
         Action::Toggle => {
             state.travel.show = !state.travel.show;
+            state.config.travel.show = state.travel.show;
             if state.travel.show {
                 // A trip that failed is tried again when travel is turned back on.
                 state
@@ -196,7 +196,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     .routes
                     .retain(|_, route| !matches!(route, RouteState::Failed(_)));
             }
-            Task::none()
+            queue_save(state)
         }
 
         Action::ApiKey(key) => {
@@ -486,15 +486,6 @@ fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Mess
     Task::batch([save, write])
 }
 
-/// How a place reads in an event's location: its title and then its address.
-pub fn location_text(place: &Place) -> String {
-    if place.address.is_empty() || place.address == place.name {
-        place.name.clone()
-    } else {
-        format!("{}, {}", place.name, place.address)
-    }
-}
-
 /// Works out whichever trips the day view or the open card needs and does
 /// not have yet. Runs after every message, so a synced event, a day change
 /// or a new location all find their trips without each having to ask.
@@ -596,44 +587,7 @@ pub struct Stop {
 /// Google keeps, so it is matched against the saved places' titles and
 /// addresses.
 pub fn place_of(travel: &TravelSettings, event: &Event) -> Option<u64> {
-    if event.is_task() {
-        return tb::metadata(event)
-            .location
-            .filter(|id| travel.place(*id).is_some());
-    }
-
-    if let Some(place) = travel
-        .event_places
-        .get(&event.id)
-        .filter(|id| travel.place(**id).is_some())
-    {
-        return Some(*place);
-    }
-
-    let text = normalize(&event.details.location);
-    if text.is_empty() {
-        return None;
-    }
-
-    travel
-        .places
-        .iter()
-        .find(|place| normalize(&place.name) == text || normalize(&place.address) == text)
-        .or_else(|| {
-            // Mapbox's addresses run on into the country, which is rarely typed.
-            travel
-                .places
-                .iter()
-                .find(|place| text.len() >= 6 && normalize(&place.address).starts_with(&text))
-        })
-        .map(|place| place.id)
-}
-
-fn normalize(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    timeslay_core::places::place_of(&travel.places, &travel.event_places, event)
 }
 
 /// The trips a day needs, in order, given its events in the order they happen.
@@ -808,78 +762,6 @@ fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
 // Talking to Mapbox
 // ---------------------------------------------------------------------------
 
-/// Searches Mapbox for `query`. Blocking: call it from
-/// [`crate::blocking::run`].
-pub fn search_places(
-    key: &str,
-    query: &str,
-    proximity: Option<(f64, f64)>,
-) -> Result<Vec<Found>, String> {
-    Ok(parse_places(&get(&search_url(key, query, proximity))?))
-}
-
-/// Proximity is longitude, latitude; it biases ranking without limiting the area.
-fn search_url(key: &str, query: &str, proximity: Option<(f64, f64)>) -> String {
-    let mut url = format!(
-        "{SEARCH_URL}?q={}&limit={MAX_RESULTS}&access_token={}",
-        urlencoding::encode(query),
-        urlencoding::encode(key),
-    );
-
-    if let Some((lng, lat)) = proximity
-        && lng.is_finite()
-        && lat.is_finite()
-        && (-180.0..=180.0).contains(&lng)
-        && (-90.0..=90.0).contains(&lat)
-    {
-        url.push_str(&format!("&proximity={lng},{lat}"));
-    }
-    url
-}
-
-pub fn parse_places(response: &Value) -> Vec<Found> {
-    response["features"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|feature| {
-            let properties = &feature["properties"];
-            let place_id = properties["mapbox_id"].as_str()?.to_owned();
-            let address = properties["full_address"]
-                .as_str()
-                .or_else(|| properties["place_formatted"].as_str())
-                .unwrap_or("")
-                .to_owned();
-            let name = properties["name"]
-                .as_str()
-                .filter(|name| !name.trim().is_empty())
-                .map(str::to_owned)
-                .or_else(|| address.split(',').next().map(|part| part.trim().to_owned()))
-                .filter(|name| !name.is_empty())?;
-
-            // `[longitude, latitude]`, as GeoJSON has it.
-            let (lng, lat) = match (
-                feature["geometry"]["coordinates"][0].as_f64(),
-                feature["geometry"]["coordinates"][1].as_f64(),
-            ) {
-                (Some(lng), Some(lat)) => (lng, lat),
-                _ => (
-                    properties["coordinates"]["longitude"].as_f64()?,
-                    properties["coordinates"]["latitude"].as_f64()?,
-                ),
-            };
-
-            Some(Found {
-                place_id,
-                name,
-                address,
-                lat,
-                lng,
-            })
-        })
-        .collect()
-}
-
 /// How long and how far a trip is, from Mapbox Directions. Blocking: call it
 /// from [`crate::blocking::run`].
 pub fn compute_route(
@@ -919,30 +801,6 @@ pub fn parse_route(response: &Value) -> Result<Route, String> {
         seconds: seconds.round().max(0.0) as u32,
         meters: route["distance"].as_f64().unwrap_or(0.0).round().max(0.0) as u32,
     })
-}
-
-fn get(url: &str) -> Result<Value, String> {
-    match crate::calendar::api::agent().get(url).call() {
-        Ok(response) => response
-            .into_json::<Value>()
-            .map_err(|error| format!("Mapbox: {error}")),
-        Err(ureq::Error::Status(code, response)) => {
-            let detail = response
-                .into_json::<Value>()
-                .ok()
-                .and_then(|body| {
-                    body["message"]
-                        .as_str()
-                        .or_else(|| body["error"].as_str())
-                        .map(str::to_owned)
-                })
-                .filter(|message| !message.is_empty())
-                .unwrap_or_else(|| format!("HTTP {code}"));
-            Err(format!("Mapbox: {detail}"))
-        }
-        // The URL carries the token, which must not end up in the settings page.
-        Err(ureq::Error::Transport(error)) => Err(format!("Mapbox: {}", error.kind())),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,6 +1421,28 @@ mod tests {
         assert_eq!(place.address, "1 Main St");
         assert_eq!(place.place_id, "g-sbux");
         assert_eq!((place.lat, place.lng), (1.0, 2.0));
+    }
+
+    #[test]
+    fn the_menu_toggle_is_saved_and_restored_at_startup() {
+        let mut state = state();
+        assert!(!state.travel.show, "travel starts off");
+
+        let _ = update(&mut state, Action::Toggle);
+        assert!(state.travel.show);
+        assert!(
+            state.config.travel.show,
+            "the switch is kept in the config file"
+        );
+
+        let _ = update(&mut state, Action::Toggle);
+        assert!(!state.travel.show);
+        assert!(!state.config.travel.show);
+
+        // A fresh state comes up the way the config was left.
+        state.config.travel.show = true;
+        let restored = State::new(state.config.clone(), crate::theme::Catalog::built_in());
+        assert!(restored.travel.show);
     }
 
     #[test]

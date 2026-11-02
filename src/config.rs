@@ -19,8 +19,10 @@ use crate::hex::HexColor;
 use crate::todos::TodoList;
 
 pub use timeslay_core::config::{
-    CalendarSettings, TriageRequirements, cache_days_dir, config_path, project_dirs,
+    CalendarSettings, Project, ProjectsSettings, TriageRequirements, cache_days_dir, config_path,
+    project_dirs,
 };
+pub use timeslay_core::places::Place;
 
 /// How long to wait after the last change before writing to disk.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -469,167 +471,6 @@ impl ViewSettings {
     }
 }
 
-/// A project that tasks can be filed under.
-///
-/// Tasks refer to a project by `id`, never by name, so a project can be
-/// renamed without losing track of what belongs to it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Project {
-    pub id: u64,
-    /// Slash-separated, so `School/Calculus` reads as a part of `School`.
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<HexColor>,
-    /// Where the project's files are kept on disk.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub directory: Option<PathBuf>,
-}
-
-impl Project {
-    pub fn color(&self) -> Option<Color> {
-        self.color.map(Color::from)
-    }
-}
-
-/// The projects shown in the Projects tab and offered when editing a task.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ProjectsSettings {
-    pub items: Vec<Project>,
-}
-
-impl Default for ProjectsSettings {
-    fn default() -> Self {
-        // Fixed ids, so the defaults mean the same project on every machine.
-        let items = [
-            "Work",
-            "School/Homework",
-            "School/Calculus",
-            "Personal",
-            "Personal/Chores",
-        ]
-        .into_iter()
-        .zip(1..)
-        .map(|(name, id)| Project {
-            id,
-            name: name.to_owned(),
-            color: None,
-            directory: None,
-        })
-        .collect();
-
-        let mut settings = Self { items };
-        settings.sort();
-        settings
-    }
-}
-
-impl ProjectsSettings {
-    /// Keeps the projects in alphabetical order, ignoring case.
-    pub fn sort(&mut self) {
-        self.items
-            .sort_by_cached_key(|project| (project.name.to_lowercase(), project.id));
-    }
-
-    /// The projects in alphabetical order, whatever order the file lists them in.
-    pub fn sorted(&self) -> Vec<&Project> {
-        let mut projects: Vec<&Project> = self.items.iter().collect();
-        projects.sort_by_cached_key(|project| (project.name.to_lowercase(), project.id));
-        projects
-    }
-
-    pub fn get(&self, id: u64) -> Option<&Project> {
-        self.items.iter().find(|project| project.id == id)
-    }
-
-    /// Tidies `input` into a project name and checks that no other project
-    /// (`except` is the one being renamed) already has it.
-    ///
-    /// Spaces around a `/` are dropped and empty segments removed, so
-    /// `School / Physics/` is the same project as `School/Physics`.
-    pub fn clean_name(&self, input: &str, except: Option<u64>) -> Result<String, String> {
-        let name = input
-            .split('/')
-            .map(str::trim)
-            .filter(|segment| !segment.is_empty())
-            .collect::<Vec<_>>()
-            .join("/");
-
-        if name.is_empty() {
-            return Err("A project needs a name".to_owned());
-        }
-
-        let taken = self.items.iter().any(|project| {
-            Some(project.id) != except && project.name.to_lowercase() == name.to_lowercase()
-        });
-
-        if taken {
-            return Err(format!("There is already a project named {name}"));
-        }
-
-        Ok(name)
-    }
-
-    /// Adds a project and returns its id.
-    pub fn add(&mut self, name: String) -> u64 {
-        let id = self.next_id();
-        self.items.push(Project {
-            id,
-            name,
-            color: None,
-            directory: None,
-        });
-        self.sort();
-        id
-    }
-
-    pub fn remove(&mut self, id: u64) {
-        self.items.retain(|project| project.id != id);
-    }
-
-    /// An id that no project has had before, as far as the file can tell.
-    ///
-    /// Ids are never handed out again after a removal that took the highest
-    /// one, so a task left pointing at a removed project does not suddenly
-    /// belong to a new one. The clock keeps them unique between runs.
-    fn next_id(&self) -> u64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_millis() as u64);
-        let highest = self
-            .items
-            .iter()
-            .map(|project| project.id)
-            .max()
-            .unwrap_or(0);
-
-        now.max(highest + 1)
-    }
-}
-
-/// A place that tasks and events can happen at, found with Mapbox search.
-///
-/// Everything needed to find the place again is kept apart from the title,
-/// so the title can be renamed to whatever reads best ("Home", "Campus")
-/// without the place losing its address or its Mapbox ID.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Place {
-    /// What tasks refer to. Unlike the title, it never changes.
-    pub id: u64,
-    /// The title shown in the app. Free to edit.
-    pub name: String,
-    /// The address as Mapbox spelled it when the place was chosen.
-    #[serde(default)]
-    pub address: String,
-    /// Mapbox's ID for the place, which keeps one place from being saved
-    /// twice. (Places saved before Mapbox hold a Google ID here; routes use
-    /// the coordinates, so they keep working.)
-    #[serde(default)]
-    pub place_id: String,
-    pub lat: f64,
-    pub lng: f64,
-}
-
 /// How a trip between two places is made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -740,6 +581,9 @@ pub struct TravelSettings {
     pub default_mode: TravelMode,
     /// The map "Open in Maps" opens a trip on.
     pub map_app: MapApp,
+    /// Whether travel times are shown on the calendar. Toggled from the
+    /// calendar menu beside the TimeSlay sources, and off until then.
+    pub show: bool,
     pub places: Vec<Place>,
     /// Trips whose method was chosen by hand.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -762,6 +606,7 @@ impl<'de> Deserialize<'de> for TravelSettings {
             end: Option<u64>,
             default_mode: TravelMode,
             map_app: MapApp,
+            show: bool,
             places: Vec<Place>,
             modes: Vec<RouteMode>,
             event_places: std::collections::BTreeMap<String, u64>,
@@ -772,6 +617,7 @@ impl<'de> Deserialize<'de> for TravelSettings {
             home: stored.home.or(stored.start).or(stored.end),
             default_mode: stored.default_mode,
             map_app: stored.map_app,
+            show: stored.show,
             places: stored.places,
             modes: stored.modes,
             event_places: stored.event_places,
@@ -820,27 +666,7 @@ impl TravelSettings {
         lat: f64,
         lng: f64,
     ) -> u64 {
-        if !place_id.is_empty()
-            && let Some(existing) = self.places.iter().find(|place| place.place_id == place_id)
-        {
-            return existing.id;
-        }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_millis() as u64);
-        let highest = self.places.iter().map(|place| place.id).max().unwrap_or(0);
-        let id = now.max(highest + 1);
-
-        self.places.push(Place {
-            id,
-            name: name.trim().to_owned(),
-            address: address.trim().to_owned(),
-            place_id: place_id.to_owned(),
-            lat,
-            lng,
-        });
-        id
+        timeslay_core::places::add_place(&mut self.places, name, address, place_id, lat, lng)
     }
 
     /// How the trip from `from` to `to` is made.

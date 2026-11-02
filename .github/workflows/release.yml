@@ -15,9 +15,9 @@ jobs:
     environment: Release
     env:
       CARGO_BUILD_JOBS: "2"
-      TIMESLAY_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      TIMESLAY_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      TIMESLAY_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      TIMESLAY_KEYSTORE_BASE64: ${{ secrets.TIMESLAY_KEYSTORE_BASE64 }}
+      TIMESLAY_KEYSTORE_KEYALIAS: ${{ secrets.TIMESLAY_KEYSTORE_KEYALIAS }}
+      TIMESLAY_KEYSTORE_PASSWORD: ${{ secrets.TIMESLAY_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -27,14 +27,10 @@ jobs:
           java-version: "21"
       - name: Check signing secrets
         run: |
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS; do
+          for name in TIMESLAY_KEYSTORE_BASE64 TIMESLAY_KEYSTORE_KEYALIAS TIMESLAY_KEYSTORE_PASSWORD; do
             eval "value=\${$name:-}"
             [ -n "$value" ] || { echo "::error::Missing secret $name"; exit 1; }
           done
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       - name: Install Android SDK packages
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
@@ -50,13 +46,7 @@ jobs:
           tool: cargo-binstall
       - run: cargo binstall --no-confirm dioxus-cli@0.7.10
       - name: Build signed release APK
-        run: |
-          keystore="$RUNNER_TEMP/release.jks"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore"
-          TIMESLAY_KEYSTORE="$keystore" scripts/build-android.sh --release --abi arm64 --output dist
-          rm -f "$keystore"
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: scripts/build-android.sh --release --abi arm64 --output dist
       - name: Name release asset
         run: |
           mv dist/timeslay-arm64-v8a-release.apk "dist/timeslay-arm64-v8a-${GITHUB_REF_NAME}.apk"
