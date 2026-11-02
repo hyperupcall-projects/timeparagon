@@ -11,7 +11,9 @@ use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
 use timeslay_core::calendar::layout::{self, Span};
 use timeslay_core::calendar::sources::TimeSlaySource;
 use timeslay_core::calendar::{self, Event, Snapshot};
-use timeslay_core::config::{CalendarSettings, Config};
+use timeslay_core::config::{CalendarSettings, Config, ProjectsSettings};
+use timeslay_core::places::{self, Found, Place, PlaceSettings};
+use timeslay_core::task_edit::{self, Change};
 use timeslay_core::timeblocking as tb;
 
 /// Reads the same configuration the iced app uses.
@@ -685,6 +687,367 @@ pub fn capacity_label(minutes: i64) -> String {
     duration_label(minutes)
 }
 
+/// What the editors need to know beyond the item being edited.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditContext {
+    pub settings: CalendarSettings,
+    pub projects: ProjectsSettings,
+    pub places: PlaceSettings,
+    pub calendars: Vec<calendar::Calendar>,
+    /// Everything loaded for the day, which a task write lays out around.
+    pub events: Vec<Event>,
+}
+
+impl EditContext {
+    pub fn new(config: &Config, snapshot: &Snapshot) -> Self {
+        Self {
+            settings: config.calendar.clone(),
+            projects: config.projects.clone(),
+            places: config.travel.clone(),
+            calendars: snapshot.calendars.clone(),
+            events: snapshot.events.clone(),
+        }
+    }
+}
+
+/// How the editor describes where an item comes from, like the iced details pane.
+pub fn source_label(event: &Event, context: &EditContext) -> String {
+    let calendar = context
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id == event.calendar_id);
+    let managed = context.settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
+        || calendar.is_some_and(|calendar| CalendarSettings::is_app_calendar_name(&calendar.name));
+    let kind = if event.details.sleep.is_some() {
+        Some("Sleep")
+    } else if event.details.habit {
+        Some("Habit")
+    } else if event.is_task() || event.details.scheduled.is_some() {
+        Some("Task")
+    } else if managed {
+        Some(if event.all_day { "Event" } else { "Time Block" })
+    } else {
+        None
+    };
+    match kind {
+        Some(kind) => format!("Type: {kind}"),
+        None => format!(
+            "Calendar: {}",
+            calendar.map_or(event.calendar_id.as_str(), |calendar| calendar
+                .name
+                .as_str())
+        ),
+    }
+}
+
+/// A task's fields as they are being typed, before each one is saved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskFields {
+    pub title: String,
+    pub description: String,
+    pub estimate: String,
+    pub date: String,
+    pub start: String,
+    pub end: String,
+    pub deadline: String,
+    pub deadline_time: String,
+}
+
+impl TaskFields {
+    pub fn new(task: &Event) -> Self {
+        let deadline = calendar::deadline::input_text(&task.details.description);
+        Self {
+            title: task.title.clone(),
+            description: calendar::notes::Notes::new(&tb::description(&task.details.description))
+                .without(&["DUE:", "DEADLINE:"]),
+            estimate: tb::metadata(task).minutes.to_string(),
+            date: if task.start.date_naive() == tb::UNDATED {
+                String::new()
+            } else {
+                task.start.date_naive().to_string()
+            },
+            start: if task.all_day {
+                "09:00".to_owned()
+            } else {
+                calendar::clock_label(task.start)
+            },
+            end: if task.all_day {
+                "09:30".to_owned()
+            } else {
+                calendar::clock_label(task.end)
+            },
+            deadline: deadline.get(..10).unwrap_or_default().to_owned(),
+            deadline_time: deadline.get(11..).unwrap_or("09:00").to_owned(),
+        }
+    }
+
+    /// The change that saves the due date on its own. A blank date clears it.
+    pub fn day_change(&self) -> Result<Change, String> {
+        if self.date.is_empty() {
+            return Ok(Change::ClearSchedule);
+        }
+        calendar::deadline::parse_date(self.date.trim()).map(Change::Day)
+    }
+
+    /// The change that saves the due date with a start and end time.
+    pub fn time_change(&self) -> Result<Change, String> {
+        let (start, end) = task_edit::schedule_range(&self.date, &self.start, &self.end)?;
+        if end <= start {
+            return Err("The task must end after it starts".to_owned());
+        }
+        Ok(Change::Time(start, end))
+    }
+
+    /// The change that saves the deadline, with its time when `timed`. A blank
+    /// date clears it.
+    pub fn deadline_change(&self, timed: bool) -> Result<Change, String> {
+        let day = self.deadline.trim();
+        if day.is_empty() {
+            return Ok(Change::Deadline(None));
+        }
+        let input = if timed {
+            format!("{day} {}", self.deadline_time.trim())
+        } else {
+            day.to_owned()
+        };
+        calendar::deadline::parse_input(&input).map(|deadline| Change::Deadline(Some(deadline)))
+    }
+
+    pub fn estimate_change(&self) -> Result<u32, String> {
+        let minutes = self
+            .estimate
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| "Enter an estimate in whole minutes".to_owned())?;
+        if minutes == 0 {
+            return Err("An estimate is required".to_owned());
+        }
+        if minutes > 10080 {
+            return Err("Estimate must be at most 10080 minutes".to_owned());
+        }
+        Ok(minutes)
+    }
+
+    pub fn title_change(&self) -> Result<String, String> {
+        let title = self.title.trim();
+        if title.is_empty() {
+            return Err("A task needs a name".to_owned());
+        }
+        if title.chars().count() > task_edit::MAX_TITLE_CHARS {
+            return Err(format!(
+                "A task name can be at most {} characters",
+                task_edit::MAX_TITLE_CHARS
+            ));
+        }
+        Ok(title.to_owned())
+    }
+}
+
+/// Labels already used on the day's tasks, offered so they need no retyping.
+pub fn label_suggestions(events: &[Event], current: &[String], query: &str) -> Vec<String> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for event in events.iter().filter(|event| event.is_task()) {
+        for label in tb::metadata(event).labels {
+            let known = |existing: &String| existing.eq_ignore_ascii_case(&label);
+            if !current.iter().any(known)
+                && !seen.iter().any(known)
+                && label.to_lowercase().contains(&query)
+            {
+                seen.push(label);
+            }
+        }
+    }
+    seen.truncate(5);
+    seen
+}
+
+/// The task's labels with `label` added, or `None` when it already has it.
+pub fn with_label(task: &Event, label: &str) -> Result<Option<Vec<String>>, String> {
+    let label = task_edit::clean_label(label).map_err(str::to_owned)?;
+    let mut labels = tb::metadata(task).labels;
+    if labels
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&label))
+    {
+        return Ok(None);
+    }
+    labels.push(label);
+    Ok(Some(labels))
+}
+
+/// Whether a task is still waiting in the Inbox to be triaged.
+pub fn untriaged(task: &Event, context: &EditContext) -> bool {
+    let inbox = match &context.settings.inbox_list {
+        Some(chosen) => {
+            chosen.trim_start_matches("tasks:") == task.calendar_id.trim_start_matches("tasks:")
+        }
+        None => context.calendars.iter().any(|calendar| {
+            calendar.id == task.calendar_id
+                && calendar.is_task_list()
+                && calendar
+                    .name
+                    .trim()
+                    .eq_ignore_ascii_case(calendar::scheduled::DEFAULT_LIST)
+        }),
+    };
+    inbox
+        && task.start.date_naive() == tb::UNDATED
+        && tb::in_backlog(task)
+        && tb::metadata(task).schedule.is_none()
+}
+
+/// Open tasks of the day that a block could take on.
+pub fn assignable_tasks(events: &[Event]) -> Vec<Event> {
+    let mut tasks: Vec<Event> = events
+        .iter()
+        .filter(|event| event.is_task())
+        .filter(|event| tb::task_status(event) == tb::TaskStatus::Active)
+        .filter(|event| tb::metadata(event).block.is_none())
+        .cloned()
+        .collect();
+    tasks.sort_by_key(|task| (tb::metadata(task).order, task.title.clone()));
+    tasks
+}
+
+/// Writes one change to a task and returns the task as it now stands. Its id
+/// can differ from the one passed in, because moving lists renames it.
+///
+/// Blocking: callers run this on a worker thread.
+pub fn save_task(task: Event, change: Change, context: &EditContext) -> Result<Event, String> {
+    let settings = context.settings.clone();
+    // New assignments go to the end of a block.
+    let order = context
+        .events
+        .iter()
+        .filter(|event| event.is_task())
+        .map(|event| tb::metadata(event).order)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1_i64 << 32);
+    let blocks = block_events(&context.events, &settings);
+    let related = context
+        .events
+        .iter()
+        .filter(|event| event.is_task())
+        .cloned()
+        .collect();
+    let mut changed = task_edit::save_and_reflow(
+        task,
+        settings,
+        change,
+        order,
+        blocks,
+        related,
+        task_edit::google_access,
+    )?;
+    // The task itself always comes first.
+    Ok(changed.swap_remove(0))
+}
+
+/// Every event of the day that holds, or could hold, assigned tasks.
+fn block_events(events: &[Event], settings: &CalendarSettings) -> Vec<Event> {
+    let assigned: HashSet<String> = events
+        .iter()
+        .filter(|event| event.is_task())
+        .filter_map(|event| tb::metadata(event).block)
+        .collect();
+    events
+        .iter()
+        .filter(|event| is_time_block(event, settings, &assigned))
+        .cloned()
+        .collect()
+}
+
+/// Saves an edited event, habit or time block, and lays a block's tasks out
+/// again from its new start.
+///
+/// Blocking: callers run this on a worker thread.
+pub fn save_event(
+    original: &Event,
+    draft: &calendar::EditDraft,
+    scope: calendar::SaveScope,
+    context: &EditContext,
+) -> Result<(), String> {
+    if draft.title.trim().is_empty() {
+        return Err("Enter a title".to_owned());
+    }
+    if draft.end <= draft.start {
+        return Err("The end time has to be after the start".to_owned());
+    }
+    draft.recurrence_lines()?;
+
+    let settings = &context.settings;
+    let labelled_block = tb::is_block(original, settings);
+    let description = if labelled_block {
+        calendar::event_description(&draft.description, "Time Block", &[])
+    } else {
+        draft.description.clone()
+    };
+    let color_id = labelled_block
+        .then(|| calendar::colors::event_id(settings.time_block_color()))
+        .flatten();
+    calendar::save_event_scope(
+        &settings.client_id,
+        &settings.client_secret,
+        original,
+        draft,
+        scope,
+        &description,
+        color_id,
+    )?;
+
+    let key = tb::block_key(original);
+    if block_events(&context.events, settings)
+        .iter()
+        .any(|block| tb::block_key(block) == key)
+    {
+        let mut moved = original.clone();
+        moved.start = draft.start;
+        moved.end = draft.end;
+        task_edit::reflow(&moved, &context.events, settings, task_edit::google_access)?;
+    }
+    Ok(())
+}
+
+/// Gives a calendar event a place, or takes it away, both on Google and in the
+/// config the iced app reads it from.
+///
+/// Blocking: callers run this on a worker thread.
+pub fn save_event_place(
+    event: &Event,
+    place: Option<&Place>,
+    settings: &CalendarSettings,
+) -> Result<(), String> {
+    let text = place.map(places::location_text).unwrap_or_default();
+    calendar::set_event_location(
+        &settings.client_id,
+        &settings.client_secret,
+        &event.calendar_id,
+        &event.id,
+        &text,
+    )?;
+    timeslay_core::config::save_event_place(&event.id, place.map(|place| place.id))
+        .map_err(|error| format!("Could not save the location: {error}"))
+}
+
+/// Saves a place Mapbox found, so tasks and events can refer to it.
+pub fn save_found_place(found: &Found) -> Result<Place, String> {
+    let id = timeslay_core::config::save_found_place(found)
+        .map_err(|error| format!("Could not save the place: {error}"))?;
+    Ok(Place {
+        id,
+        name: found.name.clone(),
+        address: found.address.clone(),
+        place_id: found.place_id.clone(),
+        lat: found.lat,
+        lng: found.lng,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,6 +1426,150 @@ mod tests {
         assert_eq!(model.timed[0].columns, 2);
         assert_eq!(model.timed[1].columns, 2);
         assert_ne!(model.timed[0].column, model.timed[1].column);
+    }
+
+    #[test]
+    fn task_fields_start_from_the_task_and_turn_into_changes() {
+        let mut timed = task("a", "Write", None, 1, 45, false);
+        timed.all_day = false;
+        timed.start = at(9, 0);
+        timed.end = at(9, 45);
+        timed.details.description = "Notes\nDEADLINE: 2026-11-05 17:30".to_owned();
+        let mut fields = TaskFields::new(&timed);
+        assert_eq!(fields.description, "Notes");
+        assert_eq!(fields.estimate, "45");
+        assert_eq!(fields.date, "2026-10-26");
+        assert_eq!(
+            (fields.start.as_str(), fields.end.as_str()),
+            ("09:00", "09:45")
+        );
+        assert_eq!(fields.deadline, "2026-11-05");
+        assert_eq!(fields.deadline_time, "17:30");
+
+        assert!(matches!(fields.day_change(), Ok(Change::Day(day)) if day == day_of(&timed)));
+        assert!(matches!(
+            fields.time_change(),
+            Ok(Change::Time(start, end)) if start == at(9, 0) && end == at(9, 45)
+        ));
+        // A day-only save drops the time; a timed one keeps it.
+        let Ok(Change::Deadline(Some(deadline))) = fields.deadline_change(false) else {
+            panic!("expected a deadline");
+        };
+        assert_eq!(deadline.value(), "2026-11-05");
+        let Ok(Change::Deadline(Some(deadline))) = fields.deadline_change(true) else {
+            panic!("expected a deadline");
+        };
+        assert_eq!(deadline.value(), "2026-11-05 17:30");
+
+        fields.date.clear();
+        fields.deadline.clear();
+        assert!(matches!(fields.day_change(), Ok(Change::ClearSchedule)));
+        assert!(matches!(
+            fields.deadline_change(true),
+            Ok(Change::Deadline(None))
+        ));
+    }
+
+    fn day_of(event: &Event) -> NaiveDate {
+        event.start.date_naive()
+    }
+
+    #[test]
+    fn task_fields_refuse_what_google_would_not_keep() {
+        let mut fields = TaskFields::new(&task("a", "Write", None, 1, 45, false));
+        fields.estimate = "soon".into();
+        assert!(fields.estimate_change().is_err());
+        fields.estimate = "10081".into();
+        assert!(fields.estimate_change().is_err());
+        fields.estimate = " 90 ".into();
+        assert_eq!(fields.estimate_change(), Ok(90));
+        fields.title = "   ".into();
+        assert!(fields.title_change().is_err());
+        fields.title = " Write ".into();
+        assert_eq!(fields.title_change().unwrap(), "Write");
+    }
+
+    #[test]
+    fn labels_are_cleaned_deduplicated_and_suggested_from_other_tasks() {
+        let mut first = task("a", "Write", None, 1, 45, false);
+        first.details.task_data.as_mut().unwrap().metadata.labels = vec!["Deep work".into()];
+        let mut second = task("b", "Review", None, 2, 10, false);
+        second.details.task_data.as_mut().unwrap().metadata.labels =
+            vec!["deep WORK".into(), "Urgent".into()];
+
+        assert_eq!(with_label(&first, " deep   work "), Ok(None));
+        assert_eq!(
+            with_label(&first, "  new  label "),
+            Ok(Some(vec!["Deep work".to_owned(), "new label".to_owned()]))
+        );
+        assert!(with_label(&first, "   ").is_err());
+
+        let events = [first, second];
+        assert_eq!(
+            label_suggestions(&events, &[], "deep"),
+            vec!["Deep work".to_owned()]
+        );
+        assert!(label_suggestions(&events, &["DEEP WORK".to_owned()], "deep").is_empty());
+        assert!(label_suggestions(&events, &[], "  ").is_empty());
+    }
+
+    #[test]
+    fn only_open_unassigned_tasks_can_join_a_block() {
+        let tasks = assignable_tasks(&[
+            event("m1", "work", "Standup", at(9, 0), at(10, 0)),
+            task("late", "Second", None, 2, 10, false),
+            task("early", "First", None, 1, 10, false),
+            task("done", "Done", None, 3, 10, true),
+            task("taken", "Taken", Some("blocks/b1"), 4, 10, false),
+        ]);
+        let titles: Vec<_> = tasks.iter().map(|task| task.title.as_str()).collect();
+        assert_eq!(titles, ["First", "Second"]);
+    }
+
+    #[test]
+    fn untriaged_follows_the_inbox_list_and_the_missing_date() {
+        let mut waiting = task("a", "Write", None, 1, 45, false);
+        waiting.calendar_id = "tasks:inbox".into();
+        waiting.start = calendar::at_clock(tb::UNDATED, 0, 0);
+        waiting.end = waiting.start + Duration::days(1);
+        let mut context = EditContext {
+            settings: settings(),
+            projects: ProjectsSettings::default(),
+            places: PlaceSettings::default(),
+            calendars: vec![
+                calendar("tasks:inbox", "Inbox"),
+                calendar("tasks:work", "Work"),
+            ],
+            events: Vec::new(),
+        };
+        assert!(untriaged(&waiting, &context));
+
+        let mut dated = waiting.clone();
+        dated.start = at(0, 0);
+        assert!(!untriaged(&dated, &context));
+
+        context.settings.inbox_list = Some("tasks:work".into());
+        assert!(!untriaged(&waiting, &context));
+    }
+
+    #[test]
+    fn the_source_label_names_the_kind_or_the_calendar() {
+        let context = EditContext {
+            settings: settings(),
+            projects: ProjectsSettings::default(),
+            places: PlaceSettings::default(),
+            calendars: vec![calendar("blocks", "Focus"), calendar("work", "Work")],
+            events: Vec::new(),
+        };
+        let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        assert_eq!(source_label(&block, &context), "Type: Time Block");
+        let meeting = event("m1", "work", "Standup", at(12, 0), at(12, 30));
+        assert_eq!(source_label(&meeting, &context), "Calendar: Work");
+        let mut habit = meeting.clone();
+        habit.details.habit = true;
+        assert_eq!(source_label(&habit, &context), "Type: Habit");
+        let write = task("a", "Write", None, 1, 45, false);
+        assert_eq!(source_label(&write, &context), "Type: Task");
     }
 
     #[test]

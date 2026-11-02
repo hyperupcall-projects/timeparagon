@@ -158,9 +158,32 @@ current time (or 8am on another day), and the time-block popup becomes a bottom 
   overlap packing and end-of-day boundary as the iced app.
 - A live **current-time needle**, automatic scroll to now, day navigation,
   manual refresh, and a refresh on the configured sync interval.
-- Clicking a **time block** opens a popup listing **every task assigned to
-  that block**, in planned order, with each task's list, status, estimate,
-  and the block's total planned time against its capacity.
+- Tapping a **time block** opens a popup listing **every task assigned to that
+  block**, in planned order, with each task's list, status and estimate, and the
+  block's total planned time against its capacity. Tasks can be opened, removed
+  and added there, and **Edit block** edits the block itself.
+
+## Editing
+
+Tapping anything else on the day opens a sheet with the same fields as the iced
+details pane. It writes through the same code in `timeslay-core`, so both apps
+behave alike.
+
+- **Tasks** save each field as it changes: title, description, projects, estimate,
+  due date and time, deadline, labels, priority and location. Complete, ignore,
+  triage, move to inbox or backlog, and delete are at the foot of the sheet.
+- **Events and time blocks** stage their title, description, times, projects,
+  labels, repeat rule, notifications, availability and visibility until **Save**.
+  A recurring event can save or delete one occurrence, that one and later ones,
+  or the whole series. A block's tasks are laid out again from its new start.
+- **Habits** edit like events, keep their length when moved, and can be marked done.
+- **Sleep** edits its start, wake-up time and whether each is estimated.
+- **Locations** apply at once, from saved places or a Mapbox search. Searching
+  needs the Mapbox token from the iced app's settings, which arrives with the
+  synced config. A newly chosen place is added to that config too.
+
+Sheets only reach what the day has loaded, so a habit is edited from a day it
+occurs on. Creating items, and managing the project list, stay in the iced app.
 
 Time blocks are read from the app's single TimeSlay calendar
 (`calendar.app_calendar`, discovered from the calendar list). A block referenced
