@@ -76,28 +76,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         section("Appearance", appearance(state, metrics), metrics),
         section("Dock", dock(state, metrics), metrics),
         section("Side panel", panel(state, metrics), metrics),
-        section(
-            "Event/Habit/Task overlay",
-            layout_number(
-                "Event/Habit/Task details width (px)",
-                LayoutField::DetailWidth,
-                state,
-                metrics
-            ),
-            metrics
-        ),
-        section(
-            "Time block overlay",
-            layout_number(
-                "Time block panel width (px)",
-                LayoutField::TimeBlockWidth,
-                state,
-                metrics
-            ),
-            metrics
-        ),
+        section("Overlays", overlays(state, metrics), metrics),
         section("Windowing", windowing(state, metrics), metrics),
-        section("Application", restart(metrics), metrics),
         section("Keyboard shortcuts", shortcuts(state, metrics), metrics),
         section(
             "Calendar view order",
@@ -105,6 +85,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics
         ),
         section("Google Calendar", calendar(state, metrics), metrics),
+        section("Sleep", sleep(state, metrics), metrics),
         section(
             "Travel",
             super::travel::settings_section(state, metrics),
@@ -116,6 +97,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             integrations(state, metrics),
             metrics
         ),
+        section("Application", restart(metrics), metrics),
     ]
     .spacing(metrics.spacing)
     .padding(iced::Padding {
@@ -262,21 +244,12 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     column![
         choice(
             "Theme",
-            state.catalog.names(),
-            Some(
-                state
-                    .catalog
-                    .resolve(&state.config.appearance.theme)
-                    .name
-                    .clone()
-            ),
+            crate::theme::picker_names(&state.catalog),
+            Some(crate::theme::selected_name(
+                &state.catalog,
+                &state.config.appearance.theme,
+            )),
             |v0| Message::Settings(SettingsMessage::ThemeSelected(v0)),
-            metrics,
-        ),
-        switch(
-            "Follow system light/dark",
-            state.config.appearance.follow_system,
-            |v0| Message::Settings(SettingsMessage::FollowSystemToggled(v0)),
             metrics,
         ),
         layout_number(
@@ -344,6 +317,14 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         text("Change the appearance of the dock.")
             .size(metrics.label())
             .style(text::secondary),
+        container(switch(
+            "Dock hour lines",
+            views.dock_hour_lines,
+            |v0| Message::Settings(SettingsMessage::DockHourLinesToggled(v0)),
+            metrics,
+        ))
+        .id("dock-hour-lines")
+        .width(Fill),
         choice(
             "Screen edge",
             crate::config::DockSide::ALL.to_vec(),
@@ -420,6 +401,27 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         layout_number(
             "Calendar month width (px)",
             LayoutField::CalendarMonthWidth,
+            state,
+            metrics
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .into()
+}
+
+fn overlays<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    column![
+        subsection("Event/Habit/Task overlay", metrics),
+        layout_number(
+            "Event/Habit/Task details width (px)",
+            LayoutField::DetailWidth,
+            state,
+            metrics
+        ),
+        subsection("Time block overlay", metrics),
+        layout_number(
+            "Time block panel width (px)",
+            LayoutField::TimeBlockWidth,
             state,
             metrics
         ),
@@ -513,12 +515,6 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ));
     }
     section
-        .push(switch(
-            "Dock hour lines",
-            views.dock_hour_lines,
-            |v0| Message::Settings(SettingsMessage::DockHourLinesToggled(v0)),
-            metrics,
-        ))
         .push(
             text("Customize the app's transition effects for KDE.")
                 .size(metrics.label())
@@ -727,6 +723,46 @@ fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     indent(section.into(), metrics)
 }
 
+fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let settings = &state.config.calendar;
+    let time_format = state.config.appearance.time_format;
+
+    column![
+        field(
+            format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
+            crate::ui::controls::slider(6..=12, settings.sleep_goal_hours(), |v0| {
+                Message::Settings(SettingsMessage::SleepGoalChanged(v0))
+            })
+            .into(),
+            metrics,
+        ),
+        field(
+            format!(
+                "Sleep day starts at {}",
+                calendar::time_format::hour(settings.sleep_day_start_hour(), time_format)
+            ),
+            crate::ui::controls::slider(0..=6, settings.sleep_day_start_hour(), |v0| {
+                Message::Settings(SettingsMessage::SleepDayStartChanged(v0))
+            })
+            .into(),
+            metrics,
+        ),
+        field(
+            format!(
+                "Latest wake-up: {}",
+                calendar::time_format::hour(settings.latest_wakeup_hour(), time_format)
+            ),
+            crate::ui::controls::slider(4..=14, settings.latest_wakeup_hour(), |v0| {
+                Message::Settings(SettingsMessage::LatestWakeupChanged(v0))
+            })
+            .into(),
+            metrics,
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .into()
+}
+
 fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = &state.config.calendar;
     let connected = state.calendar.is_signed_in();
@@ -839,45 +875,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             settings.day_start_hour(),
             |v0| Message::Settings(SettingsMessage::CalendarDayEndChanged(v0)),
         )
-        .into(),
-        metrics,
-    ));
-
-    section = section.push(field(
-        format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
-        crate::ui::controls::slider(6..=12, settings.sleep_goal_hours(), |v0| {
-            Message::Settings(SettingsMessage::SleepGoalChanged(v0))
-        })
-        .into(),
-        metrics,
-    ));
-
-    section = section.push(field(
-        format!(
-            "Sleep day starts at {}",
-            calendar::time_format::hour(
-                settings.sleep_day_start_hour(),
-                state.config.appearance.time_format
-            )
-        ),
-        crate::ui::controls::slider(0..=6, settings.sleep_day_start_hour(), |v0| {
-            Message::Settings(SettingsMessage::SleepDayStartChanged(v0))
-        })
-        .into(),
-        metrics,
-    ));
-
-    section = section.push(field(
-        format!(
-            "Latest wake-up: {}",
-            calendar::time_format::hour(
-                settings.latest_wakeup_hour(),
-                state.config.appearance.time_format
-            )
-        ),
-        crate::ui::controls::slider(4..=14, settings.latest_wakeup_hour(), |v0| {
-            Message::Settings(SettingsMessage::LatestWakeupChanged(v0))
-        })
         .into(),
         metrics,
     ));
@@ -1224,6 +1221,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sleep_settings_live_in_their_own_section() {
+        use iced_test::{Simulator, core::Settings};
+
+        let state = State::blank();
+        let size = iced::Size::new(420.0, 1200.0);
+        let metrics = Metrics::of(size);
+        for label in [
+            "Sleep goal: 8 hours",
+            "Sleep day starts at 00:00",
+            "Latest wake-up: 08:00",
+        ] {
+            let mut ui = Simulator::with_size(Settings::default(), size, sleep(&state, &metrics));
+            assert!(ui.find(label).is_ok(), "missing {label}");
+        }
+
+        let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
+        assert!(ui.find("Sleep goal: 8 hours").is_err());
+    }
+
+    #[test]
     fn week_day_choices_show_the_start_day_and_switch_in_a_narrow_panel() {
         use iced_test::{Simulator, core::Settings};
 
@@ -1287,6 +1304,36 @@ mod tests {
         let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
         assert!(ui.find("Left margin (px, 0–100)").is_ok());
         assert!(ui.find("Right margin (px, 0–100)").is_ok());
+    }
+
+    #[test]
+    fn dock_hour_lines_and_overlay_widths_live_in_their_sections() {
+        use crate::app;
+        use iced_test::{Simulator, core::Settings};
+
+        let mut state = State::blank();
+        let size = iced::Size::new(420.0, 800.0);
+        let metrics = Metrics::of(size);
+
+        let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
+        ui.click(iced::widget::Id::from("dock-hour-lines")).unwrap();
+        for message in ui.into_messages() {
+            let _ = app::update(&mut state, message);
+        }
+        assert!(!state.config.views.dock_hour_lines);
+
+        let mut ui = Simulator::with_size(Settings::default(), size, windowing(&state, &metrics));
+        assert!(ui.find(iced::widget::Id::from("dock-hour-lines")).is_err());
+
+        let mut ui = Simulator::with_size(Settings::default(), size, overlays(&state, &metrics));
+        for label in [
+            "Event/Habit/Task overlay",
+            "Event/Habit/Task details width (px)",
+            "Time block overlay",
+            "Time block panel width (px)",
+        ] {
+            assert!(ui.find(label).is_ok(), "missing {label}");
+        }
     }
 
     #[test]

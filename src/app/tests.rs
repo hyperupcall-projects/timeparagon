@@ -1785,3 +1785,29 @@ fn choosing_habit_opens_the_shared_details_editor() {
     assert_eq!(habit.rule.repeat, crate::habits::RepeatMode::Weekly);
     assert!(habit.rule.weekdays[2], "Wednesday is preselected");
 }
+
+#[test]
+fn the_system_themes_follow_the_system_tone() {
+    use iced::theme::Mode;
+
+    let mut state = State::blank();
+    let id = window::Id::unique();
+
+    state.config.appearance.theme = crate::theme::SYSTEM.into();
+    assert!(active_theme(&state, id).is_none());
+
+    state.config.appearance.theme = crate::theme::SYSTEM_HIGH_CONTRAST.into();
+    state.system_theme = Mode::Dark;
+    assert_eq!(
+        active_theme(&state, id).unwrap().to_string(),
+        "Dark high contrast"
+    );
+    state.system_theme = Mode::Light;
+    assert_eq!(
+        active_theme(&state, id).unwrap().to_string(),
+        "Light high contrast"
+    );
+
+    state.config.appearance.theme = "Dark".into();
+    assert_eq!(active_theme(&state, id).unwrap().to_string(), "Dark");
+}

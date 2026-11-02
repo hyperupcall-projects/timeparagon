@@ -221,7 +221,9 @@ fn the_compact_theme_picker_cycles_on_press() -> Result<(), Error> {
         ("Light", "Light", "Light high contrast"),
         ("Light high contrast", "Light high contrast", "Dark"),
         ("Dark", "Dark", "Dark high contrast"),
-        ("Dark high contrast", "Dark high contrast", "Light"),
+        ("Dark high contrast", "Dark high contrast", "System"),
+        ("System", "System", "System high contrast"),
+        ("System high contrast", "System high contrast", "Light"),
         ("Sakura", "Light", "Light high contrast"),
     ] {
         let mut state = state();
