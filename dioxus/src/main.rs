@@ -151,6 +151,7 @@ fn App() -> Element {
     let mut settings_secret = use_signal(String::new);
     let mut settings_error = use_signal(|| None::<String>);
     let mut show_calendars = use_signal(|| false);
+    let mut show_habits = use_signal(|| false);
     let mut calendars_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
@@ -232,7 +233,11 @@ fn App() -> Element {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             // Rolling over would take the day out from under an open editor.
-            if follow_today() && editing.peek().is_none() && !*block_writing.peek() {
+            if follow_today()
+                && editing.peek().is_none()
+                && !*show_habits.peek()
+                && !*block_writing.peek()
+            {
                 let today = day::today(&config.peek().calendar);
                 if today != current_day() {
                     current_day.set(today);
@@ -376,6 +381,14 @@ fn App() -> Element {
                         show_calendars.set(true);
                     },
                     "☰"
+                }
+                button {
+                    class: "btn icon",
+                    title: "Habits",
+                    aria_label: "Habits",
+                    disabled: model.is_none(),
+                    onclick: move |_| show_habits.set(true),
+                    "↻"
                 }
                 button {
                     class: "btn icon",
@@ -616,6 +629,20 @@ fn App() -> Element {
 
     // Keyed by what was opened: a task's id can change while it is being edited
     // (moving lists renames it), and that must not reset the sheet.
+    let habits_sheet = edit_context
+        .clone()
+        .filter(|_| show_habits())
+        .map(|context| {
+            rsx! {
+                editor::HabitsSheet {
+                    context,
+                    revision,
+                    on_open: move |habit| editing.set(Some(habit)),
+                    on_close: move |()| show_habits.set(false),
+                }
+            }
+        });
+
     let edit_sheet = editing().zip(edit_context).map(|(event, context)| {
         rsx! {
             editor::Editor {
@@ -813,6 +840,7 @@ fn App() -> Element {
             {notice}
             {body}
             {modal}
+            {habits_sheet}
             {edit_sheet}
             {settings_modal}
             {calendars_modal}

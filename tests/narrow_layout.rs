@@ -1268,19 +1268,33 @@ fn timeblocking_state() -> State {
 }
 
 #[test]
-fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> Result<(), Error> {
+fn a_plain_click_on_a_time_block_opens_the_event_pane_not_the_panel() -> Result<(), Error> {
     let mut state = timeblocking_state();
     let _ = app::update(
         &mut state,
         Message::Event(EventMessage::EventOpened("standup".into())),
+    );
+    assert_eq!(state.calendar.open_event.as_deref(), Some("standup"));
+    assert!(state.timeblocking.block.is_none());
+    let mut ui = render(&state, Size::new(660.0, 720.0));
+    assert!(ui.find("Save current event").is_ok());
+    assert!(ui.find("Planned Tasks").is_err());
+    Ok(())
+}
+
+#[test]
+fn planning_a_time_block_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> Result<(), Error>
+{
+    let mut state = timeblocking_state();
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
     assert!(state.floating_editors());
     assert!(state.calendar.open_event.is_none());
     let mut ui = render(&state, Size::new(660.0, 720.0));
     for label in [
-        "Save current event",
-        "Start Time",
         "Delete",
         "Close",
         "Planned Tasks",
@@ -1292,6 +1306,8 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     ] {
         assert!(ui.find(label).is_ok(), "missing {label}");
     }
+    // The block's own fields are edited in the event pane, not in this panel.
+    assert!(ui.find("Save current event").is_err());
     assert!(ui.find("Show Event Details").is_err());
     assert!(ui.find("Edit time block").is_err());
     assert!(ui.find("90m planned / 60m available").is_err());
@@ -1316,7 +1332,7 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     let mut state = timeblocking_state();
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let _ = app::update(
         &mut state,
@@ -1332,7 +1348,7 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
     let mut state = timeblocking_state();
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
 
     for width in [500.0, 660.0] {
@@ -1378,12 +1394,12 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
 }
 
 #[test]
-fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error> {
+fn event_details_sit_to_the_right_of_the_time_block_panel() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let _ = app::update(
         &mut state,
@@ -1393,12 +1409,12 @@ fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error
     assert!(state.calendar.open_event.is_some());
 
     let mut ui = render(&state, Size::new(400.0 + 360.0, 900.0));
-    let block = ui.find("Save current event")?.bounds();
+    let block = ui.find("Planned Tasks")?.bounds();
     let details = ui.find("Complete task")?.bounds();
 
     assert!(
         block.x < details.x,
-        "the editor should be left of the details: {block:?} {details:?}"
+        "the panel should be left of the details: {block:?} {details:?}"
     );
 
     Ok(())
@@ -1412,7 +1428,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
     let metrics = timeslay::ui::layout::Metrics::of(Size::new(400.0, 1200.0));
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let original = state.calendar.event(id).unwrap().clone();
     for (ignore, expected) in [
@@ -1736,7 +1752,7 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
     let mut state = timeblocking_state();
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let _ = app::update(
         &mut state,
@@ -1787,7 +1803,7 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
     let mut state = timeblocking_state();
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let _ = app::update(
         &mut state,
@@ -1859,7 +1875,7 @@ fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<()
     state.calendar.add_event(task);
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let _ = app::update(
         &mut state,
@@ -1926,7 +1942,7 @@ fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<()
     let _ = app::update(&mut state, Message::TimeBlocking(Action::Close));
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     assert!(!state.timeblocking.available_planned);
     assert!(!state.timeblocking.available_all);
@@ -1958,7 +1974,7 @@ fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error
     task.end = task.start + chrono::Duration::days(1);
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
 
     let size = Size::new(400.0, 1000.0);

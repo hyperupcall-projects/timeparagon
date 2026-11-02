@@ -60,6 +60,15 @@ fn actions(task: Task<Message>) -> Vec<Geometry> {
     })
 }
 
+/// The message that opens `event`'s editor: a block is planned, anything else opened.
+fn opening(event: &str) -> Message {
+    if event == "standup" {
+        Message::TimeBlocking(timeblocking::Action::Plan(event.into()))
+    } else {
+        Message::Event(EventMessage::EventOpened(event.into()))
+    }
+}
+
 #[test]
 fn every_details_destination_uses_an_independent_editor() {
     for sidebar in [false, true] {
@@ -75,10 +84,7 @@ fn every_details_destination_uses_an_independent_editor() {
                 let mut state = state(sidebar, screen);
                 let original = state.main_size;
                 let main = state.main_window.unwrap();
-                let result = actions(app::update(
-                    &mut state,
-                    Message::Event(EventMessage::EventOpened(event.into())),
-                ));
+                let result = actions(app::update(&mut state, opening(event)));
                 let editor = state.editor_window.unwrap();
                 let width = if event == "standup" {
                     state.config.views.time_block_width()
@@ -91,13 +97,7 @@ fn every_details_destination_uses_an_independent_editor() {
                 assert_eq!(state.main_size, original);
                 assert_eq!(state.main_window, Some(main));
                 // Switching among same-kind items reuses the editor surface.
-                assert!(
-                    actions(app::update(
-                        &mut state,
-                        Message::Event(EventMessage::EventOpened(event.into()))
-                    ))
-                    .is_empty()
-                );
+                assert!(actions(app::update(&mut state, opening(event))).is_empty());
                 assert_eq!(state.editor_window, Some(editor));
             }
         }
@@ -110,7 +110,7 @@ fn closing_a_block_preserves_details_and_resizes_only_the_editor() {
         let mut state = state(sidebar, Screen::Calendar);
         let _ = actions(app::update(
             &mut state,
-            Message::Event(EventMessage::EventOpened("standup".into())),
+            Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
         ));
         let editor = state.editor_window.unwrap();
         let _ = actions(app::update(
@@ -141,7 +141,7 @@ fn deleting_an_open_block_closes_its_editor_only_on_success() {
         let mut state = state(sidebar, Screen::Calendar);
         let _ = actions(app::update(
             &mut state,
-            Message::Event(EventMessage::EventOpened("standup".into())),
+            Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
         ));
         let editor = state.editor_window.unwrap();
         assert!(
@@ -172,7 +172,7 @@ fn configured_editor_widths_apply_live_and_survive_restart() {
         let mut state = state(sidebar, Screen::Inbox);
         let _ = actions(app::update(
             &mut state,
-            Message::Event(EventMessage::EventOpened("standup".into())),
+            Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
         ));
         let editor = state.editor_window.unwrap();
         let original = state.main_size;
