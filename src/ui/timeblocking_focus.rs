@@ -92,6 +92,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             body = body.push(text(error).size(12).style(text::danger));
         }
         body = body.push(task_list(state, block, metrics, narrow, short));
+        body = body.push(distractions(state, block));
         let block_id = block.id.clone();
         let schedule = responsive(move |size| {
             let block = state
@@ -490,6 +491,89 @@ fn title_text<'a>(
             })
             .into()
     }
+}
+
+/// What the block has lost to distractions, and a quick way to add to it.
+fn distractions<'a>(state: &'a State, block: &'a Event) -> Element<'a, Message> {
+    let (count, minutes) = state.config.task_work.distracted(&tb::block_key(block));
+    let summary = match count {
+        0 => "No distractions".to_owned(),
+        1 => format!("Distracted {minutes}m · once"),
+        count => format!("Distracted {minutes}m · {count} times"),
+    };
+    let mut line = row![text(summary).size(13).style(text::secondary).width(Fill)]
+        .spacing(4)
+        .align_y(iced::Center);
+    if count > 0 {
+        line = line.push(
+            button(text("Undo").size(13))
+                .on_press(msg(Action::UndoDistraction))
+                .style(crate::ui::controls::ghost),
+        );
+    }
+    container(
+        line.push(
+            button(text("I got distracted").size(13))
+                .on_press(msg(Action::OpenDistraction))
+                .style(crate::ui::controls::secondary),
+        ),
+    )
+    .padding([6, 10])
+    .width(Fill)
+    .style(crate::ui::controls::card_surface)
+    .into()
+}
+
+/// Ask how long a distraction lasted. One press records it and closes.
+pub fn distraction_overlay<'a>(metrics: &Metrics) -> Element<'a, Message> {
+    let mut choices = row![].spacing(6);
+    for minutes in task_work::DISTRACTION_MINUTES {
+        choices = choices.push(
+            button(text(format!("+{minutes}m")).size(13))
+                .on_press(msg(Action::AddDistraction(minutes)))
+                .style(crate::ui::controls::primary),
+        );
+    }
+    let card = container(
+        column![
+            row![
+                text("How long were you distracted?").size(16).width(Fill),
+                button(text("Cancel").size(13))
+                    .on_press(msg(Action::CloseDistraction))
+                    .style(crate::ui::controls::ghost),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            choices.wrap().vertical_spacing(6),
+        ]
+        .spacing(10),
+    )
+    .padding(16)
+    .width(Fill)
+    .max_width(420)
+    .max_height((metrics.size.height - 32.0).max(80.0))
+    .style(crate::ui::controls::surface);
+    let backdrop =
+        mouse_area(
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|_| container::Style {
+                    background: Some(crate::ui::controls::SCRIM.into()),
+                    ..Default::default()
+                }),
+        )
+        .on_press(msg(Action::CloseDistraction))
+        .on_scroll(|_| Message::Ignored);
+    let foreground = container(
+        mouse_area(card)
+            .on_press(Message::Ignored)
+            .on_scroll(|_| Message::Ignored),
+    )
+    .padding(16)
+    .center_x(Fill)
+    .center_y(Fill);
+    stack![backdrop, foreground].into()
 }
 
 /// Edit the exact start and end of a work session. A blank end keeps the

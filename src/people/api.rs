@@ -1,5 +1,6 @@
 //! The Google People API: contacts, their labels, and Workspace directories.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::calendar::api;
@@ -23,7 +24,7 @@ const DIRECTORY_SOURCES: &str =
 const DIRECTORY_RESULTS: u32 = 50;
 
 /// A label on an account's contacts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Group {
     pub resource: String,
     pub name: String,

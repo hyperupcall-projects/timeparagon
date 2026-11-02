@@ -102,6 +102,8 @@ pub struct Workspace {
     pub session_start: String,
     pub session_end: String,
     pub session_error: Option<String>,
+    /// The choice of how long a distraction lasted is open.
+    pub distraction_open: bool,
     pub revision: u64,
     pub date: String,
     pub deadline: String,
@@ -184,6 +186,13 @@ pub enum Action {
     SaveSession,
     CloseSession,
     DeleteSession,
+    /// Ask how long the distraction from the focused block lasted.
+    OpenDistraction,
+    CloseDistraction,
+    /// Record this many distracted minutes against the focused block.
+    AddDistraction(u32),
+    /// Take back the focused block's latest distraction.
+    UndoDistraction,
     HideOverdue(bool),
     Deadline(String),
     StartTime(String),
@@ -383,6 +392,7 @@ pub fn close(state: &mut State) -> Task<Message> {
     }
     state.timeblocking.block = None;
     state.timeblocking.focus = None;
+    state.timeblocking.distraction_open = false;
     state.timeblocking.session_edit = None;
     state.timeblocking.session_error = None;
     state.timeblocking.dragging = None;
@@ -410,11 +420,17 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
         state.timeblocking.available_planned = false;
     }
     state.timeblocking.focus = None;
+    state.timeblocking.distraction_open = false;
     // The panel edits the block in place, so it always opens with a live
     // draft of the block's own fields.
     state.calendar.edit_draft = event(state, &id).map(crate::calendar::EditDraft::from_event);
     state.timeblocking.block = Some(id);
     Task::none()
+}
+
+fn focused_block_key(state: &State) -> Option<String> {
+    let id = state.timeblocking.focus.as_deref()?;
+    state.calendar.event(id).map(block_key)
 }
 
 fn advance_pomodoro(state: &mut State, now: chrono::DateTime<chrono::Utc>) -> bool {
@@ -537,6 +553,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::CloseView => {
             state.timeblocking.focus = None;
+            state.timeblocking.distraction_open = false;
             return Task::none();
         }
         Action::WorkTick => {
@@ -714,6 +731,37 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 return crate::app::queue_save(state);
             }
             return Task::none();
+        }
+        Action::OpenDistraction => {
+            state.timeblocking.distraction_open = state.timeblocking.focus.is_some();
+            return Task::none();
+        }
+        Action::CloseDistraction => {
+            state.timeblocking.distraction_open = false;
+            return Task::none();
+        }
+        Action::AddDistraction(minutes) => {
+            state.timeblocking.distraction_open = false;
+            let Some(key) = focused_block_key(state) else {
+                return Task::none();
+            };
+            state
+                .config
+                .task_work
+                .distractions
+                .push(crate::task_work::Distraction {
+                    block_key: key,
+                    minutes,
+                    recorded_at: crate::clock::utc_now(),
+                });
+            return crate::app::queue_save(state);
+        }
+        Action::UndoDistraction => {
+            let Some(key) = focused_block_key(state) else {
+                return Task::none();
+            };
+            state.config.task_work.undo_distraction(&key);
+            return crate::app::queue_save(state);
         }
         Action::StartWork(id) => {
             let now = crate::clock::utc_now();
@@ -3101,6 +3149,40 @@ mod tests {
         });
         state.timeblocking.focus = Some("standup".into());
         state
+    }
+
+    #[test]
+    fn a_distraction_is_recorded_against_the_focused_block_and_can_be_undone() {
+        let mut state = estimate_state();
+        let key = block_key(state.calendar.event("standup").unwrap());
+        let _ = update(&mut state, Action::OpenDistraction);
+        assert!(state.timeblocking.distraction_open);
+        let _ = update(&mut state, Action::CloseDistraction);
+        assert!(!state.timeblocking.distraction_open);
+        assert!(state.config.task_work.distractions.is_empty());
+
+        for minutes in [5, 10] {
+            let _ = update(&mut state, Action::OpenDistraction);
+            let _ = update(&mut state, Action::AddDistraction(minutes));
+            assert!(!state.timeblocking.distraction_open);
+        }
+        assert_eq!(state.config.task_work.distracted(&key), (2, 15));
+
+        let _ = update(&mut state, Action::UndoDistraction);
+        assert_eq!(state.config.task_work.distracted(&key), (1, 5));
+    }
+
+    #[test]
+    fn leaving_the_block_closes_the_distraction_choice() {
+        let mut state = estimate_state();
+        let _ = update(&mut state, Action::OpenDistraction);
+        let _ = update(&mut state, Action::CloseView);
+        assert!(!state.timeblocking.distraction_open);
+        // Without a focused block there is nothing to ask about or record against.
+        let _ = update(&mut state, Action::OpenDistraction);
+        assert!(!state.timeblocking.distraction_open);
+        let _ = update(&mut state, Action::AddDistraction(5));
+        assert!(state.config.task_work.distractions.is_empty());
     }
 
     #[test]

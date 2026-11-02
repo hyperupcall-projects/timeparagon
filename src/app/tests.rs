@@ -1849,6 +1849,23 @@ fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
 }
 
 #[test]
+fn escape_closes_the_distraction_choice_before_the_time_block_view() {
+    let mut state = State::blank();
+    state.timeblocking.focus = Some("standup".into());
+    state.timeblocking.distraction_open = true;
+    assert!(matches!(
+        key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Escape),
+            keyboard::Modifiers::default()
+        ),
+        Some(Message::TimeBlocking(
+            crate::timeblocking::Action::CloseDistraction
+        ))
+    ));
+}
+
+#[test]
 fn dragging_a_task_can_be_cancelled_with_escape() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());

@@ -36,7 +36,6 @@ There's week and month views, just like any other calendar app:
 	- Events
 		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
 		- Integrates with meeting software like Zoom and Google Meet.
-			- See people/contact info (TODO).
 		- Integrates with guest/event/RSVP going/not going feature (TODO)
 		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP).
 	- Time blocks
@@ -44,7 +43,7 @@ There's week and month views, just like any other calendar app:
 		- Assign tasks to time blocks.
 		- Brain dump.
 		- Pomodoro timer.
-		- Record distractions (TODO).
+		- Record distractions.
 		- Reschedule in bulk (TODO)
 	- Habits
 		- These are standard calendar events that are colored differently.
@@ -89,7 +88,7 @@ There's week and month views, just like any other calendar app:
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - People.
-	- Browse, search, and edit the contacts of every signed-in Google account, and search Google Workspace directories.
+	- Browse and edit contacts from Google accounts and workspace directories.
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.

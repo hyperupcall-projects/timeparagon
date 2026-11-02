@@ -70,6 +70,7 @@ fn book_state() -> State {
         )
         .unwrap(),
     ];
+    book.directory_seen = book.directory.clone();
     state.people.books.push(book);
     state
 }
@@ -480,4 +481,247 @@ fn choosing_the_contact_already_open_keeps_its_edits() {
     let draft = state.people.draft.as_ref().unwrap();
     assert_eq!(draft.pending, None);
     assert_eq!(draft.given, "Augusta");
+}
+
+/// A state whose cache is a real file in a temporary directory.
+fn cached_state() -> (State, tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("people/contacts.json");
+    let mut state = book_state();
+    state.people.cache_path = Some(path.clone());
+    (state, dir, path)
+}
+
+/// Writes happen on a scratch thread, so wait for the file to say what's wanted.
+fn wait_for_cache(path: &std::path::Path, wanted: impl Fn(&[Book]) -> bool) -> Vec<Book> {
+    for _ in 0..500 {
+        let books = cache::load(path);
+        if wanted(&books) {
+            return books;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the cache never reached the expected state");
+}
+
+fn account() -> String {
+    "me@example.org".to_owned()
+}
+
+#[test]
+fn every_contact_fetched_is_cached_and_read_back() {
+    let (mut state, _dir, path) = cached_state();
+    state.people.generation = 1;
+    let groups = vec![group("friends1", "Book club")];
+    let other = json!({ "resourceName": "people/c9", "names": [{"displayName": "Alan Turing"}] });
+    let _ = update(
+        &mut state,
+        Action::Loaded(1, account(), Ok((vec![person(), other], groups))),
+    );
+
+    let books = wait_for_cache(&path, |books| {
+        books.first().is_some_and(|b| b.contacts.len() == 2)
+    });
+    assert_eq!(books[0].account(), "me@example.org");
+    assert_eq!(books[0].contacts[0].name, "Ada Lovelace");
+    assert_eq!(books[0].contacts[0].labels, ["Book club"]);
+    assert_eq!(books[0].contacts[0].person, person());
+    assert_eq!(books[0].contacts[1].name, "Alan Turing");
+    assert!(!books[0].loading);
+}
+
+#[test]
+fn the_cache_is_only_readable_by_this_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let (mut state, _dir, path) = cached_state();
+    state.people.generation = 1;
+    let _ = update(
+        &mut state,
+        Action::Loaded(1, account(), Ok((vec![person()], vec![]))),
+    );
+    wait_for_cache(&path, |books| !books.is_empty());
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0);
+}
+
+#[test]
+fn an_edit_is_cached_as_google_returned_it_not_as_it_was_typed() {
+    let (mut state, _dir, path) = cached_state();
+    let _ = update(&mut state, Action::Open(target("people/c1", false)));
+    let _ = update(
+        &mut state,
+        Action::FieldEdited(Field::GivenName, "augusta".to_owned()),
+    );
+    // Google tidies what it is given, and issues a new etag.
+    let mut returned = person();
+    returned["names"][0]["displayName"] = json!("Augusta Lovelace");
+    returned["names"][0]["givenName"] = json!("Augusta");
+    returned["etag"] = json!("newer");
+    let _ = update(&mut state, Action::Saved(account(), Ok(returned.clone())));
+
+    let books = wait_for_cache(&path, |books| {
+        books
+            .first()
+            .is_some_and(|b| b.contacts[0].name == "Augusta Lovelace")
+    });
+    assert_eq!(books[0].contacts[0].person, returned);
+    assert_eq!(state.people.draft.as_ref().unwrap().given, "Augusta");
+}
+
+#[test]
+fn a_failed_edit_leaves_the_cache_alone() {
+    let (mut state, _dir, path) = cached_state();
+    let _ = update(&mut state, Action::Open(target("people/c1", false)));
+    let _ = update(
+        &mut state,
+        Action::FieldEdited(Field::GivenName, "Augusta".to_owned()),
+    );
+    let _ = update(
+        &mut state,
+        Action::Saved(account(), Err(Problem::sign_in("expired"))),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_failed_refresh_keeps_the_cached_contacts_on_show() {
+    let (mut state, _dir, path) = cached_state();
+    state.people.generation = 1;
+    let _ = update(
+        &mut state,
+        Action::Loaded(1, account(), Err(Problem::sign_in("expired"))),
+    );
+    assert_eq!(state.people.books[0].contacts.len(), 1);
+    assert!(state.people.books[0].problem.is_some());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!path.exists());
+}
+
+#[test]
+fn directory_people_are_cached_and_found_again_without_google() {
+    let (mut state, _dir, path) = cached_state();
+    state.people.search_generation = 1;
+    let hedy = json!({ "resourceName": "people/d2", "names": [{"displayName": "Hedy Lamarr"}] });
+    let _ = update(
+        &mut state,
+        Action::DirectoryFound(1, account(), Ok(api::Directory::Found(vec![hedy]))),
+    );
+    // Google's answer is what is shown, and the earlier result is still known.
+    assert_eq!(state.people.books[0].directory.len(), 1);
+    assert_eq!(state.people.books[0].directory[0].name, "Hedy Lamarr");
+
+    let mut books = wait_for_cache(&path, |books| {
+        books.first().is_some_and(|b| b.directory_seen.len() == 2)
+    });
+    books[0].show_seen("grace");
+    assert_eq!(books[0].directory[0].name, "Grace Hopper");
+
+    let _ = update(&mut state, Action::QueryChanged("grace".to_owned()));
+    assert_eq!(state.people.books[0].directory[0].name, "Grace Hopper");
+}
+
+#[test]
+fn signing_an_account_out_removes_it_from_the_cache() {
+    let (mut state, _dir, path) = cached_state();
+    state
+        .people
+        .books
+        .push(Book::for_tests(Login::primary("main@example.org")));
+    let _ = update(&mut state, Action::Open(target("people/c1", false)));
+
+    let _ = forget_account(&mut state, "ME@example.org");
+    assert!(state.people.draft.is_none());
+    let books = wait_for_cache(&path, |books| books.len() == 1);
+    assert_eq!(books[0].account(), "main@example.org");
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("Lovelace"));
+
+    let _ = forget_primary(&mut state);
+    wait_for_cache(&path, |books| books.is_empty());
+    assert!(path.exists());
+}
+
+#[test]
+fn an_account_no_longer_signed_in_leaves_the_cache_at_the_next_refresh() {
+    let (mut state, _dir, path) = cached_state();
+    state.people.generation = 1;
+    let _ = update(&mut state, Action::Listed(1, Ok(vec![])));
+    assert!(state.people.books.is_empty());
+    wait_for_cache(&path, |books| books.is_empty() && path.exists());
+}
+
+#[test]
+fn offline_the_calendar_account_keeps_its_cached_contacts() {
+    let mut state = State::blank();
+    let mut book = Book::for_tests(Login::primary("main@example.org"));
+    book.contacts = vec![contact()];
+    state.people.books.push(book);
+    state.people.generation = 1;
+    // Its address can't be looked up, so it arrives under the generic name.
+    let unidentified = Login::primary("Google Calendar account");
+    assert!(unidentified.is_unidentified());
+    let _ = update(&mut state, Action::Listed(1, Ok(vec![unidentified])));
+    assert_eq!(state.people.books[0].account(), "main@example.org");
+    assert_eq!(state.people.books[0].contacts.len(), 1);
+}
+
+#[test]
+fn a_different_calendar_account_does_not_inherit_the_cached_contacts() {
+    let mut state = State::blank();
+    let mut book = Book::for_tests(Login::primary("old@example.org"));
+    book.contacts = vec![contact()];
+    state.people.books.push(book);
+    state.people.generation = 1;
+    let _ = update(
+        &mut state,
+        Action::Listed(1, Ok(vec![Login::primary("new@example.org")])),
+    );
+    assert_eq!(state.people.books[0].account(), "new@example.org");
+    assert!(state.people.books[0].contacts.is_empty());
+}
+
+#[test]
+fn not_learning_who_is_signed_in_drops_nobody() {
+    let (mut state, _dir, _path) = cached_state();
+    state.people.generation = 1;
+    let _ = update(&mut state, Action::Listed(1, Err("worker died".to_owned())));
+    assert_eq!(state.people.books.len(), 1);
+    assert!(!state.people.listing);
+}
+
+#[test]
+fn the_newest_snapshot_wins_whatever_order_they_are_written_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("contacts.json");
+    let mut state = book_state();
+    let older = cache::snapshot(&state.people.books).unwrap();
+    state.people.books[0].contacts.clear();
+    let newer = cache::snapshot(&state.people.books).unwrap();
+    newer.write(&path).unwrap();
+    older.write(&path).unwrap();
+    assert!(cache::load(&path)[0].contacts.is_empty());
+}
+
+#[test]
+fn a_damaged_cache_is_the_same_as_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("contacts.json");
+    assert!(cache::load(&path).is_empty());
+    std::fs::write(&path, "not json").unwrap();
+    assert!(cache::load(&path).is_empty());
+}
+
+#[test]
+fn starting_up_shows_the_cached_contacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("contacts.json");
+    let state = book_state();
+    cache::snapshot(&state.people.books)
+        .unwrap()
+        .write(&path)
+        .unwrap();
+    let mut store = Store::default();
+    store.go_live(Some(path));
+    assert_eq!(store.books[0].contacts[0].name, "Ada Lovelace");
+    assert!(!store.books[0].loading);
 }

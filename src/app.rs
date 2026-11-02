@@ -1157,7 +1157,7 @@ fn boot_state() -> State {
     state.calendar.apply_task_colors(&state.config.calendar);
     state.calendar.cache_days_in(config::cache_days_dir());
     state.keep.cache_in(config::cache_keep_path());
-    state.people.go_live();
+    state.people.go_live(config::cache_people_path());
     state.travel.cache_in(config::cache_travel_path());
 
     state.alarms.keep_in(alarms::path());
@@ -1732,6 +1732,14 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         // steal a space while it is being written.
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::BrainDump(crate::brain_dump::Action::Close)),
+            _ => None,
+        };
+    }
+    if state.timeblocking.distraction_open {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::TimeBlocking(
+                crate::timeblocking::Action::CloseDistraction,
+            )),
             _ => None,
         };
     }
