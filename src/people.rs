@@ -9,8 +9,13 @@
 //! A contact keeps the JSON Google sent. An edit changes the fields it touched
 //! within that JSON and sends only those, so whatever this screen has no control
 //! for (a phonetic name, a structured address) comes through unharmed.
+//!
+//! Everything Google sends goes into [`cache`]. That includes its answer to an
+//! edit, which is the contact as Google now holds it: the list, the panel and
+//! the cache all take that rather than what was typed.
 
 pub mod api;
+mod cache;
 
 use iced::Task;
 use iced::widget::text_editor;
@@ -240,8 +245,11 @@ pub struct Book {
     pub groups: Vec<Group>,
     pub loading: bool,
     pub problem: Option<Problem>,
-    /// The latest directory results, in Google's order.
+    /// What the directory section shows, in Google's order once it has answered.
     pub directory: Vec<Contact>,
+    /// Everyone a directory search has ever returned. A new search looks here
+    /// first, so results appear at once and without a connection.
+    directory_seen: Vec<Contact>,
     pub searching: bool,
     pub directory_problem: Option<Problem>,
     /// Google said this account is not part of a Workspace domain.
@@ -257,6 +265,7 @@ impl Book {
             loading: true,
             problem: None,
             directory: Vec::new(),
+            directory_seen: Vec::new(),
             searching: false,
             directory_problem: None,
             no_directory: false,
@@ -285,6 +294,31 @@ impl Book {
 
     fn may_search(&self) -> bool {
         !self.no_directory && api::may_have_directory(self.account())
+    }
+
+    /// Shows what is already known of `query`, until Google answers.
+    fn show_seen(&mut self, query: &str) {
+        self.directory = self
+            .directory_seen
+            .iter()
+            .filter(|person| person.matches(query))
+            .cloned()
+            .collect();
+    }
+
+    /// Google's answer replaces what is shown, and adds to what is known.
+    fn show_found(&mut self, found: Vec<Contact>) {
+        for person in &found {
+            match self
+                .directory_seen
+                .iter_mut()
+                .find(|seen| seen.resource == person.resource)
+            {
+                Some(seen) => *seen = person.clone(),
+                None => self.directory_seen.push(person.clone()),
+            }
+        }
+        self.directory = found;
     }
 
     /// The contact already saved under one of `emails`, so a directory entry
@@ -652,8 +686,9 @@ fn membership(group: &str) -> Value {
 /// Everything the People screen holds.
 #[derive(Default)]
 pub struct Store {
-    /// Only real app startup reaches Google; test stores stay isolated.
+    /// Only real app startup reaches Google or the disk; test stores stay isolated.
     live: bool,
+    cache_path: Option<std::path::PathBuf>,
     pub books: Vec<Book>,
     /// Finding out which accounts are signed in.
     pub listing: bool,
@@ -668,8 +703,13 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn go_live(&mut self) {
+    /// Starts talking to Google, and picks up the contacts from the last run.
+    pub fn go_live(&mut self, cache_path: Option<std::path::PathBuf>) {
         self.live = true;
+        if let Some(path) = &cache_path {
+            self.books = cache::load(path);
+        }
+        self.cache_path = cache_path;
     }
 
     pub fn shown_books(&self) -> impl Iterator<Item = &Book> {
@@ -754,6 +794,52 @@ pub enum Action {
     Added(String, Result<Value, Problem>),
 }
 
+/// Writes the books to the cache on a scratch thread.
+fn persist(state: &State) -> Task<Message> {
+    let Some(path) = state.people.cache_path.clone() else {
+        return Task::none();
+    };
+    let snapshot = match cache::snapshot(&state.people.books) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            log::warn!("could not prepare the contacts cache: {error}");
+            return Task::none();
+        }
+    };
+    blocking::run(move || {
+        if let Err(error) = snapshot.write(&path) {
+            log::warn!("could not save the contacts cache: {error}");
+        }
+    })
+    .map(|()| Message::Ignored)
+}
+
+/// Removes the accounts `signed_out` picks, from the screen and from the disk.
+fn forget(state: &mut State, signed_out: impl Fn(&Login) -> bool) -> Task<Message> {
+    let people = &mut state.people;
+    let before = people.books.len();
+    people.books.retain(|book| !signed_out(&book.login));
+    if people.draft.as_ref().is_some_and(|d| signed_out(&d.login)) {
+        people.draft = None;
+    }
+    if people.books.len() == before {
+        return Task::none();
+    }
+    persist(state)
+}
+
+/// The calendar's sign-in has ended.
+pub fn forget_primary(state: &mut State) -> Task<Message> {
+    forget(state, Login::is_primary)
+}
+
+/// A connected account was removed.
+pub fn forget_account(state: &mut State, email: &str) -> Task<Message> {
+    forget(state, |login| {
+        !login.is_primary() && login.label.eq_ignore_ascii_case(email)
+    })
+}
+
 /// Reloads everything. Results of an earlier refresh still on their way are
 /// ignored when they arrive.
 pub fn refresh(state: &mut State) -> Task<Message> {
@@ -825,18 +911,26 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 return Task::none();
             }
             state.people.listing = false;
-            let logins = logins.unwrap_or_default();
+            // Not knowing who is signed in is no reason to drop anyone.
+            let Ok(logins) = logins else {
+                return Task::none();
+            };
             let mut tasks = Vec::new();
             let mut books = Vec::new();
             for login in logins {
+                // Offline, the calendar's account can't say what its address
+                // is. It is still the one that was cached under that address.
                 let mut book = state
                     .people
                     .books
                     .iter()
-                    .position(|book| book.login == login)
+                    .position(|book| {
+                        book.login == login || (login.is_unidentified() && book.login.is_primary())
+                    })
                     .map(|at| state.people.books.remove(at))
-                    .unwrap_or_else(|| Book::new(login.clone()));
+                    .unwrap_or_else(|| Book::new(login));
                 book.loading = true;
+                let login = book.login.clone();
                 let settings = state.config.calendar.clone();
                 let account = login.label.clone();
                 tasks.push(
@@ -846,7 +940,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 );
                 books.push(book);
             }
-            state.people.books = books;
+            // Whatever is left over is no longer signed in.
+            if !state.people.books.is_empty() {
+                state.people.books = books;
+                tasks.push(persist(state));
+            } else {
+                state.people.books = books;
+            }
             if let Some(account) = &state.people.account
                 && !state.people.books.iter().any(|b| b.account() == account)
             {
@@ -863,6 +963,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 return Task::none();
             };
             book.loading = false;
+            // A failure leaves the cached contacts on show, with the reason.
+            let fetched = result.is_ok();
             match result {
                 Ok((people, groups)) => {
                     book.contacts = parse_all(people, &groups);
@@ -889,7 +991,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if fresh.is_some() {
                 state.people.draft = fresh;
             }
-            Task::none()
+            if fetched {
+                persist(state)
+            } else {
+                Task::none()
+            }
         }
         Action::QueryChanged(query) => {
             let people = &mut state.people;
@@ -903,6 +1009,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     book.directory_problem = None;
                 }
                 return Task::none();
+            }
+            let query = people.query.trim().to_owned();
+            for book in people.books.iter_mut().filter(|book| book.may_search()) {
+                book.show_seen(&query);
             }
             if !people.live {
                 return Task::none();
@@ -928,14 +1038,18 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             book.searching = false;
             book.directory_problem = None;
             match result {
-                Ok(api::Directory::Found(people)) => book.directory = parse_all(people, &[]),
+                Ok(api::Directory::Found(people)) => book.show_found(parse_all(people, &[])),
                 Ok(api::Directory::None) => {
                     book.no_directory = true;
                     book.directory.clear();
+                    book.directory_seen.clear();
                 }
-                Err(problem) => book.directory_problem = Some(problem),
+                Err(problem) => {
+                    book.directory_problem = Some(problem);
+                    return Task::none();
+                }
             }
-            Task::none()
+            persist(state)
         }
         Action::AccountChosen(account) => {
             state.people.account = account;
@@ -1004,15 +1118,19 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         next.saved = true;
                         state.people.draft = Some(next);
                     }
+                    let saved = persist(state);
                     // A reload begun before this save would bring the old
                     // version back, so start it over.
                     if was_loading {
-                        return refresh(state);
+                        return Task::batch([saved, refresh(state)]);
                     }
+                    saved
                 }
-                Err(problem) => draft.problem = Some(problem),
+                Err(problem) => {
+                    draft.problem = Some(problem);
+                    Task::none()
+                }
             }
-            Task::none()
         }
         Action::AddToContacts => {
             let Some(draft) = &mut state.people.draft else {
@@ -1049,10 +1167,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         next.saved = true;
                         state.people.draft = Some(next);
                     }
+                    persist(state)
                 }
-                Err(problem) => draft.problem = Some(problem),
+                Err(problem) => {
+                    draft.problem = Some(problem);
+                    Task::none()
+                }
             }
-            Task::none()
         }
         Action::NewLabelSubmitted => new_label(state),
         Action::LabelCreated(account, result) => {
@@ -1078,6 +1199,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     draft.new_label.clear();
                     draft.labels.push(group.resource);
                 }
+                return persist(state);
             }
             Task::none()
         }

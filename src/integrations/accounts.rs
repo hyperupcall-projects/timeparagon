@@ -49,15 +49,16 @@ struct File {
     accounts: Vec<Account>,
 }
 
-/// An account a link can be tried against.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An account a link can be tried against. Holds no credentials, only which
+/// account to find them for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Login {
     /// What to call it in a message: an address, or the calendar account.
     pub label: String,
     which: Which,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum Which {
     /// The account the calendar is signed in with.
     Primary,
@@ -70,6 +71,19 @@ impl Login {
     /// different place than a connected account.
     pub fn is_primary(&self) -> bool {
         self.which == Which::Primary
+    }
+
+    /// The calendar's sign-in, when its address could not be looked up.
+    pub fn is_unidentified(&self) -> bool {
+        self.is_primary() && self.label == PRIMARY_LABEL
+    }
+
+    #[cfg(test)]
+    pub fn primary(label: &str) -> Self {
+        Self {
+            label: label.to_owned(),
+            which: Which::Primary,
+        }
     }
 
     #[cfg(test)]
@@ -376,7 +390,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 .err()
                 .map(|error| format!("could not remove {email}: {error}"));
             state.accounts.emails = emails();
-            Task::none()
+            if state.accounts.error.is_some() {
+                return Task::none();
+            }
+            crate::people::forget_account(state, &email)
         }
     }
 }

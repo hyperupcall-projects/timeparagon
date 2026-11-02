@@ -2862,3 +2862,46 @@ fn dropping_in_the_current_backlog_section_is_a_noop() {
     assert!(state.timeblocking.busy.is_empty());
     assert_eq!(state.calendar.event("task:backlog"), Some(&before));
 }
+
+#[test]
+fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), Error> {
+    use timeslay::task_work::DISTRACTION_MINUTES;
+    use timeslay::timeblocking::Action;
+    for width in [200.0, 320.0, 480.0, 900.0] {
+        let size = Size::new(width, 900.0);
+        let mut state = focus_state();
+        let mut ui = render(&state, size);
+        assert!(ui.find("No distractions").is_ok());
+        let edge = ui.find("I got distracted")?.bounds();
+        assert!(edge.x + edge.width <= width, "button cut off at {width}");
+        let _ = ui.click("I got distracted")?;
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::TimeBlocking(Action::OpenDistraction))),
+            "{width}"
+        );
+        let _ = app::update(&mut state, Message::TimeBlocking(Action::OpenDistraction));
+
+        let mut ui = render(&state, size);
+        for minutes in DISTRACTION_MINUTES {
+            let choice = ui.find(format!("+{minutes}m").as_str())?.bounds();
+            assert!(choice.x + choice.width <= width, "+{minutes}m at {width}");
+        }
+        let _ = ui.click("+5m")?;
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::TimeBlocking(Action::AddDistraction(5)))),
+            "{width}"
+        );
+        let _ = app::update(&mut state, Message::TimeBlocking(Action::AddDistraction(5)));
+
+        let mut ui = render(&state, size);
+        assert!(ui.find("+5m").is_err(), "the choice closes at {width}");
+        assert!(ui.find("Distracted 5m · once").is_ok(), "{width}");
+    }
+    Ok(())
+}

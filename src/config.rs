@@ -1046,6 +1046,16 @@ pub fn cache_keep_path() -> Option<PathBuf> {
     Some(project_dirs()?.cache_dir().join("keep").join("notes.json"))
 }
 
+/// Every contact fetched from Google, and the directory entries seen in searches.
+pub fn cache_people_path() -> Option<PathBuf> {
+    Some(
+        project_dirs()?
+            .cache_dir()
+            .join("people")
+            .join("contacts.json"),
+    )
+}
+
 /// Travel times already worked out, so a restart does not ask Mapbox again.
 pub fn cache_travel_path() -> Option<PathBuf> {
     Some(

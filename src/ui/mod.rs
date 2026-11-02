@@ -147,6 +147,9 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
     if state.timeblocking.session_edit.is_some() {
         layers.push(timeblocking::session_editor(state, metrics));
     }
+    if state.timeblocking.distraction_open {
+        layers.push(timeblocking::distraction_overlay(metrics));
+    }
     if state.brain_dump.open.is_some() {
         layers.push(brain_dump::editor_overlay(state, metrics));
     }
