@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
@@ -27,13 +26,11 @@ private const val END_PADDING_DP = 8f
 private const val ITEM_GAP_DP = 2f
 private const val RADIUS_DP = 6f
 
+/** The shortest a travel box is drawn, so its words fit in it. */
+private const val TRAVEL_MIN_DP = 16f
+
 /** Below this a column cannot show a useful word, so the rest collapse into "+N". */
 private const val MIN_COLUMN_DP = 58f
-
-/** A block narrower than this stacks its tasks under the title. */
-private const val SPLIT_BLOCK_DP = 150f
-
-private const val TASK_LINE_DP = 18f
 
 class WidgetColors(
     val surface: Int,
@@ -87,9 +84,6 @@ class WidgetColors(
     }
 }
 
-/** A row of chips above the timeline. */
-class AllDayChip(val title: String, val color: Int?, val overdue: Boolean)
-
 /**
  * Draws the day. A widget's list can only hold whole views of a fixed set of
  * types, with no way to place one at a time of day, so the timeline is drawn as
@@ -118,16 +112,14 @@ class DayRenderer(
     private fun sp(value: Float) = value * density * fontScale
 
     /** The chips, wrapped into rows that fit the width. */
-    val allDayRows: List<List<AllDayChip>> = run {
-        val chips = data.allDay.map { AllDayChip(it.title, it.color, false) } +
-            data.looseTasks.map { AllDayChip(it.title, null, it.overdue) }
-        val rows = mutableListOf<MutableList<AllDayChip>>()
+    val allDayRows: List<List<AllDayEvent>> = run {
+        val rows = mutableListOf<MutableList<AllDayEvent>>()
         var used = Float.MAX_VALUE
         val available = widthPx - dp(16f)
-        chips.forEach { chip ->
+        data.allDay.forEach { chip ->
             val width = chipWidth(chip, available)
             if (used + width + dp(4f) > available) {
-                rows += mutableListOf<AllDayChip>()
+                rows += mutableListOf<AllDayEvent>()
                 used = 0f
             }
             rows.last() += chip
@@ -136,14 +128,13 @@ class DayRenderer(
         rows
     }
 
-    private fun chipWidth(chip: AllDayChip, available: Float): Float {
+    private fun chipWidth(chip: AllDayEvent, available: Float): Float {
         text.typeface = regular
         text.textSize = sp(12f)
-        val circle = if (chip.color == null) dp(15f) else 0f
-        return min(text.measureText(chip.title) + dp(16f) + circle, available)
+        return min(text.measureText(chip.title) + dp(16f), available)
     }
 
-    fun drawAllDayRow(row: List<AllDayChip>): Bitmap {
+    fun drawAllDayRow(row: List<AllDayEvent>): Bitmap {
         val height = (ALL_DAY_ROW_DP * density).toInt()
         val bitmap = Bitmap.createBitmap(widthPx, height, Bitmap.Config.RGB_565)
         val canvas = Canvas(bitmap)
@@ -153,20 +144,10 @@ class DayRenderer(
         row.forEach { chip ->
             val width = chipWidth(chip, available)
             val box = RectF(x, dp(3f), x + width, height - dp(3f))
-            val background = chip.color ?: if (chip.overdue) tint(colors.now, 0.16f) else colors.overflow
-            val ink = when {
-                chip.color != null -> inkOn(chip.color)
-                chip.overdue -> colors.now
-                else -> colors.text
-            }
-            fill.color = background
+            fill.color = chip.color
             canvas.drawRoundRect(box, dp(RADIUS_DP), dp(RADIUS_DP), fill)
-            var textStart = x + dp(8f)
-            if (chip.color == null) {
-                drawCircle(canvas, textStart + dp(5f), box.centerY(), false, ink)
-                textStart += dp(15f)
-            }
-            drawLine(canvas, chip.title, textStart, box.centerY(), box.right - dp(8f) - textStart, ink, 12f, regular)
+            val textStart = x + dp(8f)
+            drawLine(canvas, chip.title, textStart, box.centerY(), box.right - dp(8f) - textStart, inkOn(chip.color), 12f, regular)
             x += width + dp(4f)
         }
         return bitmap
@@ -192,6 +173,10 @@ class DayRenderer(
         }
         placed.overflow.forEach { group ->
             if (group.bottom > rowTop && group.top < rowBottom) drawOverflow(canvas, group)
+        }
+        // Over the items, since a trip can run back across the one before it.
+        placed.trips.forEach { trip ->
+            if (trip.box.bottom > rowTop && trip.box.top < rowBottom) drawTravel(canvas, trip)
         }
         data.nowMinutes()?.let { minutes ->
             val y = minutes * hourHeight / 60f
@@ -238,7 +223,13 @@ class DayRenderer(
         val bottom get() = box.bottom
     }
 
-    private class Placed(val visible: List<Place>, val overflow: List<Overflow>)
+    private class Trip(val travel: WidgetTravel, val box: RectF)
+
+    private class Placed(
+        val visible: List<Place>,
+        val overflow: List<Overflow>,
+        val trips: List<Trip>,
+    )
 
     private val placement: Placed by lazy {
         val visible = mutableListOf<Place>()
@@ -270,7 +261,17 @@ class DayRenderer(
             count++
         }
         if (count > 0) overflow += Overflow(boxFor(start, end, maxColumns - 1, maxColumns), count)
-        Placed(visible, overflow)
+        // A trip to an item folded into "+N" has nothing on screen to hang off.
+        val trips = visible.mapNotNull { place -> place.item.travel?.let { tripFor(it, place.box) } }
+        Placed(visible, overflow, trips)
+    }
+
+    /** Ends where the item starts and lasts as long as the trip takes. */
+    private fun tripFor(travel: WidgetTravel, item: RectF): Trip {
+        val height = max(travel.minutes * hourHeight / 60f, dp(TRAVEL_MIN_DP))
+        val top = max(0f, item.top - dp(ITEM_GAP_DP) - height)
+        val width = if (travel.halfWidth) item.width() / 2 else item.width()
+        return Trip(travel, RectF(item.left, top, item.left + width, top + height))
     }
 
     private fun boxFor(start: Int, end: Int, column: Int, columns: Int): RectF {
@@ -287,106 +288,43 @@ class DayRenderer(
 
     private fun drawItem(canvas: Canvas, place: Place) {
         val item = place.item
-        if (item.kind == "block") {
-            drawBlock(canvas, place.box, item)
-            return
-        }
-        val color = if (item.done) tint(item.color, 0.35f) else item.color
-        val ink = if (item.done) colors.muted else inkOn(color)
-        fill.color = color
+        val ink = inkOn(item.color)
+        fill.color = item.color
         canvas.drawRoundRect(place.box, dp(RADIUS_DP), dp(RADIUS_DP), fill)
 
         canvas.save()
         canvas.clipRect(place.box)
-        var left = place.box.left + dp(6f)
-        val right = place.box.right - dp(4f)
-        if (item.kind == "task") {
-            val centre = place.box.top + dp(14f)
-            drawCircle(canvas, left + dp(5f), centre, item.done, if (item.overdue) colors.now else ink)
-            left += dp(14f)
-        }
-        val textWidth = right - left
-        val tall = place.box.height() >= dp(42f)
-        drawLine(canvas, item.title, left, place.box.top + dp(14f), textWidth, ink, 13f, bold, item.done)
-        if (tall && item.time.isNotEmpty()) {
+        val left = place.box.left + dp(6f)
+        val textWidth = place.box.right - dp(4f) - left
+        drawLine(canvas, item.title, left, place.box.top + dp(14f), textWidth, ink, 13f, bold)
+        if (place.box.height() >= dp(42f) && item.time.isNotEmpty()) {
             drawLine(canvas, item.time, left, place.box.top + dp(31f), textWidth, ink, 11f, regular)
         }
         canvas.restore()
     }
 
-    /**
-     * A block is a solid panel naming it and a tinted panel listing its tasks,
-     * side by side when the block is wide and stacked when it is not.
-     */
-    private fun drawBlock(canvas: Canvas, box: RectF, item: WidgetItem) {
-        val radius = dp(RADIUS_DP)
-        val ink = inkOn(item.color)
-        if (item.tasks.isEmpty()) {
-            fill.color = item.color
-            canvas.drawRoundRect(box, radius, radius, fill)
-            drawBlockTitle(canvas, box, item, ink)
-            return
-        }
+    private fun drawTravel(canvas: Canvas, trip: Trip) {
+        fill.color = trip.travel.color
+        canvas.drawRoundRect(trip.box, dp(RADIUS_DP), dp(RADIUS_DP), fill)
+        stroke.color = 0x73000000
+        stroke.strokeWidth = max(1f, dp(0.75f))
+        canvas.drawRoundRect(trip.box, dp(RADIUS_DP), dp(RADIUS_DP), stroke)
 
-        fill.color = tint(item.color, 0.22f)
-        canvas.drawRoundRect(box, radius, radius, fill)
-        val split = box.width() >= dp(SPLIT_BLOCK_DP)
-        // Clipped so the solid panel keeps the block's rounded corners.
-        val outline = Path().apply { addRoundRect(box, radius, radius, Path.Direction.CW) }
         canvas.save()
-        canvas.clipPath(outline)
-        val titlePanel = if (split) {
-            RectF(box.left, box.top, box.left + box.width() * 0.42f, box.bottom)
-        } else {
-            RectF(box.left, box.top, box.right, min(box.bottom, box.top + dp(if (box.height() >= dp(70f)) 44f else 26f)))
-        }
-        fill.color = item.color
-        canvas.drawRect(titlePanel, fill)
-        drawBlockTitle(canvas, titlePanel, item, ink)
-        val tasks = if (split) {
-            RectF(titlePanel.right, box.top, box.right, box.bottom)
-        } else {
-            RectF(box.left, titlePanel.bottom, box.right, box.bottom)
-        }
-        drawBlockTasks(canvas, tasks, item, ink)
+        canvas.clipRect(trip.box)
+        val left = trip.box.left + dp(6f)
+        drawLine(
+            canvas,
+            trip.travel.label,
+            left,
+            trip.box.top + dp(TRAVEL_MIN_DP) / 2,
+            trip.box.right - dp(4f) - left,
+            inkOn(trip.travel.color),
+            11f,
+            regular,
+        )
         canvas.restore()
     }
-
-    private fun drawBlockTitle(canvas: Canvas, panel: RectF, item: WidgetItem, ink: Int) {
-        val left = panel.left + dp(6f)
-        val width = panel.width() - dp(10f)
-        drawLine(canvas, item.title, left, panel.top + dp(14f), width, ink, 13f, bold)
-        if (panel.height() >= dp(38f)) {
-            drawLine(canvas, item.time, left, panel.top + dp(31f), width, ink, 11f, regular)
-        }
-    }
-
-    private fun drawBlockTasks(canvas: Canvas, panel: RectF, item: WidgetItem, blockInk: Int) {
-        if (panel.height() < dp(TASK_LINE_DP)) return
-        val room = floor((panel.height() - dp(4f)) / dp(TASK_LINE_DP)).toInt()
-        val needsCount = item.tasks.size > room
-        val shown = if (needsCount) max(0, room - 1) else item.tasks.size
-        val left = panel.left + dp(6f)
-        val width = panel.width() - dp(21f)
-        var centre = panel.top + dp(2f) + dp(TASK_LINE_DP) / 2
-        item.tasks.take(shown).forEach { task ->
-            val ink = when {
-                task.done -> colors.muted
-                task.overdue -> colors.now
-                else -> colors.text
-            }
-            drawCircle(canvas, left + dp(5f), centre, task.done, ink)
-            drawLine(canvas, task.title, left + dp(15f), centre, width, ink, 12f, regular, task.done)
-            centre += dp(TASK_LINE_DP)
-        }
-        if (needsCount) {
-            val rest = item.tasks.size - shown
-            val label = if (shown == 0) taskCount(rest) else "+$rest more"
-            drawLine(canvas, label, left, centre, panel.width() - dp(10f), colors.muted, 11f, bold)
-        }
-    }
-
-    private fun taskCount(count: Int) = if (count == 1) "1 task" else "$count tasks"
 
     private fun drawOverflow(canvas: Canvas, group: Overflow) {
         fill.color = colors.overflow
@@ -399,18 +337,6 @@ class DayRenderer(
         text.textAlign = Paint.Align.LEFT
     }
 
-    private fun drawCircle(canvas: Canvas, x: Float, y: Float, done: Boolean, color: Int) {
-        val radius = dp(4.5f)
-        if (done) {
-            fill.color = color
-            canvas.drawCircle(x, y, radius, fill)
-        } else {
-            stroke.color = color
-            stroke.strokeWidth = dp(1.2f)
-            canvas.drawCircle(x, y, radius, stroke)
-        }
-    }
-
     /** One ellipsized line, vertically centred on [centre]. */
     private fun drawLine(
         canvas: Canvas,
@@ -421,28 +347,15 @@ class DayRenderer(
         color: Int,
         size: Float,
         face: Typeface,
-        strike: Boolean = false,
     ) {
         if (width <= 0f) return
         text.typeface = face
         text.textSize = sp(size)
         text.color = color
-        text.isStrikeThruText = strike
         val line = TextUtils.ellipsize(value.replace('\n', ' '), text, width, TextUtils.TruncateAt.END)
         val metrics = text.fontMetrics
         val baseline = centre - (metrics.ascent + metrics.descent) / 2
         canvas.drawText(line, 0, line.length, left, baseline, text)
-        text.isStrikeThruText = false
-    }
-
-    /** [color] mixed into the surface, keeping it readable on either theme. */
-    private fun tint(color: Int, amount: Float): Int {
-        val mix = { over: Int, under: Int -> (over * amount + under * (1 - amount)).toInt() }
-        return Color.rgb(
-            mix(Color.red(color), Color.red(colors.surface)),
-            mix(Color.green(color), Color.green(colors.surface)),
-            mix(Color.blue(color), Color.blue(colors.surface)),
-        )
     }
 
     private fun inkOn(color: Int): Int {

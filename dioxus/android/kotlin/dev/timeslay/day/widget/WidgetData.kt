@@ -18,7 +18,6 @@ class WidgetDay(
     val updated: String,
     val hours: List<String>,
     val allDay: List<AllDayEvent>,
-    val looseTasks: List<WidgetTask>,
     val items: List<WidgetItem>,
 ) {
     /** Minutes into this day right now, or null when it is not today. */
@@ -54,13 +53,9 @@ class WidgetDay(
                 val event = array.getJSONObject(i)
                 AllDayEvent(event.getString("title"), Color.parseColor(event.getString("color")))
             },
-            looseTasks = json.getJSONArray("loose_tasks").map { array, i ->
-                parseTask(array.getJSONObject(i))
-            },
             items = json.getJSONArray("items").map { array, i ->
                 val item = array.getJSONObject(i)
                 WidgetItem(
-                    kind = item.getString("kind"),
                     title = item.getString("title"),
                     time = item.getString("time"),
                     color = Color.parseColor(item.getString("color")),
@@ -68,19 +63,16 @@ class WidgetDay(
                     end = item.getInt("end"),
                     column = item.getInt("column"),
                     columns = item.getInt("columns"),
-                    done = item.getBoolean("done"),
-                    overdue = item.getBoolean("overdue"),
-                    tasks = item.getJSONArray("tasks").map { tasks, t ->
-                        parseTask(tasks.getJSONObject(t))
+                    travel = item.optJSONObject("travel")?.let { travel ->
+                        WidgetTravel(
+                            label = travel.getString("label"),
+                            color = Color.parseColor(travel.getString("color")),
+                            minutes = travel.getInt("minutes"),
+                            halfWidth = travel.getBoolean("half_width"),
+                        )
                     },
                 )
             },
-        )
-
-        private fun parseTask(task: JSONObject) = WidgetTask(
-            task.getString("title"),
-            task.getBoolean("done"),
-            task.getBoolean("overdue"),
         )
 
         private fun <T> JSONArray.map(read: (JSONArray, Int) -> T): List<T> =
@@ -90,10 +82,7 @@ class WidgetDay(
 
 class AllDayEvent(val title: String, val color: Int)
 
-class WidgetTask(val title: String, val done: Boolean, val overdue: Boolean)
-
 class WidgetItem(
-    val kind: String,
     val title: String,
     val time: String,
     val color: Int,
@@ -101,7 +90,14 @@ class WidgetItem(
     val end: Int,
     val column: Int,
     val columns: Int,
-    val done: Boolean,
-    val overdue: Boolean,
-    val tasks: List<WidgetTask>,
+    /** The trip that leads to this item. */
+    val travel: WidgetTravel?,
+)
+
+class WidgetTravel(
+    val label: String,
+    val color: Int,
+    /** How long the trip takes, or 0 when the desktop has not worked it out. */
+    val minutes: Int,
+    val halfWidth: Boolean,
 )

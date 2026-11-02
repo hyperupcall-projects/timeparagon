@@ -20,6 +20,8 @@ use day::{BlockRef, DayModel, EditContext, TaskGroup, TaskRow, Theme, TimeBlock,
 
 /// Height of one hour on the timeline, in pixels.
 const HOUR_HEIGHT: f32 = 64.0;
+/// The shortest a travel box is drawn, so its words fit in it.
+const TRAVEL_MIN_HEIGHT: f32 = 16.0;
 
 const SCROLL_SCRIPT: &str = r#"
 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -314,11 +316,15 @@ fn App() -> Element {
     let model = snapshot
         .as_ref()
         .map(|snapshot| day::build_model(snapshot, &settings));
+    let travel = model
+        .as_ref()
+        .map(|model| day::travel_boxes(model, &config.read().travel))
+        .unwrap_or_default();
     let selected_day = current_day();
     let today = day::today(&settings);
     #[cfg(target_os = "android")]
     if let (Some(model), Some(snapshot)) = (&model, &snapshot) {
-        widget::publish(model, today, &settings, snapshot.fetched_at);
+        widget::publish(model, &travel, today, &settings, snapshot.fetched_at);
     }
 
     let heading = calendar::day_heading(selected_day, today);
@@ -481,7 +487,7 @@ fn App() -> Element {
             }
             div { class: "day-body", "data-view": if show_tasks() { "tasks" } else { "calendar" },
                 {sidebar(model, selected_block, editing)}
-                {timeline(model, selected_block, editing)}
+                {timeline(model, &travel, selected_block, editing)}
             }
         },
         None if settings.client_id.trim().is_empty() && !pending => {
@@ -746,6 +752,7 @@ fn App() -> Element {
         let sections = day::source_sections(&store.display_sources(&settings), &settings);
         let no_calendars = store.calendars.is_empty();
         drop(store);
+        let travel_shown = config.read().travel.show;
         let error = calendars_error().map(|message| {
             rsx! { p { class: "error-text", "{message}" } }
         });
@@ -779,10 +786,33 @@ fn App() -> Element {
                         }
                     }
                 });
+                // Travel is not an event kind, but it is toggled with the sources
+                // that are, as on the desktop.
+                let travel_row = (heading == "TimeSlay").then(|| {
+                    let swatch = format!("background:{};", css_color(calendar::colors::TRAVEL));
+                    rsx! {
+                        button {
+                            class: "source-row",
+                            role: "switch",
+                            aria_checked: travel_shown.to_string(),
+                            onclick: move |_| match day::set_travel_shown(!travel_shown) {
+                                Ok(saved) => {
+                                    config.set(saved);
+                                    calendars_error.set(None);
+                                }
+                                Err(error) => calendars_error.set(Some(error)),
+                            },
+                            span { class: "source-swatch", style: "{swatch}" }
+                            span { class: "source-name", "Travel" }
+                            span { class: "source-switch", span { class: "source-knob" } }
+                        }
+                    }
+                });
                 rsx! {
                     section { key: "{heading}", class: "source-section",
                         h3 { class: "source-heading", "{heading}" }
                         {rows}
+                        {travel_row}
                     }
                 }
             });
@@ -1089,6 +1119,7 @@ fn block_link_view(block: &BlockRef, open_block: Signal<Option<String>>) -> Elem
 
 fn timeline(
     model: &DayModel,
+    travel: &[day::TravelBox],
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
 ) -> Element {
@@ -1120,6 +1151,16 @@ fn timeline(
         .timed
         .iter()
         .map(|timed| timed_event_view(timed, open_block, editing))
+        .collect();
+
+    let trips: Vec<Element> = travel
+        .iter()
+        .map(|trip| {
+            let style = travel_style(trip);
+            rsx! {
+                div { key: "travel-{trip.event_id}", class: "grid-travel", style: "{style}", "{trip.label}" }
+            }
+        })
         .collect();
 
     let now_line = model.now_min.map(|minutes| {
@@ -1168,6 +1209,7 @@ fn timeline(
                     div { class: "grid", style: "height: {grid_height}px;",
                         {lines.into_iter()}
                         {events.into_iter()}
+                        {trips.into_iter()}
                         {now_line}
                         {empty}
                         div {
@@ -1373,6 +1415,27 @@ fn event_style(timed: &TimedEvent) -> String {
 
     format!(
         "top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + 3px);width:calc({width:.4}% - 6px);background:{background};color:{ink};"
+    )
+}
+
+/// Where a trip's box sits: ending at the start of the event it leads to, in
+/// that event's column. Over a time block it is half as wide, as on the desktop.
+fn travel_style(trip: &day::TravelBox) -> String {
+    let height = (trip.minutes as f32 * HOUR_HEIGHT / 60.0).max(TRAVEL_MIN_HEIGHT);
+    let top = (trip.anchor_min as f32 * HOUR_HEIGHT / 60.0 - height).max(0.0);
+    let column_width = 100.0 / trip.columns.max(1) as f32;
+    let left = trip.column as f32 * column_width;
+    let span = trip.column_span.max(1) as f32 * column_width;
+    let width = if trip.time_block {
+        format!("calc(({span:.4}% - 12px) * 0.5)")
+    } else {
+        format!("calc({span:.4}% - 6px)")
+    };
+    let background = css_color(calendar::colors::TRAVEL);
+    let ink = css_color(calendar::colors::on_color(calendar::colors::TRAVEL));
+
+    format!(
+        "top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + 3px);width:{width};background:{background};color:{ink};"
     )
 }
 

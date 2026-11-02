@@ -12,9 +12,8 @@ use timeslay_core::Color;
 use timeslay_core::calendar::layout::{self, Span};
 use timeslay_core::calendar::{self, Event, time_format};
 use timeslay_core::config::CalendarSettings;
-use timeslay_core::timeblocking as tb;
 
-use crate::day::{self, DayModel, TimedEvent};
+use crate::day::{self, DayModel, TimedEvent, TravelBox};
 
 /// The shortest an item is drawn, so a 15-minute task still fits a line of text.
 /// Overlaps are packed at this height because that is what shares the screen.
@@ -31,8 +30,6 @@ struct WidgetDay {
     updated: String,
     hours: Vec<String>,
     all_day: Vec<WidgetAllDay>,
-    /// Active tasks without a time or a block.
-    loose_tasks: Vec<WidgetTask>,
     items: Vec<WidgetItem>,
 }
 
@@ -44,7 +41,6 @@ struct WidgetAllDay {
 
 #[derive(Debug, Serialize)]
 struct WidgetItem {
-    kind: ItemKind,
     title: String,
     time: String,
     color: String,
@@ -52,25 +48,19 @@ struct WidgetItem {
     end: i32,
     column: usize,
     columns: usize,
-    done: bool,
-    overdue: bool,
-    tasks: Vec<WidgetTask>,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-enum ItemKind {
-    Event,
-    Block,
-    Task,
-    Sleep,
+    /// The trip that leads to this item, drawn just above it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    travel: Option<WidgetTravel>,
 }
 
 #[derive(Debug, Serialize)]
-struct WidgetTask {
-    title: String,
-    done: bool,
-    overdue: bool,
+struct WidgetTravel {
+    label: String,
+    color: String,
+    /// How long the trip takes, or 0 when the desktop has not worked it out.
+    minutes: u32,
+    /// Half as wide as the item, as over a time block in the app.
+    half_width: bool,
 }
 
 fn hex(color: Color) -> String {
@@ -83,33 +73,23 @@ fn hex(color: Color) -> String {
     )
 }
 
-fn widget_task(event: &Event, status: tb::TaskStatus) -> WidgetTask {
-    WidgetTask {
-        title: event.title.clone(),
-        done: status != tb::TaskStatus::Active,
-        overdue: tb::overdue(event),
-    }
-}
-
-fn item_kind(timed: &TimedEvent) -> ItemKind {
-    if timed.event.details.sleep.is_some() {
-        ItemKind::Sleep
-    } else if timed.time_block {
-        ItemKind::Block
-    } else if timed.event.is_task() {
-        ItemKind::Task
-    } else {
-        ItemKind::Event
-    }
+/// Tasks stay in the app. A scheduled task's calendar copy is one too.
+fn is_todo(event: &Event) -> bool {
+    event.is_task() || event.details.scheduled.is_some()
 }
 
 fn widget_day(
     model: &DayModel,
+    travel: &[TravelBox],
     settings: &CalendarSettings,
     updated: chrono::DateTime<chrono::Local>,
 ) -> WidgetDay {
-    let spans: Vec<Span> = model
+    let timed: Vec<&TimedEvent> = model
         .timed
+        .iter()
+        .filter(|timed| !is_todo(&timed.event))
+        .collect();
+    let spans: Vec<Span> = timed
         .iter()
         .map(|timed| Span {
             start_min: timed.start_min,
@@ -117,64 +97,31 @@ fn widget_day(
         })
         .collect();
     // The app's columns already rank the sources left to right.
-    let ranks: Vec<usize> = model.timed.iter().map(|timed| timed.column).collect();
+    let ranks: Vec<usize> = timed.iter().map(|timed| timed.column).collect();
     let packed = layout::pack_prioritized(&spans, &ranks);
 
-    let items = model
-        .timed
+    let items = timed
         .iter()
         .zip(&spans)
         .zip(packed)
-        .map(|((timed, span), slot)| {
-            let block = timed.time_block.then(|| {
-                model
-                    .blocks
-                    .iter()
-                    .find(|block| block.event.id == timed.event.id)
-            });
-            // The widget only has room for some of a block's tasks, so the ones
-            // left to do come first and keep their planned order.
-            let mut tasks: Vec<WidgetTask> = block
-                .flatten()
-                .map(|block| {
-                    block
-                        .tasks
-                        .iter()
-                        .map(|task| widget_task(&task.event, task.status))
-                        .collect()
-                })
-                .unwrap_or_default();
-            tasks.sort_by_key(|task| task.done);
-            WidgetItem {
-                kind: item_kind(timed),
-                title: timed.title.clone(),
-                time: time_format::event(&timed.event, FORMAT),
-                color: hex(timed.event.display_color(settings)),
-                start: span.start_min,
-                end: span.end_min,
-                column: slot.column,
-                columns: slot.columns,
-                done: timed.event.is_task() && timed.event.completed,
-                overdue: tb::overdue(&timed.event),
-                tasks,
-            }
-        })
-        .collect();
-
-    // A task with a place on the grid is already drawn there.
-    let placed = |event: &Event| {
-        model.timed.iter().any(|timed| timed.event.id == event.id)
-            || model
-                .blocks
+        .map(|((timed, span), slot)| WidgetItem {
+            title: timed.title.clone(),
+            time: time_format::event(&timed.event, FORMAT),
+            color: hex(timed.event.display_color(settings)),
+            start: span.start_min,
+            end: span.end_min,
+            column: slot.column,
+            columns: slot.columns,
+            travel: travel
                 .iter()
-                .any(|block| block.tasks.iter().any(|task| task.event.id == event.id))
-    };
-    let loose_tasks = model
-        .task_groups
-        .iter()
-        .flat_map(|group| &group.tasks)
-        .filter(|task| task.status == tb::TaskStatus::Active && !placed(&task.event))
-        .map(|task| widget_task(&task.event, task.status))
+                .find(|trip| trip.event_id == timed.event.id)
+                .map(|trip| WidgetTravel {
+                    label: trip.label.clone(),
+                    color: hex(calendar::colors::TRAVEL),
+                    minutes: trip.minutes,
+                    half_width: trip.time_block,
+                }),
+        })
         .collect();
 
     WidgetDay {
@@ -192,7 +139,6 @@ fn widget_day(
                 color: hex(event.display_color(settings)),
             })
             .collect(),
-        loose_tasks,
         items,
     }
 }
@@ -207,13 +153,14 @@ fn path() -> Option<std::path::PathBuf> {
 #[cfg(target_os = "android")]
 fn write(
     model: &DayModel,
+    travel: &[TravelBox],
     settings: &CalendarSettings,
     updated: chrono::DateTime<chrono::Local>,
 ) -> bool {
     let Some(path) = path() else {
         return false;
     };
-    let Ok(json) = serde_json::to_vec(&widget_day(model, settings, updated)) else {
+    let Ok(json) = serde_json::to_vec(&widget_day(model, travel, settings, updated)) else {
         return false;
     };
     if std::fs::read(&path).is_ok_and(|current| current == json) {
@@ -227,11 +174,12 @@ fn write(
 #[cfg(target_os = "android")]
 pub fn publish(
     model: &DayModel,
+    travel: &[TravelBox],
     today: NaiveDate,
     settings: &CalendarSettings,
     updated: chrono::DateTime<chrono::Local>,
 ) {
-    if model.day == today && write(model, settings, updated) {
+    if model.day == today && write(model, travel, settings, updated) {
         notify();
     }
 }
@@ -296,7 +244,8 @@ fn refresh() -> bool {
         return false;
     };
     let model = day::build_model(&snapshot, &config.calendar);
-    write(&model, &config.calendar, snapshot.fetched_at);
+    let travel = day::travel_boxes(&model, &config.travel);
+    write(&model, &travel, &config.calendar, snapshot.fetched_at);
     true
 }
 
@@ -336,6 +285,7 @@ mod tests {
     use super::*;
     use chrono::{DateTime, Duration, Local, TimeZone};
     use timeslay_core::calendar::{Calendar, Details, Snapshot};
+    use timeslay_core::places::{Place, PlaceSettings, SavedRoute, TravelMode};
     use timeslay_core::task_db::TaskData;
     use timeslay_core::timeblocking::Metadata;
 
@@ -391,6 +341,10 @@ mod tests {
     }
 
     fn build(events: Vec<Event>) -> WidgetDay {
+        build_with_travel(events, &PlaceSettings::default())
+    }
+
+    fn build_with_travel(events: Vec<Event>, travel: &PlaceSettings) -> WidgetDay {
         let settings = CalendarSettings {
             app_calendar: Some("blocks".into()),
             ..CalendarSettings::default()
@@ -403,35 +357,47 @@ mod tests {
             notice: None,
         };
         let model = day::build_model(&snapshot, &settings);
-        widget_day(&model, &settings, snapshot.fetched_at)
+        let travel = day::travel_boxes(&model, travel);
+        widget_day(&model, &travel, &settings, snapshot.fetched_at)
     }
 
     #[test]
-    fn a_block_carries_its_tasks_with_the_unfinished_ones_first() {
+    fn todos_are_left_out_but_blocks_stay() {
+        let mut timed_task = task("Timed", None, 6, false);
+        timed_task.all_day = false;
+        timed_task.start = at(14, 0);
+        timed_task.end = at(15, 0);
+        let mut scheduled = event("Scheduled", "work", at(14, 0), at(15, 0));
+        scheduled.details.scheduled = Some(calendar::scheduled::Link {
+            calendar_id: "work".into(),
+            event_id: "Scheduled".into(),
+            list_id: "list".into(),
+            task_id: "task".into(),
+            pending: false,
+            block: None,
+            order: 0,
+            color_id: None,
+        });
+
         let day = build(vec![
             event("Study", "blocks", at(18, 15), at(19, 30)),
-            task("Read", Some("blocks/Study"), 1, true),
-            task("Write", Some("blocks/Study"), 2, false),
-            task("Review", Some("blocks/Study"), 3, false),
-            task("Loose", None, 4, false),
-            task("Finished", None, 5, true),
+            event("Standup", "work", at(14, 0), at(15, 0)),
+            task("Write", Some("blocks/Study"), 1, false),
+            task("Loose", None, 2, false),
+            timed_task,
+            scheduled,
         ]);
 
-        assert_eq!(day.items.len(), 1);
-        let block = &day.items[0];
-        assert_eq!(block.kind, ItemKind::Block);
-        assert_eq!(block.time, "6.15p – 7.30p");
-        let titles: Vec<_> = block.tasks.iter().map(|task| task.title.as_str()).collect();
-        assert_eq!(titles, ["Write", "Review", "Read"]);
-        assert!(block.tasks[2].done);
+        let titles: Vec<_> = day.items.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["Standup", "Study"]);
+        assert_eq!(day.items[1].time, "6.15p – 7.30p");
+        // The todos that were removed do not leave gaps beside what remains.
+        assert_eq!(day.items[0].columns, 1);
 
-        // Block tasks are not repeated, and finished tasks are not listed.
-        let loose: Vec<_> = day
-            .loose_tasks
-            .iter()
-            .map(|task| task.title.as_str())
-            .collect();
-        assert_eq!(loose, ["Loose"]);
+        let json = serde_json::to_string(&day).unwrap();
+        for todo in ["Write", "Loose", "Timed", "Scheduled"] {
+            assert!(!json.contains(todo), "{todo} reached the widget");
+        }
     }
 
     #[test]
@@ -449,6 +415,100 @@ mod tests {
         assert_eq!(day.items[2].columns, 1);
     }
 
+    fn campus_trip() -> PlaceSettings {
+        let place = |id: u64, name: &str| Place {
+            id,
+            name: name.to_owned(),
+            address: String::new(),
+            place_id: String::new(),
+            lat: 0.0,
+            lng: 0.0,
+        };
+        PlaceSettings {
+            home: Some(1),
+            places: vec![place(1, "Home"), place(2, "Campus")],
+            default_mode: TravelMode::Bike,
+            show: true,
+            routes: vec![SavedRoute {
+                from: 1,
+                to: 2,
+                mode: TravelMode::Bike,
+                seconds: 1190,
+                meters: 5300,
+            }],
+            ..PlaceSettings::default()
+        }
+    }
+
+    fn at_campus(mut event: Event) -> Event {
+        event.details.location = "Campus".into();
+        event
+    }
+
+    #[test]
+    fn a_trip_reaches_the_widget_on_the_item_it_leads_to() {
+        let day = build_with_travel(
+            vec![
+                event("Standup", "work", at(8, 0), at(8, 30)),
+                at_campus(event("Lecture", "work", at(9, 0), at(10, 0))),
+            ],
+            &campus_trip(),
+        );
+
+        assert!(day.items[0].travel.is_none());
+        let travel = day.items[1].travel.as_ref().unwrap();
+        assert_eq!(travel.label, "Bike · 20 min · 5.3 km");
+        assert_eq!(travel.minutes, 20);
+        assert!(!travel.half_width);
+
+        let json = serde_json::to_value(&day).unwrap();
+        assert!(json["items"][0].get("travel").is_none());
+        assert_eq!(json["items"][1]["travel"]["minutes"], 20);
+        assert!(
+            json["items"][1]["travel"]["color"]
+                .as_str()
+                .unwrap()
+                .starts_with('#')
+        );
+    }
+
+    #[test]
+    fn a_trip_is_half_as_wide_over_a_time_block() {
+        let day = build_with_travel(
+            vec![at_campus(event("Study", "blocks", at(9, 0), at(10, 0)))],
+            &campus_trip(),
+        );
+        assert!(day.items[0].travel.as_ref().unwrap().half_width);
+    }
+
+    #[test]
+    fn the_widget_has_no_trip_when_travel_is_off_or_leads_to_a_todo() {
+        let off = PlaceSettings {
+            show: false,
+            ..campus_trip()
+        };
+        let day = build_with_travel(
+            vec![at_campus(event("Lecture", "work", at(9, 0), at(10, 0)))],
+            &off,
+        );
+        assert!(day.items[0].travel.is_none());
+
+        let mut scheduled = at_campus(event("Scheduled", "work", at(9, 0), at(10, 0)));
+        scheduled.details.scheduled = Some(calendar::scheduled::Link {
+            calendar_id: "work".into(),
+            event_id: "Scheduled".into(),
+            list_id: "list".into(),
+            task_id: "task".into(),
+            pending: false,
+            block: None,
+            order: 0,
+            color_id: None,
+        });
+        let day = build_with_travel(vec![scheduled], &campus_trip());
+        assert!(day.items.is_empty());
+        assert!(!serde_json::to_string(&day).unwrap().contains("travel"));
+    }
+
     #[test]
     fn the_file_format_matches_what_the_kotlin_reader_expects() {
         let day = build(vec![event("Standup", "work", at(9, 0), at(10, 0))]);
@@ -457,7 +517,6 @@ mod tests {
         assert_eq!(json["day"], "2026-10-26");
         assert_eq!(json["hours"][15], "3p");
         assert_eq!(json["updated"], "10a");
-        assert_eq!(json["items"][0]["kind"], "event");
         assert_eq!(json["items"][0]["start"], 540);
         assert_eq!(json["items"][0]["end"], 600);
         assert!(json["items"][0]["color"].as_str().unwrap().starts_with('#'));

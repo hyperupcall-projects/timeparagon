@@ -80,6 +80,8 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             }
             // An external edit wins over a save that has not started yet.
             state.save_queued = false;
+            // The phone can flip this switch too, through the synced config.
+            state.travel.show = state.config.travel.show;
             if previous.notepad.text != state.config.notepad.text {
                 state.notepad = text_editor::Content::with_text(&state.config.notepad.text);
             }

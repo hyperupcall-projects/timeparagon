@@ -710,6 +710,21 @@ button {
     flex: 0 0 auto;
 }
 
+/* Only there to read: a tap goes through to the event underneath. */
+.grid-travel {
+    position: absolute;
+    box-sizing: border-box;
+    border-radius: 7px;
+    border: 1px solid rgba(0, 0, 0, 0.45);
+    padding: 1px 8px;
+    overflow: hidden;
+    font-size: 9.5px;
+    line-height: 12px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+
 .grid-event .event-title {
     font-size: 12px;
     font-weight: 700;

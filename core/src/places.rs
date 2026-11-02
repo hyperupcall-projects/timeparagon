@@ -13,6 +13,179 @@ const SEARCH_URL: &str = "https://api.mapbox.com/search/searchbox/v1/forward";
 /// The most places a search offers.
 const MAX_RESULTS: u32 = 8;
 
+/// What a trip's start is called when it is Home.
+pub const START_OF_DAY: &str = "Start of day";
+
+/// How a trip between two places is made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TravelMode {
+    #[default]
+    Walk,
+    Bike,
+    /// Configs written when public transport was offered read as `Car`:
+    /// Mapbox has no transit routing.
+    #[serde(alias = "multimodal")]
+    Car,
+}
+
+impl TravelMode {
+    pub const ALL: [TravelMode; 3] = [Self::Walk, Self::Bike, Self::Car];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Walk => "Walk",
+            Self::Bike => "Bike",
+            Self::Car => "Car",
+        }
+    }
+
+    /// The profile the Mapbox Directions API expects.
+    pub fn profile(self) -> &'static str {
+        match self {
+            Self::Walk => "walking",
+            Self::Bike => "cycling",
+            Self::Car => "driving",
+        }
+    }
+
+    /// The `travelmode` of a Google Maps directions link.
+    pub fn google_travelmode(self) -> &'static str {
+        match self {
+            Self::Walk => "walking",
+            Self::Bike => "bicycling",
+            Self::Car => "driving",
+        }
+    }
+
+    /// The routing engine of an OpenStreetMap directions link.
+    pub fn osm_engine(self) -> &'static str {
+        match self {
+            Self::Walk => "fossgis_osrm_foot",
+            Self::Bike => "fossgis_osrm_bike",
+            Self::Car => "fossgis_osrm_car",
+        }
+    }
+
+    /// The mode after this one, wrapping around.
+    pub fn next(self) -> Self {
+        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+}
+
+impl std::fmt::Display for TravelMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// How the trip from one place to another is made, when that is not the default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteMode {
+    pub from: u64,
+    pub to: u64,
+    pub mode: TravelMode,
+}
+
+/// A trip already worked out, as the synced config holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedRoute {
+    pub from: u64,
+    pub to: u64,
+    pub mode: TravelMode,
+    pub seconds: u32,
+    pub meters: u32,
+}
+
+/// How far, and for how long, a trip goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Route {
+    pub seconds: u32,
+    pub meters: u32,
+}
+
+/// A trip between two places, whichever events it falls between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Leg {
+    pub from: u64,
+    pub to: u64,
+}
+
+/// A trip a day needs, and where it sits among the day's events.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hop {
+    pub leg: Leg,
+    /// The event the trip leads to, which is where its box is drawn.
+    pub before: String,
+    pub from_title: String,
+    pub to_title: String,
+}
+
+/// An event, as far as travel is concerned: when it is, and where.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stop {
+    pub id: String,
+    pub title: String,
+    pub place: Option<u64>,
+}
+
+/// The trips a day needs, in order, given its events in the order they happen.
+///
+/// Every event with a place is a destination. Its trip starts at the place of
+/// the nearest earlier event that has one, or at Home when there is none. No
+/// trip is needed when the two places are the same.
+pub fn hops(places: &[Place], home: Option<u64>, stops: &[Stop]) -> Vec<Hop> {
+    let home = home.filter(|id| places.iter().any(|place| place.id == *id));
+    let mut found = Vec::new();
+    let mut previous: Option<(u64, &str)> = None;
+
+    for stop in stops {
+        let Some(place) = stop.place else { continue };
+        let source = previous.or(home.map(|id| (id, START_OF_DAY)));
+        if let Some((from, from_title)) = source
+            && from != place
+        {
+            found.push(Hop {
+                leg: Leg { from, to: place },
+                before: stop.id.clone(),
+                from_title: from_title.to_owned(),
+                to_title: stop.title.clone(),
+            });
+        }
+        previous = Some((place, &stop.title));
+    }
+
+    found
+}
+
+/// "12 min", or "1 h 05 min".
+pub fn duration_label(seconds: u32) -> String {
+    let minutes = seconds.div_ceil(60).max(1);
+    if minutes < 60 {
+        format!("{minutes} min")
+    } else {
+        format!("{} h {:02} min", minutes / 60, minutes % 60)
+    }
+}
+
+/// "850 m", or "1.2 km".
+pub fn distance_label(meters: u32) -> String {
+    if meters < 1000 {
+        format!("{meters} m")
+    } else {
+        format!("{:.1} km", f64::from(meters) / 1000.0)
+    }
+}
+
+pub fn route_label(route: Route) -> String {
+    format!(
+        "{} · {}",
+        duration_label(route.seconds),
+        distance_label(route.meters)
+    )
+}
+
 /// A place that tasks and events can happen at, found with Mapbox search.
 ///
 /// Everything needed to find the place again is kept apart from the title,
@@ -54,9 +227,39 @@ pub struct PlaceSettings {
     pub home: Option<u64>,
     pub places: Vec<Place>,
     pub event_places: BTreeMap<String, u64>,
+    /// How a trip is made until it is set otherwise.
+    pub default_mode: TravelMode,
+    /// Trips whose method was chosen by hand.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<RouteMode>,
+    /// Whether travel is shown on the calendar.
+    pub show: bool,
+    /// The trips the desktop app has worked out.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<SavedRoute>,
 }
 
 impl PlaceSettings {
+    /// How the trip from `from` to `to` is made.
+    pub fn mode_for(&self, from: u64, to: u64) -> TravelMode {
+        self.modes
+            .iter()
+            .find(|route| route.from == from && route.to == to)
+            .map_or(self.default_mode, |route| route.mode)
+    }
+
+    /// How long this trip takes by its method, if that has been worked out.
+    pub fn route(&self, leg: Leg) -> Option<Route> {
+        let mode = self.mode_for(leg.from, leg.to);
+        self.routes
+            .iter()
+            .find(|saved| saved.from == leg.from && saved.to == leg.to && saved.mode == mode)
+            .map(|saved| Route {
+                seconds: saved.seconds,
+                meters: saved.meters,
+            })
+    }
+
     pub fn place(&self, id: u64) -> Option<&Place> {
         self.places.iter().find(|place| place.id == id)
     }

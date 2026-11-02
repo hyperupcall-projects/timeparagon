@@ -212,6 +212,20 @@ pub struct AssignedTask {
     pub list_name: String,
 }
 
+/// A trip's gray box on the grid, hanging off the start of the event it leads to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TravelBox {
+    pub event_id: String,
+    pub label: String,
+    /// How long the trip takes, or 0 when the desktop has not worked it out.
+    pub minutes: u32,
+    pub anchor_min: i32,
+    pub column: usize,
+    pub columns: usize,
+    pub column_span: usize,
+    pub time_block: bool,
+}
+
 /// Tasks from one Google Tasks list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskGroup {
@@ -685,6 +699,54 @@ pub fn duration_label(minutes: u32) -> String {
 pub fn capacity_label(minutes: i64) -> String {
     let minutes = minutes.max(0) as u32;
     duration_label(minutes)
+}
+
+/// The trips on the grid, with the times the desktop app worked out and synced.
+/// Nothing is asked of Mapbox here.
+pub fn travel_boxes(model: &DayModel, travel: &PlaceSettings) -> Vec<TravelBox> {
+    if !travel.show {
+        return Vec::new();
+    }
+    // The order the desktop walks a day's events in, so both find the same trips.
+    let mut timed: Vec<&TimedEvent> = model.timed.iter().collect();
+    timed.sort_by_key(|timed| (timed.event.start, timed.event.end));
+    let stops: Vec<places::Stop> = timed
+        .iter()
+        .map(|timed| places::Stop {
+            id: timed.event.id.clone(),
+            title: timed.event.title.clone(),
+            place: places::place_of(&travel.places, &travel.event_places, &timed.event),
+        })
+        .collect();
+
+    places::hops(&travel.places, travel.home, &stops)
+        .into_iter()
+        .filter_map(|hop| {
+            let timed = timed.iter().find(|timed| timed.event.id == hop.before)?;
+            let mode = travel.mode_for(hop.leg.from, hop.leg.to);
+            let route = travel.route(hop.leg);
+            Some(TravelBox {
+                event_id: hop.before,
+                label: match route {
+                    Some(route) => format!("{mode} · {}", places::route_label(route)),
+                    None => format!("{mode} · no time yet"),
+                },
+                minutes: route.map_or(0, |route| route.seconds.div_ceil(60)),
+                anchor_min: timed.start_min,
+                column: timed.column,
+                columns: timed.columns,
+                column_span: timed.column_span,
+                time_block: timed.time_block,
+            })
+        })
+        .collect()
+}
+
+/// Shows or hides travel and returns the config as it now reads.
+pub fn set_travel_shown(show: bool) -> Result<Config, String> {
+    timeslay_core::config::save_travel_show(show)
+        .map_err(|error| format!("Could not save the travel setting: {error}"))?;
+    Ok(load_config())
 }
 
 /// What the editors need to know beyond the item being edited.
@@ -1680,6 +1742,86 @@ mod tests {
         assert_eq!(row.event.details.recurring_event_id.as_deref(), Some("h1"));
         assert_eq!(row.event.details.description, "Ten minutes");
         assert_eq!(row.color, settings().habit_color());
+    }
+
+    fn travel_settings() -> PlaceSettings {
+        let place = |id: u64, name: &str| Place {
+            id,
+            name: name.to_owned(),
+            address: String::new(),
+            place_id: String::new(),
+            lat: 0.0,
+            lng: 0.0,
+        };
+        PlaceSettings {
+            home: Some(1),
+            places: vec![place(1, "Home"), place(2, "Campus"), place(3, "Gym")],
+            default_mode: places::TravelMode::Bike,
+            show: true,
+            routes: vec![
+                places::SavedRoute {
+                    from: 1,
+                    to: 2,
+                    mode: places::TravelMode::Bike,
+                    seconds: 1190,
+                    meters: 5300,
+                },
+                places::SavedRoute {
+                    from: 2,
+                    to: 3,
+                    mode: places::TravelMode::Car,
+                    seconds: 300,
+                    meters: 2000,
+                },
+            ],
+            ..PlaceSettings::default()
+        }
+    }
+
+    fn located(id: &str, place: &str, hour: u32) -> Event {
+        let mut event = event(id, "work", id, at(hour, 0), at(hour + 1, 0));
+        event.details.location = place.to_owned();
+        event
+    }
+
+    #[test]
+    fn a_trip_shows_the_synced_time_above_the_event_it_leads_to() {
+        let snapshot = snapshot(vec![located("lecture", "Campus", 9)]);
+        let model = build_model(&snapshot, &settings());
+        let boxes = travel_boxes(&model, &travel_settings());
+
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].event_id, "lecture");
+        assert_eq!(boxes[0].label, "Bike · 20 min · 5.3 km");
+        assert_eq!(boxes[0].minutes, 20);
+        assert_eq!(boxes[0].anchor_min, 9 * 60);
+    }
+
+    #[test]
+    fn a_trip_with_no_synced_time_for_its_method_says_so() {
+        // Only the car time from Campus to the gym is known, and this goes by bike.
+        let snapshot = snapshot(vec![
+            located("lecture", "Campus", 9),
+            located("gym", "Gym", 11),
+        ]);
+        let model = build_model(&snapshot, &settings());
+        let boxes = travel_boxes(&model, &travel_settings());
+
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(boxes[1].event_id, "gym");
+        assert_eq!(boxes[1].label, "Bike · no time yet");
+        assert_eq!(boxes[1].minutes, 0);
+    }
+
+    #[test]
+    fn travel_stays_off_until_it_is_switched_on() {
+        let snapshot = snapshot(vec![located("lecture", "Campus", 9)]);
+        let model = build_model(&snapshot, &settings());
+        let travel = PlaceSettings {
+            show: false,
+            ..travel_settings()
+        };
+        assert!(travel_boxes(&model, &travel).is_empty());
     }
 
     #[test]
