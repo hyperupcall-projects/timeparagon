@@ -137,15 +137,9 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             state.calendar.menu_open = false;
             let mut close_block = None;
             if let Some(event) = state.calendar.event(&id).cloned() {
-                let is_block = crate::timeblocking::is_block(&event, &state.config.calendar);
                 let is_task = event.is_task();
                 let mut draft = calendar::EditDraft::from_event(&event);
                 draft.loading = event.details.habit && event.details.recurring_event_id.is_some();
-                if is_block {
-                    state.calendar.open_event = None;
-                    state.calendar.edit_draft = Some(draft);
-                    return crate::timeblocking::open(state, id);
-                }
                 // A block's panel and the event pane are two different
                 // sidebars; opening one closes the other.
                 if state.timeblocking.block.is_some() {

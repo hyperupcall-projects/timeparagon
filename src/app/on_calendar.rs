@@ -145,6 +145,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                     | Message::EventDraft(EventDraftMessage::EventDraftStarted { .. })
                     | Message::TimeBlocking(
                         crate::timeblocking::Action::View(_)
+                            | crate::timeblocking::Action::Plan(_)
                             | crate::timeblocking::Action::NewWeekTask
                             | crate::timeblocking::Action::DropWeekList { .. }
                             | crate::timeblocking::Action::DropDay
@@ -163,7 +164,10 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 if matches!(
                     &*message,
                     Message::Event(EventMessage::EventOpened(_))
-                        | Message::TimeBlocking(crate::timeblocking::Action::View(_))
+                        | Message::TimeBlocking(
+                            crate::timeblocking::Action::View(_)
+                                | crate::timeblocking::Action::Plan(_)
+                        )
                 ) {
                     let _ = crate::timeblocking::close(state);
                 }

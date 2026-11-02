@@ -149,6 +149,9 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
     };
     let weekly = state.weekly();
     let metrics = *metrics;
+    // A block is written as soon as its type is chosen, so a failure has to be
+    // reported on the popup itself rather than on the details pane it skips.
+    let error = state.calendar.error.clone();
     let overlay = responsive(move |size| {
         let title = crate::ui::controls::text_input("Add title", &draft.title)
             .on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)))
@@ -175,13 +178,25 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
             ]
             .spacing(6.0)
             .width(Fill),
+            button(text("Cancel").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
+                .style(crate::ui::controls::secondary),
         ]
         .spacing(6.0)
         .width(Fill)
         .into();
 
+        let mut body = column![title, kinds].spacing(metrics.spacing);
+        if let Some(error) = &error {
+            body = body.push(
+                text(error.clone())
+                    .size(metrics.label() - 1.0)
+                    .style(text::danger),
+            );
+        }
         let card = mouse_area(
-            container(column![title, kinds].spacing(metrics.spacing))
+            container(body)
                 .padding(metrics.padding)
                 .width(Fill)
                 .height(Fill)
@@ -190,7 +205,8 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
         .on_press(Message::Ignored);
 
         let width = 340.0_f32.min((size.width - 16.0).max(1.0));
-        let height = (metrics.label() * 3.0 + 84.0).min(size.height);
+        let height =
+            (metrics.label() * 4.0 + if error.is_some() { 150.0 } else { 110.0 }).min(size.height);
         let anchor = CREATE_ANCHOR.with(|a| a.get());
         let root = ROOT_BOUNDS.with(|r| r.get());
         let anchor = Rectangle {

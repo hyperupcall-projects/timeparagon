@@ -946,8 +946,6 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     } else {
         row![delete, close].spacing(metrics.spacing).into()
     };
-    // Keep planning and drag targets above the longer block-details form.
-    let editor = super::calendar::event_editor(state, block, metrics);
     let mut body = column![
         text(block.title.clone()).size(18),
         super::calendar::event_source(state, block, metrics),
@@ -1053,13 +1051,6 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             body = body.push(row![task_row(state, task, metrics, false), add]);
         }
     }
-    body = body
-        .push(super::controls::section_heading(
-            "Block details",
-            None,
-            16.0,
-        ))
-        .push(editor);
     // A release anywhere on the panel assigns the dragged task, including on the
     // plus box. A release on a task row is captured first and reorders instead.
     mouse_area(

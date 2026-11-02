@@ -99,6 +99,28 @@ fn the_new_event_popup_offers_a_habit() {
 }
 
 #[test]
+fn the_new_event_popup_cancels_from_a_full_width_button() {
+    let mut state = State::blank();
+    let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+    state.calendar.draft = Some(calendar::Draft::new(
+        "primary".into(),
+        start,
+        start + chrono::Duration::minutes(45),
+    ));
+    let metrics = Metrics::of(Size::new(800.0, 600.0));
+    let mut ui = iced_test::Simulator::with_size(
+        iced_test::core::Settings::default(),
+        Size::new(800.0, 600.0),
+        draft_overlay(&state, &metrics),
+    );
+    ui.click("Cancel").unwrap();
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::EventDraft(EventDraftMessage::EventDraftCancelled)
+    )));
+}
+
+#[test]
 fn event_project_picker_searches_and_emits_assignment_actions() {
     let state = State::blank();
     let metrics = Metrics::of(Size::new(300.0, 800.0));
@@ -534,7 +556,7 @@ fn habit_details_show_start_day_repeat_projects_and_location() {
 }
 
 #[test]
-fn a_time_block_panel_edits_its_fields_in_place() {
+fn a_time_block_panel_only_plans_tasks() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     state.timeblocking.block = Some("standup".into());
@@ -546,9 +568,9 @@ fn a_time_block_panel_edits_its_fields_in_place() {
         Size::new(400.0, 800.0),
         crate::ui::timeblocking::panel(&state, &metrics),
     );
-    assert!(ui.find("Save current event").is_ok());
     assert!(ui.find("Planned Tasks").is_ok());
-    assert!(ui.find("Edit").is_err());
+    assert!(ui.find("Block details").is_err());
+    assert!(ui.find("Save current event").is_err());
 }
 
 #[test]
@@ -647,56 +669,54 @@ fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
 }
 
 #[test]
-fn time_block_full_height_regions_dispatch_different_actions() {
-    for (width, columns, height_fraction, view) in [
-        (600.0, 1, 0.05, true),
-        (600.0, 1, 0.95, false),
-        (240.0, 3, 0.05, true),
-        (240.0, 3, 0.95, true),
-        (240.0, 3, 0.05, false),
-        (240.0, 3, 0.95, false),
+fn time_block_regions_dispatch_different_actions() {
+    // (x fraction, y fraction, expected: 0 = focus, 1 = plan, 2 = details)
+    for (width, columns, x, y, expected) in [
+        (600.0, 1, 0.8, 0.1, 0),
+        (600.0, 1, 0.8, 0.9, 1),
+        (600.0, 1, 0.2, 0.1, 2),
+        (600.0, 1, 0.2, 0.9, 2),
+        (240.0, 3, 0.9, 0.2, 0),
+        (240.0, 3, 0.9, 0.8, 1),
+        (240.0, 3, 0.1, 0.5, 2),
     ] {
         let mut canvas = canvas_with_one_block();
         canvas.blocks[0].time_block = true;
         canvas.blocks[0].columns = columns;
         let bounds = canvas.block_rect(&canvas.blocks[0], width);
-        let (view_rect, open_rect) = block_actions(bounds);
-        assert_eq!(view_rect.height, bounds.height);
-        assert_eq!(open_rect.height, bounds.height);
-        assert_eq!(view_rect.width, bounds.width / 3.0);
-        assert_eq!(view_rect.x, bounds.x);
-        assert_eq!(open_rect.x, bounds.x + bounds.width / 3.0);
+        let (label, focus, plan) = block_actions(bounds);
+        assert_eq!(label.x, bounds.x);
+        assert_eq!(focus.x, plan.x);
+        assert_eq!(focus.y, bounds.y);
+        assert_eq!(focus.height, bounds.height / 2.0);
+        assert_eq!(plan.y, bounds.y + focus.height);
         let element: Element<'_, Message> = canvas_widget(canvas).width(width).height(1440).into();
         let mut ui = iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
             Size::new(width, 1440.0),
             element,
         );
-        // Click physical left/right positions independently of block_actions,
-        // so swapping the regions cannot silently swap the test targets too.
-        let width_fraction = if view { 1.0 / 6.0 } else { 2.0 / 3.0 };
         ui.point_at(Point::new(
-            bounds.x + bounds.width * width_fraction,
-            bounds.y + bounds.height * height_fraction,
+            bounds.x + bounds.width * x,
+            bounds.y + bounds.height * y,
         ));
         ui.simulate([
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
         ]);
         let messages: Vec<_> = ui.into_messages().collect();
-        if view {
-            assert!(
-                messages.iter().any(|m| matches!(
-                    m,
-                    Message::TimeBlocking(crate::timeblocking::Action::View(id))
-                        if id == "standup"
-                )),
-                "the left third must open focused mode"
-            );
-        } else {
-            assert!(messages.iter().any(
+        match expected {
+            0 => assert!(messages.iter().any(|m| matches!(
+                m,
+                Message::TimeBlocking(crate::timeblocking::Action::View(id)) if id == "standup"
+            ))),
+            1 => assert!(messages.iter().any(|m| matches!(
+                m,
+                Message::TimeBlocking(crate::timeblocking::Action::Plan(id)) if id == "standup"
+            ))),
+            _ => assert!(messages.iter().any(
                 |m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "standup")
-            ));
+            )),
         }
     }
 }
