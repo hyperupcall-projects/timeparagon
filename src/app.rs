@@ -20,6 +20,19 @@ use crate::config::{self, Config};
 use crate::theme::Catalog;
 use crate::{alarm, alarms, blocking, notify, panel, theme, timeblocking, ui};
 
+mod on_calendar;
+mod on_event;
+mod on_event_draft;
+mod on_event_edit;
+mod on_keep;
+mod on_navigation;
+mod on_notepad;
+mod on_settings;
+mod on_system;
+mod on_task;
+#[cfg(test)]
+mod tests;
+
 /// The smallest window we are willing to be asked to draw.
 ///
 /// The compact layout is built for 200px; this leaves a little room below
@@ -39,6 +52,56 @@ const STATUS_POLL: Duration = Duration::from_millis(500);
 
 /// How often the current-time needle is redrawn on the calendar.
 const NEEDLE_TICK: Duration = Duration::from_secs(15);
+
+/// Which span of time the Calendar screen shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CalendarView {
+    #[default]
+    Day,
+    Week,
+    Month,
+}
+
+/// The boxes in the shared border settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderLayer {
+    Outer,
+    Inner,
+}
+
+/// The multi-line text fields of the event and habit forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormField {
+    EventDraft,
+    EventEdit,
+    HabitNotes,
+}
+
+/// One editor per [`FormField`]. Each keeps its cursor and selection between
+/// redraws, while the form's draft holds the saved copy of the text.
+pub struct FormEditors {
+    pub event_draft: text_editor::Content,
+    pub event_edit: text_editor::Content,
+    pub habit_notes: text_editor::Content,
+}
+
+impl FormEditors {
+    fn new() -> Self {
+        Self {
+            event_draft: text_editor::Content::new(),
+            event_edit: text_editor::Content::new(),
+            habit_notes: text_editor::Content::new(),
+        }
+    }
+
+    fn get_mut(&mut self, field: FormField) -> &mut text_editor::Content {
+        match field {
+            FormField::EventDraft => &mut self.event_draft,
+            FormField::EventEdit => &mut self.event_edit,
+            FormField::HabitNotes => &mut self.habit_notes,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -137,23 +200,45 @@ impl LayoutField {
 
     pub fn changed(self, value: f32) -> Message {
         match self {
-            Self::CalendarWidth => Message::CalendarWidthChanged(value),
-            Self::CalendarWeekWidth => Message::CalendarWeekWidthChanged(value),
-            Self::CalendarMonthWidth => Message::CalendarMonthWidthChanged(value),
-            Self::TimeBlockWidth => Message::TimeBlockWidthChanged(value),
-            Self::DetailWidth => Message::DetailWidthChanged(value),
-            Self::ScreenMargin => Message::ScreenMarginChanged(value),
-            Self::BorderRadius => Message::BorderRadiusChanged(value),
-            Self::DockBorderRadius => Message::DockBorderRadiusChanged(value),
-            Self::PanelBorderRadius => Message::PanelBorderRadiusChanged(value),
-            Self::DockWidth => Message::DockWidthChanged(value),
-            Self::DockLeftMargin => Message::DockLeftMarginChanged(value),
-            Self::DockRightMargin => Message::DockRightMarginChanged(value),
-            Self::DockBorderOuterWidth => Message::DockBorderOuterWidthChanged(value),
-            Self::DockBorderInnerWidth => Message::DockBorderInnerWidthChanged(value),
-            Self::PanelBorderOuterWidth => Message::PanelBorderOuterWidthChanged(value),
-            Self::PanelBorderInnerWidth => Message::PanelBorderInnerWidthChanged(value),
-            Self::FadeDuration => Message::FadeDurationChanged(value),
+            Self::CalendarWidth => Message::Settings(SettingsMessage::CalendarWidthChanged(value)),
+            Self::CalendarWeekWidth => {
+                Message::Settings(SettingsMessage::CalendarWeekWidthChanged(value))
+            }
+            Self::CalendarMonthWidth => {
+                Message::Settings(SettingsMessage::CalendarMonthWidthChanged(value))
+            }
+            Self::TimeBlockWidth => {
+                Message::Settings(SettingsMessage::TimeBlockWidthChanged(value))
+            }
+            Self::DetailWidth => Message::Settings(SettingsMessage::DetailWidthChanged(value)),
+            Self::ScreenMargin => Message::Settings(SettingsMessage::ScreenMarginChanged(value)),
+            Self::BorderRadius => Message::Settings(SettingsMessage::BorderRadiusChanged(value)),
+            Self::DockBorderRadius => {
+                Message::Settings(SettingsMessage::DockBorderRadiusChanged(value))
+            }
+            Self::PanelBorderRadius => {
+                Message::Settings(SettingsMessage::PanelBorderRadiusChanged(value))
+            }
+            Self::DockWidth => Message::Settings(SettingsMessage::DockWidthChanged(value)),
+            Self::DockLeftMargin => {
+                Message::Settings(SettingsMessage::DockLeftMarginChanged(value))
+            }
+            Self::DockRightMargin => {
+                Message::Settings(SettingsMessage::DockRightMarginChanged(value))
+            }
+            Self::DockBorderOuterWidth => {
+                Message::Settings(SettingsMessage::DockBorderOuterWidthChanged(value))
+            }
+            Self::DockBorderInnerWidth => {
+                Message::Settings(SettingsMessage::DockBorderInnerWidthChanged(value))
+            }
+            Self::PanelBorderOuterWidth => {
+                Message::Settings(SettingsMessage::PanelBorderOuterWidthChanged(value))
+            }
+            Self::PanelBorderInnerWidth => {
+                Message::Settings(SettingsMessage::PanelBorderInnerWidthChanged(value))
+            }
+            Self::FadeDuration => Message::Settings(SettingsMessage::FadeDurationChanged(value)),
         }
     }
 }
@@ -220,7 +305,7 @@ pub struct State {
     pub task_creation_window: bool,
     pub description_popup: Option<String>,
     pub description_editor: text_editor::Content,
-    pub form_editors: [text_editor::Content; 3],
+    pub form_editors: FormEditors,
     pub config: Config,
     pub catalog: Catalog,
 
@@ -236,8 +321,7 @@ pub struct State {
     pub alarms: alarms::Alarms,
 
     pub screen: Screen,
-    pub weekly: bool,
-    pub monthly: bool,
+    pub view: CalendarView,
     /// Whether the Day/Week/Month dropdown under the left-hand navigation is open.
     pub view_menu_open: bool,
     /// Whether the More menu under the right-hand navigation group is open.
@@ -279,12 +363,9 @@ pub struct State {
     pub panel_visible: Arc<AtomicBool>,
     /// Keep empty or incomplete numbers editable until they are submitted.
     pub view_layout_input: Option<(LayoutField, String)>,
-    /// The dock border colour box being typed into: 0 for the outer border,
-    /// 1 for the inner one, and the text as it currently reads.
-    pub dock_border_input: Option<(usize, String)>,
-    /// The panel border colour box being typed into: 0 for the outer border,
-    /// 1 for the inner one, and the text as it currently reads.
-    pub panel_border_input: Option<(usize, String)>,
+    /// The panel border colour box being typed into, and the text as it
+    /// currently reads.
+    pub panel_border_input: Option<(BorderLayer, String)>,
     /// Whether the shared details editor is visible.
     pub details_pane_open: bool,
     /// Floating range view or details editor, independent of the day panel.
@@ -296,6 +377,9 @@ pub struct State {
     save_queued: bool,
     /// Last disk snapshot, including our own writes, to ignore save echoes.
     disk_config: Config,
+    /// Why settings are not reaching the disk, shown above the app until a
+    /// good config can be read or written.
+    pub config_error: Option<String>,
 
     /// The notepad's text as the editor widget holds it.
     ///
@@ -318,61 +402,58 @@ pub struct State {
     pub accounts: crate::integrations::accounts::Accounts,
 }
 
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Message {
     Picker(crate::ui::controls::Action),
-    DescriptionOpen(String),
-    DescriptionEdited(text_editor::Action),
-    DescriptionClose,
-    DescriptionSave,
-    EventTitleEdit,
-    HabitDetailsLoaded(
-        String,
-        Result<(calendar::Event, calendar::EditDraft), String>,
-    ),
-    EventEndDateChanged(String),
-    EventLabelDraft(String),
-    EventLabelAdd,
-    EventLabelRemove(String),
-    FormEdited(usize, text_editor::Action),
     TimeBlocking(crate::timeblocking::Action),
     BrainDump(crate::brain_dump::Action),
     Inbox(crate::inbox::Action),
-    TaskPopoverBounds(iced::Rectangle),
     Accounts(crate::integrations::accounts::Action),
-    FlashFrame(Instant),
+    Alarms(alarms::Action),
+    Projects(crate::projects::Action),
+    Travel(crate::travel::Action),
+    Habits(crate::habits::Action),
+    /// An event we deliberately do not act on, such as a key release or a
+    /// press that only needs to be swallowed.
+    Ignored,
+    OpenEventLink(String),
+    Navigation(NavigationMessage),
+    Notepad(NotepadMessage),
+    Settings(SettingsMessage),
+    System(SystemMessage),
+    Keep(KeepMessage),
+    Calendar(CalendarMessage),
+    Task(TaskMessage),
+    Event(EventMessage),
+    EventDraft(EventDraftMessage),
+    EventEdit(EventEditMessage),
+}
 
+/// Moving between screens.
+#[derive(Debug, Clone)]
+pub enum NavigationMessage {
+    ScreenSelected(Screen),
+    ViewMenuToggled,
+    MoreMenuToggled,
+}
+
+/// The notepad page.
+#[derive(Debug, Clone)]
+pub enum NotepadMessage {
     /// The notepad was edited.
     NotepadEdited(text_editor::Action),
     /// The text on the notepad was made bigger or smaller, by a number of
     /// percentage points.
     NotepadFontSizeChanged(i32),
-    Alarms(alarms::Action),
+}
 
-    ScreenSelected(Screen),
-    ViewMenuToggled,
-    MoreMenuToggled,
-    CalendarModeSelected(bool),
-    CalendarTaskListToggled(bool),
-    CalendarMonthViewSelected,
-    CalendarViewMonthShift(i32),
-    CalendarDayOpened(chrono::NaiveDate),
-    WeekDayAction(chrono::NaiveDate, Box<Message>),
-    WeekHover(Option<chrono::NaiveDate>),
-    WeekScrolled(f32),
-    Projects(crate::projects::Action),
-    Travel(crate::travel::Action),
-    Habits(crate::habits::Action),
-    KeepRefresh,
-    KeepSignin,
-    KeepLoaded(Result<crate::keep::Snapshot, String>),
-    KeepSignedIn(Result<(), String>),
-    KeepQueryChanged(String),
-    KeepLabelChanged(Option<String>),
-    KeepScopeChanged(crate::keep::Scope),
-    KeepEdit(String),
-    Dismiss,
-
+/// Changes made on the Settings page.
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum SettingsMessage {
     ThemeSelected(String),
     FollowSystemToggled(bool),
     TimeFormatSelected(TimeFormat),
@@ -391,12 +472,12 @@ pub enum Message {
     DockSideSelected(config::DockSide),
     DockBorderOuterWidthChanged(f32),
     DockBorderInnerWidthChanged(f32),
-    DockBorderColorInput(usize, String),
-    DockBorderColorSubmitted(usize),
+    DockBorderColorInput(BorderLayer, String),
+    DockBorderColorSubmitted(BorderLayer),
     PanelBorderOuterWidthChanged(f32),
     PanelBorderInnerWidthChanged(f32),
-    PanelBorderColorInput(usize, String),
-    PanelBorderColorSubmitted(usize),
+    PanelBorderColorInput(BorderLayer, String),
+    PanelBorderColorSubmitted(BorderLayer),
     FadeDurationChanged(f32),
     WindowAnimationSelected(config::WindowAnimation),
     DockHourLinesToggled(bool),
@@ -412,88 +493,6 @@ pub enum Message {
     ShortcutRemoved(panel::Action, usize),
     /// The shortcuts of an action were applied, or could not be.
     ShortcutsApplied(panel::Action, Result<Vec<String>, String>),
-
-    /// A sound finished rendering and is ready to hand to PipeWire.
-    SoundRendered(Result<Pcm, String>, PlaySpec),
-    NotificationPosted(Result<(), String>),
-    ConfigSaved(Result<(), String>),
-    SaveRequested,
-    ConfigReloaded(Config),
-    AudioStatusPolled,
-
-    WindowOpened(window::Id),
-    EditorWindowOpened(window::Id),
-    /// The monitor size came back, so the window can open at its default width.
-    MonitorSized(window::Id, Option<Size>),
-    WeekMonitorSized(window::Id, Option<Size>),
-    WindowClosed(window::Id),
-    WindowResized(window::Id, Size),
-    TaskDragMoved(window::Id, iced::Point),
-    WeekDragScroll,
-    TaskDragReleased(window::Id),
-    TaskDragDropped(String, Option<Box<Message>>),
-    FlashFinished,
-    /// A poll tick that checks for show/hide commands from the panel daemon.
-    PanelCommandPolled,
-    /// A poll tick that checks for tasks added over IPC.
-    InboxAddedPolled,
-
-    KeyPressed(Key, keyboard::Modifiers),
-    /// An event we deliberately do not act on, such as a key release or a
-    /// press that only needs to be swallowed.
-    Ignored,
-
-    CalendarMenuToggled,
-    CalendarToggled(String, bool),
-    /// Move a calendar-view source one position up (left) or down (right).
-    CalendarSourceMoved(String, bool),
-    CalendarSyncRequested,
-    CalendarAutoSyncRequested,
-    /// Drop cached days and pull the day in view from Google again.
-    CalendarResyncRequested,
-    CalendarSynced(Result<calendar::Snapshot, String>),
-    CalendarSyncedAt(u64, Result<calendar::Snapshot, String>),
-    CalendarRangeSynced(
-        u64,
-        Vec<chrono::NaiveDate>,
-        Result<calendar::Snapshot, String>,
-    ),
-    CalendarTick,
-    OpenGoogleCalendar,
-    /// Swap this window for the dock strip on the screen edge.
-    DockRequested,
-    EventOpened(String),
-    EventClosed,
-    OpenEventLink(String),
-    /// The user dragged an event's time on the day grid. The new times are
-    /// applied to the view at once and written back to Google.
-    EventTimeChanged {
-        id: String,
-        start: DateTime<Local>,
-        end: DateTime<Local>,
-    },
-    /// Google's answer to a dragged time change.
-    EventTimeSaved(String, Result<(), String>),
-    /// The user clicked Delete on an event's details card. The confirmation
-    /// prompt opens before anything is sent to Google.
-    EventDeleteRequested(String),
-    EventDeleteScoped(String, calendar::SaveScope),
-    EventEditDeleteMenuToggled,
-    /// The user confirmed the deletion prompt.
-    EventDeleteConfirmed(String),
-    /// The user dismissed the deletion prompt without deleting.
-    EventDeleteCancelled,
-    /// Google's answer to a single-event deletion.
-    EventDeleted(String, Result<(), String>),
-    /// Tick a Google Task off, or put it back.
-    TaskToggled(String),
-    /// Ignore a task, or restore an ignored task to active.
-    TaskIgnoreToggled(String),
-    TaskCompletionSaved(
-        String,
-        timeblocking::TaskStatus,
-        Result<calendar::Event, String>,
-    ),
     /// Show or hide Google Tasks in the day view.
     ShowTasksToggled(bool),
     /// Open or close the color picker for a calendar or Google Tasks list.
@@ -504,12 +503,6 @@ pub enum Message {
     CalendarColorPicked(String, Option<iced::Color>),
     /// Color one of the TimeSlay calendar's event kinds; `None` resets it.
     TimeSlayColorPicked(String, Option<iced::Color>),
-    /// Delete a single Google Task instance (one occurrence of a recurring task).
-    TaskDeleteRequested(String),
-    /// The user confirmed the task deletion prompt.
-    TaskDeleteConfirmed(String),
-    /// Google's answer to a single-task deletion.
-    TaskDeleted(String, Result<(), String>),
     GoogleClientIdChanged(String),
     GoogleClientSecretChanged(String),
     GoogleConnectRequested,
@@ -528,6 +521,88 @@ pub enum Message {
     SleepSaved(Result<calendar::Event, String>),
     CalendarWeeklyDaysChanged(u32),
     CalendarWeeklyWidthChanged(u32),
+
+    /// The calendar new events are created on was changed.
+    DefaultCalendarSelected(String),
+}
+
+/// Windows, timers, the config file and other things the app reacts to.
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum SystemMessage {
+    TaskPopoverBounds(iced::Rectangle),
+    FlashFrame(Instant),
+    Dismiss,
+
+    /// A sound finished rendering and is ready to hand to PipeWire.
+    SoundRendered(Result<Pcm, String>, PlaySpec),
+    NotificationPosted(Result<(), String>),
+    ConfigSaved(Result<(), String>),
+    SaveRequested,
+    ConfigReloaded(Config),
+    AudioStatusPolled,
+
+    WindowOpened(window::Id),
+    EditorWindowOpened(window::Id),
+    /// The monitor size came back, so the window can open at its default width.
+    MonitorSized(window::Id, Option<Size>),
+    WeekMonitorSized(window::Id, Option<Size>),
+    WindowClosed(window::Id),
+    WindowResized(window::Id, Size),
+    FlashFinished,
+    /// A poll tick that checks for show/hide commands from the panel daemon.
+    PanelCommandPolled,
+    /// A poll tick that checks for tasks added over IPC.
+    InboxAddedPolled,
+
+    KeyPressed(Key, keyboard::Modifiers),
+    OpenGoogleCalendar,
+    /// Swap this window for the dock strip on the screen edge.
+    DockRequested,
+}
+
+/// The Google Keep screen.
+#[derive(Debug, Clone)]
+pub enum KeepMessage {
+    KeepRefresh,
+    KeepSignin,
+    KeepLoaded(Result<crate::keep::Snapshot, String>),
+    KeepSignedIn(Result<(), String>),
+    KeepQueryChanged(String),
+    KeepLabelChanged(Option<String>),
+    KeepScopeChanged(crate::keep::Scope),
+    KeepEdit(String),
+}
+
+/// What the calendar shows and keeping it in sync.
+#[derive(Debug, Clone)]
+pub enum CalendarMessage {
+    CalendarModeSelected(bool),
+    CalendarTaskListToggled(bool),
+    CalendarMonthViewSelected,
+    CalendarViewMonthShift(i32),
+    CalendarDayOpened(chrono::NaiveDate),
+    WeekDayAction(chrono::NaiveDate, Box<Message>),
+    WeekHover(Option<chrono::NaiveDate>),
+    WeekScrolled(f32),
+
+    CalendarMenuToggled,
+    CalendarToggled(String, bool),
+    /// Move a calendar-view source one position up (left) or down (right).
+    CalendarSourceMoved(String, bool),
+    CalendarSyncRequested,
+    CalendarAutoSyncRequested,
+    /// Drop cached days and pull the day in view from Google again.
+    CalendarResyncRequested,
+    CalendarSynced(Result<calendar::Snapshot, String>),
+    CalendarSyncedAt(u64, Result<calendar::Snapshot, String>),
+    CalendarRangeSynced(
+        u64,
+        Vec<chrono::NaiveDate>,
+        Result<calendar::Snapshot, String>,
+    ),
+    CalendarTick,
     /// Multiplies the calendar hour height. Above 1 spreads the hours apart.
     ///
     /// `anchor` is the pixel row under the pointer, measured from the top of
@@ -544,7 +619,81 @@ pub enum Message {
     CalendarMonthToggled,
     /// Move the month picker by a number of months, positive or negative.
     CalendarMonthShift(i32),
+}
 
+/// Tasks: dragging, completing and deleting them.
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum TaskMessage {
+    TaskDragMoved(window::Id, iced::Point),
+    WeekDragScroll,
+    TaskDragReleased(window::Id),
+    TaskDragDropped(String, Option<Box<Message>>),
+    /// Tick a Google Task off, or put it back.
+    TaskToggled(String),
+    /// Ignore a task, or restore an ignored task to active.
+    TaskIgnoreToggled(String),
+    TaskCompletionSaved(
+        String,
+        timeblocking::TaskStatus,
+        Result<calendar::Event, String>,
+    ),
+    /// Delete a single Google Task instance (one occurrence of a recurring task).
+    TaskDeleteRequested(String),
+    /// The user confirmed the task deletion prompt.
+    TaskDeleteConfirmed(String),
+    /// Google's answer to a single-task deletion.
+    TaskDeleted(String, Result<(), String>),
+}
+
+/// An event that already exists: opening, moving and deleting it.
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum EventMessage {
+    DescriptionOpen(String),
+    DescriptionEdited(text_editor::Action),
+    DescriptionClose,
+    DescriptionSave,
+    EventTitleEdit,
+    HabitDetailsLoaded(
+        String,
+        Result<(calendar::Event, calendar::EditDraft), String>,
+    ),
+    EventEndDateChanged(String),
+    EventLabelDraft(String),
+    EventLabelAdd,
+    EventLabelRemove(String),
+    FormEdited(FormField, text_editor::Action),
+    EventOpened(String),
+    EventClosed,
+    /// The user dragged an event's time on the day grid. The new times are
+    /// applied to the view at once and written back to Google.
+    EventTimeChanged {
+        id: String,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    },
+    /// Google's answer to a dragged time change.
+    EventTimeSaved(String, Result<(), String>),
+    /// The user clicked Delete on an event's details card. The confirmation
+    /// prompt opens before anything is sent to Google.
+    EventDeleteRequested(String),
+    EventDeleteScoped(String, calendar::SaveScope),
+    /// The user confirmed the deletion prompt.
+    EventDeleteConfirmed(String),
+    /// The user dismissed the deletion prompt without deleting.
+    EventDeleteCancelled,
+    /// Google's answer to a single-event deletion.
+    EventDeleted(String, Result<(), String>),
+}
+
+/// The form for a new event.
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum EventDraftMessage {
     /// A click or drag on empty grid space asked for a new event. The popup
     /// opens on the default calendar, spanning these times.
     EventDraftStarted {
@@ -554,7 +703,6 @@ pub enum Message {
     /// The new event's title was edited.
     EventDraftTitleChanged(String),
     EventDraftOptions(calendar::event_options::Action),
-    EventEditOptions(calendar::event_options::Action),
     EventDraftProjects(calendar::projects::Action),
     /// The new event's description was edited.
     EventDraftDescriptionChanged(String),
@@ -578,6 +726,13 @@ pub enum Message {
     EventDraftSaveRequested,
     /// Google's answer to creating the event, carrying the chip to draw.
     EventDraftSaved(Result<calendar::Event, String>),
+}
+
+/// The form for editing an event.
+#[derive(Debug, Clone)]
+pub enum EventEditMessage {
+    EventEditDeleteMenuToggled,
+    EventEditOptions(calendar::event_options::Action),
 
     /// The user asked to edit an existing event, from the details card.
     EventEditRequested(String),
@@ -604,9 +759,6 @@ pub enum Message {
     EventEditSaveScoped(calendar::SaveScope),
     /// Google's answer to updating the event.
     EventEditSaved(Result<(), String>),
-
-    /// The calendar new events are created on was changed.
-    DefaultCalendarSelected(String),
 }
 
 /// The parts of a play request that survive the trip through rendering.
@@ -635,16 +787,15 @@ impl State {
             task_creation_window: false,
             description_popup: None,
             description_editor: text_editor::Content::new(),
-            form_editors: std::array::from_fn(|_| text_editor::Content::new()),
+            form_editors: FormEditors::new(),
             now: Instant::now(),
             sidebar: None,
             alarms: alarms::Alarms::default(),
             screen: Screen::Calendar,
-            weekly: false,
-            monthly: false,
+            view: CalendarView::default(),
             view_menu_open: false,
             more_menu_open: false,
-            week_anchor: calendar::day_at(Local::now(), day_end_hour),
+            week_anchor: calendar::day_at(crate::clock::now(), day_end_hour),
             week_hover: None,
             week_scroll_x: 0.0,
             projects: Default::default(),
@@ -666,13 +817,13 @@ impl State {
             shortcut_editors: Default::default(),
             panel_visible: Arc::new(AtomicBool::new(true)),
             view_layout_input: None,
-            dock_border_input: None,
             panel_border_input: None,
             details_pane_open: false,
             editor_window: None,
             editor_window_size: Size::ZERO,
             save_queued: false,
             disk_config: config.clone(),
+            config_error: None,
             catalog,
             config,
             notepad,
@@ -726,12 +877,26 @@ impl State {
         self.calendar.is_busy() || !self.calendar_fetch_pending.is_empty()
     }
 
-    pub(crate) fn range_view_active(&self) -> bool {
-        self.weekly || self.monthly
+    /// A state touching nothing outside itself: default settings and the
+    /// built-in themes. It is what tests and previews start from.
+    pub fn blank() -> Self {
+        Self::new(Config::default(), Catalog::built_in())
+    }
+
+    pub fn weekly(&self) -> bool {
+        self.view == CalendarView::Week
+    }
+
+    pub fn monthly(&self) -> bool {
+        self.view == CalendarView::Month
+    }
+
+    pub fn range_view_active(&self) -> bool {
+        self.view != CalendarView::Day
     }
 
     pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
-        if self.monthly {
+        if self.monthly() {
             calendar::month_grid(self.week_anchor)
         } else {
             calendar::week_dates(self.week_anchor, self.config.calendar.weekly_days())
@@ -739,14 +904,14 @@ impl State {
     }
 
     fn weekly_window_width(&self) -> f32 {
-        let view_width = if self.monthly {
+        let view_width = if self.monthly() {
             self.config.views.calendar_month_width()
         } else {
             self.config
                 .views
                 .calendar_week_width(ui::calendar::weekly_view_width(&self.config.calendar))
         };
-        let configured = if self.monthly {
+        let configured = if self.monthly() {
             self.config.views.calendar_month_width
         } else {
             self.config.views.calendar_week_width
@@ -807,7 +972,13 @@ pub fn boot_new_task() -> (State, Task<Message>) {
         exit_on_close_request: true,
         ..Default::default()
     });
-    (state, Task::batch([open.map(Message::WindowOpened), edit]))
+    (
+        state,
+        Task::batch([
+            open.map(|v0| Message::System(SystemMessage::WindowOpened(v0))),
+            edit,
+        ]),
+    )
 }
 
 /// Opens the clock as the side panel: a separate, narrow instance pinned to one
@@ -856,7 +1027,10 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
     );
     let (_id, open) = window::open(sidebar_settings(&panel, &state.config.views));
 
-    (state, open.map(Message::WindowOpened))
+    (
+        state,
+        open.map(|v0| Message::System(SystemMessage::WindowOpened(v0))),
+    )
 }
 
 /// The height a panel asks for before the compositor clamps it.
@@ -902,6 +1076,7 @@ fn sidebar_platform(views: &config::ViewSettings) -> window::settings::PlatformS
 /// opens no window: the two callers want different ones.
 fn boot_state() -> State {
     let mut state = State::new(Config::load(), Catalog::load());
+    state.config_error = Config::load_problem();
 
     // Follow the config in Google Drive's app folder. This is also not part of
     // `State::new`: a hand-built test state must not touch the network.
@@ -955,29 +1130,29 @@ fn window_icon() -> Option<window::Icon> {
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
     // The flash animation redraws many times a second and changes nothing
     // travel reads.
-    let ticking = matches!(message, Message::FlashFrame(_) | Message::WeekDragScroll);
+    let ticking = matches!(
+        message,
+        Message::System(SystemMessage::FlashFrame(_)) | Message::Task(TaskMessage::WeekDragScroll)
+    );
     let task = dispatch(state, message);
-    let values = [
-        state
-            .calendar
-            .draft
-            .as_ref()
-            .map(|d| d.description.as_str())
-            .unwrap_or(""),
-        state
-            .calendar
-            .edit_draft
-            .as_ref()
-            .map(|d| d.description.as_str())
-            .unwrap_or(""),
-        state
-            .habits
-            .draft
-            .as_ref()
-            .map(|d| d.notes.as_str())
-            .unwrap_or(""),
-    ];
-    for (editor, value) in state.form_editors.iter_mut().zip(values) {
+    let draft = state.calendar.draft.as_ref();
+    let edit = state.calendar.edit_draft.as_ref();
+    let habit = state.habits.draft.as_ref();
+    for (editor, value) in [
+        (
+            &mut state.form_editors.event_draft,
+            draft.map(|d| d.description.as_str()),
+        ),
+        (
+            &mut state.form_editors.event_edit,
+            edit.map(|d| d.description.as_str()),
+        ),
+        (
+            &mut state.form_editors.habit_notes,
+            habit.map(|d| d.notes.as_str()),
+        ),
+    ] {
+        let value = value.unwrap_or("");
         if editor.text() != value {
             *editor = text_editor::Content::with_text(value);
         }
@@ -1054,7 +1229,7 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
     });
     state.editor_window = Some(id);
     state.editor_window_size = size;
-    task.map(Message::EditorWindowOpened)
+    task.map(|v0| Message::System(SystemMessage::EditorWindowOpened(v0)))
 }
 
 fn detail_pane_visible(state: &State) -> bool {
@@ -1074,12 +1249,13 @@ fn range_view_transition(
     }
 
     // Range views use the floating surface; the day panel never resizes.
-    if state.range_view_active() {
-        if let Some(id) = state.main_window {
-            return close.chain(
-                window::monitor_size(id).map(move |size| Message::WeekMonitorSized(id, size)),
-            );
-        }
+    if state.range_view_active()
+        && let Some(id) = state.main_window
+    {
+        return close.chain(
+            window::monitor_size(id)
+                .map(move |size| Message::System(SystemMessage::WeekMonitorSized(id, size))),
+        );
     }
     close
 }
@@ -1099,21 +1275,6 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
 
 fn dispatch(state: &mut State, message: Message) -> Task<Message> {
     match message {
-        Message::TaskPopoverBounds(_) => Task::none(),
-        Message::EditorWindowOpened(id) => {
-            if state.editor_window == Some(id) {
-                if state.weekly && state.range_view_active() {
-                    ui::calendar::scroll_week_to_now(
-                        state.calendar.hour_height,
-                        state.config.calendar.day_end_minutes(),
-                    )
-                } else {
-                    Task::none()
-                }
-            } else {
-                window::close(id)
-            }
-        }
         Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
         Message::BrainDump(action) => crate::brain_dump::update(state, action),
         Message::Inbox(action) => {
@@ -1124,2569 +1285,28 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             task
         }
         Message::Accounts(action) => crate::integrations::accounts::update(state, action),
-        Message::FlashFrame(now) => {
-            state.now = now;
-
-            match &state.flash {
-                Some(flash) if flash.alpha(now).is_none() => Task::done(Message::FlashFinished),
-                _ => Task::none(),
-            }
-        }
-
-        Message::NotepadEdited(action) => {
-            state.notepad.perform(action);
-
-            // The editor is the one holding the text while it is being typed,
-            // so the saved copy is taken from it after every change.
-            state.config.notepad.text = state.notepad.text();
-
-            queue_save(state)
-        }
-
-        Message::NotepadFontSizeChanged(delta) => {
-            let size = state.config.notepad.font_size;
-            let next = size.saturating_add_signed(delta as i8).clamp(
-                config::Notepad::MIN_FONT_SIZE,
-                config::Notepad::MAX_FONT_SIZE,
-            );
-
-            state.config.notepad.font_size = next;
-
-            queue_save(state)
-        }
-
         Message::Alarms(action) => alarms::update(state, action),
-
-        Message::ViewMenuToggled => {
-            state.view_menu_open = !state.view_menu_open;
-            // Only one dropdown is open at a time.
-            if state.view_menu_open {
-                state.more_menu_open = false;
-            }
-            Task::none()
-        }
-
-        Message::MoreMenuToggled => {
-            state.more_menu_open = !state.more_menu_open;
-            if state.more_menu_open {
-                state.view_menu_open = false;
-            }
-            Task::none()
-        }
-
-        Message::ScreenSelected(screen) => {
-            state.view_layout_input = None;
-            // Choosing a destination puts the dropdown menus away.
-            state.view_menu_open = false;
-            state.more_menu_open = false;
-            // Alarm setting belongs to the day view, so leaving it ends both.
-            state.alarms.mode = false;
-            state.alarms.editor = None;
-            // Keep the day grid's scroll position when switching screens.
-            state.calendar.menu_open = false;
-            // Each task list opens its own selection in the details pane.
-            let tasks_screen =
-                |screen| matches!(screen, Screen::Overdue | Screen::Inbox | Screen::Triaged);
-            if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {
-                state.calendar.open_event = None;
-                state.inbox.picker = None;
-            }
-            if screen == Screen::Habits {
-                state.calendar.open_event = None;
-                state.habits.confirm_delete = None;
-            }
-            if screen != Screen::Habits {
-                state.habits.calendar_habit = None;
-            }
-            state.screen = screen;
-            if screen != Screen::BrainDump {
-                state.brain_dump.open = None;
-            }
-            let close = crate::timeblocking::close(state);
-            if screen == Screen::KeepNotes {
-                Task::batch([close, refresh_keep(state)])
-            } else if screen == Screen::Habits {
-                Task::batch([
-                    close,
-                    Task::done(Message::Habits(crate::habits::Action::Refresh)),
-                ])
-            } else {
-                close
-            }
-        }
-
-        Message::CalendarTaskListToggled(show) => {
-            state.config.calendar.weekly_task_list = show;
-            state.week_scroll_x = 0.0;
-            let scroll = if show {
-                ui::calendar::scroll_week_to_start()
-            } else {
-                ui::calendar::scroll_week_to_now(
-                    state.calendar.hour_height,
-                    state.config.calendar.day_end_minutes(),
-                )
-            };
-            Task::batch([
-                queue_save(state),
-                ui::calendar::scroll_week_to_start(),
-                scroll,
-            ])
-        }
-
-        Message::CalendarModeSelected(weekly) => {
-            state.habits.calendar_habit = None;
-            let was_weekly = state.range_view_active();
-            let changed = state.monthly || state.weekly != weekly;
-            // Overview controls must not navigate or reset the sidebar.
-            state.week_hover = None;
-            state.weekly = weekly;
-            state.monthly = false;
-            let close = range_view_transition(state, was_weekly, Task::none());
-            if changed {
-                state.week_anchor = state.calendar.day;
-                state.week_scroll_x = 0.0;
-                let scroll = if weekly {
-                    ui::calendar::scroll_week_to_now(
-                        state.calendar.hour_height,
-                        state.config.calendar.day_end_minutes(),
-                    )
-                } else {
-                    Task::none()
-                };
-                Task::batch([close, scroll, show_cached_calendar(state)])
-            } else {
-                close
-            }
-        }
-
-        Message::CalendarMonthViewSelected => {
-            let was_wide = state.range_view_active();
-            let changed = !state.monthly;
-            // Overview controls must not navigate or reset the sidebar.
-            state.week_hover = None;
-            state.weekly = false;
-            state.monthly = true;
-            if changed {
-                state.week_anchor = state.calendar.day;
-            }
-            let resize = range_view_transition(state, was_wide, Task::none());
-            Task::batch([resize, show_cached_calendar(state)])
-        }
-        Message::CalendarViewMonthShift(months) => {
-            let first = calendar::first_of_month(state.week_anchor);
-            let step = chrono::Months::new(months.unsigned_abs());
-            let day = if months >= 0 {
-                first.checked_add_months(step)
-            } else {
-                first.checked_sub_months(step)
-            };
-            if let Some(day) = day {
-                return dispatch(state, Message::CalendarDaySelected(day));
-            }
-            Task::none()
-        }
-        Message::CalendarDayOpened(day) => {
-            let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            state.calendar.set_day(day, today);
-            let close = crate::timeblocking::close(state);
-            Task::batch([close, show_cached_calendar(state)])
-        }
-
-        Message::WeekHover(day) => {
-            state.week_hover = day;
-            Task::none()
-        }
-
-        Message::WeekScrolled(x) => {
-            state.week_scroll_x = x;
-            Task::none()
-        }
-
-        Message::WeekDragScroll => ui::calendar::scroll_week_drag(state),
-        Message::TaskDragMoved(window, position) => {
-            if state.timeblocking.dragging.is_some() {
-                state.timeblocking.drag_window = Some(window);
-                state.timeblocking.drag_pointer = Some(position);
-            }
-            Task::none()
-        }
-        Message::TaskDragReleased(window) => {
-            if let Some(id) = state.timeblocking.dragging.clone()
-                && state.main_window == Some(window)
-                && let Some(position) = state.timeblocking.drag_pointer
-                && let Some(position) = ui::task_drop::range_position(state, window, position)
-            {
-                return ui::task_drop::release(id, position);
-            }
-            crate::timeblocking::update(state, crate::timeblocking::Action::CancelDrag)
-        }
-        Message::TaskDragDropped(id, message) => {
-            if state.timeblocking.dragging.as_deref() != Some(&id) {
-                return Task::none();
-            }
-            dispatch(
-                state,
-                message.map_or(
-                    Message::TimeBlocking(crate::timeblocking::Action::CancelDrag),
-                    |message| *message,
-                ),
-            )
-        }
-
-        Message::WeekDayAction(day, message) => {
-            let message = Box::new(match *message {
-                Message::TimeBlocking(crate::timeblocking::Action::DropTask(target))
-                    if state.timeblocking.drag_window.or(state.main_window)
-                        == state.main_window =>
-                {
-                    Message::TimeBlocking(crate::timeblocking::Action::DropCalendarTask(target))
-                }
-                message => message,
-            });
-            let selects_day = matches!(
-                &*message,
-                Message::EventOpened(_)
-                    | Message::EventTimeChanged { .. }
-                    | Message::TaskToggled(_)
-                    | Message::Habits(crate::habits::Action::ToggleCompleted(_))
-                    | Message::EventDraftStarted { .. }
-                    | Message::TimeBlocking(
-                        crate::timeblocking::Action::View(_)
-                            | crate::timeblocking::Action::NewWeekTask
-                            | crate::timeblocking::Action::DropWeekList { .. }
-                            | crate::timeblocking::Action::DropDay
-                            | crate::timeblocking::Action::DropTime(_)
-                            | crate::timeblocking::Action::DropTask(_)
-                            | crate::timeblocking::Action::DropCalendarTask(_)
-                            | crate::timeblocking::Action::DropBlock(_)
-                    )
-            );
-            if selects_day && day != state.calendar.day {
-                let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-                let follow_today = state.calendar.follow_today;
-                state.calendar.set_day(day, today);
-                state.calendar.follow_today = follow_today;
-                if matches!(
-                    &*message,
-                    Message::EventOpened(_)
-                        | Message::TimeBlocking(crate::timeblocking::Action::View(_))
-                ) {
-                    let _ = crate::timeblocking::close(state);
-                }
-            }
-            dispatch(state, *message)
-        }
-
         Message::Projects(action) => crate::projects::update(state, action),
         Message::Travel(action) => crate::travel::update(state, action),
         Message::Habits(action) => crate::habits::update(state, action),
-
-        Message::KeepRefresh => refresh_keep(state),
-        Message::KeepSignin => {
-            if state.keep.loading {
-                return Task::none();
-            }
-            state.keep.loading = true;
-            state.keep.error = None;
-            blocking::run(crate::keep::signin).map(Message::KeepSignedIn)
-        }
-        Message::KeepSignedIn(result) => {
-            state.keep.loading = false;
-            match result {
-                Ok(()) => refresh_keep(state),
-                Err(error) => {
-                    state.keep.error = Some(error);
-                    Task::none()
-                }
-            }
-        }
-        Message::KeepLoaded(result) => {
-            state.keep.loading = false;
-            match result {
-                Ok(snapshot) => {
-                    state.keep.snapshot = snapshot;
-                    state.keep.error = None;
-                }
-                Err(error) => state.keep.error = Some(error),
-            }
-            Task::none()
-        }
-        Message::KeepQueryChanged(query) => {
-            state.keep.query = query;
-            Task::none()
-        }
-        Message::KeepLabelChanged(label) => {
-            state.keep.label = label;
-            Task::none()
-        }
-        Message::KeepScopeChanged(scope) => {
-            state.keep.scope = scope;
-            Task::none()
-        }
-        Message::KeepEdit(url) => {
-            if url.starts_with("https://keep.google.com/") {
-                if let Err(error) = calendar::oauth::open_in_browser(&url) {
-                    state.keep.error = Some(error);
-                }
-            }
-            Task::none()
-        }
-
-        Message::Dismiss => dismiss(state),
-
-        Message::ShortcutInputChanged(action, value) => {
-            let editor = &mut state.shortcut_editors[action.index()];
-            editor.input = value;
-            editor.result = None;
-            Task::none()
-        }
-
-        Message::ShortcutAdded(action) => {
-            let editor = &mut state.shortcut_editors[action.index()];
-            let spec = editor.input.trim().to_owned();
-            if editor.busy || spec.is_empty() {
-                return Task::none();
-            }
-            let mut shortcuts = state.config.panel.shortcuts(action).to_vec();
-            let problem = if let Err(error) = panel::validate(&spec) {
-                Some(format!("{error:#}"))
-            } else if shortcuts
-                .iter()
-                .any(|known| panel::same_shortcut(known, &spec))
-            {
-                Some(format!("{spec} is already a {} shortcut", action.label()))
-            } else {
-                None
-            };
-            if let Some(problem) = problem {
-                editor.result = Some(Err(problem));
-                return Task::none();
-            }
-            shortcuts.push(spec);
-            apply_shortcuts(state, action, shortcuts)
-        }
-
-        Message::ShortcutRemoved(action, index) => {
-            let mut shortcuts = state.config.panel.shortcuts(action).to_vec();
-            if state.shortcut_editors[action.index()].busy || index >= shortcuts.len() {
-                return Task::none();
-            }
-            shortcuts.remove(index);
-            apply_shortcuts(state, action, shortcuts)
-        }
-
-        Message::ShortcutsApplied(action, result) => {
-            let editor = &mut state.shortcut_editors[action.index()];
-            editor.busy = false;
-            match result {
-                Ok(shortcuts) => {
-                    editor.input.clear();
-                    editor.result = Some(Ok(if shortcuts.is_empty() {
-                        format!("{} has no shortcut", action.label())
-                    } else {
-                        format!("{} is {}", action.label(), shortcuts.join(", "))
-                    }));
-                    state.config.panel.set_shortcuts(action, shortcuts);
-                    queue_save(state)
-                }
-                Err(error) => {
-                    editor.result = Some(Err(error));
-                    Task::none()
-                }
-            }
-        }
-
-        Message::ViewLayoutInputChanged(field, input) => {
-            if !input.chars().all(|c| c.is_ascii_digit()) {
-                return Task::none();
-            }
-            let (min, max) = field.bounds();
-            if let Ok(value) = input.parse::<f32>()
-                && (min..=max).contains(&value)
-            {
-                update(state, field.changed(value))
-            } else {
-                state.view_layout_input = Some((field, input));
-                Task::none()
-            }
-        }
-
-        Message::ViewLayoutInputSubmitted(field) => {
-            let value = state
-                .view_layout_input
-                .take()
-                .filter(|(edited, _)| *edited == field)
-                .and_then(|(_, input)| input.parse::<f32>().ok())
-                .filter(|value| value.is_finite())
-                .unwrap_or_else(|| field.value(state));
-            update(state, field.changed(value))
-        }
-
-        Message::CalendarWeekWidthChanged(width) | Message::CalendarMonthWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            let width = Some(width.clamp(
-                config::ViewSettings::MIN_WIDTH,
-                config::ViewSettings::MAX_WIDTH,
-            ));
-            if matches!(message, Message::CalendarWeekWidthChanged(_)) {
-                state.config.views.calendar_week_width = width;
-            } else {
-                state.config.views.calendar_month_width = width;
-            }
-            queue_save(state)
-        }
-
-        Message::CalendarWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.calendar_width = Some(width.clamp(
-                config::ViewSettings::MIN_WIDTH,
-                config::ViewSettings::MAX_WIDTH,
-            ));
-            let resize = apply_view_sizes(state);
-            Task::batch([resize, queue_save(state)])
-        }
-
-        Message::TimeBlockWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.time_block_width = width.clamp(
-                config::ViewSettings::MIN_WIDTH,
-                config::ViewSettings::MAX_WIDTH,
-            );
-            queue_save(state)
-        }
-
-        Message::DetailWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.detail_width = width.clamp(
-                config::ViewSettings::MIN_WIDTH,
-                config::ViewSettings::MAX_WIDTH,
-            );
-            queue_save(state)
-        }
-
-        Message::ScreenMarginChanged(margin) => {
-            state.view_layout_input = None;
-            if !margin.is_finite() {
-                return Task::none();
-            }
-            state.config.views.margin = margin.clamp(0.0, config::ViewSettings::MAX_MARGIN);
-            let resize = if state.sidebar.is_some() {
-                apply_view_sizes(state)
-            } else {
-                Task::none()
-            };
-            Task::batch([resize, queue_save(state)])
-        }
-
-        Message::DockBorderRadiusChanged(radius) => {
-            state.config.views.dock_border_radius =
-                radius.clamp(0.0, config::ViewSettings::MAX_BORDER_RADIUS);
-            queue_save(state)
-        }
-        Message::PanelBorderRadiusChanged(radius) => {
-            state.config.views.panel_border_radius =
-                Some(radius.clamp(0.0, config::ViewSettings::MAX_BORDER_RADIUS));
-            queue_save(state)
-        }
-        Message::DockReserveSpaceToggled(enabled) => {
-            state.config.views.dock_reserve_space = enabled;
-            queue_save(state)
-        }
-        Message::PanelReserveSpaceToggled(enabled) => {
-            state.config.views.panel_reserve_space = enabled;
-            queue_save(state)
-        }
-        Message::DockWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.dock_width = width.clamp(
-                config::ViewSettings::MIN_DOCK_WIDTH,
-                config::ViewSettings::MAX_DOCK_WIDTH,
-            );
-            queue_save(state)
-        }
-
-        Message::DockLeftMarginChanged(margin) | Message::DockRightMarginChanged(margin) => {
-            let left = matches!(message, Message::DockLeftMarginChanged(_));
-            state.view_layout_input = None;
-            if !margin.is_finite() {
-                return Task::none();
-            }
-            let margin = Some(margin.clamp(0.0, config::ViewSettings::MAX_DOCK_MARGIN));
-            if left {
-                state.config.views.dock_left_margin = margin;
-            } else {
-                state.config.views.dock_right_margin = margin;
-            }
-            queue_save(state)
-        }
-
-        Message::DockSideSelected(side) => {
-            state.config.views.dock_side = side;
-            queue_save(state)
-        }
-
-        Message::DockBorderOuterWidthChanged(width) => {
-            update(state, Message::PanelBorderOuterWidthChanged(width))
-        }
-        Message::DockBorderInnerWidthChanged(width) => {
-            update(state, Message::PanelBorderInnerWidthChanged(width))
-        }
-        Message::DockBorderColorInput(layer, input) => {
-            update(state, Message::PanelBorderColorInput(layer, input))
-        }
-        Message::DockBorderColorSubmitted(layer) => {
-            update(state, Message::PanelBorderColorSubmitted(layer))
-        }
-
-        Message::PanelBorderOuterWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.panel_border_outer_width =
-                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
-            state.config.views.dock_border_outer_width =
-                state.config.views.panel_border_outer_width;
-            queue_save(state)
-        }
-
-        Message::PanelBorderInnerWidthChanged(width) => {
-            state.view_layout_input = None;
-            if !width.is_finite() {
-                return Task::none();
-            }
-            state.config.views.panel_border_inner_width =
-                width.clamp(0.0, config::ViewSettings::MAX_BORDER_WIDTH);
-            state.config.views.dock_border_inner_width =
-                state.config.views.panel_border_inner_width;
-            queue_save(state)
-        }
-
-        Message::PanelBorderColorInput(layer, input) => {
-            let digits = input.trim().trim_start_matches('#');
-            if digits.len() > 8 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Task::none();
-            }
-            state.panel_border_input = Some((layer, input.clone()));
-            let Ok(color) = crate::hex::parse(&input) else {
-                return Task::none();
-            };
-            match layer {
-                0 => state.config.views.panel_border_outer_color = color.into(),
-                _ => state.config.views.panel_border_inner_color = color.into(),
-            }
-            state.config.views.dock_border_outer_color =
-                state.config.views.panel_border_outer_color;
-            state.config.views.dock_border_inner_color =
-                state.config.views.panel_border_inner_color;
-            queue_save(state)
-        }
-
-        Message::PanelBorderColorSubmitted(_) => {
-            state.panel_border_input = None;
-            Task::none()
-        }
-
-        Message::FadeDurationChanged(duration) => {
-            state.view_layout_input = None;
-            if !duration.is_finite() {
-                return Task::none();
-            }
-            state.config.views.fade_duration_ms = duration
-                .round()
-                .clamp(0.0, config::ViewSettings::MAX_FADE_DURATION_MS as f32)
-                as u32;
-            queue_save(state)
-        }
-
-        Message::WindowAnimationSelected(animation) => {
-            state.config.views.window_animation = animation;
-            queue_save(state)
-        }
-
-        Message::RestartRequested => {
-            let config = state.config.clone();
-            blocking::run(move || {
-                let saved = config.save();
-                (saved, crate::dock::launch::relaunch())
-            })
-            .then(|(saved, relaunched)| {
-                if let Err(error) = &saved {
-                    log::error!("could not save before restarting: {error:#}");
-                }
-                match relaunched {
-                    Ok(()) => iced::exit(),
-                    Err(error) => {
-                        log::error!("could not restart: {error:#}");
-                        Task::none()
-                    }
-                }
-            })
-        }
-
-        Message::DockHourLinesToggled(on) => {
-            state.config.views.dock_hour_lines = on;
-            queue_save(state)
-        }
-
-        Message::BorderRadiusChanged(radius) => {
-            state.view_layout_input = None;
-            if !radius.is_finite() {
-                return Task::none();
-            }
-            state.config.views.border_radius =
-                radius.clamp(0.0, config::ViewSettings::MAX_BORDER_RADIUS);
-            queue_save(state)
-        }
-
-        Message::ThemeSelected(name) => {
-            state.config.appearance.theme = name;
-            state.config.appearance.follow_system = false;
-            queue_save(state)
-        }
-
-        Message::TimeFormatSelected(format) => {
-            state.config.appearance.time_format = format;
-            queue_save(state)
-        }
-
-        Message::FollowSystemToggled(follow) => {
-            state.config.appearance.follow_system = follow;
-            queue_save(state)
-        }
-
-        Message::AlwaysOnTopToggled(on_top) => {
-            state.config.window.always_on_top = on_top;
-
-            let apply = state
-                .main_window
-                .map(|id| window::set_level(id, level(on_top)))
-                .unwrap_or(Task::none());
-
-            Task::batch([apply, queue_save(state)])
-        }
-
-        Message::SoundRendered(Ok(pcm), spec) => {
-            state.audio_error = None;
-            state.audio.set_gain(spec.gain);
-            state.audio.play(audio::Play {
-                pcm,
-                repeats: spec.repeats,
-                fade_in: spec.fade_in,
-            });
-
-            Task::none()
-        }
-
-        Message::SoundRendered(Err(error), _) => {
-            log::warn!("could not prepare the alarm sound: {error}");
-            state.audio_error = Some(error);
-            Task::none()
-        }
-
-        Message::NotificationPosted(Err(error)) => {
-            log::warn!("could not post the notification: {error}");
-            Task::none()
-        }
-
-        Message::NotificationPosted(Ok(())) => Task::none(),
-
-        Message::ConfigSaved(result) => {
-            if let Err(error) = result {
-                log::warn!("could not save the config: {error}");
-            }
-
-            Task::none()
-        }
-
-        Message::ConfigReloaded(config) => {
-            if config == state.disk_config {
-                return Task::none();
-            }
-            state.disk_config = config.clone();
-            if config == state.config {
-                return Task::none();
-            }
-            let previous = std::mem::replace(&mut state.config, config);
-            if previous.views != state.config.views {
-                state.view_layout_input = None;
-                state.dock_border_input = None;
-                state.panel_border_input = None;
-            }
-            // An external edit wins over a save that has not started yet.
-            state.save_queued = false;
-            if previous.notepad.text != state.config.notepad.text {
-                state.notepad = text_editor::Content::with_text(&state.config.notepad.text);
-            }
-            // Keep an open brain dump in step with an edit made outside the
-            // app, without disturbing a page that is not open.
-            if previous.brain_dump != state.config.brain_dump
-                && let Some(date) = state.brain_dump.open
-            {
-                let text = state
-                    .config
-                    .brain_dump
-                    .get(date)
-                    .unwrap_or_default()
-                    .to_owned();
-                state.brain_dump.editor = text_editor::Content::with_text(&text);
-            }
-            state.audio.set_gain(state.config.alarm.sound.gain());
-            state.calendar.apply_task_colors(&state.config.calendar);
-            if previous.calendar.day_start_hour() != state.config.calendar.day_start_hour() {
-                let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-                state.calendar.set_day(day, day);
-                state.calendar.forget_cached_days();
-            }
-            let mut tasks = Vec::new();
-            let pane_widths_changed =
-                previous.views.calendar_width != state.config.views.calendar_width;
-            let views_changed = pane_widths_changed
-                || (state.sidebar.is_some() && previous.views.margin != state.config.views.margin);
-            if views_changed {
-                if state.sidebar.is_none() {
-                    state.main_size.height = state.config.window.height;
-                }
-                tasks.push(apply_view_sizes(state));
-            }
-            if state.sidebar.is_none() {
-                if let Some(id) = state.main_window {
-                    if previous.window.always_on_top != state.config.window.always_on_top {
-                        tasks.push(window::set_level(
-                            id,
-                            level(state.config.window.always_on_top),
-                        ));
-                    }
-                    if !views_changed
-                        && (previous.window.width != state.config.window.width
-                            || previous.window.height != state.config.window.height)
-                    {
-                        state.main_size.height = state.config.window.height;
-                        tasks.push(apply_view_sizes(state));
-                    }
-                }
-            }
-            if previous.calendar != state.config.calendar {
-                tasks.push(show_cached_calendar(state));
-                if previous.calendar.sleep_goal_hours() != state.config.calendar.sleep_goal_hours()
-                    || previous.calendar.sleep_day_start_hour()
-                        != state.config.calendar.sleep_day_start_hour()
-                    || previous.calendar.latest_wakeup_hour()
-                        != state.config.calendar.latest_wakeup_hour()
-                {
-                    tasks.push(refresh_week_after_write(state));
-                }
-            }
-            log::info!("reloaded config from disk");
-            Task::batch(tasks)
-        }
-
-        Message::SaveRequested => {
-            if !state.save_queued {
-                return Task::none();
-            }
-            state.save_queued = false;
-            state.disk_config = state.config.clone();
-            let config = state.config.clone();
-
-            blocking::run(move || config.save().map_err(|error| error.to_string()))
-                .map(Message::ConfigSaved)
-        }
-
-        Message::AudioStatusPolled => {
-            if let audio::Status::Unavailable(reason) = state.audio.status() {
-                state.audio_error = Some(reason);
-            }
-
-            Task::none()
-        }
-
-        Message::PanelCommandPolled => {
-            let Some(command) = state
-                .panel_command_rx
-                .as_ref()
-                .and_then(|rx| rx.try_recv().ok())
-            else {
-                return Task::none();
-            };
-
-            match command {
-                PanelCommand::ToggleReservation => {
-                    state.config.views.panel_reserve_space =
-                        !state.config.views.panel_reserve_space;
-                    queue_save(state)
-                }
-                PanelCommand::Show => {
-                    if state.main_window.is_some() {
-                        return Task::none(); // already visible
-                    }
-                    let Some(panel) = &state.panel_config else {
-                        return Task::none();
-                    };
-                    let settings = sidebar_settings(panel, &state.config.views);
-                    let (_id, open) = window::open(settings);
-                    open.map(Message::WindowOpened)
-                }
-                PanelCommand::Hide => {
-                    let Some(id) = state.main_window else {
-                        return Task::none(); // already hidden
-                    };
-                    state.panel_expected_close = true;
-                    window::close(id)
-                }
-            }
-        }
-
-        Message::InboxAddedPolled => {
-            let mut added = Vec::new();
-            if let Some(rx) = state.inbox_added_rx.as_ref() {
-                while let Ok(event) = rx.try_recv() {
-                    added.push(event);
-                }
-            }
-            if added.is_empty() {
-                return Task::none();
-            }
-            for event in added {
-                state.timeblocking.revision += 1;
-                state.calendar.events.retain(|other| other.id != event.id);
-                state.calendar.replace_cached_task(&event.id, &event);
-                state.calendar.add_event(event);
-            }
-            Task::done(Message::CalendarSyncRequested)
-        }
-
-        Message::WindowOpened(id) => {
-            if state.editor_window == Some(id) {
-                return Task::none();
-            }
-            state.main_window = Some(id);
-
-            // The window opens at whatever size we last saved; once the
-            // monitor size is known it is widened to the default fraction of
-            // the screen. The height stays as the user left it.
-            let measure = window::monitor_size(id).map(move |size| Message::MonitorSized(id, size));
-
-            // The calendar is the front page now, so it opens on the hour the
-            // needle is at rather than on midnight.
-            let scroll = ui::calendar::scroll_to_now(
-                state.calendar.hour_height,
-                state.config.calendar.day_end_minutes(),
-            );
-
-            let sync = if state.calendar.is_signed_in() {
-                auto_sync_calendar(state)
-            } else {
-                Task::none()
-            };
-
-            Task::batch([measure, sync, scroll])
-        }
-
-        Message::MonitorSized(id, size) => {
-            if state.main_window != Some(id) {
-                return Task::none();
-            }
-
-            state.monitor_size = size;
-            if state.task_creation_window {
-                return Task::none();
-            }
-            let Some(size) = size else {
-                return Task::none();
-            };
-
-            // The panel is pinned to its configured width and the full height
-            // of the monitor, and never widens to the default fraction.
-            if let Some(sidebar) = &state.sidebar {
-                let width =
-                    state.config.views.calendar_width(sidebar.width) + state.screen_margin_width();
-                log::debug!("panel filling {}x{}", width, size.height);
-                return window::resize(id, Size::new(width, size.height));
-            }
-
-            // Only a window that has never been sized gets the default
-            // fraction. A width the user chose, or the one saved with the
-            // editor open, must survive a relaunch.
-            if state.config.window.width != Config::default().window.width
-                || state.config.views.calendar_width.is_some()
-            {
-                return Task::none();
-            }
-
-            let width = launch_width(size.width);
-            let height = state.config.window.height;
-            state.config.window.width = width;
-
-            Task::batch([
-                window::resize(id, Size::new(width, height)),
-                queue_save(state),
-            ])
-        }
-
-        Message::WeekMonitorSized(id, size) => {
-            if state.main_window != Some(id) || !state.range_view_active() {
-                return Task::none();
-            }
-            state.monitor_size = size;
-            Task::none()
-        }
-
-        Message::WindowResized(id, size) => {
-            if state.main_window != Some(id) {
-                return Task::none();
-            }
-
-            state.main_size = size;
-            if state.task_creation_window {
-                return Task::none();
-            }
-            log::debug!("window is now {}x{}", size.width, size.height);
-
-            // The panel's geometry is not the user's saved window, so it must
-            // not be written back over it.
-            if state.sidebar.is_some() {
-                return Task::none();
-            }
-
-            state.config.window.width = size.width;
-            state.config.window.height = size.height;
-
-            queue_save(state)
-        }
-
-        Message::WindowClosed(id) => {
-            if state.editor_window == Some(id) {
-                state.editor_window = None;
-                // Overview visibility belongs to its toggle, even if the
-                // compositor closes the floating surface. Reconciliation
-                // recreates it while the panel is visible.
-                if state.range_view_active() {
-                    return Task::none();
-                }
-                state.calendar.open_event = None;
-                state.calendar.edit_draft = None;
-                state.calendar.detail_event = None;
-                return crate::timeblocking::close(state);
-            }
-            if state.main_window == Some(id) {
-                if state.panel_expected_close {
-                    state.panel_expected_close = false;
-                    state.main_window = None;
-                    return Task::none();
-                }
-                // Closing the clock quits, even though a daemon would
-                // otherwise keep running with no windows left.
-                if !state.config.task_work.is_empty() {
-                    let config = state.config.clone();
-                    return blocking::run(move || config.save()).then(|_| iced::exit());
-                }
-                return iced::exit();
-            }
-
-            if state.flash.as_ref().is_some_and(|flash| flash.window == id) {
-                state.flash = None;
-            }
-
-            Task::none()
-        }
-
-        Message::FlashFinished => {
-            let Some(flash) = state.flash.take() else {
-                return Task::none();
-            };
-
-            window::close(flash.window)
-        }
-
-        Message::KeyPressed(key, modifiers) => on_key(state, key, modifiers),
-
         Message::Picker(action) => crate::ui::controls::update(state, action),
-        Message::DescriptionOpen(id) => {
-            let value =
-                if let Some(draft) = state.calendar.edit_draft.as_ref().filter(|d| d.id == id) {
-                    draft.description.clone()
-                } else if let Some(event) = state.calendar.event(&id) {
-                    calendar::notes::Notes::new(&crate::timeblocking::description(
-                        &event.details.description,
-                    ))
-                    .without(&["DUE:", "DEADLINE:"])
-                } else {
-                    return Task::none();
-                };
-            state.description_editor = text_editor::Content::with_text(&value);
-            state.description_popup = Some(id);
-            Task::none()
-        }
-        Message::DescriptionEdited(action) => {
-            state.description_editor.perform(action);
-            Task::none()
-        }
-        Message::DescriptionClose => {
-            state.description_popup = None;
-            Task::none()
-        }
-        Message::DescriptionSave => {
-            let Some(id) = state.description_popup.take() else {
-                return Task::none();
-            };
-            let value = state.description_editor.text();
-            if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
-                draft.description = value;
-                // Keep this with the other staged fields until the editor's
-                // Save button is used. Saving a new habit here would close
-                // its pane as soon as the creation request finishes.
-                Task::none()
-            } else {
-                crate::timeblocking::update(
-                    state,
-                    crate::timeblocking::Action::SaveDescription(id, value),
-                )
-            }
-        }
-        Message::HabitDetailsLoaded(id, result) => {
-            if state.calendar.open_event.as_deref() == Some(id.as_str()) {
-                match result {
-                    Ok((event, draft)) => {
-                        state.calendar.open_event = Some(event.id.clone());
-                        if state.calendar.detail_event.is_some() || event.id != id {
-                            state.calendar.detail_event = Some(event);
-                        }
-                        state.calendar.edit_draft = Some(draft);
-                        state.calendar.error = None;
-                    }
-                    Err(error) => {
-                        state.calendar.error = Some(error);
-                    }
-                }
-            }
-            Task::none()
-        }
-        Message::EventTitleEdit => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.editing_title = true;
-            }
-            iced::widget::operation::focus(iced::widget::Id::new("event-title"))
-        }
-        Message::EventEndDateChanged(value) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.set_end_date_text(value);
-            }
-            Task::none()
-        }
-        Message::EventLabelDraft(value) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.label_draft = value;
-            }
-            Task::none()
-        }
-        Message::EventLabelAdd => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                let label = draft.label_draft.trim().trim_start_matches('#').to_owned();
-                if !label.is_empty() && !draft.labels.contains(&label) {
-                    draft.labels.push(label);
-                }
-                draft.label_draft.clear();
-            }
-            Task::none()
-        }
-        Message::EventLabelRemove(label) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.labels.retain(|l| l != &label);
-            }
-            Task::none()
-        }
-        Message::FormEdited(index, action) => {
-            if let Some(editor) = state.form_editors.get_mut(index) {
-                editor.perform(action);
-                let value = editor.text();
-                match index {
-                    0 => {
-                        if let Some(d) = &mut state.calendar.draft {
-                            d.description = value;
-                        }
-                    }
-                    1 => {
-                        if let Some(d) = &mut state.calendar.edit_draft {
-                            d.description = value;
-                        }
-                    }
-                    2 => {
-                        if !state.habits.busy {
-                            if let Some(d) = &mut state.habits.draft {
-                                d.notes = value;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Task::none()
-        }
         Message::Ignored => Task::none(),
-
-        Message::CalendarMenuToggled => {
-            state.calendar.menu_open = !state.calendar.menu_open;
-            // Dismissing the menu also puts away any open color picker, so it
-            // does not pop back up the next time the menu is opened.
-            state.calendar.color_editor = None;
-            if state.calendar.menu_open {
-                // The old single TimeSlay toggle is replaced by per-kind
-                // toggles. Preserve its hidden state without leaving an
-                // invisible calendar-wide switch behind the new controls.
-                let hidden_app_ids: Vec<_> = state
-                    .config
-                    .calendar
-                    .disabled
-                    .iter()
-                    .filter(|id| {
-                        state.config.calendar.app_calendar.as_ref() == Some(id)
-                            || state.calendar.calendars.iter().any(|calendar| {
-                                &calendar.id == *id
-                                    && calendar.is_app_calendar(&state.config.calendar)
-                            })
-                    })
-                    .cloned()
-                    .collect();
-                if !hidden_app_ids.is_empty() {
-                    for source in calendar::sources::TimeSlaySource::ALL {
-                        if source != calendar::sources::TimeSlaySource::Sleep {
-                            state
-                                .config
-                                .calendar
-                                .set_calendar_enabled(source.id(), false);
-                        }
-                    }
-                    for id in hidden_app_ids {
-                        state.config.calendar.set_calendar_enabled(&id, true);
-                    }
-                    return queue_save(state);
-                }
-            }
-            Task::none()
-        }
-
-        Message::CalendarToggled(id, enabled) => {
-            // Preserve a previous global hide when switching to per-list controls.
-            if enabled && id.starts_with("tasks:") && !state.config.calendar.show_tasks {
-                for calendar in &state.calendar.calendars {
-                    if calendar.is_task_list() {
-                        state
-                            .config
-                            .calendar
-                            .set_calendar_enabled(&calendar.id, false);
-                    }
-                }
-                state.config.calendar.show_tasks = true;
-            }
-            state.config.calendar.set_calendar_enabled(&id, enabled);
-            queue_save(state)
-        }
-
-        Message::CalendarSourceMoved(id, up) => {
-            let mut order: Vec<_> = state
-                .calendar
-                .display_sources(&state.config.calendar)
-                .into_iter()
-                .map(|source| source.id)
-                .collect();
-            let Some(index) = order.iter().position(|source| source == &id) else {
-                return Task::none();
-            };
-            let next = if up {
-                index.checked_sub(1)
-            } else {
-                index.checked_add(1).filter(|&next| next < order.len())
-            };
-            let Some(next) = next else {
-                return Task::none();
-            };
-            order.swap(index, next);
-            // Keep preferences for calendars temporarily absent from the account.
-            for saved in &state.config.calendar.source_order {
-                if !order.contains(saved) {
-                    order.push(saved.clone());
-                }
-            }
-            state.config.calendar.source_order = order;
-            queue_save(state)
-        }
-
-        Message::CalendarSyncRequested => sync_calendar(state),
-        Message::CalendarAutoSyncRequested => auto_sync_calendar(state),
-
-        Message::CalendarResyncRequested => {
-            // Days parked in memory and on disk would paint before the next
-            // visit fetched them. Drop them so the resync is the source of
-            // truth. The day in view stays up until its own fetch lands.
-            state.calendar.invalidate_other_days();
-            sync_calendar(state)
-        }
-
-        Message::CalendarSyncedAt(revision, result) => {
-            if revision != state.timeblocking.revision {
-                state.calendar.sync = SyncState::Idle;
-                return Task::done(Message::CalendarSyncRequested);
-            }
-            Task::done(Message::CalendarSynced(result))
-        }
-        Message::CalendarRangeSynced(revision, dates, result) => {
-            if revision != state.timeblocking.revision {
-                state.calendar.sync = SyncState::Idle;
-                return Task::done(Message::CalendarSyncRequested);
-            }
-            match result {
-                Ok(mut snapshot) => {
-                    if let Some(notice) = state.timeblocking.sync_notice.take() {
-                        snapshot.notice = Some(match snapshot.notice.take() {
-                            Some(existing) => format!("{notice}\n{existing}"),
-                            None => notice,
-                        });
-                    }
-                    let remember = remember_app_calendar(state, &snapshot);
-                    state.calendar.cache_fetched_snapshot(snapshot, &dates);
-                    state.calendar.apply_task_colors(&state.config.calendar);
-                    let reconcile = reconcile_completed_task(state);
-                    let fetch = fetch_pending_calendar_days(state, &dates);
-                    let reconcile = Task::batch([reconcile, fetch]);
-                    if remember {
-                        Task::batch([queue_save(state), reconcile])
-                    } else {
-                        reconcile
-                    }
-                }
-                Err(error) => dispatch(state, Message::CalendarSynced(Err(error))),
-            }
-        }
-        Message::CalendarSynced(Ok(mut snapshot)) => {
-            if let Some(notice) = state.timeblocking.sync_notice.take() {
-                snapshot.notice = Some(match snapshot.notice.take() {
-                    Some(existing) => format!("{notice}\n{existing}"),
-                    None => notice,
-                });
-            }
-            let remember = remember_app_calendar(state, &snapshot);
-            let day = snapshot.day;
-            state.calendar.cache_fetched_snapshot(snapshot, &[day]);
-            state.calendar.apply_task_colors(&state.config.calendar);
-            let reconcile = reconcile_completed_task(state);
-            let fetch = fetch_pending_calendar_days(state, &[day]);
-            let reconcile = Task::batch([reconcile, fetch]);
-            if remember {
-                Task::batch([queue_save(state), reconcile])
-            } else {
-                reconcile
-            }
-        }
-
-        Message::CalendarSynced(Err(error)) => {
-            log::warn!("calendar sync failed: {error}");
-            state.calendar.sync = SyncState::Idle;
-            if matches!(error.as_str(), "Not connected to Google Calendar") {
-                state.calendar.connection = Connection::SignedOut;
-            }
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::CalendarTick if state.screen == Screen::Overdue && !state.range_view_active() => {
-            Task::none()
-        }
-        Message::CalendarTick => refresh_day(state),
-
-        Message::OpenGoogleCalendar => {
-            if let Err(error) = calendar::oauth::open_in_browser(calendar::WEB_URL) {
-                state.calendar.error = Some(error);
-            }
-            Task::none()
-        }
-
-        Message::DockRequested => {
-            if let Err(error) = crate::dock::launch::open_dock() {
-                state.calendar.error = Some(format!("Could not open the dock: {error:#}"));
-                return Task::none();
-            }
-
-            state.calendar.menu_open = false;
-            let Some(id) = state.main_window else {
-                return Task::none();
-            };
-            // The panel process stays up with its window hidden, so it can be
-            // brought back by the dock.
-            state.panel_expected_close = state.sidebar.is_some();
-            state.panel_visible.store(false, Ordering::Relaxed);
-            window::close(id)
-        }
-
-        Message::EventOpened(id) => {
-            state.timeblocking.backlog_picker = None;
-            if state
-                .calendar
-                .detail_event
-                .as_ref()
-                .is_some_and(|event| event.id != id)
-            {
-                state.calendar.detail_event = None;
-            }
-            state.calendar.error = None;
-            state.calendar.menu_open = false;
-            let mut close_block = None;
-            if let Some(event) = state.calendar.event(&id).cloned() {
-                let is_block = crate::timeblocking::is_block(&event, &state.config.calendar);
-                let is_task = event.is_task();
-                let mut draft = calendar::EditDraft::from_event(&event);
-                draft.loading = event.details.habit && event.details.recurring_event_id.is_some();
-                if is_block {
-                    state.calendar.open_event = None;
-                    state.calendar.edit_draft = Some(draft);
-                    return crate::timeblocking::open(state, id);
-                }
-                // A block's panel and the event pane are two different
-                // sidebars; opening one closes the other.
-                if state.timeblocking.block.is_some() {
-                    close_block = Some(crate::timeblocking::close(state));
-                }
-                if !is_task {
-                    // Events are edited in place in the details pane, so the
-                    // draft opens with the card rather than behind an Edit
-                    // button.
-                    state.calendar.edit_draft = Some(draft);
-                }
-                if is_task {
-                    state.timeblocking.editing_title = false;
-                    state.timeblocking.editing_due_time = false;
-                    state.timeblocking.editing_deadline_time = false;
-                    state.timeblocking.title = event.title.clone();
-                    state.timeblocking.title_error = None;
-                    state.timeblocking.date =
-                        if event.start.date_naive() == crate::timeblocking::UNDATED {
-                            String::new()
-                        } else {
-                            event.start.date_naive().to_string()
-                        };
-                    state.timeblocking.deadline =
-                        calendar::deadline::input_text(&event.details.description);
-                    state.timeblocking.deadline_time = state
-                        .timeblocking
-                        .deadline
-                        .get(11..)
-                        .unwrap_or("09:00")
-                        .to_owned();
-                    state.timeblocking.start_time = if event.all_day {
-                        "09:00".into()
-                    } else {
-                        calendar::clock_label(event.start)
-                    };
-                    state.timeblocking.end_time = if event.all_day {
-                        "09:30".into()
-                    } else {
-                        calendar::clock_label(event.end)
-                    };
-                    state.timeblocking.project_query.clear();
-                    state.timeblocking.project_picker = None;
-                    state.timeblocking.label_draft.clear();
-                    state.timeblocking.label_error = None;
-                }
-            }
-            let habit_load = state
-                .calendar
-                .event(&id)
-                .filter(|event| event.details.habit && event.details.recurring_event_id.is_some())
-                .cloned()
-                .map(|event| {
-                    let settings = state.config.calendar.clone();
-                    let id = id.clone();
-                    blocking::run(move || {
-                        calendar::habit_edit_draft(
-                            &settings.client_id,
-                            &settings.client_secret,
-                            &event,
-                        )
-                    })
-                    .map(move |result| Message::HabitDetailsLoaded(id.clone(), result))
-                });
-            state.calendar.open_event = Some(id);
-            // Recorded during this click, before the message is handled.
-            state.calendar.details_below = ui::calendar::click_was_in_the_top_half();
-            state.inbox.picker = None;
-            Task::batch(close_block.into_iter().chain(habit_load))
-        }
-
-        Message::EventClosed => {
-            state.calendar.open_event = None;
-            state.calendar.edit_draft = None;
-            state.calendar.detail_event = None;
-            state.inbox.picker = None;
-            Task::none()
-        }
-
         Message::OpenEventLink(url) => {
             if let Err(error) = calendar::oauth::open_in_browser(&url) {
                 state.calendar.error = Some(error);
             }
             Task::none()
         }
-
-        Message::EventTimeChanged { id, start, end } => {
-            if state
-                .calendar
-                .event(&id)
-                .is_some_and(|event| event.is_task())
-            {
-                return crate::timeblocking::update(
-                    state,
-                    crate::timeblocking::Action::Schedule(id, start, end),
-                );
-            }
-            let Some(calendar_id) = state
-                .calendar
-                .event(&id)
-                .filter(|event| !event.is_task())
-                .map(|event| event.calendar_id.clone())
-            else {
-                return Task::none();
-            };
-
-            // The chip moves now; the lighter shade and the write follow. A
-            // second drag on the same event is refused until this one lands.
-            if !state.calendar.begin_time_change(&id, start, end) {
-                return Task::none();
-            }
-
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            let request_id = id.clone();
-            state.calendar.error = None;
-
-            blocking::run(move || {
-                calendar::set_event_time(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                    start,
-                    end,
-                )
-            })
-            .map(move |result| Message::EventTimeSaved(id.clone(), result))
-        }
-
-        Message::EventTimeSaved(id, Ok(())) => {
-            state.calendar.confirm_time_change(&id);
-            let refresh =
-                crate::timeblocking::update(state, crate::timeblocking::Action::RefreshBlock(id));
-            Task::batch([refresh, refresh_week_after_write(state)])
-        }
-
-        Message::EventTimeSaved(id, Err(error)) => {
-            state.calendar.fail_time_change(&id);
-            log::warn!("could not move the event: {error}");
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        request @ (Message::EventDeleteRequested(_) | Message::EventDeleteScoped(_, _)) => {
-            let (id, scope) = match request {
-                Message::EventDeleteScoped(id, scope) => (id, scope),
-                Message::EventDeleteRequested(id) => (id, calendar::SaveScope::Current),
-                _ => unreachable!(),
-            };
-            // Only calendar events can be deleted this way; Google Tasks live
-            // under the Tasks API and are ticked off instead.
-            let is_task = state
-                .calendar
-                .event(&id)
-                .map(|event| event.is_task())
-                .unwrap_or(false);
-            if is_task {
-                return Task::none();
-            }
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.delete_menu_open = false;
-                draft.save_menu_open = false;
-            }
-            state.calendar.pending_delete_scope = scope;
-            state.calendar.pending_delete = Some(id);
-            Task::none()
-        }
-
-        Message::EventDeleteConfirmed(id) => {
-            if state.calendar.pending_delete.as_deref() != Some(id.as_str()) {
-                return Task::none();
-            }
-            let scope = state.calendar.pending_delete_scope;
-            let Some(calendar_id) = state
-                .calendar
-                .event(&id)
-                .filter(|event| !event.is_task())
-                .map(|event| event.calendar_id.clone())
-            else {
-                state.calendar.pending_delete = None;
-                return Task::none();
-            };
-
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            let request_id = id.clone();
-            state.calendar.error = None;
-
-            blocking::run(move || {
-                calendar::delete_event_scope(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                    scope,
-                )
-            })
-            .map(move |result| Message::EventDeleted(id.clone(), result))
-        }
-
-        Message::EventDeleteCancelled => {
-            state.calendar.pending_delete = None;
-            Task::none()
-        }
-
-        Message::EventDeleted(id, Ok(())) => {
-            state.calendar.pending_delete = None;
-            // The event is gone on Google's side, so drop it from the day in
-            // view. The next sync reconciles the cache.
-            if state.range_view_active() {
-                state.calendar.forget_event_everywhere(&id);
-            } else {
-                state.calendar.events.retain(|event| event.id != id);
-            }
-            let closing_details = state.calendar.open_event.as_deref() == Some(id.as_str());
-            if closing_details {
-                state.calendar.open_event = None;
-                state.calendar.edit_draft = None;
-                state.calendar.detail_event = None;
-            }
-            let close = if state.timeblocking.block.as_deref() == Some(id.as_str()) {
-                crate::timeblocking::close(state)
-            } else {
-                Task::none()
-            };
-            if state.screen == Screen::Habits {
-                state.habits.habits.retain(|habit| habit.id != id);
-            }
-            Task::batch([close, Task::done(Message::CalendarSyncRequested)])
-        }
-
-        Message::EventDeleted(_id, Err(error)) => {
-            state.calendar.pending_delete = None;
-            log::warn!("could not delete the event: {error}");
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::TaskDeleteRequested(id) => {
-            // Only Google Tasks can be deleted this way; calendar events use
-            // EventDeleteRequested instead.
-            let is_task = state
-                .calendar
-                .event(&id)
-                .map(|event| event.is_task())
-                .unwrap_or(false);
-            if !is_task {
-                return Task::none();
-            }
-            state.calendar.pending_delete = Some(id);
-            Task::none()
-        }
-
-        Message::TaskDeleteConfirmed(id) => {
-            if state.calendar.pending_delete.as_deref() != Some(id.as_str()) {
-                return Task::none();
-            }
-            if !state.timeblocking.busy.is_empty() {
-                return Task::none();
-            }
-            state.timeblocking.revision += 1;
-            let Some(task) = state
-                .calendar
-                .event(&id)
-                .filter(|event| event.is_task())
-                .cloned()
-            else {
-                state.calendar.pending_delete = None;
-                return Task::none();
-            };
-
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            let app_calendar = state.config.calendar.app_calendar.clone();
-            state.calendar.error = None;
-            state.timeblocking.busy.insert(id.clone());
-
-            blocking::run(move || {
-                calendar::delete_task(&client_id, &client_secret, &task, app_calendar.as_deref())
-            })
-            .map(move |result| Message::TaskDeleted(id.clone(), result))
-        }
-
-        Message::TaskDeleted(id, Ok(())) => {
-            state.timeblocking.busy.remove(&id);
-            state.timeblocking.revision += 1;
-            state.calendar.pending_delete = None;
-            if let Some(task) = state.calendar.event(&id) {
-                state
-                    .config
-                    .task_work
-                    .stop(&timeblocking::task_key(task), chrono::Utc::now());
-            }
-            // The task is gone on Google's side. Drop every chip that was
-            // showing it, including a stale copy on the list it was moved
-            // from and the calendar block that held its time.
-            state.calendar.forget_task(&id);
-            let save = queue_save(state);
-            Task::batch([save, refresh_week_after_write(state)])
-        }
-
-        Message::TaskDeleted(id, Err(error)) => {
-            state.timeblocking.busy.remove(&id);
-            state.timeblocking.revision += 1;
-            state.calendar.pending_delete = None;
-            log::warn!("could not delete the task: {error}");
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::TaskToggled(_) | Message::TaskIgnoreToggled(_) => {
-            let ignoring = matches!(&message, Message::TaskIgnoreToggled(_));
-            let (Message::TaskToggled(id) | Message::TaskIgnoreToggled(id)) = message else {
-                unreachable!()
-            };
-            if !state.timeblocking.busy.is_empty() {
-                return Task::none();
-            }
-            state.timeblocking.revision += 1;
-            let Some(task) = state
-                .calendar
-                .event(&id)
-                .filter(|event| event.is_task())
-                .cloned()
-            else {
-                return Task::none();
-            };
-            let previous = timeblocking::task_status(&task);
-            let status = if ignoring {
-                if previous == timeblocking::TaskStatus::Ignored {
-                    timeblocking::TaskStatus::Active
-                } else {
-                    timeblocking::TaskStatus::Ignored
-                }
-            } else if previous == timeblocking::TaskStatus::Completed {
-                timeblocking::TaskStatus::Active
-            } else {
-                timeblocking::TaskStatus::Completed
-            };
-
-            // Update the chip straight away, then put it back if Google
-            // refuses the write.
-            state.timeblocking.busy.insert(id.clone());
-            let completed = status != timeblocking::TaskStatus::Active;
-            if completed && let Some(task) = state.calendar.event(&id) {
-                state
-                    .config
-                    .task_work
-                    .stop(&crate::timeblocking::task_key(task), chrono::Utc::now());
-                state.timeblocking.work_now = Some(chrono::Utc::now());
-                let _ = queue_save(state);
-            }
-            if let Some(event) = state.calendar.event_mut(&id) {
-                timeblocking::apply_status(event, status);
-            }
-
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            state.calendar.error = None;
-
-            blocking::run(move || {
-                calendar::set_linked_task_status(&client_id, &client_secret, &task, status)
-            })
-            .map(move |result| Message::TaskCompletionSaved(id.clone(), previous, result))
-        }
-
-        Message::TaskCompletionSaved(id, _, Ok(task)) => {
-            if let Some(event) = state.calendar.event_mut(&id) {
-                *event = task.clone();
-            }
-            state.timeblocking.busy.remove(&id);
-            state.timeblocking.revision += 1;
-            state.calendar.replace_cached_task(&id, &task);
-            Task::done(Message::CalendarSyncRequested)
-        }
-
-        Message::TaskCompletionSaved(id, previous, Err(error)) => {
-            state.timeblocking.busy.remove(&id);
-            state.timeblocking.revision += 1;
-            if let Some(event) = state.calendar.event_mut(&id) {
-                timeblocking::apply_status(event, previous);
-            }
-
-            log::warn!("could not update the task: {error}");
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::ShowTasksToggled(show) => {
-            state.config.calendar.show_tasks = show;
-            queue_save(state)
-        }
-
-        Message::SourceColorEditorToggled(id) => {
-            state.calendar.color_editor =
-                (state.calendar.color_editor.as_deref() != Some(id.as_str())).then_some(id);
-            Task::none()
-        }
-
-        Message::TaskColorPicked(id, color) => {
-            state.config.calendar.set_task_color(&id, color);
-            state.calendar.apply_task_colors(&state.config.calendar);
-            state.calendar.color_editor = None;
-            queue_save(state)
-        }
-
-        Message::CalendarColorPicked(id, color) => {
-            match color {
-                Some(color) => {
-                    state
-                        .config
-                        .calendar
-                        .calendar_colors
-                        .insert(id, crate::hex::HexColor(color));
-                }
-                None => {
-                    state.config.calendar.calendar_colors.remove(&id);
-                }
-            }
-            state.calendar.color_editor = None;
-            queue_save(state)
-        }
-
-        Message::TimeSlayColorPicked(id, color) => {
-            if let Some(source) = calendar::sources::TimeSlaySource::from_id(&id) {
-                source.set_color(&mut state.config.calendar, color);
-                state.calendar.apply_task_colors(&state.config.calendar);
-                state.calendar.color_editor = None;
-            }
-            queue_save(state)
-        }
-
-        Message::GoogleClientIdChanged(id) => {
-            state.config.calendar.client_id = id;
-            queue_save(state)
-        }
-
-        Message::GoogleClientSecretChanged(secret) => {
-            state.config.calendar.client_secret = secret;
-            queue_save(state)
-        }
-
-        Message::GoogleConnectRequested => {
-            if state.calendar.is_busy() {
-                return Task::none();
-            }
-
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            state.calendar.sync = SyncState::Connecting;
-            state.calendar.error = None;
-
-            blocking::run(move || calendar::connect(client_id, client_secret))
-                .map(Message::GoogleConnected)
-        }
-
-        Message::GoogleConnected(Ok(_tokens)) => {
-            // Signing in is what makes config sync possible.
-            crate::config_sync::poke();
-            state.calendar.connection = Connection::SignedIn;
-            state.calendar.sync = SyncState::Idle;
-            state.calendar.error = None;
-            sync_calendar(state)
-        }
-
-        Message::GoogleConnected(Err(error)) => {
-            log::warn!("Google sign-in failed: {error}");
-            state.calendar.sync = SyncState::Idle;
-            state.calendar.connection = Connection::SignedOut;
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::GoogleDisconnectRequested => {
-            calendar::disconnect();
-            state.calendar = calendar::Store::new(state.config.calendar.day_start_hour());
-            // The reset takes the store with it, so the directory is put
-            // straight back: days keep being written across a disconnect.
-            state.calendar.apply_task_colors(&state.config.calendar);
-            state.calendar.cache_days_in(config::cache_days_dir());
-            state.calendar.connection = Connection::SignedOut;
-            Task::none()
-        }
-
-        Message::CalendarSyncMinutesChanged(minutes) => {
-            state.config.calendar.sync_minutes = minutes.clamp(
-                config::CalendarSettings::MIN_SYNC_MINUTES,
-                config::CalendarSettings::MAX_SYNC_MINUTES,
-            );
-            queue_save(state)
-        }
-
-        Message::SleepGoalChanged(hours) => {
-            state.config.calendar.sleep_goal_hours = hours.clamp(6, 12);
-            Task::batch([queue_save(state), refresh_week_after_write(state)])
-        }
-        Message::SleepDayStartChanged(hour) => {
-            state.config.calendar.sleep_day_start_hour = hour.min(6);
-            Task::batch([queue_save(state), refresh_week_after_write(state)])
-        }
-        Message::LatestWakeupChanged(hour) => {
-            state.config.calendar.latest_wakeup_hour = hour.clamp(4, 14);
-            Task::batch([queue_save(state), refresh_week_after_write(state)])
-        }
-        Message::SleepEstimatedStart(value) => {
-            if let Some(record) = state
-                .calendar
-                .edit_draft
-                .as_mut()
-                .and_then(|d| d.sleep.as_mut())
-            {
-                record.estimated_start = value;
-            }
-            Task::none()
-        }
-        Message::SleepEstimatedEnd(value) => {
-            if let Some(record) = state
-                .calendar
-                .edit_draft
-                .as_mut()
-                .and_then(|d| d.sleep.as_mut())
-            {
-                record.estimated_end = value;
-            }
-            Task::none()
-        }
-        Message::SleepSaveRequested => {
-            let Some(draft) = state.calendar.edit_draft.as_ref() else {
-                return Task::none();
-            };
-            let Some(mut record) = draft.sleep.clone() else {
-                return Task::none();
-            };
-            if draft.saving {
-                return Task::none();
-            }
-            if calendar::parse_clock(&draft.start_text).is_none()
-                || calendar::parse_clock(&draft.end_text).is_none()
-                || calendar::deadline::parse_date(&draft.date_text).is_err()
-                || calendar::deadline::parse_date(&draft.end_date_text).is_err()
-                || draft.end <= draft.start
-            {
-                state.calendar.error =
-                    Some("Enter valid dates and times, with wake-up after sleep start".into());
-                return Task::none();
-            }
-            let Some(mut event) = state.calendar.event(&draft.id).cloned() else {
-                return Task::none();
-            };
-            let new = event.id == calendar::sleep::NEW_ID;
-            record.automatic = false;
-            if new {
-                record.wake_date = draft.end.date_naive();
-            }
-            event.start = draft.start;
-            event.end = draft.end;
-            event.details.sleep = Some(record);
-            state.calendar.edit_draft.as_mut().unwrap().saving = true;
-            state.timeblocking.revision += 1;
-            state.calendar.error = None;
-            let settings = state.config.calendar.clone();
-            blocking::run(move || calendar::sleep::save(&settings, event, new))
-                .map(Message::SleepSaved)
-        }
-        Message::SleepSaved(Ok(event)) => {
-            let id = event.id.clone();
-            state.calendar.forget_event_everywhere(&id);
-            state.calendar.detail_event = None;
-            state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
-            state.calendar.add_event(event);
-            state.calendar.open_event = Some(id);
-            refresh_week_after_write(state)
-        }
-        Message::SleepSaved(Err(error)) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.saving = false;
-            }
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::CalendarDayEndChanged(hour) => {
-            state.config.calendar.day_end_hour =
-                hour.min(config::CalendarSettings::MAX_DAY_END_HOUR);
-            // The day's window moved, so the day in view and the events that
-            // belong to it may have changed too. This also puts the view back
-            // on today if the user had navigated away.
-            let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            state.calendar.set_day(day, day);
-            state.week_anchor = day;
-            // The day's window moved, so the cached days no longer describe
-            // the days they are filed under.
-            state.calendar.forget_cached_days();
-            let save = queue_save(state);
-            Task::batch([save, sync_calendar(state)])
-        }
-
-        Message::CalendarWeeklyDaysChanged(days) => {
-            state.config.calendar.weekly_days = days.clamp(7, 8);
-            Task::batch([queue_save(state), show_cached_calendar(state)])
-        }
-
-        Message::CalendarWeeklyWidthChanged(width) => {
-            state.config.calendar.weekly_day_width = width.clamp(100, 400);
-            queue_save(state)
-        }
-
-        Message::CalendarZoomed { factor, anchor } => {
-            let before = state.calendar.hour_height;
-            state.calendar.zoom(factor);
-            let after = state.calendar.hour_height;
-
-            if after == before {
-                return Task::none();
-            }
-
-            // Keep the row under the pointer fixed. The grid grows by `ratio`,
-            // so the anchored row slides down by `anchor * (ratio - 1)` and the
-            // scroll has to follow it by the same amount.
-            let delta = crate::ui::calendar::zoom_scroll_delta(anchor, before, after);
-            crate::ui::calendar::scroll_by(delta)
-        }
-
-        Message::CalendarDayShift(days) => {
-            let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            let origin = if state.weekly || state.monthly {
-                state.week_anchor
-            } else {
-                state.calendar.day
-            };
-            let day = origin + chrono::Duration::days(days);
-            let close = if state.weekly || state.monthly {
-                state.calendar.open_event = None;
-                crate::timeblocking::close(state)
-            } else {
-                Task::none()
-            };
-            state.calendar.set_day(day, today);
-            if state.weekly || state.monthly {
-                state.week_anchor = day;
-                state.week_scroll_x = 0.0;
-            }
-            state.calendar.menu_open = false;
-            state.calendar.month_open = false;
-            let scroll = if state.weekly || state.monthly {
-                ui::calendar::scroll_week_to_start()
-            } else {
-                Task::none()
-            };
-            Task::batch([close, scroll, show_cached_calendar(state)])
-        }
-
-        Message::CalendarDaySelected(day) => {
-            let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-            let close = if state.weekly || state.monthly {
-                state.calendar.open_event = None;
-                crate::timeblocking::close(state)
-            } else {
-                Task::none()
-            };
-            state.calendar.set_day(day, today);
-            if state.weekly || state.monthly {
-                state.week_anchor = day;
-                state.week_hover = None;
-                state.week_scroll_x = 0.0;
-            }
-            state.calendar.month_open = false;
-            let scroll = if state.weekly || state.monthly {
-                ui::calendar::scroll_week_to_start()
-            } else {
-                Task::none()
-            };
-            Task::batch([close, scroll, show_cached_calendar(state)])
-        }
-
-        Message::CalendarMonthToggled => {
-            state.calendar.month_open = !state.calendar.month_open;
-            // The picker opens on the month of the day in view, and the menu
-            // gets out of its way.
-            if state.calendar.month_open {
-                state.calendar.month = calendar::first_of_month(if state.weekly || state.monthly {
-                    state.week_anchor
-                } else {
-                    state.calendar.day
-                });
-                state.calendar.menu_open = false;
-            }
-            Task::none()
-        }
-
-        Message::CalendarMonthShift(months) => {
-            let step = chrono::Months::new(months.unsigned_abs());
-            let shifted = if months >= 0 {
-                state.calendar.month.checked_add_months(step)
-            } else {
-                state.calendar.month.checked_sub_months(step)
-            };
-            if let Some(month) = shifted {
-                state.calendar.month = month;
-            }
-            Task::none()
-        }
-
-        Message::EventDraftStarted { start, end } => {
-            let Some(calendar_id) = state.calendar.default_calendar_id(&state.config.calendar)
-            else {
-                state.calendar.error =
-                    Some("Connect Google Calendar in Settings to add events".to_owned());
-                return Task::none();
-            };
-
-            state.calendar.error = None;
-            state.calendar.begin_draft(calendar_id, start, end);
-            state.calendar.day = calendar::day_at(start, state.config.calendar.day_start_hour());
-            Task::none()
-        }
-
-        Message::EventDraftProjects(action) => {
-            if let calendar::projects::Action::Add(id) = &action {
-                if state.config.projects.get(*id).is_none() {
-                    return Task::none();
-                }
-            }
-            if let Some(draft) = &mut state.calendar.draft {
-                draft.projects.update(action);
-            }
-            Task::none()
-        }
-
-        Message::EventDraftOptions(action) => {
-            if let Some(draft) = &mut state.calendar.draft {
-                draft.options.update(action);
-            }
-            Task::none()
-        }
-        Message::EventEditOptions(action) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                if !draft.loading && !draft.saving {
-                    draft.options.update(action);
-                }
-            }
-            Task::none()
-        }
-        Message::EventDraftTitleChanged(title) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.title = title;
-            }
-            Task::none()
-        }
-
-        Message::EventDraftDescriptionChanged(description) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.description = description;
-            }
-            Task::none()
-        }
-
-        Message::EventDraftDateChanged(text) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.set_date_text(text);
-            }
-            Task::none()
-        }
-
-        Message::EventDraftRecurrence(action) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                if matches!(&action, crate::recurrence::Action::SkipAdd) {
-                    match draft.rule.add_skip() {
-                        Ok(()) => state.calendar.error = None,
-                        Err(error) => state.calendar.error = Some(error),
-                    }
-                } else {
-                    draft.rule.apply_action(action, draft.start.date_naive());
-                }
-            }
-            Task::none()
-        }
-
-        Message::EventDraftStartChanged(text) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.set_start_text(text);
-            }
-            Task::none()
-        }
-
-        Message::EventDraftEndChanged(text) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.set_end_text(text);
-            }
-            Task::none()
-        }
-
-        Message::EventDraftKindSelected(calendar::DraftKind::Sleep) => {
-            let Some(draft) = state.calendar.draft.take() else {
-                return Task::none();
-            };
-            let start = draft.start;
-            let end = start
-                + chrono::Duration::hours(i64::from(state.config.calendar.sleep_goal_hours()));
-            let event = calendar::Event {
-                id: calendar::sleep::NEW_ID.into(),
-                calendar_id: state
-                    .config
-                    .calendar
-                    .app_calendar
-                    .clone()
-                    .unwrap_or_default(),
-                title: "Sleep".into(),
-                start,
-                end,
-                all_day: false,
-                color: calendar::sleep::COLOR,
-                completed: false,
-                details: calendar::Details {
-                    sleep: Some(calendar::sleep::Record::planned(end.date_naive())),
-                    ..Default::default()
-                },
-            };
-            state.calendar.detail_event = Some(event);
-            update(state, Message::EventOpened(calendar::sleep::NEW_ID.into()))
-        }
-
-        Message::EventDraftKindSelected(calendar::DraftKind::Habit) => {
-            // Creation and editing share the habit details pane.
-            let Some(draft) = state.calendar.draft.take() else {
-                return Task::none();
-            };
-            let color_id =
-                calendar::colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
-            let habit = crate::habits::Draft::for_calendar_with_rule(
-                draft.start,
-                draft.end,
-                draft.title,
-                draft.description,
-                color_id,
-                draft.rule.clone(),
-            );
-            let task = crate::habits::open_new(state, habit);
-            if let Some(edit) = &mut state.calendar.edit_draft {
-                edit.options = draft.options;
-            }
-            task
-        }
-
-        Message::EventDraftKindSelected(kind) => {
-            let app_calendar = state.config.calendar.app_calendar.clone();
-            let default_calendar = state.calendar.default_calendar_id(&state.config.calendar);
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.kind = kind;
-                draft.editor_open = true;
-                // A time block always lives on the app's TimeSlay calendar;
-                // switching back to an event returns to the normal default.
-                if let Some(calendar_id) = match kind {
-                    calendar::DraftKind::TimeBlock | calendar::DraftKind::Sleep => app_calendar,
-                    calendar::DraftKind::Event | calendar::DraftKind::Habit => default_calendar,
-                } {
-                    draft.calendar_id = calendar_id;
-                }
-                draft.calendar_dropdown_open = false;
-            }
-            Task::none()
-        }
-
-        Message::EventDraftCalendarSelected(id) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.calendar_id = id;
-                draft.calendar_dropdown_open = false;
-            }
-            Task::none()
-        }
-
-        Message::EventDraftCalendarDropdownToggled => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.calendar_dropdown_open = !draft.calendar_dropdown_open;
-            }
-            Task::none()
-        }
-
-        Message::EventDraftCancelled => {
-            state.calendar.draft = None;
-            Task::none()
-        }
-
-        Message::EventDraftSaveRequested => {
-            let Some(draft) = state.calendar.draft.clone() else {
-                return Task::none();
-            };
-
-            if draft.end <= draft.start {
-                state.calendar.error = Some("The end time has to be after the start".to_owned());
-                return Task::none();
-            }
-
-            // A time block is always written to the app's TimeSlay calendar
-            // and labelled and colored as a block; an ordinary event stays on
-            // the calendar the picker shows.
-            let is_block = draft.kind == calendar::DraftKind::TimeBlock
-                || state.config.calendar.app_calendar.as_deref()
-                    == Some(draft.calendar_id.as_str());
-            let calendar_id = if draft.kind == calendar::DraftKind::TimeBlock {
-                state
-                    .config
-                    .calendar
-                    .app_calendar
-                    .clone()
-                    .unwrap_or_else(|| draft.calendar_id.clone())
-            } else {
-                draft.calendar_id.clone()
-            };
-            let color = if is_block {
-                state.config.calendar.time_block_color()
-            } else {
-                state.calendar.calendar_color(&calendar_id)
-            };
-            let description = if is_block {
-                calendar::event_description(&draft.description, "Time Block", &[])
-            } else {
-                draft.description.clone()
-            };
-            let color_id = if is_block {
-                calendar::colors::event_id(state.config.calendar.time_block_color())
-            } else {
-                None
-            };
-            let recurrence = match draft.recurrence_lines() {
-                Ok(lines) => lines,
-                Err(error) => {
-                    state.calendar.error = Some(error);
-                    return Task::none();
-                }
-            };
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            state.calendar.error = None;
-
-            blocking::run(move || {
-                let id = calendar::create_event(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &draft.title,
-                    &description,
-                    color_id,
-                    draft.start,
-                    draft.end,
-                    &recurrence,
-                    &draft.projects.ids,
-                    Some(&draft.options),
-                )?;
-
-                Ok(calendar::Event {
-                    id,
-                    calendar_id,
-                    title: if draft.title.trim().is_empty() {
-                        "(No title)".to_owned()
-                    } else {
-                        draft.title.clone()
-                    },
-                    start: draft.start,
-                    end: draft.end,
-                    all_day: false,
-                    color,
-                    completed: false,
-                    details: calendar::Details {
-                        options: draft.options.clone(),
-                        projects: draft.projects.ids.clone(),
-                        description,
-                        recurrence: recurrence.clone(),
-                        ..calendar::Details::default()
-                    },
-                })
-            })
-            .map(Message::EventDraftSaved)
-        }
-
-        Message::EventDraftSaved(Ok(event)) => {
-            state.calendar.draft = None;
-            state.calendar.add_event(event);
-            refresh_week_after_write(state)
-        }
-
-        Message::EventDraftSaved(Err(error)) => {
-            // The popup stays open so the half-filled event is not lost.
-            log::warn!("could not create the event: {error}");
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::EventEditRequested(id) => {
-            state.calendar.begin_edit(&id);
-            Task::none()
-        }
-
-        Message::EventEditProjects(action) => {
-            if let calendar::projects::Action::Add(id) = &action {
-                if state.config.projects.get(*id).is_none() {
-                    return Task::none();
-                }
-            }
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.projects.update(action);
-            }
-            Task::none()
-        }
-
-        Message::EventEditTitleChanged(title) => {
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                draft.title = title;
-            }
-            Task::none()
-        }
-
-        Message::EventEditDescriptionChanged(description) => {
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                draft.description = description;
-            }
-            Task::none()
-        }
-
-        Message::EventEditDateChanged(text) => {
-            let habit = state
-                .calendar
-                .open_event
-                .as_deref()
-                .and_then(|id| state.calendar.event(id))
-                .is_some_and(|event| event.details.habit);
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                let duration = draft.end - draft.start;
-                draft.set_date_text(text);
-                if habit {
-                    draft.end = draft.start + duration;
-                    draft.end_date_text = draft.end.date_naive().to_string();
-                }
-            }
-            Task::none()
-        }
-
-        Message::EventEditRecurrence(action) => {
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                draft.recurrence_changed = true;
-                if matches!(&action, crate::recurrence::Action::SkipAdd) {
-                    match draft.rule.add_skip() {
-                        Ok(()) => state.calendar.error = None,
-                        Err(error) => state.calendar.error = Some(error),
-                    }
-                } else {
-                    draft.rule.apply_action(action, draft.start.date_naive());
-                }
-            }
-            Task::none()
-        }
-
-        Message::EventEditStartChanged(text) => {
-            let habit = state
-                .calendar
-                .open_event
-                .as_deref()
-                .and_then(|id| state.calendar.event(id))
-                .is_some_and(|event| event.details.habit);
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                let duration = draft.end - draft.start;
-                draft.set_start_text(text);
-                draft.all_day = false;
-                if habit {
-                    draft.end = draft.start + duration;
-                    draft.end_text = calendar::clock_label(draft.end);
-                    draft.end_date_text = draft.end.date_naive().to_string();
-                }
-            }
-            Task::none()
-        }
-
-        Message::EventEditEndChanged(text) => {
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                draft.set_end_text(text);
-                draft.all_day = false;
-            }
-            Task::none()
-        }
-
-        Message::EventEditCalendarSelected(id) => {
-            if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                draft.calendar_id = id;
-            }
-            Task::none()
-        }
-
-        Message::EventEditCancelled => {
-            state.calendar.edit_draft = None;
-            Task::none()
-        }
-
-        Message::EventEditDeleteMenuToggled => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.delete_menu_open = !draft.delete_menu_open;
-                draft.save_menu_open = false;
-            }
-            Task::none()
-        }
-
-        Message::EventEditSaveMenuToggled => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.save_menu_open = !draft.save_menu_open;
-                draft.delete_menu_open = false;
-            }
-            Task::none()
-        }
-
-        request @ (Message::EventEditSaveRequested | Message::EventEditSaveScoped(_)) => {
-            let scope = match request {
-                Message::EventEditSaveScoped(scope) => scope,
-                _ => calendar::SaveScope::Current,
-            };
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.save_menu_open = false;
-                draft.delete_menu_open = false;
-            }
-            let Some(draft) = state.calendar.edit_draft.clone() else {
-                return Task::none();
-            };
-
-            if draft.loading || draft.saving {
-                return Task::none();
-            }
-            if draft.title.trim().is_empty() {
-                state.calendar.error = Some("Enter a title".into());
-                return Task::none();
-            }
-            if draft.end <= draft.start {
-                state.calendar.error = Some("The end time has to be after the start".to_owned());
-                return Task::none();
-            }
-
-            if draft.id == crate::habits::NEW_HABIT_ID {
-                if state.habits.busy {
-                    return Task::none();
-                }
-                if let Err(error) = draft.recurrence_lines() {
-                    state.calendar.error = Some(error);
-                    return Task::none();
-                }
-                let settings = state.config.calendar.clone();
-                let color_id = state
-                    .calendar
-                    .event(&draft.id)
-                    .and_then(|event| event.details.color_id.clone());
-                state.habits.busy = true;
-                state.calendar.error = None;
-                return blocking::run(move || {
-                    calendar::create_habit(
-                        &settings.client_id,
-                        &settings.client_secret,
-                        &draft,
-                        color_id.as_deref(),
-                    )
-                })
-                .map(|result| Message::Habits(crate::habits::Action::Saved(result)));
-            }
-
-            let is_block = state
-                .calendar
-                .event(&draft.id)
-                .is_some_and(|event| crate::timeblocking::is_block(event, &state.config.calendar));
-            let description = if is_block {
-                calendar::event_description(&draft.description, "Time Block", &[])
-            } else {
-                draft.description.clone()
-            };
-            let color_id = if is_block {
-                calendar::colors::event_id(state.config.calendar.time_block_color())
-            } else {
-                None
-            };
-            let Some(original) = state.calendar.event(&draft.id).cloned() else {
-                return Task::none();
-            };
-            if let Err(error) = draft.recurrence_lines() {
-                state.calendar.error = Some(error);
-                return Task::none();
-            }
-            let settings = state.config.calendar.clone();
-            state.calendar.error = None;
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.saving = true;
-            }
-            blocking::run(move || {
-                calendar::save_event_scope(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &original,
-                    &draft,
-                    scope,
-                    &description,
-                    color_id,
-                )
-            })
-            .map(Message::EventEditSaved)
-        }
-
-        Message::EventEditSaved(Ok(())) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.editing_title = false;
-                draft.saving = false;
-            }
-            // Keep the inline draft as the user left it until the calendar
-            // sync brings the saved event back, so fields do not flicker.
-            if state.screen == Screen::Habits {
-                Task::batch([
-                    Task::done(Message::Habits(crate::habits::Action::Refresh)),
-                    refresh_week_after_write(state),
-                ])
-            } else {
-                refresh_week_after_write(state)
-            }
-        }
-
-        Message::EventEditSaved(Err(error)) => {
-            if let Some(draft) = &mut state.calendar.edit_draft {
-                draft.saving = false;
-            }
-            // The popup stays open so the half-filled edit is not lost.
-            log::warn!("could not update the event: {error}");
-            state.calendar.error = Some(error);
-            Task::none()
-        }
-
-        Message::DefaultCalendarSelected(id) => {
-            state.config.calendar.default_calendar = if id.is_empty() { None } else { Some(id) };
-            queue_save(state)
-        }
+        Message::Navigation(message) => on_navigation::update(state, message),
+        Message::Notepad(message) => on_notepad::update(state, message),
+        Message::Settings(message) => on_settings::update(state, message),
+        Message::System(message) => on_system::update(state, message),
+        Message::Keep(message) => on_keep::update(state, message),
+        Message::Calendar(message) => on_calendar::update(state, message),
+        Message::Task(message) => on_task::update(state, message),
+        Message::Event(message) => on_event::update(state, message),
+        Message::EventDraft(message) => on_event_draft::update(state, message),
+        Message::EventEdit(message) => on_event_edit::update(state, message),
     }
 }
 
@@ -3754,9 +1374,10 @@ pub fn title(state: &State, window: window::Id) -> String {
 pub fn subscription(state: &State) -> Subscription<Message> {
     let mut subscriptions = vec![
         crate::travel::map::subscription(state),
-        config::watch().map(Message::ConfigReloaded),
-        window::close_events().map(Message::WindowClosed),
-        window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
+        config::watch().map(|v0| Message::System(SystemMessage::ConfigReloaded(v0))),
+        window::close_events().map(|v0| Message::System(SystemMessage::WindowClosed(v0))),
+        window::resize_events()
+            .map(|(id, size)| Message::System(SystemMessage::WindowResized(id, size))),
         keyboard::listen().map(map_key),
         iced::event::listen_with(|event, status, window| {
             if status == iced::event::Status::Ignored
@@ -3767,7 +1388,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
                     ))
                 )
             {
-                Some(Message::TaskDragReleased(window))
+                Some(Message::Task(TaskMessage::TaskDragReleased(window)))
             } else {
                 None
             }
@@ -3781,24 +1402,29 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(iced::event::listen_with(
             |event, _status, window| match event {
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                    Some(Message::TaskDragMoved(window, position))
+                    Some(Message::Task(TaskMessage::TaskDragMoved(window, position)))
                 }
                 _ => None,
             },
         ));
     }
 
-    if state.weekly
+    if state.weekly()
         && state.config.calendar.weekly_task_list
         && state.timeblocking.dragging.is_some()
     {
-        subscriptions
-            .push(iced::time::every(Duration::from_millis(50)).map(|_| Message::WeekDragScroll));
+        subscriptions.push(
+            iced::time::every(Duration::from_millis(50))
+                .map(|_| Message::Task(TaskMessage::WeekDragScroll)),
+        );
     }
 
     // Refresh the calendar needle and the Overdue list as time passes.
     if state.range_view_active() || matches!(state.screen, Screen::Calendar | Screen::Overdue) {
-        subscriptions.push(iced::time::every(NEEDLE_TICK).map(|_| Message::CalendarTick));
+        subscriptions.push(
+            iced::time::every(NEEDLE_TICK)
+                .map(|_| Message::Calendar(CalendarMessage::CalendarTick)),
+        );
     }
 
     // Alarms are checked once a second, and only while there is one waiting,
@@ -3828,29 +1454,37 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     if state.calendar.is_signed_in() {
         subscriptions.push(
             iced::time::every(state.config.calendar.sync_every())
-                .map(|_| Message::CalendarAutoSyncRequested),
+                .map(|_| Message::Calendar(CalendarMessage::CalendarAutoSyncRequested)),
         );
     }
 
     if state.flash.is_some() {
-        subscriptions.push(iced::time::every(FLASH_FRAME).map(Message::FlashFrame));
+        subscriptions.push(
+            iced::time::every(FLASH_FRAME).map(|v0| Message::System(SystemMessage::FlashFrame(v0))),
+        );
     }
 
     if matches!(state.screen, Screen::Settings) {
-        subscriptions.push(iced::time::every(STATUS_POLL).map(|_| Message::AudioStatusPolled));
+        subscriptions.push(
+            iced::time::every(STATUS_POLL)
+                .map(|_| Message::System(SystemMessage::AudioStatusPolled)),
+        );
     }
 
     // The debounce itself: the write lands once the interval elapses, and
     // further edits in the meantime ride along on the same pending save.
     if state.save_queued {
-        subscriptions
-            .push(iced::time::every(config::SAVE_DEBOUNCE).map(|_| Message::SaveRequested));
+        subscriptions.push(
+            iced::time::every(config::SAVE_DEBOUNCE)
+                .map(|_| Message::System(SystemMessage::SaveRequested)),
+        );
     }
 
     // The side panel polls for show/hide commands from the panel daemon.
     if state.panel_command_rx.is_some() {
         subscriptions.push(
-            iced::time::every(Duration::from_millis(200)).map(|_| Message::PanelCommandPolled),
+            iced::time::every(Duration::from_millis(200))
+                .map(|_| Message::System(SystemMessage::PanelCommandPolled)),
         );
     }
 
@@ -3866,8 +1500,10 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
     // The extension and the Slack app add tasks from their own processes.
     if state.inbox_added_rx.is_some() {
-        subscriptions
-            .push(iced::time::every(Duration::from_millis(200)).map(|_| Message::InboxAddedPolled));
+        subscriptions.push(
+            iced::time::every(Duration::from_millis(200))
+                .map(|_| Message::System(SystemMessage::InboxAddedPolled)),
+        );
     }
 
     Subscription::batch(subscriptions)
@@ -3875,7 +1511,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 
 fn map_key(event: keyboard::Event) -> Message {
     match event {
-        keyboard::Event::KeyPressed { key, modifiers, .. } => Message::KeyPressed(key, modifiers),
+        keyboard::Event::KeyPressed { key, modifiers, .. } => {
+            Message::System(SystemMessage::KeyPressed(key, modifiers))
+        }
         _ => Message::Ignored,
     }
 }
@@ -3883,7 +1521,7 @@ fn map_key(event: keyboard::Event) -> Message {
 fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<Message> {
     if state.description_popup.is_some() {
         return if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
-            update(state, Message::DescriptionClose)
+            update(state, Message::Event(EventMessage::DescriptionClose))
         } else {
             Task::none()
         };
@@ -3957,13 +1595,17 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     }
     if state.view_menu_open {
         return match key.as_ref() {
-            Key::Named(Named::Escape) => Some(Message::ViewMenuToggled),
+            Key::Named(Named::Escape) => {
+                Some(Message::Navigation(NavigationMessage::ViewMenuToggled))
+            }
             _ => None,
         };
     }
     if state.more_menu_open {
         return match key.as_ref() {
-            Key::Named(Named::Escape) => Some(Message::MoreMenuToggled),
+            Key::Named(Named::Escape) => {
+                Some(Message::Navigation(NavigationMessage::MoreMenuToggled))
+            }
             _ => None,
         };
     }
@@ -4038,15 +1680,17 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     if state.calendar.draft.is_some() || state.calendar.edit_draft.is_some() {
         return match key.as_ref() {
             Key::Named(Named::Escape) if state.calendar.draft.is_some() => {
-                Some(Message::EventDraftCancelled)
+                Some(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
             }
-            Key::Named(Named::Escape) => Some(Message::EventClosed),
+            Key::Named(Named::Escape) => Some(Message::Event(EventMessage::EventClosed)),
             _ => None,
         };
     }
     if modifiers.command() {
         return match key.as_ref() {
-            Key::Character(",") => Some(Message::ScreenSelected(Screen::Settings)),
+            Key::Character(",") => Some(Message::Navigation(NavigationMessage::ScreenSelected(
+                Screen::Settings,
+            ))),
             _ => None,
         };
     }
@@ -4070,9 +1714,11 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
                     Screen::Overdue | Screen::Inbox | Screen::Triaged
                 ) && state.calendar.open_event.is_some() =>
             {
-                Some(Message::EventClosed)
+                Some(Message::Event(EventMessage::EventClosed))
             }
-            Key::Named(Named::Escape) => Some(Message::ScreenSelected(Screen::Calendar)),
+            Key::Named(Named::Escape) => Some(Message::Navigation(
+                NavigationMessage::ScreenSelected(Screen::Calendar),
+            )),
             _ => None,
         };
     }
@@ -4080,19 +1726,23 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     match key.as_ref() {
         // The clock no longer has a place on the calendar, so a space only
         // has something to do while an alarm is ringing.
-        Key::Named(Named::Space) if state.alarm_active => Some(Message::Dismiss),
+        Key::Named(Named::Space) if state.alarm_active => {
+            Some(Message::System(SystemMessage::Dismiss))
+        }
         Key::Named(Named::Escape) => {
             if state.calendar.open_event.is_some() {
-                Some(Message::EventClosed)
+                Some(Message::Event(EventMessage::EventClosed))
             } else if state.timeblocking.block.is_some() {
                 Some(Message::TimeBlocking(crate::timeblocking::Action::Close))
             } else if state.calendar.menu_open {
                 state.calendar.menu_open = false;
                 None
             } else if state.alarm_active {
-                Some(Message::Dismiss)
+                Some(Message::System(SystemMessage::Dismiss))
             } else if state.screen != Screen::Calendar {
-                Some(Message::ScreenSelected(Screen::Calendar))
+                Some(Message::Navigation(NavigationMessage::ScreenSelected(
+                    Screen::Calendar,
+                )))
             } else {
                 None
             }
@@ -4128,13 +1778,14 @@ pub(crate) fn perform(state: &mut State, actions: alarm::Actions) -> Task<Messag
         // decoding a file the user picked is not necessarily.
         tasks.push(
             blocking::run(move || audio::render(&choice))
-                .map(move |result| Message::SoundRendered(result, spec)),
+                .map(move |result| Message::System(SystemMessage::SoundRendered(result, spec))),
         );
     }
 
     if let Some(notification) = actions.notification {
         tasks.push(
-            blocking::run(move || notify::show(&notification)).map(Message::NotificationPosted),
+            blocking::run(move || notify::show(&notification))
+                .map(|v0| Message::System(SystemMessage::NotificationPosted(v0))),
         );
     }
 
@@ -4142,10 +1793,10 @@ pub(crate) fn perform(state: &mut State, actions: alarm::Actions) -> Task<Messag
         tasks.push(open_flash(state, settings));
     }
 
-    if actions.raise {
-        if let Some(id) = state.main_window {
-            tasks.push(window::gain_focus(id));
-        }
+    if actions.raise
+        && let Some(id) = state.main_window
+    {
+        tasks.push(window::gain_focus(id));
     }
 
     Task::batch(tasks)
@@ -4221,7 +1872,7 @@ fn apply_shortcuts(
         panel::rebind(action, &shortcuts).map_err(|error| format!("{error:#}"))?;
         Ok(shortcuts)
     })
-    .map(move |result| Message::ShortcutsApplied(action, result))
+    .map(move |result| Message::Settings(SettingsMessage::ShortcutsApplied(action, result)))
 }
 
 pub(crate) fn queue_save(state: &mut State) -> Task<Message> {
@@ -4243,7 +1894,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
         return Task::none();
     }
 
-    let day = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let day = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let displayed = if state.range_view_active() {
         state.week_anchor
     } else {
@@ -4251,7 +1902,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
     };
     if day != displayed {
         state.calendar.set_day(day, day);
-        if state.weekly || state.monthly {
+        if state.range_view_active() {
             state.week_anchor = day;
         }
         return show_cached_calendar(state);
@@ -4261,7 +1912,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
     state.timeblocking.revision += 1;
-    Task::done(Message::CalendarSyncRequested)
+    Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 }
 
 fn reconcile_completed_task(state: &mut State) -> Task<Message> {
@@ -4278,7 +1929,7 @@ fn reconcile_completed_task(state: &mut State) -> Task<Message> {
             .then(|| session.task_key.clone())
     });
     if let Some(key) = completed_key {
-        let now = chrono::Utc::now();
+        let now = crate::clock::utc_now();
         state.config.task_work.stop(&key, now);
         state.timeblocking.work_now = Some(now);
         queue_save(state)
@@ -4333,7 +1984,7 @@ fn empty_calendar_days(state: &State) -> Vec<chrono::NaiveDate> {
     days.into_iter()
         .filter(|&day| {
             !state.calendar.has_calendar_events_on(day)
-                || (!state.monthly
+                || (!state.monthly()
                     && [day, day.succ_opt().unwrap_or(day)].iter().any(|wake_day| {
                         !state.calendar.loaded_days().iter().any(|&loaded| {
                             state.calendar.events_on(loaded).iter().any(|event| {
@@ -4377,7 +2028,7 @@ fn fetch_pending_calendar_days(state: &mut State, fetched: &[chrono::NaiveDate])
 fn auto_sync_calendar(state: &mut State) -> Task<Message> {
     if state
         .calendar
-        .sync_due(state.config.calendar.sync_every(), Local::now())
+        .sync_due(state.config.calendar.sync_every(), crate::clock::now())
     {
         sync_calendar(state)
     } else {
@@ -4411,10 +2062,16 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
         let dates = state.calendar_dates();
         let fetched_dates = dates.clone();
         return blocking::run(move || calendar::sleep::sync(&settings, anchor, &fetched_dates))
-            .map(move |result| Message::CalendarRangeSynced(revision, dates.clone(), result));
+            .map(move |result| {
+                Message::Calendar(CalendarMessage::CalendarRangeSynced(
+                    revision,
+                    dates.clone(),
+                    result,
+                ))
+            });
     }
     blocking::run(move || calendar::sleep::sync(&settings, day, &[day]))
-        .map(move |result| Message::CalendarSyncedAt(revision, result))
+        .map(move |result| Message::Calendar(CalendarMessage::CalendarSyncedAt(revision, result)))
 }
 
 fn level(always_on_top: bool) -> window::Level {
@@ -4476,1634 +2133,6 @@ fn panel_ipc_listener(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use iced::futures::{StreamExt, executor::block_on};
-
-    #[derive(Debug)]
-    enum GeometryAction {
-        Resize(Size),
-        Min(Option<Size>),
-        Max(Option<Size>),
-        Open(window::Settings),
-    }
-
-    fn geometry_actions(task: Task<Message>) -> Vec<GeometryAction> {
-        use iced_test::runtime::{Action, task, window::Action as WindowAction};
-        block_on(async {
-            let Some(mut stream) = task::into_stream(task) else {
-                return Vec::new();
-            };
-            let mut actions = Vec::new();
-            while let Some(action) = stream.next().await {
-                match action {
-                    Action::Window(WindowAction::Resize(_, size)) => {
-                        actions.push(GeometryAction::Resize(size));
-                    }
-                    Action::Window(WindowAction::SetMinSize(_, size)) => {
-                        actions.push(GeometryAction::Min(size));
-                    }
-                    Action::Window(WindowAction::SetMaxSize(_, size)) => {
-                        actions.push(GeometryAction::Max(size));
-                    }
-                    Action::Window(WindowAction::GetMonitorSize(_, sender)) => {
-                        let _ = sender.send(None);
-                    }
-                    Action::Window(WindowAction::Open(id, settings, sender)) => {
-                        actions.push(GeometryAction::Open(settings));
-                        let _ = sender.send(id);
-                    }
-                    _ => {}
-                }
-            }
-            actions
-        })
-    }
-
-    fn flash(settings: config::Flash) -> Flash {
-        Flash {
-            window: window::Id::unique(),
-            started: Instant::now(),
-            settings,
-        }
-    }
-
-    #[test]
-    fn event_and_time_block_choices_open_the_creation_pane_without_saving() {
-        for kind in [calendar::DraftKind::Event, calendar::DraftKind::TimeBlock] {
-            let mut state = State::new(
-                crate::config::Config::default(),
-                crate::theme::Catalog::built_in(),
-            );
-            state.config.calendar.app_calendar = Some("timeslay".into());
-            let start =
-                calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
-            let end = start + chrono::Duration::minutes(45);
-            state.calendar.begin_draft("primary".into(), start, end);
-            let _ = update(
-                &mut state,
-                Message::EventDraftTitleChanged("Planning".into()),
-            );
-            let _ = update(&mut state, Message::EventDraftKindSelected(kind));
-            let draft = state.calendar.draft.as_ref().unwrap();
-            assert!(draft.editor_open);
-            assert!(state.details_pane_open);
-            assert_eq!(draft.title, "Planning");
-            assert_eq!((draft.start, draft.end), (start, end));
-            assert_eq!(draft.kind, kind);
-            if kind == calendar::DraftKind::TimeBlock {
-                assert_eq!(draft.calendar_id, "timeslay");
-            }
-            let _ = update(&mut state, Message::EventDraftCancelled);
-            assert!(state.calendar.draft.is_none());
-            assert!(!state.details_pane_open);
-        }
-    }
-
-    #[test]
-    fn external_config_updates_live_state_and_cancels_pending_save() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.save_queued = true;
-        let mut external = state.config.clone();
-        external.notepad.text = "edited outside the app".into();
-        external.appearance.theme = "Ocean".into();
-        external.calendar.day_end_hour = 3;
-        let _ = update(&mut state, Message::ConfigReloaded(external.clone()));
-        assert_eq!(state.config, external);
-        assert_eq!(state.notepad.text(), "edited outside the app");
-        assert!(!state.save_queued);
-    }
-
-    #[test]
-    fn own_save_echo_does_not_undo_newer_unsaved_edits() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let saved = state.disk_config.clone();
-        state.config.notepad.text = "new unsaved text".into();
-        state.save_queued = true;
-        let _ = update(&mut state, Message::ConfigReloaded(saved));
-        assert_eq!(state.config.notepad.text, "new unsaved text");
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn the_window_icon_decodes() {
-        assert!(window_icon().is_some(), "the embedded icon should decode");
-    }
-
-    #[test]
-    fn the_flash_fades_in_and_out_within_a_pulse() {
-        let flash = flash(config::Flash {
-            pulses: 1,
-            pulse_ms: 1_000,
-            peak_opacity: 1.0,
-            ..config::Flash::default()
-        });
-
-        let at = |millis| flash.alpha(flash.started + Duration::from_millis(millis));
-
-        assert_eq!(at(0), Some(0.0));
-        assert!(at(500).unwrap() > 0.99, "should peak mid-pulse");
-        assert!(at(950).unwrap() < 0.05, "should fade back out");
-    }
-
-    #[test]
-    fn the_flash_reports_when_it_is_over() {
-        let flash = flash(config::Flash {
-            pulses: 2,
-            pulse_ms: 500,
-            ..config::Flash::default()
-        });
-
-        let total = flash.settings.total_duration();
-        assert_eq!(total, Duration::from_millis(1_000));
-
-        assert!(
-            flash
-                .alpha(flash.started + total - Duration::from_millis(1))
-                .is_some()
-        );
-        assert!(flash.alpha(flash.started + total).is_none());
-    }
-
-    #[test]
-    fn a_flash_configured_faster_than_the_safety_cap_is_slowed_down() {
-        let flash = flash(config::Flash {
-            pulses: 2,
-            pulse_ms: 20,
-            ..config::Flash::default()
-        });
-
-        // The config asked for 50 pulses a second; it gets three.
-        assert_eq!(
-            flash.settings.total_duration(),
-            config::Flash::MIN_PULSE * 2
-        );
-    }
-
-    #[test]
-    fn the_flash_never_exceeds_the_configured_peak() {
-        let flash = flash(config::Flash {
-            pulses: 3,
-            peak_opacity: 0.35,
-            ..config::Flash::default()
-        });
-
-        for millis in (0..3_000).step_by(7) {
-            if let Some(alpha) = flash.alpha(flash.started + Duration::from_millis(millis)) {
-                assert!((0.0..=0.35).contains(&alpha), "alpha {alpha} out of range");
-            }
-        }
-    }
-
-    #[test]
-    fn a_zero_opacity_flash_draws_nothing() {
-        let flash = flash(config::Flash {
-            peak_opacity: 0.0,
-            ..config::Flash::default()
-        });
-
-        assert_eq!(
-            flash.alpha(flash.started + Duration::from_millis(100)),
-            Some(0.0)
-        );
-    }
-
-    #[test]
-    fn showing_tasks_is_remembered() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        assert!(state.config.calendar.show_tasks);
-
-        let _ = update(&mut state, Message::ShowTasksToggled(false));
-
-        assert!(!state.config.calendar.show_tasks);
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn the_notepad_keeps_what_was_written() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        for letter in "milk".chars() {
-            let _ = update(
-                &mut state,
-                Message::NotepadEdited(text_editor::Action::Edit(text_editor::Edit::Insert(
-                    letter,
-                ))),
-            );
-        }
-
-        assert_eq!(state.config.notepad.text, "milk");
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn the_notepad_opens_on_what_was_written_last_time() {
-        let mut config = Config::default();
-        config.notepad.text = "remember the milk".to_owned();
-
-        let state = State::new(config, Catalog::built_in());
-
-        assert_eq!(state.notepad.text(), "remember the milk");
-    }
-
-    #[test]
-    fn a_bad_or_repeated_shortcut_is_refused_without_touching_the_desktop() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let action = panel::Action::ToggleVisibility;
-
-        for input in ["nonsense", "super + u"] {
-            let _ = update(
-                &mut state,
-                Message::ShortcutInputChanged(action, input.into()),
-            );
-            let _ = update(&mut state, Message::ShortcutAdded(action));
-
-            let editor = &state.shortcut_editors[action.index()];
-            assert!(!editor.busy, "{input:?} was sent to the desktop");
-            assert!(matches!(editor.result, Some(Err(_))), "{input:?}");
-        }
-        assert_eq!(state.config.panel.toggle_visibility, ["Meta+U"]);
-    }
-
-    #[test]
-    fn an_action_keeps_every_shortcut_that_was_applied() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let action = panel::Action::ToggleVisibility;
-        let both = vec!["Meta+J".to_owned(), "Meta+F".to_owned()];
-
-        let _ = update(
-            &mut state,
-            Message::ShortcutsApplied(action, Ok(both.clone())),
-        );
-
-        assert_eq!(state.config.panel.toggle_visibility, both);
-        assert_eq!(
-            state.config.panel.toggle_shape,
-            panel::PanelConfig::default().toggle_shape
-        );
-        assert!(state.save_queued);
-
-        let _ = update(
-            &mut state,
-            Message::ShortcutsApplied(action, Err("taken".into())),
-        );
-        assert_eq!(state.config.panel.toggle_visibility, both);
-    }
-
-    #[test]
-    fn the_notepad_text_size_is_remembered() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        assert_eq!(state.config.notepad.font_size, 100);
-
-        let _ = update(&mut state, Message::NotepadFontSizeChanged(10));
-        assert_eq!(state.config.notepad.font_size, 110);
-
-        let _ = update(&mut state, Message::NotepadFontSizeChanged(-20));
-        assert_eq!(state.config.notepad.font_size, 90);
-        assert!(state.save_queued);
-    }
-
-    #[test]
-    fn the_notepad_text_size_stops_at_the_ends_of_its_range() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        for _ in 0..40 {
-            let _ = update(&mut state, Message::NotepadFontSizeChanged(10));
-        }
-        assert_eq!(
-            state.config.notepad.font_size,
-            config::Notepad::MAX_FONT_SIZE
-        );
-
-        for _ in 0..40 {
-            let _ = update(&mut state, Message::NotepadFontSizeChanged(-10));
-        }
-        assert_eq!(
-            state.config.notepad.font_size,
-            config::Notepad::MIN_FONT_SIZE
-        );
-    }
-
-    #[test]
-    fn the_notepad_is_a_tab_of_its_own() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let _ = update(&mut state, Message::ScreenSelected(Screen::Notepad));
-        assert_eq!(state.screen, Screen::Notepad);
-
-        let _ = update(&mut state, Message::ScreenSelected(Screen::Calendar));
-        assert_eq!(state.screen, Screen::Calendar);
-    }
-
-    #[test]
-    fn the_clock_shortcuts_are_left_off_while_writing() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.screen = Screen::Notepad;
-
-        let space = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Space),
-            keyboard::Modifiers::default(),
-        );
-        let reset = key_message(
-            &mut state,
-            Key::Character("r".into()),
-            keyboard::Modifiers::default(),
-        );
-
-        assert!(space.is_none(), "a space would start the clock mid-word");
-        assert!(reset.is_none(), "an r would reset the clock mid-word");
-
-        // Escape still leaves the page.
-        let escape = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Escape),
-            keyboard::Modifiers::default(),
-        );
-        assert!(
-            matches!(escape, Some(Message::ScreenSelected(Screen::Calendar))),
-            "escape should leave the notepad"
-        );
-    }
-
-    #[test]
-    fn a_space_on_the_calendar_only_silences_a_ringing_alarm() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let space = |state: &mut State| {
-            key_message(
-                state,
-                Key::Named(keyboard::key::Named::Space),
-                keyboard::Modifiers::default(),
-            )
-        };
-
-        assert!(
-            space(&mut state).is_none(),
-            "there is no clock on the calendar for a space to start"
-        );
-
-        state.alarm_active = true;
-
-        assert!(matches!(space(&mut state), Some(Message::Dismiss)));
-    }
-
-    #[test]
-    fn changing_the_end_of_day_moves_the_day_in_view() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        assert_eq!(state.config.calendar.day_end_hour, 0);
-
-        let _ = update(&mut state, Message::CalendarDayEndChanged(3));
-
-        assert_eq!(state.config.calendar.day_end_hour, 3);
-        assert!(state.save_queued);
-        // The day in view is recomputed from the new boundary, not left on the
-        // date the old one produced.
-        assert_eq!(state.calendar.day, calendar::day_at(Local::now(), 3));
-    }
-
-    #[test]
-    fn an_out_of_range_end_of_day_is_clamped() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let _ = update(&mut state, Message::CalendarDayEndChanged(99));
-
-        assert_eq!(
-            state.config.calendar.day_end_hour,
-            config::CalendarSettings::MAX_DAY_END_HOUR
-        );
-    }
-
-    #[test]
-    fn picking_a_task_color_recolors_the_list_and_its_events() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-
-        // The sample uses a shortened id; a real task list is `tasks:<list>`.
-        state.calendar.calendars[2].id = "tasks:list".into();
-        let deep = state
-            .calendar
-            .events
-            .iter_mut()
-            .find(|event| event.id == "deep")
-            .unwrap();
-        deep.calendar_id = "tasks:list".into();
-
-        let red = iced::Color::from_rgb8(0xDC, 0x21, 0x27);
-        let _ = update(
-            &mut state,
-            Message::TaskColorPicked("tasks:list".into(), Some(red)),
-        );
-
-        assert_eq!(state.config.calendar.task_color("tasks:list"), Some(red));
-        assert!(state.save_queued);
-        assert_eq!(state.calendar.calendars[2].color, red);
-        assert_eq!(
-            state.calendar.event("deep").unwrap().color,
-            red,
-            "the task's own chip should follow the list color"
-        );
-
-        // Resetting has to repaint the chip, not just forget the override.
-        let _ = update(
-            &mut state,
-            Message::TaskColorPicked("tasks:list".into(), None),
-        );
-        assert_eq!(state.config.calendar.task_color("tasks:list"), None);
-        assert_eq!(
-            state.calendar.event("deep").unwrap().color,
-            calendar::colors::TASK
-        );
-    }
-
-    #[test]
-    fn the_task_color_editor_opens_and_closes() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-
-        let _ = update(
-            &mut state,
-            Message::SourceColorEditorToggled("tasks:list".into()),
-        );
-        assert_eq!(state.calendar.color_editor.as_deref(), Some("tasks:list"));
-
-        let _ = update(
-            &mut state,
-            Message::SourceColorEditorToggled("tasks:list".into()),
-        );
-        assert_eq!(state.calendar.color_editor, None);
-    }
-
-    #[test]
-    fn the_window_opens_at_two_thirds_of_the_monitor() {
-        assert_eq!(launch_width(1920.0), 1280.0);
-        assert_eq!(launch_width(3840.0), 2560.0);
-        // A tiny monitor must not fold the layout below its minimum.
-        assert_eq!(launch_width(120.0), MIN_SIZE.width);
-    }
-
-    #[test]
-    fn the_panel_window_is_pinned_to_its_width() {
-        let panel = panel::PanelConfig {
-            width: 200,
-            ..Default::default()
-        };
-        let settings = sidebar_settings(&panel, &config::ViewSettings::default());
-
-        // The width is fixed from both sides, so the compositor cannot stretch
-        // the strip, but the height is free to fill the screen.
-        assert_eq!(settings.min_size.unwrap().width, 216.0);
-        assert_eq!(settings.max_size.unwrap().width, 216.0);
-        assert!(settings.min_size.unwrap().height < settings.max_size.unwrap().height);
-        assert!(!settings.decorations);
-        assert!(settings.transparent);
-        assert_eq!(settings.level, window::Level::AlwaysOnTop);
-        assert_eq!(settings.platform_specific.application_id, APPLICATION_ID);
-    }
-
-    #[test]
-    fn range_width_fits_beside_the_day_panel() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.config.calendar.weekly_days = 7;
-        state.config.calendar.weekly_day_width = 100;
-        assert_eq!(state.weekly_window_width(), 716.0);
-        state.config.calendar.weekly_days = 8;
-        state.config.calendar.weekly_day_width = 220;
-        assert_eq!(state.weekly_window_width(), 1776.0);
-        state.sidebar = Some(Sidebar {
-            width: 200.0,
-            side: panel::Side::Left,
-        });
-        assert_eq!(state.weekly_window_width(), 1792.0);
-        state.monitor_size = Some(Size::new(1200.0, 900.0));
-        assert_eq!(state.weekly_window_width(), 984.0);
-        state.monitor_size = Some(Size::new(f32::NAN, 900.0));
-        assert_eq!(state.weekly_window_width(), 1792.0);
-        state.sidebar = None;
-        state.monitor_size = None;
-        state.config.window.width = 3000.0;
-        assert_eq!(state.weekly_window_width(), 3000.0);
-    }
-
-    #[test]
-    fn explicit_range_widths_are_independent_of_day_width() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.config.views.calendar_width = Some(1500.0);
-        state.config.views.calendar_week_width = Some(900.0);
-        state.config.views.calendar_month_width = Some(1100.0);
-        state.weekly = true;
-        assert_eq!(state.weekly_window_width(), 900.0);
-        state.monthly = true;
-        assert_eq!(state.weekly_window_width(), 1100.0);
-        assert_eq!(state.calendar_width(), 1500.0);
-    }
-
-    #[test]
-    fn day_width_changes_keep_fixed_panel_constraints_with_a_range_open() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.main_window = Some(window::Id::unique());
-        state.sidebar = Some(Sidebar {
-            width: 200.0,
-            side: panel::Side::Left,
-        });
-        state.main_size = Size::new(216.0, 900.0);
-        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
-        let actions = geometry_actions(update(&mut state, Message::CalendarWidthChanged(300.0)));
-        assert!(matches!(actions.as_slice(), [GeometryAction::Max(None),
-            GeometryAction::Min(Some(min)), GeometryAction::Resize(size), GeometryAction::Max(Some(max))]
-            if min.width == 316.0 && size.width == 316.0 && max.width == 316.0));
-    }
-
-    #[test]
-    fn range_views_float_without_resizing_the_day_panel() {
-        for monthly in [false, true] {
-            let mut state = State::new(Config::default(), Catalog::built_in());
-            let main = window::Id::unique();
-            state.main_window = Some(main);
-            state.sidebar = Some(Sidebar {
-                width: 200.0,
-                side: panel::Side::Left,
-            });
-            state.main_size = Size::new(216.0, 900.0);
-            let day = state.calendar.day;
-            let actions = geometry_actions(update(
-                &mut state,
-                if monthly {
-                    Message::CalendarMonthViewSelected
-                } else {
-                    Message::CalendarModeSelected(true)
-                },
-            ));
-            assert!(
-                matches!(actions.as_slice(), [GeometryAction::Open(settings)]
-                if settings.platform_specific.application_id == "timeslay-editor"
-                    && !settings.decorations && settings.size.width > 216.0)
-            );
-            let floating = state.editor_window.unwrap();
-            assert_ne!(floating, main);
-            assert_eq!(state.main_size, Size::new(216.0, 900.0));
-            assert_eq!(state.calendar.day, day);
-            let saved_width = state.config.window.width;
-            let _ = update(
-                &mut state,
-                Message::WindowResized(floating, Size::new(1000.0, 800.0)),
-            );
-            assert_eq!(state.config.window.width, saved_width);
-            let actions =
-                geometry_actions(update(&mut state, Message::CalendarModeSelected(false)));
-            assert!(actions.is_empty());
-            assert!(state.editor_window.is_none());
-            assert_eq!(state.main_window, Some(main));
-            assert_eq!(state.main_size, Size::new(216.0, 900.0));
-        }
-    }
-
-    #[test]
-    fn range_surface_survives_escape_and_hides_with_the_panel() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.main_window = Some(window::Id::unique());
-        let _ = geometry_actions(update(&mut state, Message::CalendarModeSelected(true)));
-        let floating = state.editor_window.unwrap();
-        let _ = geometry_actions(update(&mut state, Message::CalendarMonthViewSelected));
-        assert_eq!(state.editor_window, Some(floating));
-        assert!(state.monthly);
-        let escape = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Escape),
-            keyboard::Modifiers::default(),
-        );
-        assert!(escape.is_none());
-        assert!(state.range_view_active());
-        assert_eq!(state.editor_window, Some(floating));
-        state.panel_expected_close = true;
-        let _ = update(&mut state, Message::CalendarTick);
-        assert!(state.editor_window.is_none());
-    }
-
-    #[test]
-    fn overview_refreshes_and_follows_today_on_other_panel_tabs() {
-        for screen in [
-            Screen::Inbox,
-            Screen::Overdue,
-            Screen::Projects,
-            Screen::Notepad,
-            Screen::Travel,
-            Screen::Habits,
-            Screen::KeepNotes,
-            Screen::BrainDump,
-            Screen::Settings,
-        ] {
-            for monthly in [false, true] {
-                let mut state = State::new(Config::default(), Catalog::built_in());
-                state.screen = screen;
-                state.weekly = !monthly;
-                state.monthly = monthly;
-                let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-                state.week_anchor = today - chrono::Duration::days(1);
-                state.calendar.follow_today = true;
-                let _ = update(&mut state, Message::CalendarTick);
-                assert_eq!(state.week_anchor, today);
-                assert_eq!(state.screen, screen);
-                state.calendar.connection = Connection::SignedIn;
-                let _ = update(&mut state, Message::CalendarSyncRequested);
-                assert_eq!(state.calendar.sync, SyncState::Syncing);
-                assert!(state.range_view_active());
-            }
-        }
-    }
-
-    #[test]
-    fn closing_the_range_surface_keeps_the_overview_toggle_enabled() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let main = window::Id::unique();
-        state.main_window = Some(main);
-        let _ = geometry_actions(update(&mut state, Message::CalendarMonthViewSelected));
-        let floating = state.editor_window.unwrap();
-        let _ = update(&mut state, Message::WindowClosed(floating));
-        assert!(state.range_view_active());
-        assert!(state.monthly);
-        assert!(state.editor_window.is_some());
-        assert_ne!(state.editor_window, Some(floating));
-        assert_eq!(state.main_window, Some(main));
-    }
-
-    #[test]
-    fn the_panel_does_not_widen_to_the_default_fraction() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let id = window::Id::unique();
-        state.main_window = Some(id);
-        state.sidebar = Some(Sidebar {
-            width: 200.0,
-            side: panel::Side::Left,
-        });
-
-        let before = state.config.window.width;
-        let _ = update(
-            &mut state,
-            Message::MonitorSized(id, Some(Size::new(1920.0, 1080.0))),
-        );
-
-        // The main window would have adopted `launch_width` (1280px) here; the
-        // panel keeps the width it was told to.
-        assert_eq!(state.config.window.width, before);
-    }
-
-    #[test]
-    fn the_panel_does_not_write_its_geometry_over_the_window() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let id = window::Id::unique();
-        state.main_window = Some(id);
-        state.sidebar = Some(Sidebar {
-            width: 200.0,
-            side: panel::Side::Left,
-        });
-
-        let before = state.config.window.clone();
-        let _ = update(
-            &mut state,
-            Message::WindowResized(id, Size::new(200.0, 1080.0)),
-        );
-
-        assert_eq!(
-            state.config.window, before,
-            "the panel must leave the saved window alone"
-        );
-    }
-
-    #[test]
-    fn a_main_window_still_remembers_its_own_size() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let id = window::Id::unique();
-        state.main_window = Some(id);
-
-        let _ = update(
-            &mut state,
-            Message::WindowResized(id, Size::new(640.0, 480.0)),
-        );
-
-        assert_eq!(state.config.window.width, 640.0);
-        assert_eq!(state.config.window.height, 480.0);
-    }
-
-    #[test]
-    fn opening_an_event_in_the_top_half_puts_the_details_below() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        ui::calendar::record_pointer(20.0, 500.0);
-
-        let _ = update(&mut state, Message::EventOpened("standup".into()));
-
-        assert_eq!(state.calendar.open_event.as_deref(), Some("standup"));
-        assert!(state.calendar.details_below);
-    }
-
-    #[test]
-    fn opening_an_event_seeds_the_inline_editor() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-
-        let _ = update(&mut state, Message::EventOpened("standup".into()));
-
-        let draft = state
-            .calendar
-            .edit_draft
-            .as_ref()
-            .expect("the details pane edits the event in place");
-        assert_eq!(draft.id, "standup");
-        assert_eq!(draft.title, "Standup");
-        assert_eq!(draft.rule.repeat, crate::recurrence::RepeatMode::Never);
-    }
-
-    #[test]
-    fn event_project_changes_are_staged_and_cancelled_without_changing_the_event() {
-        use calendar::projects::Action;
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let ids: Vec<_> = state
-            .config
-            .projects
-            .items
-            .iter()
-            .take(2)
-            .map(|p| p.id)
-            .collect();
-        let _ = update(&mut state, Message::EventOpened("standup".into()));
-        for id in [ids[0], ids[1], ids[0], u64::MAX] {
-            let _ = update(&mut state, Message::EventEditProjects(Action::Add(id)));
-        }
-        let mut expected = ids.clone();
-        expected.sort_unstable();
-        assert_eq!(
-            state.calendar.edit_draft.as_ref().unwrap().projects.ids,
-            expected
-        );
-        assert!(
-            state
-                .calendar
-                .event("standup")
-                .unwrap()
-                .details
-                .projects
-                .is_empty()
-        );
-        let _ = update(
-            &mut state,
-            Message::EventEditProjects(Action::Remove(ids[0])),
-        );
-        assert_eq!(
-            state.calendar.edit_draft.as_ref().unwrap().projects.ids,
-            vec![ids[1]]
-        );
-        let _ = update(&mut state, Message::EventEditCancelled);
-        assert!(state.calendar.edit_draft.is_none());
-        assert!(
-            state
-                .calendar
-                .event("standup")
-                .unwrap()
-                .details
-                .projects
-                .is_empty()
-        );
-
-        let event = state.calendar.event("standup").unwrap();
-        state.calendar.draft = Some(calendar::Draft::new(
-            "primary".into(),
-            event.start,
-            event.end,
-        ));
-        let _ = update(&mut state, Message::EventDraftProjects(Action::Add(ids[0])));
-        let _ = update(&mut state, Message::EventDraftProjects(Action::Add(ids[1])));
-        assert_eq!(state.calendar.draft.as_ref().unwrap().projects.ids.len(), 2);
-    }
-
-    #[test]
-    fn opening_an_event_in_the_bottom_half_keeps_the_details_on_top() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        ui::calendar::record_pointer(480.0, 500.0);
-
-        let _ = update(&mut state, Message::EventOpened("lunch".into()));
-
-        assert_eq!(state.calendar.open_event.as_deref(), Some("lunch"));
-        assert!(!state.calendar.details_below);
-    }
-
-    #[test]
-    fn editors_leave_the_main_window_geometry_unchanged_on_every_destination() {
-        for screen in [
-            Screen::Calendar,
-            Screen::Inbox,
-            Screen::Overdue,
-            Screen::Triaged,
-            Screen::Backlog,
-            Screen::Habits,
-        ] {
-            for sidebar in [false, true] {
-                for block in [false, true] {
-                    let mut state = State::new(Config::default(), Catalog::built_in());
-                    state.screen = screen;
-                    state.sidebar = sidebar.then_some(Sidebar {
-                        width: 200.0,
-                        side: panel::Side::Left,
-                    });
-                    let main = window::Id::unique();
-                    state.main_window = Some(main);
-                    state.main_size = Size::new(216.0, 900.0);
-                    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-                    let task = if block {
-                        assert!(
-                            geometry_actions(crate::timeblocking::open(
-                                &mut state,
-                                "standup".into()
-                            ))
-                            .is_empty()
-                        );
-                        update(&mut state, Message::CalendarTick)
-                    } else {
-                        update(&mut state, Message::EventOpened("standup".into()))
-                    };
-                    let actions = geometry_actions(task);
-                    assert!(
-                        matches!(actions.as_slice(), [GeometryAction::Open(settings)]
-                if settings.level == window::Level::AlwaysOnTop && !settings.decorations)
-                    );
-                    let editor = state.editor_window.expect("an independent editor window");
-                    assert_ne!(editor, main);
-                    assert_eq!(state.main_window, Some(main));
-                    assert_eq!(state.main_size, Size::new(216.0, 900.0));
-                    let escape = key_message(
-                        &mut state,
-                        Key::Named(keyboard::key::Named::Escape),
-                        keyboard::Modifiers::default(),
-                    )
-                    .unwrap();
-                    assert!(geometry_actions(update(&mut state, escape)).is_empty());
-                    assert!(state.editor_window.is_none());
-                    assert!(state.calendar.open_event.is_none());
-                    assert!(state.timeblocking.block.is_none());
-                    // A delayed opened notification cannot replace the main window.
-                    let _ = update(&mut state, Message::EditorWindowOpened(editor));
-                    assert_eq!(state.main_window, Some(main));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn escape_closes_the_event_details_pane() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar.open_event = Some("standup".into());
-
-        let escape = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Escape),
-            keyboard::Modifiers::default(),
-        );
-
-        assert!(
-            matches!(escape, Some(Message::EventClosed)),
-            "escape should close the details pane, got {escape:?}"
-        );
-    }
-
-    #[test]
-    fn populated_day_navigation_retains_cached_events_while_filling_missing_sleep() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        state.calendar.connection = Connection::SignedIn;
-        state.calendar.last_sync = Some(Local::now() - chrono::Duration::hours(3));
-        let day = state.calendar.day;
-        let count = state.calendar.events.len();
-        let _ = update(&mut state, Message::CalendarDaySelected(day));
-        assert_eq!(state.calendar.sync, SyncState::Syncing);
-        assert_eq!(state.calendar.events.len(), count);
-        let _ = update(&mut state, Message::CalendarAutoSyncRequested);
-        assert_eq!(state.calendar.sync, SyncState::Syncing);
-    }
-
-    #[test]
-    fn switching_to_uncached_views_fetches_despite_a_recent_sync() {
-        for message in [
-            Message::CalendarModeSelected(true),
-            Message::CalendarMonthViewSelected,
-            Message::CalendarDayShift(1),
-        ] {
-            let mut state = State::new(Config::default(), Catalog::built_in());
-            state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-            state.calendar.connection = Connection::SignedIn;
-            state.calendar.last_sync = Some(Local::now());
-            let _ = update(&mut state, message);
-            assert_eq!(state.calendar.sync, SyncState::Syncing);
-        }
-    }
-
-    #[test]
-    fn empty_cached_days_are_fetched_again_on_navigation() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let mut snapshot = calendar::sample_snapshot();
-        snapshot.events.clear();
-        let day = snapshot.day;
-        state.calendar = calendar::Store::with_snapshot(snapshot);
-        state.calendar.connection = Connection::SignedIn;
-        state.calendar.last_sync = Some(Local::now());
-        let _ = update(&mut state, Message::CalendarDaySelected(day));
-        assert_eq!(state.calendar.sync, SyncState::Syncing);
-    }
-
-    #[test]
-    fn navigation_during_a_fetch_loads_the_new_view_after_completion() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let snapshot = calendar::sample_snapshot();
-        state.calendar = calendar::Store::with_snapshot(snapshot.clone());
-        state.calendar.connection = Connection::SignedIn;
-        state.calendar.sync = SyncState::Syncing;
-        let _ = update(&mut state, Message::CalendarModeSelected(true));
-        assert!(!state.calendar_fetch_pending.is_empty());
-        let _ = update(&mut state, Message::CalendarSynced(Ok(snapshot)));
-        assert_eq!(state.calendar.sync, SyncState::Syncing);
-        assert!(state.calendar_fetch_pending.is_empty());
-    }
-
-    #[test]
-    fn an_empty_range_result_does_not_fetch_forever() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let mut snapshot = calendar::sample_snapshot();
-        state.calendar = calendar::Store::with_snapshot(snapshot.clone());
-        state.calendar.connection = Connection::SignedIn;
-        state.calendar.sync = SyncState::Syncing;
-        let _ = update(&mut state, Message::CalendarModeSelected(true));
-        let dates = state.calendar_dates();
-        snapshot.events.clear();
-        let revision = state.timeblocking.revision;
-        let _ = update(
-            &mut state,
-            Message::CalendarRangeSynced(revision, dates, Ok(snapshot)),
-        );
-        assert_eq!(state.calendar.sync, SyncState::Idle);
-        assert!(state.calendar_fetch_pending.is_empty());
-    }
-
-    #[test]
-    fn a_recent_sync_prevents_an_automatic_fetch_but_manual_sync_still_works() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let template = state.calendar.events[1].clone();
-        for wake_date in [state.calendar.day, state.calendar.day.succ_opt().unwrap()] {
-            let mut night = template.clone();
-            night.id = format!("sleep-{wake_date}");
-            night.details.sleep = Some(calendar::sleep::Record::planned(wake_date));
-            state.calendar.events.push(night);
-        }
-        state.calendar.connection = Connection::SignedIn;
-        state.calendar.last_sync = Some(Local::now());
-        let _ = update(&mut state, Message::CalendarAutoSyncRequested);
-        assert_eq!(state.calendar.sync, SyncState::Idle);
-        let _ = update(&mut state, Message::CalendarSyncMinutesChanged(120));
-        assert_eq!(state.calendar.sync, SyncState::Idle);
-        let _ = update(&mut state, Message::CalendarSyncRequested);
-        assert_eq!(state.calendar.sync, SyncState::Syncing);
-    }
-
-    #[test]
-    fn stepping_the_day_moves_the_view_and_drops_the_old_events() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let start = state.calendar.day;
-
-        let _ = update(&mut state, Message::CalendarDayShift(1));
-
-        assert_eq!(state.calendar.day, start.succ_opt().unwrap());
-        assert!(
-            state.calendar.events.is_empty(),
-            "the old day's events must not paint onto the new day"
-        );
-        assert!(!state.calendar.follow_today);
-    }
-
-    #[test]
-    fn stepping_back_to_a_day_paints_its_cached_events_at_once() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let start = state.calendar.day;
-        let cached = state.calendar.events.len();
-        assert!(cached > 0);
-
-        let _ = update(&mut state, Message::CalendarDayShift(1));
-        assert!(
-            state.calendar.events.is_empty(),
-            "a day not seen yet starts empty"
-        );
-
-        let _ = update(&mut state, Message::CalendarDayShift(-1));
-
-        assert_eq!(state.calendar.day, start);
-        assert_eq!(
-            state.calendar.events.len(),
-            cached,
-            "the day we came back to should paint from the cache"
-        );
-    }
-
-    #[test]
-    fn selecting_today_makes_the_view_follow_it_again() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-        state.calendar.day = today;
-        state.calendar.follow_today = false;
-
-        let _ = update(&mut state, Message::CalendarDaySelected(today));
-
-        assert!(state.calendar.follow_today);
-    }
-
-    #[test]
-    fn the_month_picker_opens_on_the_month_of_the_day_in_view() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar.day = chrono::NaiveDate::from_ymd_opt(2026, 10, 17).unwrap();
-
-        let _ = update(&mut state, Message::CalendarMonthToggled);
-
-        assert!(state.calendar.month_open);
-        assert_eq!(
-            state.calendar.month,
-            chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
-        );
-
-        let _ = update(&mut state, Message::CalendarMonthToggled);
-        assert!(!state.calendar.month_open);
-    }
-
-    #[test]
-    fn stepping_the_month_crosses_the_year_boundary() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar.month = chrono::NaiveDate::from_ymd_opt(2026, 12, 1).unwrap();
-
-        let _ = update(&mut state, Message::CalendarMonthShift(1));
-        assert_eq!(
-            state.calendar.month,
-            chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
-        );
-
-        let _ = update(&mut state, Message::CalendarMonthShift(-2));
-        assert_eq!(
-            state.calendar.month,
-            chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()
-        );
-    }
-
-    #[test]
-    fn picking_a_day_closes_the_month_picker_and_moves_the_view() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar.month_open = true;
-        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
-
-        let _ = update(&mut state, Message::CalendarDaySelected(day));
-
-        assert_eq!(state.calendar.day, day);
-        assert!(!state.calendar.month_open);
-    }
-
-    #[test]
-    fn a_snapshot_for_a_day_we_left_does_not_snap_the_view_back() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let moved_to = state.calendar.day.succ_opt().unwrap();
-        state.calendar.day = moved_to;
-        state.calendar.sync = SyncState::Syncing;
-
-        // The sample snapshot is for the day we navigated away from.
-        let _ = update(
-            &mut state,
-            Message::CalendarSynced(Ok(calendar::sample_snapshot())),
-        );
-
-        assert_eq!(state.calendar.day, moved_to);
-        assert_eq!(state.calendar.sync, SyncState::Idle);
-        state
-            .calendar
-            .set_day(moved_to.pred_opt().unwrap(), moved_to);
-        assert!(
-            !state.calendar.events.is_empty(),
-            "late results should remain cached"
-        );
-    }
-
-    #[test]
-    fn resync_forgets_cached_days() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        // Stay signed out so the fetch is not started against a real account.
-        // The cache drop still has to happen; a signed-in store would also
-        // move into Syncing, which `sync_calendar` owns.
-        state.calendar.connection = Connection::SignedOut;
-        let today = state.calendar.day;
-        let tomorrow = today.succ_opt().unwrap();
-        state.calendar.set_day(tomorrow, today);
-
-        let _ = update(&mut state, Message::CalendarResyncRequested);
-
-        state.calendar.set_day(today, today);
-        assert!(
-            state.calendar.events.is_empty(),
-            "a resync should forget days that were only cached"
-        );
-        assert_eq!(state.calendar.sync, SyncState::Idle);
-    }
-
-    fn at_in(minutes: i64) -> DateTime<Local> {
-        alarms::minute_of(Local::now()) + chrono::Duration::minutes(minutes)
-    }
-
-    fn place(state: &mut State, minutes: i64) {
-        let _ = update(
-            state,
-            Message::Alarms(alarms::Action::Place(at_in(minutes))),
-        );
-    }
-
-    #[test]
-    fn set_alarm_enters_and_leaves_alarm_mode() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar.menu_open = true;
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::ModeToggled));
-
-        assert!(state.alarms.mode);
-        assert!(!state.calendar.menu_open, "the menu gets out of the way");
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::ModeToggled));
-
-        assert!(!state.alarms.mode);
-    }
-
-    #[test]
-    fn escape_leaves_alarm_mode() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.alarms.mode = true;
-
-        let escape = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Escape),
-            keyboard::Modifiers::default(),
-        );
-
-        assert!(matches!(
-            escape,
-            Some(Message::Alarms(alarms::Action::ModeToggled))
-        ));
-    }
-
-    #[test]
-    fn clicking_a_future_time_sets_the_alarm_and_opens_its_options() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.alarms.mode = true;
-
-        place(&mut state, 45);
-
-        assert_eq!(state.alarms.items().len(), 1);
-        assert!(!state.alarms.mode, "placing an alarm ends the mode");
-
-        let editor = state.alarms.editor.as_ref().expect("the popup opens");
-        assert_eq!(editor.id, state.alarms.items()[0].id);
-        assert_eq!(
-            alarms::minutes_between(Local::now(), state.alarms.items()[0].at),
-            45
-        );
-    }
-
-    #[test]
-    fn an_alarm_cannot_be_set_in_the_past() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.alarms.mode = true;
-
-        place(&mut state, -30);
-        place(&mut state, 0);
-
-        assert!(state.alarms.is_empty());
-        assert!(state.alarms.editor.is_none());
-    }
-
-    #[test]
-    fn a_new_alarm_starts_from_the_alarm_profile_without_the_timer_wording() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.config.alarm.sound.volume = 33;
-
-        place(&mut state, 10);
-
-        let alarm = &state.alarms.items()[0];
-        assert_eq!(alarm.profile.sound.volume, 33);
-        assert_eq!(alarm.profile.notification.summary, "Alarm");
-    }
-
-    #[test]
-    fn opening_an_alarm_shows_its_time_and_closing_puts_it_away() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        place(&mut state, 90);
-        let id = state.alarms.items()[0].id;
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::CloseEditor));
-        assert!(state.alarms.editor.is_none());
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::Open(id)));
-        assert_eq!(
-            state.alarms.editor.as_ref().map(|e| e.time_text.clone()),
-            Some(state.alarms.items()[0].at.format("%H:%M").to_string())
-        );
-    }
-
-    #[test]
-    fn an_alarm_can_be_removed_before_it_goes_off() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        place(&mut state, 60);
-        place(&mut state, 120);
-        let id = state
-            .alarms
-            .editor
-            .as_ref()
-            .expect("the last one is open")
-            .id;
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::Delete(id)));
-
-        assert_eq!(state.alarms.items().len(), 1);
-        assert!(state.alarms.get(id).is_none());
-        assert!(state.alarms.editor.is_none(), "its popup goes with it");
-    }
-
-    #[test]
-    fn editing_an_alarm_changes_what_it_does_and_nothing_else() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        place(&mut state, 60);
-        let before = state.alarms.items()[0].at;
-
-        for edit in [
-            alarms::Edit::Label("Tea".into()),
-            alarms::Edit::Sound(false),
-            alarms::Edit::Volume(12),
-            alarms::Edit::Flash(false),
-        ] {
-            let _ = update(&mut state, Message::Alarms(alarms::Action::Edit(edit)));
-        }
-
-        let alarm = &state.alarms.items()[0];
-        assert_eq!(alarm.label, "Tea");
-        assert!(!alarm.profile.sound.enabled);
-        assert_eq!(alarm.profile.sound.volume, 12);
-        assert!(!alarm.profile.flash.enabled);
-        assert_eq!(alarm.at, before);
-        assert_eq!(
-            state.config.alarm,
-            Config::default().alarm,
-            "defaults stay put"
-        );
-    }
-
-    #[test]
-    fn an_alarm_time_can_be_edited_but_not_into_the_past() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        place(&mut state, 24 * 60 + 30);
-        let alarm = state.alarms.items()[0].clone();
-
-        // The same time of day, tomorrow, is still ahead.
-        let later = (alarm.at + chrono::Duration::minutes(5))
-            .format("%H:%M")
-            .to_string();
-        let _ = update(
-            &mut state,
-            Message::Alarms(alarms::Action::Edit(alarms::Edit::Time(later.clone()))),
-        );
-        assert_eq!(
-            state.alarms.items()[0].at.format("%H:%M").to_string(),
-            later
-        );
-        assert!(state.alarms.editor.as_ref().unwrap().time_error.is_none());
-
-        // Nonsense is refused and the alarm stays where it was.
-        let kept = state.alarms.items()[0].at;
-        let _ = update(
-            &mut state,
-            Message::Alarms(alarms::Action::Edit(alarms::Edit::Time("soon".into()))),
-        );
-        assert_eq!(state.alarms.items()[0].at, kept);
-        assert!(state.alarms.editor.as_ref().unwrap().time_error.is_some());
-    }
-
-    #[test]
-    fn an_alarm_for_today_cannot_be_edited_into_the_past() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        place(&mut state, 2);
-        let alarm = state.alarms.items()[0].clone();
-        if alarm.at.date_naive() != Local::now().date_naive() {
-            return; // set a hair before midnight, so it landed on tomorrow
-        }
-
-        // Midnight has always passed by the time today has an alarm in it.
-        let _ = update(
-            &mut state,
-            Message::Alarms(alarms::Action::Edit(alarms::Edit::Time("00:00".into()))),
-        );
-
-        assert_eq!(
-            state.alarms.items()[0].at,
-            alarm.at,
-            "the alarm did not move"
-        );
-        assert!(state.alarms.editor.as_ref().unwrap().time_error.is_some());
-    }
-
-    #[test]
-    fn an_alarm_that_comes_due_goes_off_and_leaves_the_calendar() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        place(&mut state, 60);
-        state.alarms.add(
-            Local::now() - chrono::Duration::seconds(1),
-            config::AlarmProfile::default(),
-        );
-        assert_eq!(state.alarms.items().len(), 2);
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::Poll));
-
-        assert_eq!(state.alarms.items().len(), 1, "only the due one went");
-        assert!(state.alarm_active, "it rings until dismissed");
-    }
-
-    #[test]
-    fn an_alarm_going_off_closes_its_own_popup() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let id = state.alarms.add(
-            Local::now() - chrono::Duration::seconds(1),
-            config::AlarmProfile::default(),
-        );
-        let _ = update(&mut state, Message::Alarms(alarms::Action::Open(id)));
-        assert!(state.alarms.editor.is_some());
-
-        let _ = update(&mut state, Message::Alarms(alarms::Action::Poll));
-
-        assert!(state.alarms.editor.is_none());
-    }
-
-    #[test]
-    fn leaving_the_calendar_ends_alarm_setting() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.alarms.mode = true;
-
-        let _ = update(&mut state, Message::ScreenSelected(Screen::Notepad));
-
-        assert!(!state.alarms.mode);
-    }
-
-    #[test]
-    fn the_alarm_poll_only_runs_while_an_alarm_is_waiting() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        assert!(!alarms::needs_poll(&state.alarms));
-
-        place(&mut state, 5);
-
-        assert!(alarms::needs_poll(&state.alarms));
-    }
-
-    /// A state with the standup already dragged an hour later and pending.
-    fn state_with_a_pending_drag() -> (State, DateTime<Local>, DateTime<Local>) {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-
-        let event = state.calendar.event("standup").unwrap();
-        let start = event.start + chrono::Duration::hours(1);
-        let end = event.end + chrono::Duration::hours(1);
-        state.calendar.begin_time_change("standup", start, end);
-        (state, start, end)
-    }
-
-    #[test]
-    fn a_confirmed_drag_makes_the_chip_final() {
-        let (mut state, start, _) = state_with_a_pending_drag();
-
-        let _ = update(
-            &mut state,
-            Message::EventTimeSaved("standup".into(), Ok(())),
-        );
-
-        assert!(state.calendar.pending_time("standup").is_none());
-        assert_eq!(state.calendar.event("standup").unwrap().start, start);
-    }
-
-    #[test]
-    fn a_refused_drag_puts_the_old_time_back_and_says_so() {
-        let (mut state, start, _) = state_with_a_pending_drag();
-        let before = calendar::sample_snapshot()
-            .events
-            .into_iter()
-            .find(|event| event.id == "standup")
-            .unwrap()
-            .start;
-
-        let _ = update(
-            &mut state,
-            Message::EventTimeSaved("standup".into(), Err("Google Calendar: nope".into())),
-        );
-
-        assert!(state.calendar.pending_time("standup").is_none());
-        assert_eq!(state.calendar.event("standup").unwrap().start, before);
-        assert_ne!(state.calendar.event("standup").unwrap().start, start);
-        assert_eq!(
-            state.calendar.error.as_deref(),
-            Some("Google Calendar: nope")
-        );
-    }
-
-    #[test]
-    fn a_task_time_change_uses_task_scheduling_instead_of_a_calendar_event_write() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-
-        // The sample's `deep` event stands in for a Google Task.
-        let deep = state.calendar.event_mut("deep").unwrap();
-        deep.id = "task:deep".into();
-        deep.calendar_id = "tasks:list".into();
-        let start = deep.start + chrono::Duration::hours(1);
-        let end = deep.end + chrono::Duration::hours(1);
-
-        let _ = update(
-            &mut state,
-            Message::EventTimeChanged {
-                id: "task:deep".into(),
-                start,
-                end,
-            },
-        );
-
-        assert!(state.calendar.pending_time("task:deep").is_none());
-        assert!(state.timeblocking.busy.contains("task:deep"));
-        assert_ne!(state.calendar.event("task:deep").unwrap().start, start);
-    }
-    #[test]
-    fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.timeblocking.focus = Some("standup".into());
-        state.timeblocking.estimate_task = Some("task:deep".into());
-        assert!(
-            key_message(
-                &mut state,
-                Key::Named(keyboard::key::Named::Space),
-                keyboard::Modifiers::default()
-            )
-            .is_none()
-        );
-        assert!(matches!(
-            key_message(
-                &mut state,
-                Key::Named(keyboard::key::Named::Escape),
-                keyboard::Modifiers::default()
-            ),
-            Some(Message::TimeBlocking(
-                crate::timeblocking::Action::CloseEstimate
-            ))
-        ));
-    }
-
-    #[test]
-    fn dragging_a_task_can_be_cancelled_with_escape() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let task = state.calendar.event_mut("deep").unwrap();
-        task.id = "task:deep".into();
-        task.calendar_id = "tasks:list".into();
-
-        let position = iced::Point::new(120.0, 240.0);
-        let _ = update(
-            &mut state,
-            Message::TimeBlocking(crate::timeblocking::Action::Drag(
-                "task:deep".into(),
-                position,
-            )),
-        );
-        assert_eq!(state.timeblocking.dragging.as_deref(), Some("task:deep"));
-        assert_eq!(state.timeblocking.drag_pointer, Some(position));
-
-        // While a task is in the air, Escape cancels the drag instead of
-        // closing whatever is underneath it, and other keys are ignored.
-        state.calendar.open_event = Some("deep".into());
-        assert!(
-            key_message(
-                &mut state,
-                Key::Named(keyboard::key::Named::Space),
-                keyboard::Modifiers::default()
-            )
-            .is_none()
-        );
-        let message = key_message(
-            &mut state,
-            Key::Named(keyboard::key::Named::Escape),
-            keyboard::Modifiers::default(),
-        );
-        assert!(matches!(
-            message,
-            Some(Message::TimeBlocking(
-                crate::timeblocking::Action::CancelDrag
-            ))
-        ));
-        let _ = update(&mut state, message.unwrap());
-        assert!(state.timeblocking.dragging.is_none());
-        assert!(state.timeblocking.drag_pointer.is_none());
-    }
-
-    #[test]
-    fn the_floating_card_follows_the_pointer_only_while_dragging() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = update(
-            &mut state,
-            Message::TimeBlocking(crate::timeblocking::Action::DragMoved(iced::Point::new(
-                10.0, 20.0,
-            ))),
-        );
-        assert!(state.timeblocking.drag_pointer.is_none());
-
-        state.timeblocking.dragging = Some("task:deep".into());
-        let _ = update(
-            &mut state,
-            Message::TimeBlocking(crate::timeblocking::Action::DragMoved(iced::Point::new(
-                30.0, 40.0,
-            ))),
-        );
-        assert_eq!(
-            state.timeblocking.drag_pointer,
-            Some(iced::Point::new(30.0, 40.0))
-        );
-    }
-
-    #[test]
-    fn keep_search_does_not_trigger_timer_shortcuts() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.screen = Screen::KeepNotes;
-        assert!(
-            key_message(
-                &mut state,
-                Key::Named(keyboard::key::Named::Space),
-                keyboard::Modifiers::default()
-            )
-            .is_none()
-        );
-        assert!(matches!(
-            key_message(
-                &mut state,
-                Key::Named(keyboard::key::Named::Escape),
-                keyboard::Modifiers::default()
-            ),
-            Some(Message::ScreenSelected(Screen::Calendar))
-        ));
-    }
-
-    #[test]
-    fn keep_failed_refresh_preserves_last_snapshot_and_filters() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        state.keep.snapshot.notes.push(crate::keep::Note {
-            title: "Saved".into(),
-            ..Default::default()
-        });
-        state.keep.query = "saved".into();
-        state.keep.loading = true;
-        let _ = update(&mut state, Message::KeepLoaded(Err("Reconnect".into())));
-        assert!(!state.keep.loading);
-        assert_eq!(state.keep.snapshot.notes[0].title, "Saved");
-        assert_eq!(state.keep.query, "saved");
-        assert_eq!(state.keep.error.as_deref(), Some("Reconnect"));
-    }
-
-    #[test]
-    fn choosing_habit_opens_the_shared_details_editor() {
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let start =
-            calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
-        let mut draft = calendar::Draft::new(
-            "primary".into(),
-            start,
-            start + chrono::Duration::minutes(45),
-        );
-        draft.title = "Stretch".into();
-        draft.description = "Slow and steady".into();
-        state.calendar.draft = Some(draft);
-
-        let _ = update(
-            &mut state,
-            Message::EventDraftKindSelected(calendar::DraftKind::Habit),
-        );
-
-        assert!(state.calendar.draft.is_none());
-        assert!(state.habits.draft.is_none());
-        assert!(state.details_pane_open);
-        let habit = state
-            .calendar
-            .edit_draft
-            .as_ref()
-            .expect("the shared editor opens");
-        assert_eq!(habit.title, "Stretch");
-        assert_eq!(habit.description, "Slow and steady");
-        assert_eq!(habit.date_text, "2026-10-28");
-        assert_eq!(habit.start_text, "09:00");
-        assert_eq!(habit.end_text, "09:45");
-        assert_eq!(habit.rule.repeat, crate::habits::RepeatMode::Weekly);
-        assert!(habit.rule.weekdays[2], "Wednesday is preselected");
-    }
-}
-
 fn refresh_keep(state: &mut State) -> Task<Message> {
     if state.keep.loading {
         return Task::none();
@@ -6111,5 +2140,6 @@ fn refresh_keep(state: &mut State) -> Task<Message> {
     state.keep.loading = true;
     state.keep.error = None;
     let cache_path = state.keep.cache_path();
-    blocking::run(move || crate::keep::fetch(cache_path)).map(Message::KeepLoaded)
+    blocking::run(move || crate::keep::fetch(cache_path))
+        .map(|v0| Message::Keep(KeepMessage::KeepLoaded(v0)))
 }

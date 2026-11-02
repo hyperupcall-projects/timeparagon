@@ -1,5 +1,6 @@
 //! A focused, fixed-scale timeline for one time block.
 use super::layout::Metrics;
+use crate::app::TaskMessage;
 use crate::calendar::time_format::TimeFormat;
 use crate::{
     app::{Message, State},
@@ -393,7 +394,10 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
     );
     let content_seconds: f32 = slots.iter().sum();
     let height = duration.max(content_seconds) * scale + 64.0;
-    let now = state.timeblocking.work_now.unwrap_or_else(Utc::now);
+    let now = state
+        .timeblocking
+        .work_now
+        .unwrap_or_else(crate::clock::utc_now);
     let bars = session_bars(state, block, now);
     let lane = if bars.is_empty() {
         0.0
@@ -467,7 +471,10 @@ fn history<'a>(state: &'a State, block: &Event) -> Option<Element<'a, Message>> 
         return None;
     }
     let key = tb::block_key(block);
-    let now = state.timeblocking.work_now.unwrap_or_else(Utc::now);
+    let now = state
+        .timeblocking
+        .work_now
+        .unwrap_or_else(crate::clock::utc_now);
     let mut history = column![text("Saved work sessions").size(14)].spacing(6);
     let sessions: Vec<_> = state
         .config
@@ -482,15 +489,12 @@ fn history<'a>(state: &'a State, block: &Event) -> Option<Element<'a, Message>> 
     for session in sessions.into_iter().rev() {
         history = history.push(
             text(format!(
-                "{} · {} → {} · {}",
+                "{} · {} {} → {} · {}",
                 session.task_title,
-                format!(
-                    "{} {}",
-                    session.started_at.with_timezone(&Local).format("%b %-d"),
-                    crate::calendar::time_format::clock(
-                        session.started_at.with_timezone(&Local),
-                        state.config.appearance.time_format
-                    )
+                session.started_at.with_timezone(&Local).format("%b %-d"),
+                crate::calendar::time_format::clock(
+                    session.started_at.with_timezone(&Local),
+                    state.config.appearance.time_format
                 ),
                 session
                     .stopped_at
@@ -696,7 +700,7 @@ fn task_card<'a>(
     let seconds = log.seconds(&key, now);
     let minutes = tb::metadata(task).minutes;
     let overtime = minutes > 0 && seconds > u64::from(minutes) * 60;
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains_task(&task.id);
     let ignored = tb::task_status(task) == tb::TaskStatus::Ignored;
     let mut completion = button(
         text(if task.completed && !ignored {
@@ -708,7 +712,7 @@ fn task_card<'a>(
     )
     .style(button::text);
     if state.timeblocking.busy.is_empty() {
-        completion = completion.on_press(Message::TaskToggled(task.id.clone()));
+        completion = completion.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
     let mut ignore = button(
         text(if ignored {
@@ -720,7 +724,9 @@ fn task_card<'a>(
     )
     .style(button::text);
     if state.timeblocking.busy.is_empty() {
-        ignore = ignore.on_press(Message::TaskIgnoreToggled(task.id.clone()));
+        ignore = ignore.on_press(Message::Task(TaskMessage::TaskIgnoreToggled(
+            task.id.clone(),
+        )));
     }
     let actions = column![completion, ignore].spacing(3);
     let title = super::timeblocking::task_title(task, if compact { 14.0 } else { 17.0 });

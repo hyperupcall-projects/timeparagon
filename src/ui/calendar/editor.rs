@@ -1,0 +1,618 @@
+//! The panel that edits an event that already exists.
+
+use super::*;
+use iced::widget::column;
+
+/// The in-place editor for a calendar event or time block.
+///
+/// It is the same set of fields the new-event dialog collects, bound to the
+/// event's live [`calendar::EditDraft`] so changes appear in the pane rather
+/// than in a popup. Save writes them to Google; Close discards the draft.
+pub fn event_editor<'a>(
+    state: &'a State,
+    event: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let Some(draft) = state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .filter(|draft| draft.id == event.id)
+    else {
+        return column![
+            super::super::links::text(event.title.clone(), metrics.label() + 2.0),
+            event_source(state, event, metrics),
+            text(schedule_line(event, state.config.appearance.time_format))
+                .size(metrics.label())
+                .style(text::secondary),
+        ]
+        .spacing(metrics.spacing)
+        .into();
+    };
+
+    if draft.loading {
+        let mut loading = column![text("Loading habit…").size(metrics.label())].spacing(6);
+        if let Some(error) = &state.calendar.error {
+            loading = loading.push(text(error).style(text::danger)).push(
+                button("Retry")
+                    .on_press(Message::Event(EventMessage::EventOpened(event.id.clone()))),
+            );
+        }
+        return loading.into();
+    }
+    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
+
+    let title: Element<'a, Message> = if draft.editing_title {
+        column![
+            text_input("Title", &draft.title)
+                .id(iced::widget::Id::new("event-title"))
+                .on_input(|v0| Message::EventEdit(EventEditMessage::EventEditTitleChanged(v0)))
+                .on_submit(Message::EventEdit(EventEditMessage::EventEditSaveRequested))
+                .size(metrics.label() + 6.0)
+                .width(Fill),
+            text("Press Enter to save")
+                .size(metrics.label() - 2.0)
+                .style(text::secondary),
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        button(text(&draft.title).size(metrics.label() + 6.0).font(Font {
+            weight: Weight::Bold,
+            ..Font::DEFAULT
+        }))
+        .padding(0)
+        .width(Fill)
+        .style(button::text)
+        .on_press(Message::Event(EventMessage::EventTitleEdit))
+        .into()
+    };
+    let start = column![
+        label(if event.details.habit {
+            "Start day"
+        } else {
+            "Start Time"
+        }),
+        super::super::controls::date(
+            state.config.appearance.time_format,
+            &draft.date_text,
+            false,
+            false,
+            true,
+            metrics.label(),
+            |v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))
+        ),
+        super::super::controls::time(
+            state.config.appearance.time_format,
+            &draft.start_text,
+            true,
+            metrics.label(),
+            |v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))
+        ),
+    ]
+    .spacing(6)
+    .width(Fill);
+    let mut body = column![
+        title,
+        event_source(state, event, metrics),
+        super::super::description::preview(&event.id, &draft.description, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+    for meeting in super::super::meetings::links(event) {
+        body = body.push(super::super::meetings::join_button(meeting, metrics));
+    }
+    body = body
+        .push(event_projects(state, &draft.projects, metrics, |v0| {
+            Message::EventEdit(EventEditMessage::EventEditProjects(v0))
+        }))
+        .push(start);
+    if event.details.habit {
+        body = body.push(super::super::recurrence::editor(
+            &draft.rule,
+            draft.start.date_naive(),
+            metrics,
+            false,
+            |v0| Message::EventEdit(EventEditMessage::EventEditRecurrence(v0)),
+        ));
+    } else {
+        body = body.push(
+            column![
+                label("End Time"),
+                super::super::controls::date(
+                    state.config.appearance.time_format,
+                    &draft.end_date_text,
+                    false,
+                    false,
+                    true,
+                    metrics.label(),
+                    |v0| Message::Event(EventMessage::EventEndDateChanged(v0))
+                ),
+                super::super::controls::time(
+                    state.config.appearance.time_format,
+                    &draft.end_text,
+                    true,
+                    metrics.label(),
+                    |v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))
+                ),
+            ]
+            .spacing(6)
+            .width(Fill),
+        );
+        let mut labels = column![label("Labels")].spacing(6).width(Fill);
+        for value in &draft.labels {
+            labels = labels.push(
+                row![
+                    text(value).size(metrics.label()).width(Fill),
+                    button("×")
+                        .on_press(Message::Event(EventMessage::EventLabelRemove(
+                            value.clone()
+                        )))
+                        .style(button::text)
+                ]
+                .spacing(6),
+            );
+        }
+        labels = labels.push(
+            row![
+                text_input("Add a label…", &draft.label_draft)
+                    .on_input(|v0| Message::Event(EventMessage::EventLabelDraft(v0)))
+                    .on_submit(Message::Event(EventMessage::EventLabelAdd))
+                    .size(metrics.label()),
+                button("Add").on_press(Message::Event(EventMessage::EventLabelAdd)),
+            ]
+            .spacing(8),
+        );
+        body = body.push(labels);
+    }
+
+    if let Some(error) = &state.calendar.error {
+        body = body.push(text(error).size(metrics.label()).style(text::danger));
+    }
+
+    if state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
+        if let Some(draft) = &state.calendar.edit_draft {
+            body = body.push(event_options(&draft.options, metrics, |v0| {
+                Message::EventEdit(EventEditMessage::EventEditOptions(v0))
+            }));
+        }
+        body = body.push(event_save_control(state, event, metrics));
+    }
+    body.into()
+}
+
+/// Google-style notification rows followed by availability and visibility.
+pub(super) fn event_options<'a>(
+    options: &'a calendar::event_options::EventOptions,
+    metrics: &Metrics,
+    message: fn(calendar::event_options::Action) -> Message,
+) -> Element<'a, Message> {
+    use calendar::event_options::{Action, Availability, Method, Unit, Visibility};
+    let size = metrics.label();
+    let mut notifications = column![
+        text("Notifications").size(size).style(text::secondary),
+        checkbox(options.reminders.use_default)
+            .label("Use calendar default notifications")
+            .on_toggle(move |v| message(Action::Defaults(v)))
+            .text_size(size),
+    ]
+    .spacing(8)
+    .width(Fill);
+    if options.reminders.use_default {
+        for reminder in &options.default_reminders {
+            notifications = notifications.push(
+                text(format!(
+                    "{} · {} minutes before",
+                    reminder.method, reminder.minutes
+                ))
+                .size(size)
+                .style(text::secondary),
+            );
+        }
+    }
+    if !options.reminders.use_default {
+        if options.reminders.overrides.is_empty() {
+            notifications =
+                notifications.push(text("No notifications").size(size).style(text::secondary));
+        }
+        for (i, reminder) in options.reminders.overrides.iter().enumerate() {
+            notifications = notifications.push(
+                column![
+                    row![
+                        pick_list(
+                            [Method::Notification, Method::Email],
+                            Some(reminder.method),
+                            move |v| message(Action::Method(i, v))
+                        )
+                        .text_size(size)
+                        .width(Fill),
+                        button(text("×").size(size))
+                            .on_press(message(Action::Remove(i)))
+                            .style(button::text),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    row![
+                        text_input(
+                            "10",
+                            &reminder.input.clone().unwrap_or_else(|| (reminder.minutes
+                                / reminder.unit.factor())
+                            .to_string())
+                        )
+                        .on_input(move |v| message(Action::Minutes(i, v)))
+                        .size(size)
+                        .width(80),
+                        pick_list(
+                            [Unit::Minutes, Unit::Hours, Unit::Days, Unit::Weeks],
+                            Some(reminder.unit),
+                            move |v| message(Action::Unit(i, v))
+                        )
+                        .text_size(size),
+                        text("before").size(size),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                ]
+                .spacing(6),
+            );
+        }
+    }
+    notifications = notifications.push(
+        button(text("Add notification").size(size))
+            .on_press_maybe((options.reminders.overrides.len() < 5).then_some(message(Action::Add)))
+            .style(button::text),
+    );
+    column![
+        notifications,
+        text("Availability").size(size).style(text::secondary),
+        pick_list(
+            [Availability::Busy, Availability::Free],
+            Some(options.transparency),
+            move |v| message(Action::Availability(v))
+        )
+        .text_size(size)
+        .width(Fill),
+        text("Visibility").size(size).style(text::secondary),
+        pick_list(
+            [Visibility::Default, Visibility::Public, Visibility::Private],
+            Some(options.visibility),
+            move |v| message(Action::Visibility(v))
+        )
+        .text_size(size)
+        .width(Fill),
+    ]
+    .spacing(10)
+    .width(Fill)
+    .into()
+}
+
+/// Split save button with independent, generously sized pointer targets.
+pub(super) fn event_save_control<'a>(
+    state: &'a State,
+    event: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    event_scope_control(state, event, metrics, false)
+}
+
+pub(super) fn event_scope_control<'a>(
+    state: &'a State,
+    event: &Event,
+    metrics: &Metrics,
+    deleting: bool,
+) -> Element<'a, Message> {
+    if event.id == crate::habits::NEW_HABIT_ID && !deleting {
+        return button(
+            text(if state.habits.busy {
+                "Saving…"
+            } else {
+                "Save changes"
+            })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+        )
+        .width(Fill)
+        .on_press_maybe(
+            (!state.habits.busy)
+                .then_some(Message::EventEdit(EventEditMessage::EventEditSaveRequested)),
+        )
+        .style(super::super::controls::primary)
+        .into();
+    }
+    let saving = state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .is_some_and(|draft| draft.saving);
+    let busy = saving
+        || state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .is_some_and(|draft| draft.loading);
+    let toggle = if deleting {
+        Message::EventEdit(EventEditMessage::EventEditDeleteMenuToggled)
+    } else {
+        Message::EventEdit(EventEditMessage::EventEditSaveMenuToggled)
+    };
+    let request = if deleting {
+        Message::Event(EventMessage::EventDeleteRequested(event.id.clone()))
+    } else {
+        Message::EventEdit(EventEditMessage::EventEditSaveRequested)
+    };
+    let scoped = |scope| {
+        if deleting {
+            Message::Event(EventMessage::EventDeleteScoped(event.id.clone(), scope))
+        } else {
+            Message::EventEdit(EventEditMessage::EventEditSaveScoped(scope))
+        }
+    };
+    let height = 40.0;
+    let main = button(
+        text(if deleting {
+            "Delete"
+        } else if saving {
+            "Saving…"
+        } else {
+            "Save current event"
+        })
+        .size(metrics.label())
+        .center()
+        .width(Fill),
+    )
+    .width(Fill)
+    .height(height)
+    .on_press_maybe((!busy).then_some(request))
+    .style(super::super::view_half_style(!deleting));
+    let arrow = button(text("▾").size(metrics.label()).center().width(Fill))
+        .width(48.0)
+        .height(height)
+        .on_press_maybe((!busy).then_some(toggle.clone()))
+        .style(super::super::view_half_style(!deleting));
+    let divider = container(Space::new().height(24.0))
+        .width(1.0)
+        .style(|theme: &Theme| container::Style {
+            background: Some(
+                theme
+                    .extended_palette()
+                    .primary
+                    .base
+                    .text
+                    .scale_alpha(0.35)
+                    .into(),
+            ),
+            ..Default::default()
+        });
+    let split = container(
+        row![main, divider, arrow]
+            .spacing(0)
+            .align_y(Alignment::Center),
+    )
+    .clip(true)
+    .style(super::super::view_button_style(!deleting));
+    let open = state.calendar.edit_draft.as_ref().is_some_and(|draft| {
+        if deleting {
+            draft.delete_menu_open
+        } else {
+            draft.save_menu_open
+        }
+    });
+    let choices = column![
+        button(
+            text(if deleting {
+                "Delete current and future events"
+            } else {
+                "Save current and future events"
+            })
+            .size(metrics.label())
+            .width(Fill)
+        )
+        .width(Fill)
+        .padding(10)
+        .on_press(scoped(calendar::SaveScope::CurrentAndFuture))
+        .style(super::super::controls::secondary),
+        button(
+            text(if deleting {
+                "Delete all events"
+            } else {
+                "Save all events"
+            })
+            .size(metrics.label())
+            .width(Fill)
+        )
+        .width(Fill)
+        .padding(10)
+        .on_press(scoped(calendar::SaveScope::All))
+        .style(super::super::controls::secondary),
+    ]
+    .spacing(4);
+    let menu = container(choices)
+        .padding(6)
+        .width(Fill)
+        .style(super::super::controls::surface);
+    super::super::anchored_menu::anchored_menu(split, menu, open, toggle)
+}
+
+/// The same add/search/remove flow used for task projects, staged until Save.
+pub(super) fn event_projects<'a>(
+    state: &'a State,
+    selection: &'a calendar::projects::Selection,
+    metrics: &Metrics,
+    message: fn(calendar::projects::Action) -> Message,
+) -> Element<'a, Message> {
+    use calendar::projects::Action;
+    let mut content = column![
+        text("Projects")
+            .size(metrics.label())
+            .style(text::secondary)
+    ]
+    .spacing(6)
+    .width(Fill);
+    if selection.ids.is_empty() {
+        content = content.push(
+            text("No projects")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
+    }
+    for id in &selection.ids {
+        let project = state.config.projects.get(*id);
+        let name = project
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("Removed project ({id})"));
+        let color = project
+            .and_then(|p| p.color())
+            .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e));
+        content = content.push(
+            row![
+                color_circle(color),
+                text(name).size(metrics.label()).width(Fill),
+                button(text("×").size(metrics.label()))
+                    .on_press(message(Action::Remove(*id)))
+                    .style(button::text),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        );
+    }
+    content = content.push(
+        button(
+            text(if selection.open {
+                "Done"
+            } else {
+                "+ Add project"
+            })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+        )
+        .width(Fill)
+        .on_press(message(Action::Toggle))
+        .style(crate::ui::controls::secondary),
+    );
+    if selection.open {
+        content = content.push(
+            text_input("Search projects…", &selection.query)
+                .on_input(move |query| message(Action::Query(query)))
+                .size(metrics.label())
+                .width(Fill),
+        );
+        let query = selection.query.trim().to_lowercase();
+        let available: Vec<_> = state
+            .config
+            .projects
+            .sorted()
+            .into_iter()
+            .filter(|p| !selection.ids.contains(&p.id))
+            .filter(|p| p.name.to_lowercase().contains(&query))
+            .collect();
+        if available.is_empty() {
+            content = content.push(
+                text(if state.config.projects.items.is_empty() {
+                    "Create a project in Projects first"
+                } else if query.is_empty() {
+                    "Every project is already added"
+                } else {
+                    "No matching projects"
+                })
+                .size(metrics.label())
+                .style(text::secondary),
+            );
+        }
+        let mut choices = column![].spacing(4);
+        for project in available {
+            choices = choices.push(
+                row![
+                    color_circle(
+                        project
+                            .color()
+                            .unwrap_or(Color::from_rgb8(0x9a, 0x9a, 0x9e))
+                    ),
+                    button(text(&project.name).size(metrics.label()).width(Fill))
+                        .width(Fill)
+                        .on_press(message(Action::Add(project.id)))
+                        .style(button::text),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            );
+        }
+        content =
+            content.push(container(scrollable(choices).height(Length::Shrink)).max_height(160));
+    }
+    content.into()
+}
+
+/// A night has just two timestamps and independent confidence flags.
+pub(super) fn sleep_editor<'a>(
+    state: &'a State,
+    event: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let Some(draft) = state.calendar.edit_draft.as_ref() else {
+        return Space::new().into();
+    };
+    let Some(record) = draft.sleep.as_ref() else {
+        return Space::new().into();
+    };
+    let mut preview = event.clone();
+    preview.start = draft.start;
+    preview.end = draft.end;
+    let field = |label: &'static str, date: Element<'a, Message>, time: Element<'a, Message>| {
+        column![
+            text(label).size(metrics.label()),
+            row![date, time].spacing(6)
+        ]
+        .spacing(4)
+    };
+    let mut body = column![
+        text("Sleep").size(metrics.label() + 3.0),
+        event_source(state, event, metrics),
+        text(format!("{} · {}", calendar::sleep::duration(&preview), calendar::sleep::time_label(&preview, state.config.appearance.time_format))).size(metrics.label()),
+        field("Sleep start",
+            text_input("YYYY-MM-DD", &draft.date_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))).into(),
+            text_input("HH:MM", &draft.start_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))).into()),
+        checkbox(record.estimated_start).label("Estimated Sleep Start").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedStart(v0))),
+        field("Wake-up time",
+            text_input("YYYY-MM-DD", &draft.end_date_text).on_input(|v0| Message::Event(EventMessage::EventEndDateChanged(v0))).into(),
+            text_input("HH:MM", &draft.end_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))).into()),
+        checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
+        text(if record.automatic {
+            "Calculated from the first timed event. Saving records your times and preserves them when your schedule changes."
+        } else { "Recorded sleep. These times are preserved when your schedule changes." }).size(metrics.label() - 1.0).style(text::secondary),
+    ].spacing(metrics.spacing).width(Fill);
+    if let Some(error) = &state.calendar.error {
+        body = body.push(text(error).style(text::danger));
+    }
+    let mut save = button(
+        text(if draft.saving {
+            "Saving…"
+        } else {
+            "Save sleep"
+        })
+        .center()
+        .width(Fill),
+    )
+    .width(Fill);
+    if !draft.saving {
+        save = save.on_press(Message::Settings(SettingsMessage::SleepSaveRequested));
+    }
+    container(
+        column![
+            scrollable(body).height(Fill),
+            save,
+            button(text("Close").center().width(Fill))
+                .width(Fill)
+                .on_press(Message::Event(EventMessage::EventClosed))
+                .style(crate::ui::controls::secondary),
+        ]
+        .spacing(metrics.spacing)
+        .height(Fill),
+    )
+    .padding(metrics.padding)
+    .width(Fill)
+    .height(Fill)
+    .style(crate::ui::controls::surface)
+    .into()
+}

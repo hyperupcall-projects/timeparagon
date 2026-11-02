@@ -3,6 +3,7 @@
 //! Wayland keeps pointer events on the surface where the button was pressed.
 //! Run the destination's normal release handling through a widget operation,
 //! so its scroll offsets, clipping, day mapping and block hit testing all apply.
+use crate::app::{CalendarMessage, TaskMessage};
 use crate::app::{Message, State};
 use iced::advanced::{Layout, Shell, Widget, clipboard, layout, overlay, renderer, widget};
 use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector, mouse};
@@ -83,16 +84,16 @@ impl widget::Operation<Message> for DropOperation {
     }
 
     fn finish(&self) -> widget::operation::Outcome<Message> {
-        widget::operation::Outcome::Some(Message::TaskDragDropped(
+        widget::operation::Outcome::Some(Message::Task(TaskMessage::TaskDragDropped(
             self.task.clone(),
             self.result.clone().map(Box::new),
-        ))
+        )))
     }
 }
 
 fn is_drop(message: &Message) -> bool {
     match message {
-        Message::WeekDayAction(_, message) => is_drop(message),
+        Message::Calendar(CalendarMessage::WeekDayAction(_, message)) => is_drop(message),
         Message::TimeBlocking(action) => matches!(
             action,
             crate::timeblocking::Action::DropDay
@@ -242,19 +243,18 @@ impl Widget<Message, Theme, Renderer> for DropHost<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::EventMessage;
     use crate::{
         app::{self, Screen, Sidebar},
         calendar::{self, Store},
-        config::Config,
         panel::Side,
-        theme::Catalog,
         timeblocking::{self, Action},
     };
     use chrono::{Datelike, Timelike};
     use iced_test::{Simulator, core::Settings};
 
     fn state(screen: Screen, monthly: bool) -> State {
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         let mut snapshot = calendar::sample_snapshot();
         let mut task = snapshot.events.remove(2);
         task.id = "task:drag".into();
@@ -269,8 +269,11 @@ mod tests {
         state.week_anchor = snapshot.day;
         state.calendar = Store::with_snapshot(snapshot);
         state.screen = screen;
-        state.weekly = !monthly;
-        state.monthly = monthly;
+        state.view = if monthly {
+            crate::app::CalendarView::Month
+        } else {
+            crate::app::CalendarView::Week
+        };
         state.main_window = Some(iced::window::Id::unique());
         state.editor_window = Some(iced::window::Id::unique());
         state.main_size = Size::new(300.0, 900.0);
@@ -296,8 +299,11 @@ mod tests {
             position.x + state.main_size.width,
             position.y + state.screen_margin(),
         );
-        let _ = app::update(state, Message::TaskDragMoved(main, source));
-        let task = app::update(state, Message::TaskDragReleased(main));
+        let _ = app::update(
+            state,
+            Message::Task(TaskMessage::TaskDragMoved(main, source)),
+        );
+        let task = app::update(state, Message::Task(TaskMessage::TaskDragReleased(main)));
         let mut renderer = block_on(Renderer::new(
             iced::Font::DEFAULT,
             iced::Pixels(16.0),
@@ -346,7 +352,9 @@ mod tests {
                         ui.operate(&renderer, operation.as_mut());
                         let _ = operation.finish();
                     }
-                    iced_runtime::Action::Output(message @ Message::TaskDragDropped(..)) => {
+                    iced_runtime::Action::Output(
+                        message @ Message::Task(TaskMessage::TaskDragDropped(..)),
+                    ) => {
                         return message;
                     }
                     _ => {}
@@ -375,7 +383,7 @@ mod tests {
         assert!(
             !messages
                 .iter()
-                .any(|message| matches!(message, Message::EventOpened(_)))
+                .any(|message| matches!(message, Message::Event(EventMessage::EventOpened(_))))
         );
         assert!(
             messages
@@ -419,7 +427,10 @@ mod tests {
                     point.x + state.main_size.width,
                     point.y + state.screen_margin(),
                 );
-                let _ = app::update(&mut state, Message::TaskDragMoved(main, source));
+                let _ = app::update(
+                    &mut state,
+                    Message::Task(TaskMessage::TaskDragMoved(main, source)),
+                );
                 assert!(
                     range_position(&state, main, source)
                         .unwrap()
@@ -428,22 +439,19 @@ mod tests {
                 );
                 let message = drop_at(&mut state, point);
                 assert!(
-                    matches!(&message, Message::TaskDragDropped(_, Some(message))
-                    if matches!(&**message, Message::WeekDayAction(date, inner)
+                    matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+                    if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(date, inner))
                         if *date == day && matches!(&**inner, Message::TimeBlocking(Action::DropDay | Action::DropWeekList { .. })))),
                     "{screen:?}, monthly={monthly}, point={point:?}: {message:?}"
                 );
                 // Block the save path: test only UI routing, never remote writes.
-                state
-                    .timeblocking
-                    .busy
-                    .insert("test-no-remote-write".into());
+                state.timeblocking.busy.insert("test-no-remote-write");
                 let _ = app::update(&mut state, message);
                 assert_eq!(state.calendar.day, day);
                 assert_eq!(state.week_anchor, anchor);
                 assert_eq!(state.screen, screen);
-                assert_eq!(state.monthly, monthly);
-                assert_eq!(state.weekly, !monthly);
+                assert_eq!(state.monthly(), monthly);
+                assert_eq!(state.weekly(), !monthly);
                 assert!(state.timeblocking.dragging.is_none());
                 assert!(state.timeblocking.drag_pointer.is_none());
                 assert_eq!(state.timeblocking.busy.len(), 1);
@@ -469,8 +477,8 @@ mod tests {
         drop(ui);
         let message = drop_at(&mut state, point);
         assert!(
-            matches!(&message, Message::TaskDragDropped(_, Some(message))
-            if matches!(&**message, Message::WeekDayAction(date, message)
+            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+            if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(date, message))
                 if *date == day && matches!(&**message, Message::TimeBlocking(Action::DropTime(time))
                     if time.date_naive() == day && time.minute() % 15 == 0)))
         );
@@ -486,8 +494,8 @@ mod tests {
         // A column and an hour scrolled off-screen must affect hit testing.
         let message = drop_scrolled(&mut state, Point::new(250.0, 300.0), 200.0, 60.0);
         assert!(
-            matches!(&message, Message::TaskDragDropped(_, Some(message))
-            if matches!(&**message, Message::WeekDayAction(date, message)
+            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+            if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(date, message))
                 if *date == day && matches!(&**message, Message::TimeBlocking(Action::DropTime(time))
                     if time.date_naive() == day && time.minute() % 15 == 0))),
             "{message:?}"
@@ -525,8 +533,8 @@ mod tests {
         drop(ui);
         let message = drop_scrolled(&mut state, point, 240.0, 250.0);
         assert!(
-            matches!(&message, Message::TaskDragDropped(_, Some(message))
-            if matches!(&**message, Message::WeekDayAction(day, inner)
+            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+            if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(day, inner))
                 if *day == destination && matches!(&**inner, Message::TimeBlocking(Action::DropWeekList { target: Some(id), .. })
                     if id == "task:destination-4"))),
             "{point:?}: {message:?}"
@@ -540,16 +548,19 @@ mod tests {
         let main = state.main_window.unwrap();
         assert!(range_position(&state, main, Point::new(20.0, 200.0)).is_none());
         let no_target = drop_at(&mut state, Point::new(5.0, 5.0));
-        assert!(matches!(&no_target, Message::TaskDragDropped(_, None)));
+        assert!(matches!(
+            &no_target,
+            Message::Task(TaskMessage::TaskDragDropped(_, None))
+        ));
         let _ = app::update(&mut state, no_target);
         assert!(state.timeblocking.dragging.is_none());
         assert!(state.timeblocking.busy.is_empty());
         let _ = app::update(
             &mut state,
-            Message::TaskDragDropped(
+            Message::Task(TaskMessage::TaskDragDropped(
                 "task:drag".into(),
                 Some(Box::new(Message::TimeBlocking(Action::DropDay))),
-            ),
+            )),
         );
         assert!(state.timeblocking.busy.is_empty());
     }
@@ -572,7 +583,7 @@ mod tests {
         );
         assert_eq!(range_position(&state, editor, point), Some(point));
         assert!(range_position(&state, iced::window::Id::unique(), point).is_none());
-        state.monthly = false;
+        state.view = crate::app::CalendarView::Day;
         assert!(range_position(&state, editor, point).is_none());
     }
 }

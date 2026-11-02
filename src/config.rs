@@ -1,30 +1,33 @@
 //! Persisted settings.
 //!
-//! A malformed or half-written config must never stop the app from starting,
-//! so every read falls back to defaults and every write goes through a
+//! A malformed config must never stop the app from starting, so every read
+//! falls back to defaults. It must not be lost to those defaults either, so a
+//! save refuses to replace a file it cannot parse. Every write goes through a
 //! temporary file that is renamed into place.
 
 use crate::calendar::time_format::TimeFormat;
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use directories::ProjectDirs;
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::Tone;
-use crate::calendar::colors;
 use crate::hex::HexColor;
 use crate::todos::TodoList;
+
+pub use timeslay_core::config::{
+    CalendarSettings, TriageRequirements, cache_days_dir, config_path, project_dirs,
+};
 
 /// How long to wait after the last change before writing to disk.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub voice: crate::voice::Settings,
     pub appearance: Appearance,
@@ -54,27 +57,6 @@ pub struct Config {
     /// page is written.
     #[serde(default, skip_serializing_if = "crate::brain_dump::Dumps::is_empty")]
     pub brain_dump: crate::brain_dump::Dumps,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            voice: crate::voice::Settings::default(),
-            appearance: Appearance::default(),
-            window: Window::default(),
-            views: ViewSettings::default(),
-            panel: crate::panel::PanelConfig::default(),
-            alarm: AlarmProfile::default(),
-            calendar: CalendarSettings::default(),
-            projects: ProjectsSettings::default(),
-            travel: TravelSettings::default(),
-            task_work: crate::task_work::WorkLog::default(),
-            pomodoro: crate::pomodoro::Pomodoro::default(),
-            todos: TodoList::default(),
-            notepad: Notepad::default(),
-            brain_dump: crate::brain_dump::Dumps::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -878,331 +860,6 @@ impl TravelSettings {
     }
 }
 
-/// Google Calendar connection and which calendars are shown on the calendar.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CalendarSettings {
-    /// How often to pull events, in minutes. 15 is Google's own default-ish
-    /// cadence and is what we ship with.
-    pub sync_minutes: u32,
-    /// OAuth client ID for a Desktop app created in Google Cloud. Empty until
-    /// the user pastes one in Settings.
-    pub client_id: String,
-    /// Client secret from the same Desktop OAuth client. Google still issues
-    /// one for installed apps; it is not treated as a real secret, but the
-    /// token endpoint often wants it next to PKCE.
-    pub client_secret: String,
-    /// Calendar IDs the hamburger menu has toggled off.
-    pub disabled: Vec<String>,
-    /// Calendar-view source IDs, ordered from left to right for overlapping events.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub source_order: Vec<String>,
-    /// Whether standalone Google Tasks are visible; tasks inside time blocks stay visible.
-    pub show_tasks: bool,
-    pub hide_overdue_tasks: bool,
-    /// The discovered id of the app-owned TimeSlay calendar. Every event the
-    /// app writes (time blocks and scheduled tasks) lives here. Managed by the
-    /// app from the calendar list; not exposed as a user setting.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub app_calendar: Option<String>,
-    pub time_block_list: Option<String>,
-    /// Google Tasks list for tasks moved to the backlog. None uses Backlog.
-    pub backlog_list: Option<String>,
-    /// Google Tasks list that collects triaged tasks until they are scheduled.
-    /// None uses Triaged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub triaged_list: Option<String>,
-    /// Google Tasks list that collects new tasks until they are triaged. None
-    /// uses Inbox.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inbox_list: Option<String>,
-    #[serde(default)]
-    pub inbox_sort: crate::calendar::task_sort::InboxSort,
-    #[serde(default)]
-    pub overdue_sort: crate::calendar::task_sort::InboxSort,
-    /// Which metadata a task needs before it can leave the Inbox.
-    #[serde(default)]
-    pub triage: TriageRequirements,
-    /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
-    /// to 3 and the day runs 3am to 3am, so the small hours stay with the
-    /// evening they belong to. This only moves the view: an event keeps its
-    /// real date and time, it is just drawn at the foot of the day it belongs
-    /// to.
-    pub day_end_hour: u32,
-    /// Nightly sleep target in hours, clamped to 6–12.
-    pub sleep_goal_hours: u32,
-    /// Hour (0-6) at which a day starts for sleep calculations. Events before
-    /// it are ignored when looking for the first event after waking up.
-    pub sleep_day_start_hour: u32,
-    /// Latest wake-up hour (4-14). With no earlier event, sleep ends here.
-    pub latest_wakeup_hour: u32,
-    /// Total visible days: 7 from the selected day, or 8 from the previous day.
-    pub weekly_days: u32,
-    /// Width of each day in the horizontally scrollable weekly view.
-    pub weekly_day_width: u32,
-    /// Show task cards instead of the weekly time grid.
-    pub weekly_task_list: bool,
-    /// Card placement in each day of the week board. Unlisted cards follow in time order.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub weekly_task_order: BTreeMap<String, Vec<String>>,
-    /// Custom colors for Google Tasks lists, keyed by the calendar id
-    /// (`tasks:<list>`). Google hands every list back with the same blue, so
-    /// this is where a list gets a color of its own. A missing key means the
-    /// shared task blue.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub task_colors: BTreeMap<String, HexColor>,
-    /// Local calendar color overrides, keyed by Google Calendar ID.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub calendar_colors: BTreeMap<String, HexColor>,
-    /// Color of all-day events on the TimeSlay calendar. None uses the
-    /// built-in event color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_color: Option<HexColor>,
-    /// Color of sleep events on the TimeSlay calendar. None uses the built-in
-    /// sleep gray.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sleep_color: Option<HexColor>,
-    /// Color of time-block events on the TimeSlay calendar. None uses the
-    /// built-in block color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub time_block_color: Option<HexColor>,
-    /// Color of scheduled task events on the TimeSlay calendar. None uses
-    /// Google's task blue.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_event_color: Option<HexColor>,
-    /// Color of habit events on the TimeSlay calendar. None uses the built-in
-    /// grape. A habit with its own Google `colorId` keeps that color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub habit_color: Option<HexColor>,
-    /// The calendar new events are created on, by id. `None` means the primary
-    /// calendar, falling back to the first writable one. Set from the calendar
-    /// settings pane.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_calendar: Option<String>,
-}
-
-impl Default for CalendarSettings {
-    fn default() -> Self {
-        Self {
-            sync_minutes: 60,
-            client_id: String::new(),
-            client_secret: String::new(),
-            disabled: Vec::new(),
-            source_order: Vec::new(),
-            show_tasks: true,
-            hide_overdue_tasks: false,
-            app_calendar: None,
-            time_block_list: None,
-            backlog_list: None,
-            triaged_list: None,
-            inbox_list: None,
-            inbox_sort: Default::default(),
-            overdue_sort: Default::default(),
-            triage: TriageRequirements::default(),
-            day_end_hour: 0,
-            sleep_goal_hours: 8,
-            sleep_day_start_hour: 0,
-            latest_wakeup_hour: 8,
-            weekly_days: 8,
-            weekly_day_width: 150,
-            weekly_task_list: false,
-            weekly_task_order: BTreeMap::new(),
-            task_colors: BTreeMap::new(),
-            calendar_colors: BTreeMap::new(),
-            event_color: None,
-            sleep_color: None,
-            time_block_color: None,
-            task_event_color: None,
-            habit_color: None,
-            default_calendar: None,
-        }
-    }
-}
-
-/// Which metadata a task must have before it can be triaged out of the Inbox.
-/// Everything is required by default: the Inbox is where each task is given a
-/// project, a priority and an estimate before it goes anywhere else.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TriageRequirements {
-    pub estimate: bool,
-    pub project: bool,
-    pub priority: bool,
-}
-
-impl Default for TriageRequirements {
-    fn default() -> Self {
-        Self {
-            estimate: true,
-            project: true,
-            priority: true,
-        }
-    }
-}
-
-impl CalendarSettings {
-    pub fn sleep_day_start_hour(&self) -> u32 {
-        self.sleep_day_start_hour.min(6)
-    }
-
-    pub fn latest_wakeup_hour(&self) -> u32 {
-        self.latest_wakeup_hour.clamp(4, 14)
-    }
-
-    pub fn sleep_goal_hours(&self) -> u32 {
-        self.sleep_goal_hours.clamp(6, 12)
-    }
-
-    /// Synthetic source shared by every Google Tasks list.
-    pub const GOOGLE_TASKS_ID: &str = "tasks:";
-
-    /// The Google Tasks list time-blocked and scheduled tasks are kept on,
-    /// unless another is chosen in Settings.
-    pub const DEFAULT_TIME_BLOCK_LIST: &str = "Time Blocked";
-
-    /// The Google Tasks list tasks are moved to for the backlog, unless
-    /// another is chosen in Settings.
-    pub const DEFAULT_BACKLOG_LIST: &str = "Backlog";
-
-    /// The Google Tasks list triaged tasks are kept on, unless another is
-    /// chosen in Settings.
-    pub const DEFAULT_TRIAGED_LIST: &str = "Triaged";
-
-    /// The name of the single calendar every event the app writes lives on.
-    /// Created on first use; not customizable from Settings.
-    pub const APP_CALENDAR_NAME: &str = "TimeSlay";
-
-    /// Names the app calendar has had before. They are still recognized so a
-    /// half-renamed calendar is reused rather than duplicated.
-    pub const APP_CALENDAR_ALIASES: [&str; 2] = ["TimeSlayer", "TimeSlay"];
-
-    /// Whether `name` is the app calendar or one of its former names.
-    pub fn is_app_calendar_name(name: &str) -> bool {
-        let name = name.trim();
-        name == Self::APP_CALENDAR_NAME || Self::APP_CALENDAR_ALIASES.contains(&name)
-    }
-
-    pub const MIN_SYNC_MINUTES: u32 = 1;
-    pub const MAX_SYNC_MINUTES: u32 = 1440;
-    /// The latest hour a day can end: 5am, which is as far into the morning
-    /// as a late night is worth pushing the boundary. Midnight (0) is the
-    /// default.
-    pub const MAX_DAY_END_HOUR: u32 = 5;
-
-    pub fn weekly_days(&self) -> u32 {
-        self.weekly_days.clamp(7, 8)
-    }
-
-    pub fn weekly_day_width(&self) -> u32 {
-        self.weekly_day_width.clamp(100, 400)
-    }
-
-    pub fn sync_every(&self) -> Duration {
-        let minutes = self
-            .sync_minutes
-            .clamp(Self::MIN_SYNC_MINUTES, Self::MAX_SYNC_MINUTES);
-        Duration::from_secs(u64::from(minutes) * 60)
-    }
-
-    /// Minutes past midnight at which the day ends, clamped to a real hour.
-    pub fn day_end_minutes(&self) -> i32 {
-        self.day_start_hour() as i32 * 60
-    }
-
-    /// The hour the day's window opens, which is the hour the previous day
-    /// ended. The grid's top row is labelled with this hour.
-    pub fn day_start_hour(&self) -> u32 {
-        self.day_end_hour.min(Self::MAX_DAY_END_HOUR)
-    }
-
-    pub fn set_calendar_enabled(&mut self, id: &str, enabled: bool) {
-        if enabled {
-            self.disabled.retain(|hidden| hidden != id);
-        } else if !self.disabled.iter().any(|hidden| hidden == id) {
-            self.disabled.push(id.to_owned());
-        }
-    }
-
-    /// The custom color set for a Google Tasks list, if it has one.
-    pub fn task_color(&self, calendar_id: &str) -> Option<Color> {
-        self.task_colors
-            .get(calendar_id)
-            .or_else(|| self.task_colors.get(Self::GOOGLE_TASKS_ID))
-            .map(|color| color.0)
-    }
-
-    /// Sets a task list's custom color, or clears it back to Google's blue.
-    pub fn set_task_color(&mut self, calendar_id: &str, color: Option<Color>) {
-        // Picking the aggregate swatch applies to every list.
-        if calendar_id == Self::GOOGLE_TASKS_ID {
-            self.task_colors.clear();
-        }
-        match color {
-            Some(color) => {
-                self.task_colors
-                    .insert(calendar_id.to_owned(), HexColor(color));
-            }
-            None => {
-                self.task_colors.remove(calendar_id);
-            }
-        }
-    }
-
-    /// The color all-day events are drawn in, or the built-in event color.
-    pub fn event_color(&self) -> Color {
-        self.event_color
-            .map_or(colors::DEFAULT_EVENT, |color| color.0)
-    }
-
-    /// The color sleep events are drawn in, or the built-in sleep gray.
-    pub fn sleep_color(&self) -> Color {
-        self.sleep_color
-            .map_or(crate::calendar::sleep::COLOR, |color| color.0)
-    }
-
-    /// The color time-block events are drawn in, or the built-in block color.
-    pub fn time_block_color(&self) -> Color {
-        self.time_block_color
-            .map_or(colors::TIME_BLOCK, |color| color.0)
-    }
-
-    /// The color scheduled task events are drawn in, or Google's task blue.
-    pub fn task_event_color(&self) -> Color {
-        self.task_event_color.map_or(colors::TASK, |color| color.0)
-    }
-
-    /// The color habit events are drawn in, unless the habit has a Google
-    /// color of its own.
-    pub fn habit_color(&self) -> Color {
-        self.habit_color.map_or(colors::HABIT, |color| color.0)
-    }
-
-    /// Sets the all-day event color, or clears it back to the built-in default.
-    pub fn set_event_color(&mut self, color: Option<Color>) {
-        self.event_color = color.map(HexColor);
-    }
-
-    /// Sets the sleep color, or clears it back to the built-in gray.
-    pub fn set_sleep_color(&mut self, color: Option<Color>) {
-        self.sleep_color = color.map(HexColor);
-    }
-
-    /// Sets the time-block color, or clears it back to the built-in default.
-    pub fn set_time_block_color(&mut self, color: Option<Color>) {
-        self.time_block_color = color.map(HexColor);
-    }
-
-    /// Sets the scheduled task color, or clears it back to Google's blue.
-    pub fn set_task_event_color(&mut self, color: Option<Color>) {
-        self.task_event_color = color.map(HexColor);
-    }
-
-    /// Sets the habit color, or clears it back to the built-in grape.
-    pub fn set_habit_color(&mut self, color: Option<Color>) {
-        self.habit_color = color.map(HexColor);
-    }
-}
-
 /// Everything that happens when an alarm goes off.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -1381,22 +1038,6 @@ impl Flash {
     }
 }
 
-/// Where the app stores its configuration.
-pub fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("dev", "TimeSlay", "timeslay")
-}
-
-pub fn config_path() -> Option<PathBuf> {
-    Some(project_dirs()?.config_dir().join("config.toml"))
-}
-
-/// Where cached days live: `$XDG_CACHE_HOME/timeslay/days`, which is
-/// `~/.cache/timeslay/days` unless the environment says otherwise. It is
-/// a cache rather than state: losing it only costs a re-sync.
-pub fn cache_days_dir() -> Option<PathBuf> {
-    Some(project_dirs()?.cache_dir().join("days"))
-}
-
 /// Last successful Keep snapshot, including original card previews.
 pub fn cache_keep_path() -> Option<PathBuf> {
     Some(project_dirs()?.cache_dir().join("keep").join("notes.json"))
@@ -1419,6 +1060,13 @@ impl Config {
             log::warn!("no config directory available; using defaults");
             return Self::default();
         };
+        // It holds the OAuth client secret and API keys, and older versions
+        // wrote it readable by everyone.
+        if let Err(error) = crate::fsutil::make_private(&path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            log::warn!("could not make {} private: {error}", path.display());
+        }
 
         match fs::read_to_string(&path) {
             Ok(contents) => match Self::parse(&contents) {
@@ -1461,15 +1109,51 @@ impl Config {
         Self::parse(&contents).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
+    /// Why the config on disk cannot be used, if it cannot.
+    pub fn load_problem() -> Option<String> {
+        check_replaceable(&config_path()?)
+            .err()
+            .map(|error| error.to_string())
+    }
+
     pub fn save(&self) -> io::Result<()> {
         let path = config_path().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "no config directory available")
         })?;
+        self.save_to(&path)
+    }
 
+    fn save_to(&self, path: &Path) -> io::Result<()> {
         let contents = toml::to_string_pretty(self)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
-        write_atomically(&path, contents.as_bytes())
+        crate::fsutil::locked(path, || {
+            check_replaceable(path)?;
+            write_private(path, contents.as_bytes())
+        })
+    }
+
+    /// Changes the config on disk rather than this process's copy of it, with
+    /// other writers held off between the read and the write.
+    pub fn update_on_disk(change: impl FnOnce(&mut Self)) -> io::Result<()> {
+        let path = config_path().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no config directory available")
+        })?;
+        Self::update_at(&path, change)
+    }
+
+    fn update_at(path: &Path, change: impl FnOnce(&mut Self)) -> io::Result<()> {
+        crate::fsutil::locked(path, || {
+            let mut config = match Self::read_from(path) {
+                Ok(config) => config,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+                Err(error) => return Err(error),
+            };
+            change(&mut config);
+            let contents = toml::to_string_pretty(&config)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            write_private(path, contents.as_bytes())
+        })
     }
 }
 
@@ -1566,20 +1250,100 @@ fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item =
     })
 }
 
-/// Writes through a temporary file so a crash mid-write cannot truncate the
-/// existing config.
-fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+/// A config that does not parse may be one typo away from all of the user's
+/// settings and notes, while what is in memory is only defaults. Keeping the
+/// file also keeps it out of the Drive sync, which leaves unparseable files alone
+/// but would treat a fresh save of the defaults as the newest config.
+fn check_replaceable(path: &Path) -> io::Result<()> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("{} could not be read: {error}", path.display()),
+            ));
+        }
+    };
+    Config::parse_with_ignored(&contents, |_| {}).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} has an error, so changes are not being saved. Fix or remove the file: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(())
+}
 
-    let temporary = path.with_extension("toml.tmp");
-    fs::write(&temporary, contents)?;
-    fs::rename(&temporary, path)
+fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    crate::fsutil::write_atomic(path, contents, crate::fsutil::Kind::Private)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_save_never_replaces_a_config_it_cannot_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[notepad]\ntext = \"precious\"\n[broken\n").unwrap();
+
+        let error = Config::default().save_to(&path).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("not being saved"), "{error}");
+        assert!(fs::read_to_string(&path).unwrap().contains("precious"));
+        assert!(check_replaceable(&path).is_err());
+
+        fs::write(&path, "[notepad]\ntext = \"fixed\"\n").unwrap();
+        Config::default().save_to(&path).unwrap();
+        assert!(check_replaceable(&path).is_ok());
+    }
+
+    #[test]
+    fn saving_makes_the_config_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o664)).unwrap();
+
+        Config::default().save_to(&path).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn concurrent_updates_on_disk_do_not_lose_each_others_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..5 {
+                        Config::update_at(&path, |config| {
+                            config.notepad.text.push('x');
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(Config::read_from(&path).unwrap().notepad.text.len(), 20);
+    }
+
+    #[test]
+    fn an_update_on_disk_refuses_a_broken_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[broken\n").unwrap();
+
+        assert!(Config::update_at(&path, |_| {}).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[broken\n");
+    }
+
     use super::*;
 
     #[test]
@@ -1800,7 +1564,7 @@ mod tests {
             }
         };
         wait_for_volume(25); // Initial read means the watcher is installed.
-        write_atomically(&path, b"[alarm.sound]\nvolume = 40").unwrap();
+        write_private(&path, b"[alarm.sound]\nvolume = 40").unwrap();
         wait_for_volume(40);
         fs::write(&path, "[alarm.sound]\nvolume = ").unwrap();
         assert!(Config::read_from(&path).is_err());
@@ -1814,7 +1578,7 @@ mod tests {
                 "invalid edits must not emit defaults"
             );
         }
-        write_atomically(&path, b"[alarm.sound]\nvolume = 60").unwrap();
+        write_private(&path, b"[alarm.sound]\nvolume = 60").unwrap();
         wait_for_volume(60);
         worker.join().unwrap();
         fs::remove_dir_all(directory).unwrap();
@@ -1889,8 +1653,10 @@ mod tests {
     fn explicit_sync_intervals_are_preserved_and_invalid_values_are_clamped() {
         let parsed: Config = toml::from_str("[calendar]\nsync_minutes = 120").unwrap();
         assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(7200));
-        let mut settings = CalendarSettings::default();
-        settings.sync_minutes = 0;
+        let mut settings = CalendarSettings {
+            sync_minutes: 0,
+            ..Default::default()
+        };
         assert_eq!(settings.sync_every(), Duration::from_secs(60));
         settings.sync_minutes = u32::MAX;
         assert_eq!(settings.sync_every(), Duration::from_secs(24 * 3600));

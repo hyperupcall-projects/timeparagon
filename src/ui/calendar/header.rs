@@ -1,0 +1,469 @@
+//! The strip above the day and week grids, and the all-day row.
+
+use super::*;
+use iced::widget::column;
+
+/// The top of the calendar: the month picker, the day in view and the way
+/// into the calendar menu.
+///
+/// The day sits between the month picker and the menu, and takes whatever room
+/// is left over, so the whole date is readable even when the text is large.
+/// The settings are reached through the menu rather than from here, because a
+/// narrow window has room for one button beside the day and not for two.
+pub(super) fn header<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    weekly: bool,
+) -> Element<'a, Message> {
+    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+    let day = if weekly {
+        state.week_anchor
+    } else {
+        state.calendar.day
+    };
+    let heading = if weekly {
+        let days = calendar::week_dates(day, state.config.calendar.weekly_days());
+        let format = if metrics.breakpoint.is_compact() {
+            "%-m/%-d"
+        } else {
+            "%b %-d"
+        };
+        format!(
+            "{} – {}",
+            days.first().unwrap().format(format),
+            days.last().unwrap().format(format)
+        )
+    } else {
+        calendar::day_heading(day, today)
+    };
+
+    let month = button(
+        text(format!("{} ▾", calendar::month_short(day.month())))
+            .size(metrics.label())
+            .center(),
+    )
+    .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled))
+    .style(if state.calendar.month_open {
+        crate::ui::controls::primary
+    } else {
+        crate::ui::controls::secondary
+    });
+
+    // Alarm setting mode turns the day view into a place to click a time, so
+    // the button that enters it is lit for as long as it lasts.
+    let set_alarm = button(text("Set Alarm").size(metrics.label()).center())
+        .on_press(Message::Alarms(crate::alarms::Action::ModeToggled))
+        .style(if state.alarms.mode {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        });
+
+    let menu = button(text("Menu").size(metrics.label()).center())
+        .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
+        .style(if state.calendar.menu_open {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        });
+
+    // Travel shows how long the trip to each event takes, so the button is lit
+    // for as long as those are on the grid.
+    let toggle_travel = |wide: bool| {
+        button(
+            text("Toggle Travel")
+                .size(metrics.label())
+                .center()
+                .width(if wide { Fill } else { Length::Shrink }),
+        )
+        .width(if wide { Fill } else { Length::Shrink })
+        .on_press(Message::Travel(crate::travel::Action::Toggle))
+        .style(if state.travel.show {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        })
+    };
+
+    let heading = text(heading)
+        .size(metrics.label() + 3.0)
+        .font(Font {
+            weight: Weight::Bold,
+            ..Font::DEFAULT
+        })
+        .center()
+        .width(Fill);
+    let day: Element<'a, Message> = if weekly {
+        row![
+            nav_button(
+                "◀",
+                Message::Calendar(CalendarMessage::CalendarDayShift(-i64::from(
+                    state.config.calendar.weekly_days()
+                ))),
+                metrics
+            ),
+            heading,
+            nav_button(
+                "▶",
+                Message::Calendar(CalendarMessage::CalendarDayShift(i64::from(
+                    state.config.calendar.weekly_days()
+                ))),
+                metrics
+            ),
+        ]
+        .spacing(metrics.spacing)
+        .align_y(Alignment::Center)
+        .width(Fill)
+        .into()
+    } else {
+        heading.into()
+    };
+
+    match header_lines(metrics) {
+        // Four buttons and a date do not fit side by side, so the date gets a
+        // line to itself and is never squeezed into a few letters per row.
+        // Below that there is not room for a fourth button either, so it
+        // takes a line of its own.
+        3 => column![
+            day,
+            row![month, Space::new().width(Fill), set_alarm, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
+            toggle_travel(true),
+        ]
+        .spacing(metrics.spacing)
+        .into(),
+        2 => column![
+            day,
+            row![
+                month,
+                Space::new().width(Fill),
+                toggle_travel(false),
+                set_alarm,
+                menu
+            ]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(metrics.spacing)
+        .into(),
+        _ => row![month, day, toggle_travel(false), set_alarm, menu]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center)
+            .into(),
+    }
+}
+
+/// The narrowest a calendar can be and still hold the month picker, the date,
+/// Toggle Travel, Set Alarm and Menu on one line with the date readable.
+pub(super) const SINGLE_LINE_HEADER: f32 = 460.0;
+
+/// The narrowest a calendar can be and still hold the month picker and all
+/// three buttons on one line under the date.
+pub(super) const TWO_LINE_HEADER: f32 = 340.0;
+
+/// How many lines the header takes: one, two, or three.
+pub(super) fn header_lines(metrics: &Metrics) -> u8 {
+    if metrics.size.width >= SINGLE_LINE_HEADER {
+        1
+    } else if metrics.size.width >= TWO_LINE_HEADER {
+        2
+    } else {
+        3
+    }
+}
+
+/// A square button for stepping a day or a month at a time.
+pub(super) fn nav_button<'a>(
+    label: &'a str,
+    message: Message,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    button(text(label).size(metrics.label()).center())
+        .width(Length::Fixed(metrics.icon_button()))
+        .height(Length::Fixed(metrics.icon_button()))
+        .padding(0.0)
+        .on_press(message)
+        .style(crate::ui::controls::secondary)
+        .into()
+}
+
+/// The vertical space the header row takes, so an overlay can start below
+/// it rather than over it.
+pub(super) fn header_offset(metrics: &Metrics) -> f32 {
+    let lines = f32::from(header_lines(metrics));
+
+    metrics.padding + (metrics.icon_button() + metrics.spacing) * lines
+}
+
+/// Keep the heading's position stable when alarm setting mode changes.
+pub(super) fn heading_with_alarm_hint<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    weekly: bool,
+) -> Element<'a, Message> {
+    let mut hint = column![];
+    if state.calendar_loading() {
+        hint = hint.push(
+            text("Loading...")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+    if state.alarms.mode {
+        hint = hint.push(
+            text("Click a time to set an alarm. Esc cancels.")
+                .size(metrics.label() - 1.0)
+                .color(colors::ALARM),
+        );
+    }
+    column![header(state, metrics, weekly), hint].into()
+}
+
+/// The foot of the calendar while an alarm is ringing: the way to silence it.
+///
+/// An alarm can go off with any view on screen, so this stays until it has
+/// been dismissed. With nothing ringing there is no foot at all.
+pub(super) fn dismiss_bar<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
+    state.alarm_active.then(|| {
+        button(text("Dismiss").size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .height(metrics.icon_button())
+            .on_press(Message::System(SystemMessage::Dismiss))
+            .style(button::danger)
+            .into()
+    })
+}
+
+pub(super) fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Element<'a, Message>> {
+    all_day_row_on(state, metrics, state.calendar.day, false)
+}
+
+/// A day task needs a slot unless its linked block is present on that day.
+pub(super) fn task_needs_slot(state: &State, event: &Event, day: NaiveDate) -> bool {
+    crate::timeblocking::metadata(event)
+        .block
+        .as_ref()
+        .is_none_or(|key| {
+            !state
+                .calendar
+                .events_on(day)
+                .iter()
+                .any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)
+        })
+}
+
+pub(super) fn all_day_row_on<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    day: NaiveDate,
+    weekly: bool,
+) -> Option<Element<'a, Message>> {
+    let mut events: Vec<_> = state
+        .calendar
+        .all_day_events_on(day, &state.config.calendar)
+        .collect();
+    let sources = state.calendar.display_sources(&state.config.calendar);
+    events.sort_by_key(|e| {
+        (
+            sources
+                .iter()
+                .position(|source| source.id == e.source_id())
+                .unwrap_or(usize::MAX),
+            !crate::timeblocking::overdue(e),
+            crate::timeblocking::metadata(e).order,
+        )
+    });
+    events.retain(|event| {
+        !event.is_task()
+            || task_needs_slot(state, event, day)
+            || crate::timeblocking::overdue(event)
+    });
+    let unslotted = events.iter().filter(|event| event.is_task()).count();
+    let chips: Vec<Element<'a, Message>> = events
+        .into_iter()
+        .filter(|event| weekly || !event.is_task())
+        .map(|event| {
+            if event.is_task() {
+                weekly_task_chip(state, event, metrics)
+            } else {
+                all_day_chip(state, event, metrics)
+            }
+        })
+        .collect();
+
+    if weekly && chips.is_empty() {
+        return None;
+    }
+
+    let mut content = column![].spacing(4.0).width(Fill);
+    if !weekly {
+        let overdue = crate::inbox::overdue_tasks(state).len();
+        let inbox = crate::inbox::tasks(state).len();
+        let mut summary = text(format!(
+            "{overdue} overdue.  {inbox} in inbox.  {unslotted} not slotted in"
+        ))
+        .size(metrics.label());
+        if overdue > 0 || inbox > 0 || unslotted > 0 {
+            summary = summary
+                .font(Font {
+                    weight: Weight::Bold,
+                    ..Font::DEFAULT
+                })
+                .style(text::danger);
+        }
+        content = content.push(summary);
+    }
+    content = content.extend(chips);
+
+    let dragging = state.timeblocking.dragging.is_some();
+    Some(
+        mouse_area(
+            container(scrollable(content))
+                .max_height(180)
+                .style(move |theme: &Theme| drop_zone_style(theme, dragging)),
+        )
+        .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay))
+        .into(),
+    )
+}
+
+/// Outlines a place a task in the air can be dropped, in the theme's primary
+/// color, so the destination is clear while dragging.
+pub(super) fn drop_zone_style(theme: &Theme, active: bool) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(
+            if active {
+                palette.primary.weak.color
+            } else {
+                Color::TRANSPARENT
+            }
+            .into(),
+        ),
+        border: iced::Border {
+            color: if active {
+                palette.primary.strong.color
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 5.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn weekly_task_chip<'a>(
+    state: &'a State,
+    task: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let mut check = button(text(if task.completed { "●" } else { "○" }).size(metrics.label()))
+        .padding(2)
+        .style(button::text);
+    if state.timeblocking.busy.is_empty() {
+        check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
+    }
+    let title = button(text(crate::timeblocking::task_label(task)).size(metrics.label()))
+        .padding([3, 2])
+        .width(Fill)
+        .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
+        .style(button::text);
+    super::super::task_drag::task_drag(
+        container(row![check, title].spacing(2).align_y(Alignment::Center))
+            .width(Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(theme.extended_palette().background.base.color.into()),
+                border: iced::Border {
+                    color: theme.extended_palette().background.strong.color,
+                    width: 1.0,
+                    radius: 5.0.into(),
+                },
+                ..container::Style::default()
+            }),
+        &task.id,
+        state.timeblocking.dragging.as_deref(),
+    )
+}
+
+pub(super) fn all_day_chip<'a>(
+    state: &State,
+    event: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let color = event.display_color(&state.config.calendar);
+    let ink = on_color(color);
+
+    let title = if event.completed {
+        format!("✓ {}", event.title)
+    } else {
+        event.title.clone()
+    };
+
+    let id = event.id.clone();
+    button(text(title).size(metrics.label()).color(ink))
+        .padding([4.0, 8.0])
+        .width(Fill)
+        .on_press(Message::Event(EventMessage::EventOpened(id)))
+        .style(move |_theme, status| event_chip_style(color, ink, status))
+        .into()
+}
+
+pub(super) fn event_chip_style(color: Color, ink: Color, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: Some(if hovered { lift(color) } else { color }.into()),
+        text_color: ink,
+        border: iced::Border {
+            color: Color::BLACK.scale_alpha(if hovered { 0.9 } else { 0.55 }),
+            width: if hovered { 2.0 } else { 1.0 },
+            radius: EVENT_RADIUS.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
+/// Pulls a color toward white so a hovered chip reads as raised.
+pub(super) fn lift(color: Color) -> Color {
+    Color {
+        r: color.r + (1.0 - color.r) * 0.28,
+        g: color.g + (1.0 - color.g) * 0.28,
+        b: color.b + (1.0 - color.b) * 0.28,
+        a: color.a,
+    }
+}
+
+/// A swatch that can be tapped, used for a task list's color and in the
+/// picker itself. `selected` draws a brighter ring so the current color reads.
+pub(crate) fn swatch_button<'a>(
+    color: Color,
+    selected: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    button(iced::widget::Space::new())
+        .width(Length::Fixed(14.0))
+        .height(Length::Fixed(14.0))
+        .padding(0.0)
+        .on_press(on_press)
+        .style(move |_theme, status| swatch_style(color, selected, status))
+        .into()
+}
+
+pub(super) fn swatch_style(color: Color, selected: bool, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: Some(if hovered { lift(color) } else { color }.into()),
+        text_color: on_color(color),
+        border: iced::Border {
+            color: if selected {
+                Color::WHITE
+            } else {
+                Color::BLACK.scale_alpha(0.45)
+            },
+            width: if selected { 2.0 } else { 1.0 },
+            radius: 3.0.into(),
+        },
+        ..button::Style::default()
+    }
+}

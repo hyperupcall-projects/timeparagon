@@ -1,6 +1,5 @@
 //! The popup that edits an alarm set on the calendar.
 
-use chrono::Local;
 use iced::font::Weight;
 use iced::widget::{
     Space, button, column, container, mouse_area, row, scrollable, slider, stack, text, text_input,
@@ -54,7 +53,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 
     // Always measured from the clock, so the card keeps saying how far off the
     // alarm is for as long as it is open.
-    let minutes = alarms::minutes_between(Local::now(), alarm.at);
+    let minutes = alarms::minutes_between(crate::clock::now(), alarm.at);
     let countdown = column![
         text(alarms::countdown_label(minutes))
             .size(metrics.label() + 3.0)

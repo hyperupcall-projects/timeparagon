@@ -189,10 +189,7 @@ mod tests {
 
     #[test]
     fn opening_a_page_loads_it_and_typing_saves_it() {
-        let mut state = crate::app::State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = crate::app::State::blank();
         let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
         state.config.brain_dump.set(day, "start".into());
         let _ = update(&mut state, Action::Open(day));

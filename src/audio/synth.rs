@@ -257,7 +257,7 @@ mod tests {
     fn channels_carry_the_same_signal() {
         let pcm = chime();
 
-        for frame in pcm.chunks_exact(CHANNELS) {
+        for frame in pcm.as_chunks::<CHANNELS>().0 {
             assert_eq!(frame[0], frame[1]);
         }
     }
@@ -274,7 +274,12 @@ mod tests {
     #[test]
     fn beeps_leave_silence_between_bursts() {
         let pcm = beep();
-        let frames: Vec<f32> = pcm.chunks_exact(CHANNELS).map(|frame| frame[0]).collect();
+        let frames: Vec<f32> = pcm
+            .as_chunks::<CHANNELS>()
+            .0
+            .iter()
+            .map(|frame| frame[0])
+            .collect();
 
         // Sample in the middle of the first gap, which starts at 0.12s.
         let in_gap = (0.17 * SAMPLE_RATE as f32) as usize;

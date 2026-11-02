@@ -1,9 +1,10 @@
 //! Persisted calendar settings for the data layer.
 //!
-//! This is deliberately a subset of the iced app's config: the Dioxus day view
-//! only needs the `[calendar]` table. Unknown settings in a full desktop config
-//! are ignored, so the same `config.toml` can be dropped onto a phone without
-//! rewriting it.
+//! [`CalendarSettings`] is the one definition of the `[calendar]` table, used by
+//! both apps. [`Config`] is deliberately a subset of the iced app's config: the
+//! Dioxus day view only needs that table. Unknown settings in a full desktop
+//! config are ignored, so the same `config.toml` can be dropped onto a phone
+//! without rewriting it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,7 +15,9 @@ use std::time::Duration;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::calendar::colors;
 use crate::hex::HexColor;
+use iced_core::Color;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -26,39 +29,101 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CalendarSettings {
+    /// How often to pull events, in minutes. 15 is Google's own default-ish
+    /// cadence and is what we ship with.
     pub sync_minutes: u32,
+    /// OAuth client ID for a Desktop app created in Google Cloud. Empty until
+    /// the user pastes one in Settings.
     pub client_id: String,
+    /// Client secret from the same Desktop OAuth client. Google still issues
+    /// one for installed apps; it is not treated as a real secret, but the
+    /// token endpoint often wants it next to PKCE.
     pub client_secret: String,
+    /// Calendar IDs the hamburger menu has toggled off.
     pub disabled: Vec<String>,
+    /// Calendar-view source IDs, ordered from left to right for overlapping events.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source_order: Vec<String>,
+    /// Whether standalone Google Tasks are visible; tasks inside time blocks stay visible.
     pub show_tasks: bool,
     pub hide_overdue_tasks: bool,
+    /// The discovered id of the app-owned TimeSlay calendar. Every event the
+    /// app writes (time blocks and scheduled tasks) lives here. Managed by the
+    /// app from the calendar list; not exposed as a user setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_calendar: Option<String>,
     pub time_block_list: Option<String>,
+    /// Google Tasks list for tasks moved to the backlog. None uses Backlog.
     pub backlog_list: Option<String>,
+    /// Google Tasks list that collects triaged tasks until they are scheduled.
+    /// None uses Triaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triaged_list: Option<String>,
+    /// Google Tasks list that collects new tasks until they are triaged. None
+    /// uses Inbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbox_list: Option<String>,
     #[serde(default)]
     pub inbox_sort: crate::calendar::task_sort::InboxSort,
-    pub triaged_list: Option<String>,
-    pub habit_color: Option<HexColor>,
-    /// The hour the day ends, 0-5. 0 is midnight.
+    #[serde(default)]
+    pub overdue_sort: crate::calendar::task_sort::InboxSort,
+    /// Which metadata a task needs before it can leave the Inbox.
+    #[serde(default)]
+    pub triage: TriageRequirements,
+    /// The hour the day ends, 0-5. 0 is midnight, the usual boundary. Set it
+    /// to 3 and the day runs 3am to 3am, so the small hours stay with the
+    /// evening they belong to. This only moves the view: an event keeps its
+    /// real date and time, it is just drawn at the foot of the day it belongs
+    /// to.
     pub day_end_hour: u32,
     /// Nightly sleep target in hours, clamped to 6–12.
     pub sleep_goal_hours: u32,
+    /// Hour (0-6) at which a day starts for sleep calculations. Events before
+    /// it are ignored when looking for the first event after waking up.
+    pub sleep_day_start_hour: u32,
+    /// Latest wake-up hour (4-14). With no earlier event, sleep ends here.
+    pub latest_wakeup_hour: u32,
+    /// Total visible days: 7 from the selected day, or 8 from the previous day.
+    pub weekly_days: u32,
+    /// Width of each day in the horizontally scrollable weekly view.
+    pub weekly_day_width: u32,
+    /// Show task cards instead of the weekly time grid.
+    pub weekly_task_list: bool,
+    /// Card placement in each day of the week board. Unlisted cards follow in time order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weekly_task_order: BTreeMap<String, Vec<String>>,
+    /// Custom colors for Google Tasks lists, keyed by the calendar id
+    /// (`tasks:<list>`). Google hands every list back with the same blue, so
+    /// this is where a list gets a color of its own. A missing key means the
+    /// shared task blue.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
+    /// Local calendar color overrides, keyed by Google Calendar ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub calendar_colors: BTreeMap<String, HexColor>,
+    /// Color of all-day events on the TimeSlay calendar. None uses the
+    /// built-in event color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_color: Option<HexColor>,
+    /// Color of sleep events on the TimeSlay calendar. None uses the built-in
+    /// sleep gray.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_color: Option<HexColor>,
+    /// Color of time-block events on the TimeSlay calendar. None uses the
+    /// built-in block color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_block_color: Option<HexColor>,
+    /// Color of scheduled task events on the TimeSlay calendar. None uses
+    /// Google's task blue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_event_color: Option<HexColor>,
+    /// Color of habit events on the TimeSlay calendar. None uses the built-in
+    /// grape. A habit with its own Google `colorId` keeps that color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub habit_color: Option<HexColor>,
+    /// The calendar new events are created on, by id. `None` means the primary
+    /// calendar, falling back to the first writable one. Set from the calendar
+    /// settings pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_calendar: Option<String>,
 }
@@ -76,24 +141,61 @@ impl Default for CalendarSettings {
             app_calendar: None,
             time_block_list: None,
             backlog_list: None,
+            triaged_list: None,
             inbox_list: None,
             inbox_sort: Default::default(),
-            triaged_list: None,
-            habit_color: None,
+            overdue_sort: Default::default(),
+            triage: TriageRequirements::default(),
             day_end_hour: 0,
             sleep_goal_hours: 8,
+            sleep_day_start_hour: 0,
+            latest_wakeup_hour: 8,
+            weekly_days: 8,
+            weekly_day_width: 150,
+            weekly_task_list: false,
+            weekly_task_order: BTreeMap::new(),
             task_colors: BTreeMap::new(),
             calendar_colors: BTreeMap::new(),
             event_color: None,
             sleep_color: None,
             time_block_color: None,
             task_event_color: None,
+            habit_color: None,
             default_calendar: None,
         }
     }
 }
 
+/// Which metadata a task must have before it can be triaged out of the Inbox.
+/// Everything is required by default: the Inbox is where each task is given a
+/// project, a priority and an estimate before it goes anywhere else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TriageRequirements {
+    pub estimate: bool,
+    pub project: bool,
+    pub priority: bool,
+}
+
+impl Default for TriageRequirements {
+    fn default() -> Self {
+        Self {
+            estimate: true,
+            project: true,
+            priority: true,
+        }
+    }
+}
+
 impl CalendarSettings {
+    pub fn sleep_day_start_hour(&self) -> u32 {
+        self.sleep_day_start_hour.min(6)
+    }
+
+    pub fn latest_wakeup_hour(&self) -> u32 {
+        self.latest_wakeup_hour.clamp(4, 14)
+    }
+
     pub fn sleep_goal_hours(&self) -> u32 {
         self.sleep_goal_hours.clamp(6, 12)
     }
@@ -114,6 +216,7 @@ impl CalendarSettings {
     pub const DEFAULT_TRIAGED_LIST: &str = "Triaged";
 
     /// The name of the single calendar every event the app writes lives on.
+    /// Created on first use; not customizable from Settings.
     pub const APP_CALENDAR_NAME: &str = "TimeSlay";
 
     /// Names the app calendar has had before. They are still recognized so a
@@ -128,8 +231,18 @@ impl CalendarSettings {
 
     pub const MIN_SYNC_MINUTES: u32 = 1;
     pub const MAX_SYNC_MINUTES: u32 = 1440;
-    /// The latest hour a day can end.
+    /// The latest hour a day can end: 5am, which is as far into the morning
+    /// as a late night is worth pushing the boundary. Midnight (0) is the
+    /// default.
     pub const MAX_DAY_END_HOUR: u32 = 5;
+
+    pub fn weekly_days(&self) -> u32 {
+        self.weekly_days.clamp(7, 8)
+    }
+
+    pub fn weekly_day_width(&self) -> u32 {
+        self.weekly_day_width.clamp(100, 400)
+    }
 
     pub fn sync_every(&self) -> Duration {
         let minutes = self
@@ -143,7 +256,8 @@ impl CalendarSettings {
         self.day_start_hour() as i32 * 60
     }
 
-    /// The hour the day's window opens.
+    /// The hour the day's window opens, which is the hour the previous day
+    /// ended. The grid's top row is labelled with this hour.
     pub fn day_start_hour(&self) -> u32 {
         self.day_end_hour.min(Self::MAX_DAY_END_HOUR)
     }
@@ -157,7 +271,7 @@ impl CalendarSettings {
     }
 
     /// The custom color set for a Google Tasks list, if it has one.
-    pub fn task_color(&self, calendar_id: &str) -> Option<crate::Color> {
+    pub fn task_color(&self, calendar_id: &str) -> Option<Color> {
         self.task_colors
             .get(calendar_id)
             .or_else(|| self.task_colors.get(Self::GOOGLE_TASKS_ID))
@@ -165,7 +279,8 @@ impl CalendarSettings {
     }
 
     /// Sets a task list's custom color, or clears it back to Google's blue.
-    pub fn set_task_color(&mut self, calendar_id: &str, color: Option<crate::Color>) {
+    pub fn set_task_color(&mut self, calendar_id: &str, color: Option<Color>) {
+        // Picking the aggregate swatch applies to every list.
         if calendar_id == Self::GOOGLE_TASKS_ID {
             self.task_colors.clear();
         }
@@ -181,57 +296,56 @@ impl CalendarSettings {
     }
 
     /// The color all-day events are drawn in, or the built-in event color.
-    pub fn event_color(&self) -> crate::Color {
+    pub fn event_color(&self) -> Color {
         self.event_color
-            .map_or(crate::calendar::colors::DEFAULT_EVENT, |color| color.0)
+            .map_or(colors::DEFAULT_EVENT, |color| color.0)
     }
 
     /// The color sleep events are drawn in, or the built-in sleep gray.
-    pub fn sleep_color(&self) -> crate::Color {
+    pub fn sleep_color(&self) -> Color {
         self.sleep_color
             .map_or(crate::calendar::sleep::COLOR, |color| color.0)
     }
 
     /// The color time-block events are drawn in, or the built-in block color.
-    pub fn time_block_color(&self) -> crate::Color {
+    pub fn time_block_color(&self) -> Color {
         self.time_block_color
-            .map_or(crate::calendar::colors::TIME_BLOCK, |color| color.0)
-    }
-
-    /// The color habit events are drawn in.
-    pub fn habit_color(&self) -> crate::Color {
-        self.habit_color
-            .map_or(crate::calendar::colors::HABIT, |color| color.0)
+            .map_or(colors::TIME_BLOCK, |color| color.0)
     }
 
     /// The color scheduled task events are drawn in, or Google's task blue.
-    pub fn task_event_color(&self) -> crate::Color {
-        self.task_event_color
-            .map_or(crate::calendar::colors::TASK, |color| color.0)
+    pub fn task_event_color(&self) -> Color {
+        self.task_event_color.map_or(colors::TASK, |color| color.0)
+    }
+
+    /// The color habit events are drawn in, unless the habit has a Google
+    /// color of its own.
+    pub fn habit_color(&self) -> Color {
+        self.habit_color.map_or(colors::HABIT, |color| color.0)
     }
 
     /// Sets the all-day event color, or clears it back to the built-in default.
-    pub fn set_event_color(&mut self, color: Option<crate::Color>) {
+    pub fn set_event_color(&mut self, color: Option<Color>) {
         self.event_color = color.map(HexColor);
     }
 
     /// Sets the sleep color, or clears it back to the built-in gray.
-    pub fn set_sleep_color(&mut self, color: Option<crate::Color>) {
+    pub fn set_sleep_color(&mut self, color: Option<Color>) {
         self.sleep_color = color.map(HexColor);
     }
 
     /// Sets the time-block color, or clears it back to the built-in default.
-    pub fn set_time_block_color(&mut self, color: Option<crate::Color>) {
+    pub fn set_time_block_color(&mut self, color: Option<Color>) {
         self.time_block_color = color.map(HexColor);
     }
 
     /// Sets the scheduled task color, or clears it back to Google's blue.
-    pub fn set_task_event_color(&mut self, color: Option<crate::Color>) {
+    pub fn set_task_event_color(&mut self, color: Option<Color>) {
         self.task_event_color = color.map(HexColor);
     }
 
     /// Sets the habit color, or clears it back to the built-in grape.
-    pub fn set_habit_color(&mut self, color: Option<crate::Color>) {
+    pub fn set_habit_color(&mut self, color: Option<Color>) {
         self.habit_color = color.map(HexColor);
     }
 }
@@ -264,42 +378,27 @@ fn save_google_client_at(
     client_id: &str,
     client_secret: &str,
 ) -> io::Result<()> {
-    use std::io::Write;
+    crate::fsutil::locked(path, || {
+        let mut document = match fs::read_to_string(path) {
+            Ok(text) => toml::from_str::<toml::Table>(&text)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => toml::Table::new(),
+            Err(error) => return Err(error),
+        };
+        let calendar = document
+            .entry("calendar")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "[calendar] is not a table")
+            })?;
+        calendar.insert("client_id".into(), client_id.trim().into());
+        calendar.insert("client_secret".into(), client_secret.trim().into());
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut document = match fs::read_to_string(path) {
-        Ok(text) => toml::from_str::<toml::Table>(&text)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => toml::Table::new(),
-        Err(error) => return Err(error),
-    };
-    let calendar = document
-        .entry("calendar")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "[calendar] is not a table"))?;
-    calendar.insert("client_id".into(), client_id.trim().into());
-    calendar.insert("client_secret".into(), client_secret.trim().into());
-
-    let text = toml::to_string_pretty(&document)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
-    let temporary = path.with_extension("toml.tmp");
-    let _ = fs::remove_file(&temporary);
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(text.as_bytes())?;
-    drop(file);
-    fs::rename(&temporary, path)
+        let text = toml::to_string_pretty(&document)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        crate::fsutil::write_atomic(path, text.as_bytes(), crate::fsutil::Kind::Private)
+    })
 }
 
 impl Config {
@@ -309,6 +408,11 @@ impl Config {
             log::warn!("no config directory available; using defaults");
             return Self::default();
         };
+        if let Err(error) = crate::fsutil::make_private(&path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            log::warn!("could not make {} private: {error}", path.display());
+        }
 
         match fs::read_to_string(&path) {
             Ok(contents) => match toml::from_str(&contents) {

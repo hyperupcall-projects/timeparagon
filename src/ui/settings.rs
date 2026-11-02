@@ -6,7 +6,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length};
 
-use crate::app::{LayoutField, Message, State};
+use crate::app::{BorderLayer, LayoutField, Message, State};
+use crate::app::{CalendarMessage, SettingsMessage};
 use crate::calendar;
 use crate::config;
 use crate::integrations::accounts;
@@ -52,16 +53,14 @@ fn week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             "Days shown",
             vec![WeeklyDays(7), WeeklyDays(8)],
             Some(WeeklyDays(settings.weekly_days())),
-            |days| Message::CalendarWeeklyDaysChanged(days.0),
+            |days| Message::Settings(SettingsMessage::CalendarWeeklyDaysChanged(days.0)),
             metrics,
         ),
         field(
             format!("Weekly day width: {} px", settings.weekly_day_width()),
-            slider(
-                100..=400,
-                settings.weekly_day_width(),
-                Message::CalendarWeeklyWidthChanged,
-            )
+            slider(100..=400, settings.weekly_day_width(), |v0| {
+                Message::Settings(SettingsMessage::CalendarWeeklyWidthChanged(v0))
+            },)
             .into(),
             metrics,
         ),
@@ -230,7 +229,7 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         "Time format",
         TimeFormat::ALL.to_vec(),
         Some(state.config.appearance.time_format),
-        Message::TimeFormatSelected,
+        |v0| Message::Settings(SettingsMessage::TimeFormatSelected(v0)),
         metrics,
     ))
     .id("time-format")
@@ -251,13 +250,13 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                     .name
                     .clone()
             ),
-            Message::ThemeSelected,
+            |v0| Message::Settings(SettingsMessage::ThemeSelected(v0)),
             metrics,
         ),
         switch(
             "Follow system light/dark",
             state.config.appearance.follow_system,
-            Message::FollowSystemToggled,
+            |v0| Message::Settings(SettingsMessage::FollowSystemToggled(v0)),
             metrics,
         ),
         layout_number(
@@ -268,7 +267,7 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         panel_color_input(
             "Outer border color",
-            0,
+            BorderLayer::Outer,
             views.panel_border_outer_color,
             state,
             metrics
@@ -281,7 +280,7 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         panel_color_input(
             "Inner border color",
-            1,
+            BorderLayer::Inner,
             views.panel_border_inner_color,
             state,
             metrics
@@ -308,7 +307,7 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         container(switch(
             "Reserve screen space",
             views.dock_reserve_space,
-            Message::DockReserveSpaceToggled,
+            |v0| Message::Settings(SettingsMessage::DockReserveSpaceToggled(v0)),
             metrics,
         ))
         .id("dock-reservation")
@@ -329,7 +328,7 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             "Screen edge",
             crate::config::DockSide::ALL.to_vec(),
             Some(views.dock_side),
-            Message::DockSideSelected,
+            |v0| Message::Settings(SettingsMessage::DockSideSelected(v0)),
             metrics,
         ),
         layout_number(
@@ -362,7 +361,7 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         container(switch(
             "Reserve screen space",
             views.panel_reserve_space,
-            Message::PanelReserveSpaceToggled,
+            |v0| Message::Settings(SettingsMessage::PanelReserveSpaceToggled(v0)),
             metrics,
         ))
         .id("panel-reservation")
@@ -411,7 +410,7 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 fn panel_color_input<'a>(
     label: &str,
-    layer: usize,
+    layer: BorderLayer,
     current: crate::hex::HexColor,
     state: &'a State,
     metrics: &Metrics,
@@ -423,8 +422,8 @@ fn panel_color_input<'a>(
         layer,
         current,
         input,
-        Message::PanelBorderColorInput,
-        Message::PanelBorderColorSubmitted,
+        |v0, v1| Message::Settings(SettingsMessage::PanelBorderColorInput(v0, v1)),
+        |v0| Message::Settings(SettingsMessage::PanelBorderColorSubmitted(v0)),
         metrics,
     )
 }
@@ -433,11 +432,11 @@ fn panel_color_input<'a>(
 fn border_color_input<'a>(
     label: &str,
     id_prefix: &str,
-    layer: usize,
+    layer: BorderLayer,
     current: crate::hex::HexColor,
-    edited: Option<&(usize, String)>,
-    on_input: impl Fn(usize, String) -> Message + 'a,
-    on_submit: impl Fn(usize) -> Message + 'a,
+    edited: Option<&(BorderLayer, String)>,
+    on_input: impl Fn(BorderLayer, String) -> Message + 'a,
+    on_submit: impl Fn(BorderLayer) -> Message + 'a,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let shown = edited
@@ -445,7 +444,13 @@ fn border_color_input<'a>(
         .map_or_else(|| current.to_string(), |(_, input)| input.clone());
     let submitted = on_submit(layer);
     let input = text_input("#RRGGBB", &shown)
-        .id(format!("{id_prefix}-{layer}"))
+        .id(format!(
+            "{id_prefix}-{}",
+            match layer {
+                BorderLayer::Outer => 0,
+                BorderLayer::Inner => 1,
+            }
+        ))
         .size(metrics.label())
         .width(Fill)
         .on_input(move |input| on_input(layer, input))
@@ -463,7 +468,7 @@ fn restart<'a>(metrics: &Metrics) -> Element<'a, Message> {
                 .width(Fill),
         )
         .width(Fill)
-        .on_press(Message::RestartRequested)
+        .on_press(Message::Settings(SettingsMessage::RestartRequested))
     ]
     .spacing(metrics.spacing)
     .into()
@@ -475,7 +480,7 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         "When the window appears",
         crate::config::WindowAnimation::ALL.to_vec(),
         Some(views.window_animation),
-        Message::WindowAnimationSelected,
+        |v0| Message::Settings(SettingsMessage::WindowAnimationSelected(v0)),
         metrics,
     )]
     .spacing(metrics.spacing);
@@ -491,7 +496,7 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .push(switch(
             "Dock hour lines",
             views.dock_hour_lines,
-            Message::DockHourLinesToggled,
+            |v0| Message::Settings(SettingsMessage::DockHourLinesToggled(v0)),
             metrics,
         ))
         .push(
@@ -556,8 +561,12 @@ fn layout_number<'a>(
         .id(format!("layout-{kind:?}"))
         .size(metrics.label())
         .width(Fill)
-        .on_input(move |input| Message::ViewLayoutInputChanged(kind, input))
-        .on_submit(Message::ViewLayoutInputSubmitted(kind));
+        .on_input(move |input| {
+            Message::Settings(SettingsMessage::ViewLayoutInputChanged(kind, input))
+        })
+        .on_submit(Message::Settings(
+            SettingsMessage::ViewLayoutInputSubmitted(kind),
+        ));
     field(
         label,
         row![decrement, input, increment]
@@ -606,7 +615,9 @@ fn shortcut_action<'a>(
         let mut remove =
             button(text("Remove").size(metrics.label())).style(crate::ui::controls::secondary);
         if !editor.busy {
-            remove = remove.on_press(Message::ShortcutRemoved(action, index));
+            remove = remove.on_press(Message::Settings(SettingsMessage::ShortcutRemoved(
+                action, index,
+            )));
         }
         section = section.push(
             row![
@@ -632,10 +643,12 @@ fn shortcut_action<'a>(
     .width(Fill);
     if !editor.busy {
         input = input
-            .on_input(move |value| Message::ShortcutInputChanged(action, value))
-            .on_submit(Message::ShortcutAdded(action));
+            .on_input(move |value| {
+                Message::Settings(SettingsMessage::ShortcutInputChanged(action, value))
+            })
+            .on_submit(Message::Settings(SettingsMessage::ShortcutAdded(action)));
         if !editor.input.trim().is_empty() {
-            add = add.on_press(Message::ShortcutAdded(action));
+            add = add.on_press(Message::Settings(SettingsMessage::ShortcutAdded(action)));
         }
     }
     section = section
@@ -662,10 +675,16 @@ fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
         let mut down =
             button(text("Down").size(metrics.label())).style(crate::ui::controls::secondary);
         if index > 0 {
-            up = up.on_press(Message::CalendarSourceMoved(source.id.clone(), true));
+            up = up.on_press(Message::Calendar(CalendarMessage::CalendarSourceMoved(
+                source.id.clone(),
+                true,
+            )));
         }
         if index + 1 < sources.len() {
-            down = down.on_press(Message::CalendarSourceMoved(source.id.clone(), false));
+            down = down.on_press(Message::Calendar(CalendarMessage::CalendarSourceMoved(
+                source.id.clone(),
+                false,
+            )));
         }
         let controls = row![up, down].spacing(4.0);
         let entry: Element<'a, Message> = if metrics.breakpoint.is_compact() {
@@ -698,7 +717,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         field(
             "OAuth client ID",
             text_input("Desktop client ID", &settings.client_id)
-                .on_input(Message::GoogleClientIdChanged)
+                .on_input(|v0| Message::Settings(SettingsMessage::GoogleClientIdChanged(v0)))
                 .size(metrics.label())
                 .into(),
             metrics,
@@ -706,7 +725,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         field(
             "Client secret",
             text_input("optional", &settings.client_secret)
-                .on_input(Message::GoogleClientSecretChanged)
+                .on_input(|v0| Message::Settings(SettingsMessage::GoogleClientSecretChanged(v0)))
                 .secure(true)
                 .size(metrics.label())
                 .into(),
@@ -725,7 +744,9 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .width(Fill)
         .style(crate::ui::controls::secondary);
         if !state.calendar.is_busy() {
-            disconnect = disconnect.on_press(Message::GoogleDisconnectRequested);
+            disconnect = disconnect.on_press(Message::Settings(
+                SettingsMessage::GoogleDisconnectRequested,
+            ));
         }
         disconnect
     } else {
@@ -738,7 +759,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .width(Fill)
         .style(crate::ui::controls::primary);
         if !state.calendar.is_busy() {
-            connect = connect.on_press(Message::GoogleConnectRequested);
+            connect = connect.on_press(Message::Settings(SettingsMessage::GoogleConnectRequested));
         }
         connect
     };
@@ -767,7 +788,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .width(Fill)
     .style(crate::ui::controls::secondary);
     if connected && !state.calendar.is_busy() {
-        resync = resync.on_press(Message::CalendarResyncRequested);
+        resync = resync.on_press(Message::Calendar(CalendarMessage::CalendarResyncRequested));
     }
     section = section.push(resync);
 
@@ -783,7 +804,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         "Automatic sync",
         intervals.into_iter().map(SyncInterval).collect(),
         Some(selected),
-        |interval| Message::CalendarSyncMinutesChanged(interval.0),
+        |interval| Message::Settings(SettingsMessage::CalendarSyncMinutesChanged(interval.0)),
         metrics,
     ));
 
@@ -795,7 +816,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         slider(
             0..=config::CalendarSettings::MAX_DAY_END_HOUR,
             settings.day_start_hour(),
-            Message::CalendarDayEndChanged,
+            |v0| Message::Settings(SettingsMessage::CalendarDayEndChanged(v0)),
         )
         .into(),
         metrics,
@@ -803,11 +824,9 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     section = section.push(field(
         format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
-        slider(
-            6..=12,
-            settings.sleep_goal_hours(),
-            Message::SleepGoalChanged,
-        )
+        slider(6..=12, settings.sleep_goal_hours(), |v0| {
+            Message::Settings(SettingsMessage::SleepGoalChanged(v0))
+        })
         .into(),
         metrics,
     ));
@@ -820,11 +839,9 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 state.config.appearance.time_format
             )
         ),
-        slider(
-            0..=6,
-            settings.sleep_day_start_hour(),
-            Message::SleepDayStartChanged,
-        )
+        slider(0..=6, settings.sleep_day_start_hour(), |v0| {
+            Message::Settings(SettingsMessage::SleepDayStartChanged(v0))
+        })
         .into(),
         metrics,
     ));
@@ -837,11 +854,9 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 state.config.appearance.time_format
             )
         ),
-        slider(
-            4..=14,
-            settings.latest_wakeup_hour(),
-            Message::LatestWakeupChanged,
-        )
+        slider(4..=14, settings.latest_wakeup_hour(), |v0| {
+            Message::Settings(SettingsMessage::LatestWakeupChanged(v0))
+        })
         .into(),
         metrics,
     ));
@@ -877,7 +892,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     section = section.push(field(
         "Default calendar for new events",
         pick_list(option_map, selected_option, |option: CalendarOption| {
-            Message::DefaultCalendarSelected(option.id)
+            Message::Settings(SettingsMessage::DefaultCalendarSelected(option.id))
         })
         .text_size(metrics.label())
         .width(Fill)
@@ -1189,7 +1204,6 @@ mod tests {
 
     #[test]
     fn week_day_choices_show_the_start_day_and_switch_in_a_narrow_panel() {
-        use crate::{config::Config, theme::Catalog};
         use iced_test::{Simulator, core::Settings};
 
         let size = iced::Size::new(200.0, 400.0);
@@ -1198,24 +1212,24 @@ mod tests {
             (7, "7 days starting today", 8),
             (8, "8 days starting yesterday", 7),
         ] {
-            let mut state = State::new(Config::default(), Catalog::built_in());
+            let mut state = State::blank();
             state.config.calendar.weekly_days = days;
             let mut ui =
                 Simulator::with_size(Settings::default(), size, week_view(&state, &metrics));
             ui.click(label).unwrap();
             assert!(ui.into_messages().any(|message| matches!(
-                message, Message::CalendarWeeklyDaysChanged(value) if value == next
+                message, Message::Settings(SettingsMessage::CalendarWeeklyDaysChanged(value)) if value == next
             )));
         }
     }
 
     #[test]
     fn reservation_switches_are_reachable_and_independent_at_narrow_widths() {
-        use crate::{app, config::Config, theme::Catalog};
+        use crate::app;
         use iced_test::{Simulator, core::Settings};
 
         for width in [180.0, 420.0] {
-            let mut state = State::new(Config::default(), Catalog::built_in());
+            let mut state = State::blank();
             let size = iced::Size::new(width, 400.0);
             let metrics = Metrics::of(size);
             let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
@@ -1240,9 +1254,8 @@ mod tests {
 
     #[test]
     fn margin_controls_live_in_their_respective_sections() {
-        use crate::{config::Config, theme::Catalog};
         use iced_test::{Simulator, core::Settings};
-        let state = State::new(Config::default(), Catalog::built_in());
+        let state = State::blank();
         let size = iced::Size::new(420.0, 1800.0);
         let metrics = Metrics::of(size);
         let mut ui = Simulator::with_size(Settings::default(), size, appearance(&state, &metrics));
@@ -1257,10 +1270,10 @@ mod tests {
 
     #[test]
     fn layout_number_buttons_step_and_stop_at_the_limits() {
-        use crate::{app, config::Config, theme::Catalog};
+        use crate::app;
         use iced_test::{Simulator, core::Settings};
 
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         state.config.views.dock_left_margin = Some(10.0);
         state.config.views.dock_right_margin = Some(20.0);
         for (kind, step) in [
@@ -1340,7 +1353,10 @@ mod tests {
         }
         let mut state = State::new(old, Catalog::built_in());
         for expected in TimeFormat::ALL {
-            let _ = app::update(&mut state, Message::TimeFormatSelected(expected));
+            let _ = app::update(
+                &mut state,
+                Message::Settings(SettingsMessage::TimeFormatSelected(expected)),
+            );
             assert_eq!(state.config.appearance.time_format, expected);
             let saved = toml::to_string(&state.config).unwrap();
             let restored: Config = toml::from_str(&saved).unwrap();
@@ -1357,7 +1373,7 @@ mod tests {
                 ui.click("Compact Time").unwrap();
                 assert!(ui.into_messages().any(|message| matches!(
                     message,
-                    Message::TimeFormatSelected(TimeFormat::TwelveHour)
+                    Message::Settings(SettingsMessage::TimeFormatSelected(TimeFormat::TwelveHour))
                 )));
             } else {
                 // Pick lists draw their labels directly, so operate the control by position.
@@ -1372,7 +1388,9 @@ mod tests {
                 ]);
                 assert!(ui.into_messages().any(|message| matches!(
                     message,
-                    Message::TimeFormatSelected(TimeFormat::TwentyFourHour)
+                    Message::Settings(SettingsMessage::TimeFormatSelected(
+                        TimeFormat::TwentyFourHour
+                    ))
                 )));
             }
         }
@@ -1380,8 +1398,8 @@ mod tests {
 
     #[test]
     fn calendar_widths_are_independent_and_persist() {
-        use crate::{app, config::Config, theme::Catalog};
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        use crate::{app, config::Config};
+        let mut state = State::blank();
         for (field, value) in [
             (LayoutField::CalendarWidth, 300.0),
             (LayoutField::CalendarWeekWidth, 900.0),
@@ -1397,17 +1415,29 @@ mod tests {
 
     #[test]
     fn appearance_border_edits_are_shared_with_the_dock() {
-        use crate::{app, config::Config, theme::Catalog};
-        let mut state = State::new(Config::default(), Catalog::built_in());
-        let _ = app::update(&mut state, Message::PanelBorderOuterWidthChanged(3.0));
-        let _ = app::update(&mut state, Message::PanelBorderInnerWidthChanged(2.0));
+        use crate::app;
+        let mut state = State::blank();
         let _ = app::update(
             &mut state,
-            Message::PanelBorderColorInput(0, "#123456".into()),
+            Message::Settings(SettingsMessage::PanelBorderOuterWidthChanged(3.0)),
         );
         let _ = app::update(
             &mut state,
-            Message::PanelBorderColorInput(1, "#ABCDEF".into()),
+            Message::Settings(SettingsMessage::PanelBorderInnerWidthChanged(2.0)),
+        );
+        let _ = app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::PanelBorderColorInput(
+                BorderLayer::Outer,
+                "#123456".into(),
+            )),
+        );
+        let _ = app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::PanelBorderColorInput(
+                BorderLayer::Inner,
+                "#ABCDEF".into(),
+            )),
         );
         let dock = crate::dock::config::DockConfig::load(&state.config.views);
         assert_eq!(

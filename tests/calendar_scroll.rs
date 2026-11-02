@@ -3,11 +3,10 @@ use iced::advanced::widget::{Id, Operation, operation::scrollable};
 use iced::{Font, Pixels, Rectangle, Size, Vector};
 use iced_test::core::renderer::Headless;
 use iced_test::runtime::{UserInterface, user_interface};
+use timeslay::app::{EventEditMessage, EventMessage};
 use timeslay::{
     app::{self, Message, State},
     calendar,
-    config::Config,
-    theme::Catalog,
     timeblocking::Action,
 };
 
@@ -41,7 +40,7 @@ fn time_block_edit_and_view_preserve_calendar_scroll() {
     .expect("headless renderer");
 
     for width in [200.0, 800.0] {
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         state.config.calendar.app_calendar =
             Some(state.calendar.event("standup").unwrap().calendar_id.clone());
@@ -68,13 +67,25 @@ fn time_block_edit_and_view_preserve_calendar_scroll() {
         let mut cache = ui.into_cache();
 
         for (message, panel_open) in [
-            (Message::EventOpened("standup".into()), true),
-            (Message::EventEditRequested("standup".into()), true),
-            (Message::EventEditCancelled, true),
+            (
+                Message::Event(EventMessage::EventOpened("standup".into())),
+                true,
+            ),
+            (
+                Message::EventEdit(EventEditMessage::EventEditRequested("standup".into())),
+                true,
+            ),
+            (
+                Message::EventEdit(EventEditMessage::EventEditCancelled),
+                true,
+            ),
             (Message::TimeBlocking(Action::Close), false),
             (Message::TimeBlocking(Action::View("standup".into())), false),
             (Message::TimeBlocking(Action::CloseView), false),
-            (Message::EventOpened("standup".into()), true),
+            (
+                Message::Event(EventMessage::EventOpened("standup".into())),
+                true,
+            ),
             (Message::TimeBlocking(Action::View("standup".into())), false),
             (Message::TimeBlocking(Action::CloseView), false),
             (

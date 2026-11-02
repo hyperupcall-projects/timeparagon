@@ -107,7 +107,7 @@ impl Alarms {
         self.path = path.clone();
 
         if let Some(mut alarms) = path.as_deref().and_then(read) {
-            let now = Local::now();
+            let now = crate::clock::now();
             alarms.retain(|alarm| minutes_between(now, alarm.at) > -MISSED_GRACE_MINUTES);
             self.items = alarms;
         }
@@ -175,9 +175,10 @@ impl Alarms {
 
 /// `when` with the seconds taken off.
 pub fn minute_of(when: DateTime<Local>) -> DateTime<Local> {
-    when.with_second(0)
-        .and_then(|when| when.with_nanosecond(0))
-        .unwrap_or(when)
+    // Subtracting rather than `with_second`, which gives up on a local time
+    // that happens twice, as it does in the hour the clocks go back.
+    when - chrono::Duration::seconds(i64::from(when.second()))
+        - chrono::Duration::nanoseconds(i64::from(when.nanosecond()))
 }
 
 /// Whole minutes from `now` to `at`, counted between the clock faces rather
@@ -291,16 +292,10 @@ fn write(path: &Path, alarms: Vec<Alarm>) -> io::Result<()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     let bytes = serde_json::to_vec_pretty(&File { alarms })
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes)?;
-    fs::rename(&temporary, path)
+    crate::fsutil::write_atomic(path, &bytes, crate::fsutil::Kind::Private)
 }
 
 #[derive(Debug, Clone)]
@@ -363,7 +358,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Place(at) => {
             // The grid already refuses these clicks; this is the rule itself,
             // so no other path can ever set an alarm in the past.
-            if !can_set(Local::now(), at) {
+            if !can_set(crate::clock::now(), at) {
                 return Task::none();
             }
 
@@ -542,7 +537,7 @@ fn set_time(state: &mut State, id: u64, text: String) {
                 .unwrap_or_default();
 
             match local_at(date, time) {
-                Some(at) if can_set(Local::now(), at) => Ok(at),
+                Some(at) if can_set(crate::clock::now(), at) => Ok(at),
                 Some(_) => Err("That time has already passed".to_owned()),
                 None => Err("That time does not exist on this day".to_owned()),
             }
@@ -565,7 +560,7 @@ fn set_time(state: &mut State, id: u64, text: String) {
 
 /// Runs every alarm that has come due and takes it off the calendar.
 fn ring_due(state: &mut State) -> Task<Message> {
-    let due = state.alarms.take_due(Local::now());
+    let due = state.alarms.take_due(crate::clock::now());
     if due.is_empty() {
         return Task::none();
     }
@@ -722,7 +717,7 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         let mut alarms = Alarms::default();
-        let soon = Local::now() + Span::hours(1);
+        let soon = crate::clock::now() + Span::hours(1);
         let id = alarms.add(soon, AlarmProfile::default());
         alarms.get_mut(id).unwrap().label = "Tea".to_owned();
 
@@ -745,7 +740,10 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         let mut alarms = Alarms::default();
-        alarms.add(Local::now() - Span::hours(3), AlarmProfile::default());
+        alarms.add(
+            crate::clock::now() - Span::hours(3),
+            AlarmProfile::default(),
+        );
         write(&path, alarms.items().to_vec()).unwrap();
 
         let mut loaded = Alarms::default();

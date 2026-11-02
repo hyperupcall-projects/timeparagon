@@ -1,4 +1,5 @@
 //! Local microphone -> whisper.cpp -> constrained Ollama patch.
+use crate::app::SystemMessage;
 use crate::{
     app::{Message, State},
     inbox,
@@ -163,7 +164,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             let settings = state.config.voice.clone();
             let draft = state.inbox.draft.as_ref().unwrap();
-            let context = json!({"title": draft.title, "description": state.task_description.text(), "due": state.timeblocking.date, "due_time": draft.event.as_ref().filter(|e| !e.all_day).map(|e| e.start.format("%H:%M").to_string()), "today": chrono::Local::now().date_naive().to_string(), "deadline": state.timeblocking.deadline, "metadata": draft.event.as_ref().map(crate::timeblocking::metadata), "projects": state.config.projects.items});
+            let context = json!({"title": draft.title, "description": state.task_description.text(), "due": state.timeblocking.date, "due_time": draft.event.as_ref().filter(|e| !e.all_day).map(|e| e.start.format("%H:%M").to_string()), "today": crate::clock::now().date_naive().to_string(), "deadline": state.timeblocking.deadline, "metadata": draft.event.as_ref().map(crate::timeblocking::metadata), "projects": state.config.projects.items});
             let (tx, rx) = mpsc::channel();
             let voice = &mut state.inbox.voice;
             voice.stop = Arc::new(AtomicBool::new(false));
@@ -299,7 +300,9 @@ fn pipeline(
                 break;
             }
             let energy: f32 = buffer[..n]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|s| (i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0).powi(2))
                 .sum();
             let rms = (energy / (n / 2).max(1) as f32).sqrt();
@@ -436,7 +439,7 @@ fn debug(tx: Option<&mpsc::Sender<Progress>>, label: &str, body: impl AsRef<str>
     if let Some(tx) = tx {
         let _ = tx.send(Progress::Debug(format!(
             "[{}] {label}\n{}\n\n",
-            chrono::Local::now().format("%H:%M:%S%.3f"),
+            crate::clock::now().format("%H:%M:%S%.3f"),
             body.as_ref()
         )));
     }
@@ -559,8 +562,16 @@ pub fn debug_overlay<'a>(
     if state.task_creation_window {
         // The dock input region must include this modal, not only the task card.
         iced::widget::sensor(overlay)
-            .on_show(|size| Message::TaskPopoverBounds(iced::Rectangle::with_size(size)))
-            .on_resize(|size| Message::TaskPopoverBounds(iced::Rectangle::with_size(size)))
+            .on_show(|size| {
+                Message::System(SystemMessage::TaskPopoverBounds(
+                    iced::Rectangle::with_size(size),
+                ))
+            })
+            .on_resize(|size| {
+                Message::System(SystemMessage::TaskPopoverBounds(
+                    iced::Rectangle::with_size(size),
+                ))
+            })
             .into()
     } else {
         overlay.into()
@@ -607,10 +618,10 @@ fn validate_patch(raw: &str, context: &Value) -> anyhow::Result<Patch> {
             "Invalid extracted title"
         );
     }
-    if let Some(v) = &patch.due {
-        if !v.is_empty() {
-            chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d")?;
-        }
+    if let Some(v) = &patch.due
+        && !v.is_empty()
+    {
+        chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d")?;
     }
     if let Some(time) = patch.due_time.as_deref().filter(|t| !t.is_empty()) {
         chrono::NaiveTime::parse_from_str(time, "%H:%M")?;
@@ -625,15 +636,15 @@ fn validate_patch(raw: &str, context: &Value) -> anyhow::Result<Patch> {
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned)
                     .or_else(|| context["today"].as_str().map(str::to_owned))
-                    .unwrap_or_else(|| chrono::Local::now().date_naive().to_string()),
+                    .unwrap_or_else(|| crate::clock::now().date_naive().to_string()),
             );
         }
         due_start(patch.due.as_deref().unwrap(), time)?;
     }
-    if let Some(v) = &patch.deadline {
-        if !v.is_empty() {
-            crate::calendar::deadline::parse_input(v).map_err(anyhow::Error::msg)?;
-        }
+    if let Some(v) = &patch.deadline
+        && !v.is_empty()
+    {
+        crate::calendar::deadline::parse_input(v).map_err(anyhow::Error::msg)?;
     }
     anyhow::ensure!(patch.minutes.is_none_or(|m| m <= 10080), "Invalid estimate");
     if let Some(ids) = &patch.projects {
@@ -766,6 +777,45 @@ pub fn settings<'a>(state: &'a State) -> iced::Element<'a, Message> {
     content.push(text("Uses the default microphone via arecord (alsa-utils). Click the microphone again to finish; maximum recording is 2 minutes.").size(12)).into()
 }
 
+struct Microphone;
+impl iced::widget::canvas::Program<Message> for Microphone {
+    type State = ();
+    fn draw(
+        &self,
+        _: &(),
+        renderer: &iced::Renderer,
+        theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        use iced::widget::canvas::{Frame, Path, Stroke};
+        let mut frame = Frame::new(renderer, bounds.size());
+        let color = theme.palette().text;
+        let capsule = Path::rounded_rectangle(
+            iced::Point::new(9.0, 2.0),
+            iced::Size::new(6.0, 13.0),
+            iced::border::Radius::from(3.0),
+        );
+        frame.fill(&capsule, color);
+        let stand = Path::new(|p| {
+            p.move_to(iced::Point::new(5.0, 10.0));
+            p.line_to(iced::Point::new(5.0, 12.0));
+            p.bezier_curve_to(
+                iced::Point::new(5.0, 21.0),
+                iced::Point::new(19.0, 21.0),
+                iced::Point::new(19.0, 12.0),
+            );
+            p.line_to(iced::Point::new(19.0, 10.0));
+            p.move_to(iced::Point::new(12.0, 19.0));
+            p.line_to(iced::Point::new(12.0, 23.0));
+            p.move_to(iced::Point::new(8.0, 23.0));
+            p.line_to(iced::Point::new(16.0, 23.0));
+        });
+        frame.stroke(&stand, Stroke::default().with_color(color).with_width(1.8));
+        vec![frame.into_geometry()]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,10 +849,7 @@ mod tests {
         let patch = validate_patch(r#"{"due_time":"21:00"}"#, &context).unwrap();
         assert_eq!(patch.due.as_deref(), Some("2026-10-30"));
         assert!(patch.title.is_none());
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let _ = inbox::update(&mut state, inbox::Action::NewTask);
         inbox::apply_voice(&mut state, patch);
         let _ = inbox::update(&mut state, inbox::Action::Title("Buy bread".into()));
@@ -861,7 +908,7 @@ mod tests {
         assert_eq!(patch.due_time.as_deref(), Some("21:00"));
         assert_eq!(
             patch.due.as_deref(),
-            Some(chrono::Local::now().date_naive().to_string().as_str())
+            Some(crate::clock::now().date_naive().to_string().as_str())
         );
         assert!(patch.title.is_none());
         assert!(patch.deadline.is_none());
@@ -905,10 +952,7 @@ mod tests {
     fn processing_buttons_open_live_debug_and_closing_keeps_worker() {
         use iced::{Size, widget::text_input};
         use iced_test::{Simulator, core::Settings as UiSettings};
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let _ = inbox::update(&mut state, inbox::Action::NewTask);
         let (tx, rx) = mpsc::channel();
         state.inbox.voice.rx = Some(rx);
@@ -959,10 +1003,7 @@ mod tests {
     fn debug_popup_uses_editor_host_with_main_and_dock_fallbacks() {
         use iced::{Size, window};
         use iced_test::{Simulator, core::Settings as UiSettings};
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let _ = inbox::update(&mut state, inbox::Action::NewTask);
         state.inbox.voice.debug_open = true;
         state.inbox.voice.debug_log = "Live model output".into();
@@ -1008,10 +1049,7 @@ mod tests {
             .unwrap();
             assert_eq!(patch.title.as_deref(), Some("Study machine learning"));
             assert_eq!(patch.due_time.as_deref(), Some("22:00"));
-            let mut state = State::new(
-                crate::config::Config::default(),
-                crate::theme::Catalog::built_in(),
-            );
+            let mut state = State::blank();
             let _ = inbox::update(&mut state, inbox::Action::NewTask);
             let _ = inbox::update(&mut state, inbox::Action::Title(previous_title.into()));
             inbox::apply_voice(&mut state, patch);
@@ -1045,10 +1083,7 @@ mod tests {
             widget::{Id, text_input},
         };
         use iced_test::{Simulator, core::Settings as UiSettings};
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let _ = inbox::update(&mut state, inbox::Action::NewTask);
         for width in [180.0, 420.0] {
             let title = text_input("Task, or paste a link", "").id("voice-test-title");
@@ -1114,10 +1149,7 @@ mod tests {
     }
     #[test]
     fn repeated_patches_preserve_unmentioned_metadata_and_manual_title() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let _ = inbox::update(&mut state, inbox::Action::NewTask);
         inbox::apply_voice(
             &mut state,
@@ -1140,44 +1172,5 @@ mod tests {
         );
         let _ = inbox::update(&mut state, inbox::Action::Title("Pay rent soon".into()));
         assert_eq!(state.timeblocking.date, "2026-11-03");
-    }
-}
-
-struct Microphone;
-impl iced::widget::canvas::Program<Message> for Microphone {
-    type State = ();
-    fn draw(
-        &self,
-        _: &(),
-        renderer: &iced::Renderer,
-        theme: &iced::Theme,
-        bounds: iced::Rectangle,
-        _: iced::mouse::Cursor,
-    ) -> Vec<iced::widget::canvas::Geometry> {
-        use iced::widget::canvas::{Frame, Path, Stroke};
-        let mut frame = Frame::new(renderer, bounds.size());
-        let color = theme.palette().text;
-        let capsule = Path::rounded_rectangle(
-            iced::Point::new(9.0, 2.0),
-            iced::Size::new(6.0, 13.0),
-            iced::border::Radius::from(3.0),
-        );
-        frame.fill(&capsule, color);
-        let stand = Path::new(|p| {
-            p.move_to(iced::Point::new(5.0, 10.0));
-            p.line_to(iced::Point::new(5.0, 12.0));
-            p.bezier_curve_to(
-                iced::Point::new(5.0, 21.0),
-                iced::Point::new(19.0, 21.0),
-                iced::Point::new(19.0, 12.0),
-            );
-            p.line_to(iced::Point::new(19.0, 10.0));
-            p.move_to(iced::Point::new(12.0, 19.0));
-            p.line_to(iced::Point::new(12.0, 23.0));
-            p.move_to(iced::Point::new(8.0, 23.0));
-            p.line_to(iced::Point::new(16.0, 23.0));
-        });
-        frame.stroke(&stand, Stroke::default().with_color(color).with_width(1.8));
-        vec![frame.into_geometry()]
     }
 }

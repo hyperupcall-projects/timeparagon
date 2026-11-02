@@ -1,5 +1,6 @@
 //! Google Keep's read-only browser snapshots with local search and labels.
 use super::layout::Metrics;
+use crate::app::KeepMessage;
 use crate::app::{Message, State};
 use crate::keep::{Note, Scope};
 use iced::widget::{
@@ -13,8 +14,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut refresh = button(text("Refresh").size(metrics.label()));
     let mut connect = button(text("Reconnect").size(metrics.label()));
     if !keep.loading {
-        refresh = refresh.on_press(Message::KeepRefresh);
-        connect = connect.on_press(Message::KeepSignin);
+        refresh = refresh.on_press(Message::Keep(KeepMessage::KeepRefresh));
+        connect = connect.on_press(Message::Keep(KeepMessage::KeepSignin));
     }
     let mut body = column![
         super::controls::page_heading(
@@ -25,7 +26,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         row![refresh, connect].spacing(metrics.spacing),
         text_input("Search title or description…", &keep.query)
-            .on_input(Message::KeepQueryChanged)
+            .on_input(|v0| Message::Keep(KeepMessage::KeepQueryChanged(v0)))
             .size(metrics.label()),
         row![
             scope_button("Active", Scope::Active, keep.scope, metrics),
@@ -39,7 +40,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     labels.extend(keep.labels().into_iter().map(|l| LabelOption(Some(l))));
     body = body.push(text("Labels").size(metrics.label())).push(
         pick_list(labels, Some(LabelOption(keep.label.clone())), |label| {
-            Message::KeepLabelChanged(label.0)
+            Message::Keep(KeepMessage::KeepLabelChanged(label.0))
         })
         .width(Fill),
     );
@@ -207,7 +208,7 @@ fn card<'a>(note: &'a Note, metrics: &Metrics) -> Element<'a, Message> {
     let footer = row![
         timestamps,
         button(text("Edit").size(metrics.label()))
-            .on_press(Message::KeepEdit(note.url.clone()))
+            .on_press(Message::Keep(KeepMessage::KeepEdit(note.url.clone())))
             .style(move |_, status| {
                 let background = match status {
                     button::Status::Hovered | button::Status::Pressed => {
@@ -279,7 +280,7 @@ fn scope_button<'a>(
 ) -> Element<'a, Message> {
     button(text(label).size(metrics.label()))
         .padding(4)
-        .on_press(Message::KeepScopeChanged(scope))
+        .on_press(Message::Keep(KeepMessage::KeepScopeChanged(scope)))
         .style(if scope == selected {
             crate::ui::controls::primary
         } else {

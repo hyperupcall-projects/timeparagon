@@ -165,7 +165,7 @@ fn App() -> Element {
         let initial_is_fresh = refresh == 0
             && !cached_days
                 .peek()
-                .sync_due(settings.sync_every(), chrono::Local::now());
+                .sync_due(settings.sync_every(), timeslay_core::clock::now());
         let cached = cached_days.peek().cached_snapshot();
         async move {
             if initial_is_fresh {

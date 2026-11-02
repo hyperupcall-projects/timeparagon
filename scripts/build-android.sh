@@ -276,6 +276,10 @@ fi
 # --- Build -----------------------------------------------------------------
 cd "$repo_root"
 if [ "$profile" = release ]; then
+    # Panic messages embed source paths, which `strip` does not remove. Remap
+    # the home directory (cargo registry, rustup) and the repo so the APK does
+    # not leak the build machine's username. The later flag wins on overlap.
+    export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/build/home --remap-path-prefix=$repo_root=/build/src"
     dx build --android --package timeslay-dioxus --target "$triple" --release
 else
     dx build --android --package timeslay-dioxus --target "$triple"

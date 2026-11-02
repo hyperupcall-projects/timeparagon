@@ -10,6 +10,7 @@
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, Timelike, Weekday};
 use iced::{Color, Task};
 
+use crate::app::{CalendarMessage, EventMessage};
 use crate::app::{Message, State};
 use crate::blocking;
 use crate::calendar::{self, api::HabitEvent, colors, deadline};
@@ -214,7 +215,7 @@ impl Draft {
     pub fn repeat_summary(&self) -> String {
         let anchor = self
             .anchor_date()
-            .unwrap_or_else(|| Local::now().date_naive());
+            .unwrap_or_else(|| crate::clock::now().date_naive());
         self.rule.summary(anchor)
     }
 }
@@ -276,6 +277,8 @@ impl Store {
     }
 }
 
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
     Refresh,
@@ -334,11 +337,17 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.calendar.open_event = None;
             state.calendar.detail_event = None;
             state.calendar.edit_draft = None;
-            crate::app::update(state, Message::CalendarMonthViewSelected)
+            crate::app::update(
+                state,
+                Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+            )
         }
         Action::CloseCalendar => {
             state.habits.calendar_habit = None;
-            crate::app::update(state, Message::CalendarModeSelected(false))
+            crate::app::update(
+                state,
+                Message::Calendar(CalendarMessage::CalendarModeSelected(false)),
+            )
         }
         Action::ToggleCompleted(id) => {
             if state.habits.completing.contains(&id) {
@@ -351,7 +360,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 return Task::none();
             }
             event.completed = !event.completed;
-            event.details.habit_completed_at = event.completed.then(Local::now);
+            event.details.habit_completed_at = event.completed.then(crate::clock::now);
             state.habits.completing.insert(id.clone());
             state.habits.error = None;
             let client_id = state.config.calendar.client_id.clone();
@@ -387,7 +396,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 
         Action::New => {
             state.habits.confirm_delete = None;
-            let day = Local::now().date_naive();
+            let day = crate::clock::now().date_naive();
             let color_id = colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
             open_new(state, Draft::new(day, color_id))
         }
@@ -420,7 +429,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.habits.confirm_delete = None;
             state.habits.error = None;
             state.calendar.detail_event = Some(event);
-            crate::app::update(state, Message::EventOpened(id))
+            crate::app::update(state, Message::Event(EventMessage::EventOpened(id)))
         }
 
         Action::CancelEdit => {
@@ -437,7 +446,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Repeat(mode) => edit(state, |draft| {
             let anchor = draft
                 .anchor_date()
-                .unwrap_or_else(|| Local::now().date_naive());
+                .unwrap_or_else(|| crate::clock::now().date_naive());
             draft
                 .rule
                 .apply_action(crate::recurrence::Action::Repeat(mode), anchor);
@@ -446,7 +455,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::ToggleWeekday(index) => edit(state, |draft| {
             let anchor = draft
                 .anchor_date()
-                .unwrap_or_else(|| Local::now().date_naive());
+                .unwrap_or_else(|| crate::clock::now().date_naive());
             draft
                 .rule
                 .apply_action(crate::recurrence::Action::ToggleWeekday(index), anchor);
@@ -483,7 +492,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::SimpleRepeat => edit(state, |draft| {
             let anchor = draft
                 .anchor_date()
-                .unwrap_or_else(|| Local::now().date_naive());
+                .unwrap_or_else(|| crate::clock::now().date_naive());
             draft
                 .rule
                 .apply_action(crate::recurrence::Action::SimpleRepeat, anchor);
@@ -499,7 +508,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 } else {
                     let anchor = draft
                         .anchor_date()
-                        .unwrap_or_else(|| Local::now().date_naive());
+                        .unwrap_or_else(|| crate::clock::now().date_naive());
                     draft.rule.apply_action(action, anchor);
                     draft.error = None;
                 }
@@ -537,7 +546,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     }
                     sort(&mut state.habits.habits);
                     // The day and week grids hold instances of this series.
-                    Task::done(Message::CalendarSyncRequested)
+                    Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
                 }
                 Err(error) => {
                     if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
@@ -590,7 +599,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         state.calendar.detail_event = None;
                     }
                     state.habits.error = None;
-                    Task::done(Message::CalendarSyncRequested)
+                    Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
                 }
                 Err(error) => {
                     state.habits.error = Some(error);
@@ -607,7 +616,7 @@ pub const NEW_HABIT_ID: &str = "timeslay:new-habit";
 pub fn open_new(state: &mut State, draft: Draft) -> Task<Message> {
     let day = draft
         .anchor_date()
-        .unwrap_or_else(|| Local::now().date_naive());
+        .unwrap_or_else(|| crate::clock::now().date_naive());
     let start =
         deadline::parse_time(&draft.start).unwrap_or(NaiveTime::from_hms_opt(9, 0, 0).unwrap());
     let end =
@@ -637,7 +646,10 @@ pub fn open_new(state: &mut State, draft: Draft) -> Task<Message> {
     state.habits.error = None;
     state.calendar.error = None;
     state.calendar.detail_event = Some(event);
-    let task = crate::app::update(state, Message::EventOpened(NEW_HABIT_ID.into()));
+    let task = crate::app::update(
+        state,
+        Message::Event(EventMessage::EventOpened(NEW_HABIT_ID.into())),
+    );
     if let Some(edit) = state.calendar.edit_draft.as_mut() {
         edit.rule = draft.rule;
         edit.editing_title = true;

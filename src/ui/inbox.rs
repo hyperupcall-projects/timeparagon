@@ -8,6 +8,7 @@ use iced::{Center, Color, Element, Fill};
 
 use super::layout::Metrics;
 use super::source_icon;
+use crate::app::{EventMessage, SystemMessage, TaskMessage};
 use crate::app::{Message, State};
 use crate::calendar::{self, Event};
 use crate::inbox::{self, Action, Draft};
@@ -127,7 +128,7 @@ fn task_card<'a>(
     metrics: &Metrics,
     list: List,
 ) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains_task(&task.id);
     let shown = state.calendar.open_event.as_deref() == Some(task.id.as_str());
 
     let mut heading = row![].spacing(4).align_y(Center);
@@ -152,7 +153,7 @@ fn task_card<'a>(
         .width(Fill)
         .padding(0)
         .style(button::text)
-        .on_press(Message::EventOpened(task.id.clone())),
+        .on_press(Message::Event(EventMessage::EventOpened(task.id.clone()))),
     );
 
     let mut card = column![heading].spacing(4);
@@ -491,7 +492,7 @@ fn actions<'a>(task: &'a Event, metrics: &Metrics, busy: bool) -> Element<'a, Me
         } else {
             "Complete task"
         },
-        Message::TaskToggled(task.id.clone()),
+        Message::Task(TaskMessage::TaskToggled(task.id.clone())),
         false,
     ));
     entries.push((
@@ -500,12 +501,12 @@ fn actions<'a>(task: &'a Event, metrics: &Metrics, busy: bool) -> Element<'a, Me
         } else {
             "Ignore Task"
         },
-        Message::TaskIgnoreToggled(task.id.clone()),
+        Message::Task(TaskMessage::TaskIgnoreToggled(task.id.clone())),
         false,
     ));
     entries.push((
         "Delete Task",
-        Message::TaskDeleteRequested(task.id.clone()),
+        Message::Task(TaskMessage::TaskDeleteRequested(task.id.clone())),
         false,
     ));
 
@@ -540,7 +541,7 @@ pub fn day_picker<'a>(
         .as_ref()
         .filter(|(id, _)| *id == task.id)
         .map(|(_, month)| *month);
-    let busy = state.timeblocking.busy.contains(&task.id);
+    let busy = state.timeblocking.busy.contains_task(&task.id);
 
     let toggle = button(
         text(if busy { "Saving…" } else { "Schedule Day" })
@@ -564,7 +565,7 @@ pub fn day_picker<'a>(
         return section.into();
     };
 
-    let today = calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let planned = (task.start.date_naive() != tb::UNDATED).then(|| task.start.date_naive());
     let arrow = |label: &'static str, months: i32| {
         button(text(label).size(metrics.label()).center())
@@ -679,12 +680,12 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     if state.task_creation_window {
         let viewport_height = metrics.size.height;
         let bounds = move |size: iced::Size| {
-            Message::TaskPopoverBounds(iced::Rectangle {
+            Message::System(SystemMessage::TaskPopoverBounds(iced::Rectangle {
                 x: 0.0,
                 y: (viewport_height - size.height).max(0.0),
                 width: size.width,
                 height: size.height,
-            })
+            }))
         };
         return container(
             iced::widget::sensor(card.id("dock-task-card"))
@@ -780,10 +781,7 @@ mod tests {
     use iced::Size;
 
     fn state_with_task(notes: &str) -> State {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let mut snapshot = calendar::sample_snapshot();
         snapshot.events.clear();
         snapshot.calendars.push(calendar::Calendar {
@@ -847,7 +845,10 @@ mod tests {
     #[test]
     fn opening_an_inbox_task_exposes_its_actions_in_the_details_pane() {
         let mut state = state_with_task("");
-        let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
+        let _ = crate::app::update(
+            &mut state,
+            Message::Event(EventMessage::EventOpened("task:one".into())),
+        );
         let metrics = Metrics::of(Size::new(320.0, 1800.0));
         let mut ui = iced_test::Simulator::with_size(
             iced_test::core::Settings::default(),
@@ -876,17 +877,19 @@ mod tests {
             let state = state_with_task("");
             let mut ui = simulator(&state, width);
             ui.click("Reply to Sam").unwrap();
-            assert!(
-                ui.into_messages()
-                    .any(|m| matches!(m, Message::EventOpened(id) if id == "task:one"))
-            );
+            assert!(ui.into_messages().any(
+                |m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "task:one")
+            ));
         }
     }
 
     #[test]
     fn the_details_pane_uses_the_clearable_date_picker_and_schedules_the_chosen_day() {
         let mut state = state_with_task("");
-        let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
+        let _ = crate::app::update(
+            &mut state,
+            Message::Event(EventMessage::EventOpened("task:one".into())),
+        );
         assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
         assert!(state.details_pane_open);
         assert!(state.timeblocking.date.is_empty());
@@ -970,7 +973,7 @@ mod tests {
             let mut state = state_with_task("");
             state.screen = crate::app::Screen::Overdue;
             state.calendar.events[0].start =
-                calendar::at_clock(Local::now().date_naive().pred_opt().unwrap(), 0, 0);
+                calendar::at_clock(crate::clock::now().date_naive().pred_opt().unwrap(), 0, 0);
             state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
                 id: 100,
                 legacy_key: None,
@@ -990,8 +993,11 @@ mod tests {
             }
             ui.click("Reply to Sam").unwrap();
             assert!(ui.into_messages().any(|message| matches!(message,
-                Message::EventOpened(id) if id == "task:one")));
-            let _ = crate::app::update(&mut state, Message::EventOpened("task:one".into()));
+                Message::Event(EventMessage::EventOpened(id)) if id == "task:one")));
+            let _ = crate::app::update(
+                &mut state,
+                Message::Event(EventMessage::EventOpened("task:one".into())),
+            );
             assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
             assert!(crate::app::shows_details(state.screen));
         }

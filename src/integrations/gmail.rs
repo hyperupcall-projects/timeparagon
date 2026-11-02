@@ -21,6 +21,7 @@ use serde_json::Value;
 use super::accounts::Login;
 use super::{Auth, Details, Integration, Kind};
 use crate::calendar::api;
+use crate::calendar::google::{self, GoogleError};
 
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 
@@ -244,11 +245,7 @@ fn get(url: &str, token: &str) -> Result<Value, Failure> {
             .into_json()
             .map_err(|error| Failure::Other(format!("Gmail response: {error}"))),
         Err(ureq::Error::Status(status, response)) => {
-            let detail = response
-                .into_json::<Value>()
-                .ok()
-                .and_then(|body| body["error"]["message"].as_str().map(str::to_owned))
-                .unwrap_or_else(|| format!("HTTP {status}"));
+            let detail = crate::calendar::google::Refusal::read(status, response).detail();
             Err(describe_error(status, &detail))
         }
         Err(error) => Err(Failure::Other(format!("Gmail: {error}"))),
@@ -256,12 +253,13 @@ fn get(url: &str, token: &str) -> Result<Value, Failure> {
 }
 
 fn describe_error(status: u16, detail: &str) -> Failure {
-    let lower = detail.to_lowercase();
+    let kind = GoogleError::from_status("Gmail", status, detail).kind;
     Failure::Other(match status {
-        401 | 403 if lower.contains("scope") || lower.contains("insufficient") => {
+        401 | 403 if kind == google::Kind::MissingScope => {
             "Reconnect Google in Settings to allow read access to Gmail".to_owned()
         }
-        403 if lower.contains("not been used") || lower.contains("disabled") => {
+        // Gmail words this a little differently from Tasks.
+        403 if kind == google::Kind::ApiDisabled || detail.to_lowercase().contains("disabled") => {
             "Turn on the Gmail API for your Google Cloud project, then try again".to_owned()
         }
         401 => "Google sign-in expired. Reconnect Google in Settings".to_owned(),

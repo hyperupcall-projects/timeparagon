@@ -1,10 +1,6 @@
 //! Persist complete, validated snapshots. A failed refresh leaves the last one intact.
 use super::Snapshot;
-use std::{
-    fs,
-    io::{self, Write},
-    path::Path,
-};
+use std::{fs, io, path::Path};
 
 pub(super) fn load(path: &Path) -> Option<Snapshot> {
     let result = fs::read(path)
@@ -24,38 +20,16 @@ pub(super) fn load(path: &Path) -> Option<Snapshot> {
 pub(super) fn accept(bytes: &[u8], path: Option<&Path>) -> Result<Snapshot, String> {
     // Validate both JSON and previews before replacing the previous snapshot.
     let snapshot = super::decode(bytes)?;
-    if let Some(path) = path {
-        if let Err(error) = save(path, bytes) {
-            log::warn!("could not save Keep cache: {error}");
-        }
+    if let Some(path) = path
+        && let Err(error) = save(path, bytes)
+    {
+        log::warn!("could not save Keep cache: {error}");
     }
     Ok(snapshot)
 }
 
 fn save(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut random = [0u8; 16];
-    getrandom::fill(&mut random).map_err(io::Error::other)?;
-    let temporary = path.with_extension(format!("{:032x}.tmp", u128::from_ne_bytes(random)));
-    let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    crate::fsutil::write_atomic(path, bytes, crate::fsutil::Kind::Private)
 }
 
 #[cfg(test)]

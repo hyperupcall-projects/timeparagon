@@ -114,10 +114,10 @@ Both can be built:
 # Iced desktop app.
 cargo run -p timeslay --release
 
-# Dioxus desktop app (minimal).
-cargo run -p timeslay-dioxus
+# Install Iced desktop app.
+./packaging/install.sh
 
-# Dioxus mobile app (minimal).
+# Dioxus mobile app.
 ./scripts/build-android.sh
 ```
 

@@ -1,16 +1,16 @@
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
+use timeslay::app::{CalendarMessage, SettingsMessage};
 use timeslay::{
     app::{self, Message, Screen, State},
     calendar::{self, Calendar, Event, deadline},
-    config::{CalendarSettings, Config},
-    theme::Catalog,
+    config::CalendarSettings,
 };
 
 const TASKS: &str = CalendarSettings::GOOGLE_TASKS_ID;
 
 fn state() -> State {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     for (id, name) in [
         ("tasks:one", "First task list"),
@@ -34,7 +34,10 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
     let color = calendar::colors::calendar("24").unwrap();
     let _ = app::update(
         &mut state,
-        Message::CalendarColorPicked("work".into(), Some(color)),
+        Message::Settings(SettingsMessage::CalendarColorPicked(
+            "work".into(),
+            Some(color),
+        )),
     );
     let check = |state: &State| {
         assert_eq!(
@@ -61,7 +64,10 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
     state.config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
     let snapshot = calendar::sample_snapshot();
     state.calendar.day = snapshot.day;
-    let _ = app::update(&mut state, Message::CalendarSynced(Ok(snapshot)));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarSynced(Ok(snapshot))),
+    );
     check(&state);
     let mut explicit = state.calendar.event("standup").unwrap().clone();
     explicit.details.color_id = Some("4".into());
@@ -82,7 +88,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
     state.config.calendar.app_calendar = None;
     let _ = app::update(
         &mut state,
-        Message::CalendarColorPicked("work".into(), None),
+        Message::Settings(SettingsMessage::CalendarColorPicked("work".into(), None)),
     );
     assert_eq!(
         state
@@ -99,7 +105,10 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
 fn regular_calendar_menu_shows_a_picker_at_narrow_widths() {
     let mut state = state();
     state.calendar.menu_open = true;
-    let _ = app::update(&mut state, Message::SourceColorEditorToggled("work".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SourceColorEditorToggled("work".into())),
+    );
     for width in [180.0, 200.0, 420.0] {
         state.main_size = Size::new(width, 4000.0);
         let mut ui = Simulator::with_size(
@@ -110,7 +119,7 @@ fn regular_calendar_menu_shows_a_picker_at_narrow_widths() {
         assert!(ui.find("Calendar color in TimeSlay").is_ok());
         ui.click("Reset to default").unwrap();
         assert!(ui.into_messages().any(
-            |message| matches!(message, Message::CalendarColorPicked(id, None) if id == "work")
+            |message| matches!(message, Message::Settings(SettingsMessage::CalendarColorPicked(id, None)) if id == "work")
         ));
     }
 }
@@ -122,11 +131,14 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
     state.config.calendar.show_tasks = false;
     let _ = app::update(
         &mut state,
-        Message::CalendarSourceMoved("work".into(), true),
+        Message::Calendar(CalendarMessage::CalendarSourceMoved("work".into(), true)),
     );
     let _ = app::update(
         &mut state,
-        Message::CalendarSourceMoved("tasks:one".into(), true),
+        Message::Calendar(CalendarMessage::CalendarSourceMoved(
+            "tasks:one".into(),
+            true,
+        )),
     );
     let ids = |state: &State| {
         state
@@ -164,15 +176,21 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
     let order = state.config.calendar.source_order.clone();
     let _ = app::update(
         &mut state,
-        Message::CalendarSourceMoved("work".into(), true),
+        Message::Calendar(CalendarMessage::CalendarSourceMoved("work".into(), true)),
     );
     let _ = app::update(
         &mut state,
-        Message::CalendarSourceMoved("timeslay:sleep".into(), false),
+        Message::Calendar(CalendarMessage::CalendarSourceMoved(
+            "timeslay:sleep".into(),
+            false,
+        )),
     );
     let _ = app::update(
         &mut state,
-        Message::CalendarSourceMoved("missing".into(), false),
+        Message::Calendar(CalendarMessage::CalendarSourceMoved(
+            "missing".into(),
+            false,
+        )),
     );
     assert_eq!(state.config.calendar.source_order, order);
 }
@@ -218,7 +236,7 @@ fn menu_and_settings_offer_individual_task_lists_and_work_at_narrow_widths() {
         }
         ui.click("Down").unwrap();
         assert!(ui.into_messages().any(|message| matches!(message,
-            Message::CalendarSourceMoved(id, false) if id == "personal")));
+            Message::Calendar(CalendarMessage::CalendarSourceMoved(id, false)) if id == "personal")));
     }
 }
 
@@ -272,7 +290,10 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
             .unwrap()
             .is_some()
     );
-    let _ = app::update(&mut state, Message::ShowTasksToggled(false));
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::ShowTasksToggled(false)),
+    );
     assert!(tasks(&state).is_empty());
     assert_eq!(
         state
@@ -281,7 +302,10 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
             .count(),
         5
     );
-    let _ = app::update(&mut state, Message::ShowTasksToggled(true));
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::ShowTasksToggled(true)),
+    );
     assert_eq!(tasks(&state), original);
     assert_eq!(original[0].source_id(), "tasks:one");
     assert_eq!(original[1].source_id(), "tasks:two");
@@ -296,7 +320,10 @@ fn aggregate_task_color_applies_to_all_lists_and_can_be_reset() {
         .set_task_color("tasks:one", Some(iced::Color::WHITE));
     let _ = app::update(
         &mut state,
-        Message::TaskColorPicked(TASKS.into(), Some(iced::Color::BLACK)),
+        Message::Settings(SettingsMessage::TaskColorPicked(
+            TASKS.into(),
+            Some(iced::Color::BLACK),
+        )),
     );
     for list in ["tasks:one", "tasks:two"] {
         assert_eq!(
@@ -314,7 +341,10 @@ fn aggregate_task_color_applies_to_all_lists_and_can_be_reset() {
             iced::Color::BLACK
         );
     }
-    let _ = app::update(&mut state, Message::TaskColorPicked(TASKS.into(), None));
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::TaskColorPicked(TASKS.into(), None)),
+    );
     assert!(state.config.calendar.task_colors.is_empty());
     assert_eq!(
         state
@@ -396,15 +426,21 @@ fn list_colors_and_visibility_are_independent_and_persist() {
     }
     let _ = app::update(
         &mut state,
-        Message::TaskColorPicked("tasks:one".into(), Some(iced::Color::BLACK)),
+        Message::Settings(SettingsMessage::TaskColorPicked(
+            "tasks:one".into(),
+            Some(iced::Color::BLACK),
+        )),
     );
     let _ = app::update(
         &mut state,
-        Message::TaskColorPicked("tasks:two".into(), Some(iced::Color::WHITE)),
+        Message::Settings(SettingsMessage::TaskColorPicked(
+            "tasks:two".into(),
+            Some(iced::Color::WHITE),
+        )),
     );
     let _ = app::update(
         &mut state,
-        Message::CalendarToggled("tasks:one".into(), false),
+        Message::Calendar(CalendarMessage::CalendarToggled("tasks:one".into(), false)),
     );
     state.config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
     state.calendar.apply_task_colors(&state.config.calendar);
@@ -442,7 +478,7 @@ fn list_colors_and_visibility_are_independent_and_persist() {
     assert_eq!(visible, ["task:two"]);
     let _ = app::update(
         &mut state,
-        Message::TaskColorPicked("tasks:one".into(), None),
+        Message::Settings(SettingsMessage::TaskColorPicked("tasks:one".into(), None)),
     );
     assert_eq!(state.config.calendar.task_color("tasks:one"), None);
     assert_eq!(
@@ -457,7 +493,7 @@ fn enabling_a_list_after_a_legacy_global_hide_keeps_other_lists_hidden() {
     state.config.calendar.show_tasks = false;
     let _ = app::update(
         &mut state,
-        Message::CalendarToggled("tasks:one".into(), true),
+        Message::Calendar(CalendarMessage::CalendarToggled("tasks:one".into(), true)),
     );
     assert!(
         state
@@ -564,7 +600,7 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
         for source in calendar::sources::TimeSlaySource::ALL {
             assert!(
                 messages.iter().any(|message| matches!(message,
-                    Message::CalendarToggled(id, false) if id == source.id()
+                    Message::Calendar(CalendarMessage::CalendarToggled(id, false)) if id == source.id()
                 )),
                 "missing toggle for {} at {width}px",
                 source.label()
@@ -610,7 +646,10 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
         let color = palette[index];
         let _ = app::update(
             &mut state,
-            Message::TimeSlayColorPicked(source.id().into(), Some(color)),
+            Message::Settings(SettingsMessage::TimeSlayColorPicked(
+                source.id().into(),
+                Some(color),
+            )),
         );
         assert_eq!(source.custom_color(&state.config.calendar), Some(color));
         assert_eq!(source.color(&state.config.calendar), color);
@@ -646,11 +685,14 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
         assert!(ui.find(title.as_str()).is_ok(), "no picker for {title}");
         ui.click("Reset to default").unwrap();
         assert!(ui.into_messages().any(|message| matches!(message,
-            Message::TimeSlayColorPicked(id, None) if id == source.id()
+            Message::Settings(SettingsMessage::TimeSlayColorPicked(id, None)) if id == source.id()
         )));
         let _ = app::update(
             &mut state,
-            Message::TimeSlayColorPicked(source.id().into(), None),
+            Message::Settings(SettingsMessage::TimeSlayColorPicked(
+                source.id().into(),
+                None,
+            )),
         );
         assert_eq!(source.custom_color(&state.config.calendar), None);
     }
@@ -707,7 +749,7 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
     for source in TimeSlaySource::ALL {
         let _ = app::update(
             &mut state,
-            Message::CalendarToggled(source.id().into(), false),
+            Message::Calendar(CalendarMessage::CalendarToggled(source.id().into(), false)),
         );
         state.config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
         let mut snapshot = calendar::sample_snapshot();
@@ -743,7 +785,7 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
         }
         let _ = app::update(
             &mut state,
-            Message::CalendarToggled(source.id().into(), true),
+            Message::Calendar(CalendarMessage::CalendarToggled(source.id().into(), true)),
         );
         assert_eq!(
             state
@@ -761,7 +803,10 @@ fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
     let mut state = state();
     state.config.calendar.app_calendar = Some("app".into());
     state.config.calendar.disabled = vec!["app".into()];
-    let _ = app::update(&mut state, Message::CalendarMenuToggled);
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMenuToggled),
+    );
     assert!(!state.config.calendar.disabled.iter().any(|id| id == "app"));
     for source in TimeSlaySource::ALL {
         assert_eq!(
@@ -773,10 +818,19 @@ fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
     }
     let _ = app::update(
         &mut state,
-        Message::CalendarToggled(TimeSlaySource::Habits.id().into(), true),
+        Message::Calendar(CalendarMessage::CalendarToggled(
+            TimeSlaySource::Habits.id().into(),
+            true,
+        )),
     );
-    let _ = app::update(&mut state, Message::CalendarMenuToggled);
-    let _ = app::update(&mut state, Message::CalendarMenuToggled);
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMenuToggled),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMenuToggled),
+    );
     assert!(
         state
             .calendar

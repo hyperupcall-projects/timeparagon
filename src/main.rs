@@ -7,20 +7,9 @@ fn main() -> iced::Result {
     if iced_webview::cef_subprocess_check() {
         return Ok(());
     }
-    let mode = match cli::parse(std::env::args().skip(1)) {
-        Ok(cli::Action::Run { mode }) => mode,
-        Ok(cli::Action::Help) => {
-            print!("{}", cli::HELP);
-            return Ok(());
-        }
-        Ok(cli::Action::Version) => {
-            println!("timeslay {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-        Err(error) => {
-            eprintln!("timeslay: {error}\nTry 'timeslay --help'.");
-            std::process::exit(2);
-        }
+    let mode = match cli::parse(std::env::args()) {
+        Ok(mode) => mode,
+        Err(error) => error.exit(),
     };
 
     let result = match mode {

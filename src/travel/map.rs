@@ -156,16 +156,15 @@ fn bridge_message(title: &str, session: u64) -> Option<BridgeMessage> {
     if message.session != session {
         return None;
     }
-    if let Some(place) = &message.selected {
-        if place.place_id.trim().is_empty()
+    if let Some(place) = &message.selected
+        && (place.place_id.trim().is_empty()
             || place.name.trim().is_empty()
             || !place.lng.is_finite()
             || !place.lat.is_finite()
             || !(-180.0..=180.0).contains(&place.lng)
-            || !(-90.0..=90.0).contains(&place.lat)
-        {
-            return None;
-        }
+            || !(-90.0..=90.0).contains(&place.lat))
+    {
+        return None;
     }
     Some(message)
 }
@@ -252,10 +251,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 mod tests {
     use super::*;
     fn state() -> State {
-        State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        )
+        State::blank()
     }
     #[test]
     fn confirm_requires_a_selection_and_saves_to_the_original_field() {

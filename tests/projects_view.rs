@@ -3,14 +3,12 @@ use iced::Size;
 use iced_test::{Simulator, core::Settings};
 use timeslay::{
     app::{Message, State},
-    config::Config,
     projects::{self, Action},
-    theme::Catalog,
     ui::{self, layout::Metrics},
 };
 
 fn state() -> State {
-    State::new(Config::default(), Catalog::built_in())
+    State::blank()
 }
 
 fn click(state: &mut State, width: f32, label: &str) {

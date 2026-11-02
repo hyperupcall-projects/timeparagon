@@ -8,6 +8,7 @@ use chrono::{Duration, Local, NaiveDate};
 use iced::Task;
 use iced::widget::{Id, operation};
 
+use crate::app::CalendarMessage;
 use crate::app::{Message, State};
 use crate::calendar::deadline::{self, Deadline};
 use crate::calendar::{self, Event, api};
@@ -66,7 +67,7 @@ impl Draft {
         &self,
         projects: &crate::config::ProjectsSettings,
     ) -> Vec<crate::task_input::Token> {
-        crate::task_input::detect(&self.title, Local::now().date_naive(), projects)
+        crate::task_input::detect(&self.title, crate::clock::now().date_naive(), projects)
             .into_iter()
             .filter(|token| !self.quick_ignored.contains(&token.range))
             .collect()
@@ -78,6 +79,8 @@ impl Draft {
     }
 }
 
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
     Voice(crate::voice::Action),
@@ -150,7 +153,7 @@ pub fn tasks(state: &State) -> Vec<&Event> {
 
 /// Incomplete tasks across all lists whose planned time or deadline has passed.
 pub fn overdue_tasks(state: &State) -> Vec<&Event> {
-    overdue_tasks_at(state, Local::now())
+    overdue_tasks_at(state, crate::clock::now())
 }
 
 fn overdue_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Event> {
@@ -242,7 +245,7 @@ pub fn triaged_tasks(state: &State) -> Vec<&Event> {
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
-        Action::Voice(action) => return crate::voice::update(state, action),
+        Action::Voice(action) => crate::voice::update(state, action),
         Action::Sort(sort) => {
             state.config.calendar.inbox_sort = sort;
             crate::app::queue_save(state)
@@ -302,20 +305,19 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             Task::none()
         }
         Action::DismissToken(range) => {
-            if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
-                if draft
+            if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving)
+                && draft
                     .quick_tokens(&state.config.projects)
                     .iter()
                     .any(|t| t.range == range)
-                {
-                    draft.quick_ignored.push(range);
-                    preview(
-                        draft,
-                        &mut state.timeblocking.date,
-                        &mut state.timeblocking.deadline,
-                        &state.config.projects,
-                    );
-                }
+            {
+                draft.quick_ignored.push(range);
+                preview(
+                    draft,
+                    &mut state.timeblocking.date,
+                    &mut state.timeblocking.deadline,
+                    &state.config.projects,
+                );
             }
             Task::none()
         }
@@ -376,8 +378,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.inbox.picker = match state.inbox.picker {
                 Some((ref open, _)) if *open == id => None,
                 _ => {
-                    let today =
-                        calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+                    let today = calendar::day_at(
+                        crate::clock::now(),
+                        state.config.calendar.day_start_hour(),
+                    );
                     Some((id, calendar::first_of_month(today)))
                 }
             };
@@ -622,7 +626,7 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
     let due = match draft.due.trim() {
         "" => None,
         text => Some(
-            crate::task_input::date(text, Local::now().date_naive()).ok_or_else(|| {
+            crate::task_input::date(text, crate::clock::now().date_naive()).ok_or_else(|| {
                 "Enter a due date as YYYY-MM-DD or a date like tomorrow".to_owned()
             })?,
         ),
@@ -704,13 +708,13 @@ pub(crate) fn write(
         .as_ref()
         .map(|e| tb::description(&e.details.description))
         .unwrap_or_default();
-    if let Some(source) = &task.source {
-        if !prose.contains(&source.url) {
-            if !prose.is_empty() {
-                prose.push_str("\n\n");
-            }
-            prose.push_str(&source.url);
+    if let Some(source) = &task.source
+        && !prose.contains(&source.url)
+    {
+        if !prose.is_empty() {
+            prose.push_str("\n\n");
         }
+        prose.push_str(&source.url);
     }
     let notes = deadline::write(&prose, task.deadline);
     let mut event = create_event_with_metadata(
@@ -721,10 +725,10 @@ pub(crate) fn write(
         task.due,
         task.event.as_ref().map(tb::metadata),
     )?;
-    if let Some(draft) = task.event {
-        if !draft.all_day {
-            event = tb::schedule_created(event, settings, draft.start, draft.end)?;
-        }
+    if let Some(draft) = task.event
+        && !draft.all_day
+    {
+        event = tb::schedule_created(event, settings, draft.start, draft.end)?;
     }
     Ok(event)
 }
@@ -770,7 +774,7 @@ fn create_event_with_metadata(
     metadata: Option<tb::Metadata>,
 ) -> Result<Event, String> {
     let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
-    let created_at = chrono::Utc::now();
+    let created_at = crate::clock::utc_now();
     let created = api::insert_task_with(token, &list, &api::NewTask { title, notes, due })?;
 
     let calendar_id = format!("tasks:{list}");
@@ -817,7 +821,7 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
             state.calendar.replace_cached_task(&event.id, &event);
             state.calendar.add_event(event);
             // Brings the Inbox list itself, if this made it, into the app.
-            Task::done(Message::CalendarSyncRequested)
+            Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
         }
         Err(error) => {
             if let Some(draft) = state.inbox.draft.as_mut() {
@@ -849,7 +853,109 @@ pub fn quick_days(today: NaiveDate) -> [(&'static str, NaiveDate); 3] {
 }
 
 pub fn today() -> NaiveDate {
-    Local::now().date_naive()
+    crate::clock::now().date_naive()
+}
+
+/// Apply a fully validated voice patch as a new quick-add baseline.
+pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
+    let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
+        return;
+    };
+    // Compute the schedule before changing fields so invalid combinations are atomic.
+    let schedule = if patch.due.is_some() || patch.due_time.is_some() {
+        let day = patch.due.as_deref().unwrap_or(&draft.due);
+        let old = draft.event.as_ref();
+        let time = patch.due_time.clone().unwrap_or_else(|| {
+            old.filter(|e| !e.all_day)
+                .map(|e| e.start.format("%H:%M").to_string())
+                .unwrap_or_default()
+        });
+        let result = if day.is_empty() || time.is_empty() {
+            let day = if day.is_empty() {
+                Some(UNDATED)
+            } else {
+                chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+            };
+            day.map(|day| {
+                let start = calendar::at_clock(day, 0, 0);
+                (start, start + Duration::days(1), true)
+            })
+        } else {
+            crate::voice::due_start(day, &time).ok().map(|start| {
+                let duration = old
+                    .filter(|e| !e.all_day)
+                    .map(|e| e.end - e.start)
+                    .filter(|d| *d > Duration::zero())
+                    .unwrap_or_else(|| {
+                        Duration::minutes(
+                            patch
+                                .minutes
+                                .or_else(|| old.map(|e| tb::metadata(e).minutes))
+                                .filter(|m| *m > 0)
+                                .unwrap_or(30) as i64,
+                        )
+                    });
+                (start, start + duration, false)
+            })
+        };
+        let Some(result) = result else {
+            draft.error = Some("Invalid due date or time in your time zone".into());
+            return;
+        };
+        Some(result)
+    } else {
+        None
+    };
+    if let Some(value) = patch.title {
+        draft.set_title(value);
+    }
+    if let Some(value) = patch.due {
+        draft.due = value.clone();
+        state.timeblocking.date = value;
+    }
+    if let Some(value) = patch.deadline {
+        draft.deadline = value.clone();
+        state.timeblocking.deadline = value;
+    }
+    if let Some(event) = draft.event.as_mut() {
+        if let Some((start, end, all_day)) = schedule {
+            event.start = start;
+            event.end = end;
+            event.all_day = all_day;
+            state.timeblocking.start_time = if all_day {
+                String::new()
+            } else {
+                start.format("%H:%M").to_string()
+            };
+            state.timeblocking.end_time = if all_day {
+                String::new()
+            } else {
+                end.format("%H:%M").to_string()
+            };
+            state.timeblocking.editing_due_time = false;
+        }
+        if let Some(value) = patch.description {
+            event.details.description = value.clone();
+            state.task_description = iced::widget::text_editor::Content::with_text(&value);
+        }
+        if let Some(data) = event.details.task_data.as_mut() {
+            if let Some(value) = patch.priority {
+                data.metadata.priority = value;
+            }
+            if let Some(value) = patch.minutes {
+                data.metadata.minutes = value;
+            }
+            if let Some(value) = patch.labels {
+                data.metadata.labels = value;
+            }
+            if let Some(value) = patch.projects {
+                data.metadata.projects = value;
+            }
+        }
+    }
+    draft.quick_base = None;
+    draft.quick_applied = None;
+    draft.error = None;
 }
 
 #[cfg(test)]
@@ -860,10 +966,7 @@ mod tests {
     const THREAD: &str = "https://mail.google.com/mail/u/0/#inbox/FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW";
 
     fn state() -> State {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let mut snapshot = calendar::sample_snapshot();
         snapshot.events.clear();
         snapshot.calendars.push(Calendar {
@@ -901,15 +1004,18 @@ mod tests {
         let _ = update(&mut state, Action::Title("Call tomorrow {oct 8}".into()));
         assert_eq!(
             state.timeblocking.date,
-            (Local::now().date_naive() + Duration::days(1)).to_string()
+            (crate::clock::now().date_naive() + Duration::days(1)).to_string()
         );
         assert!(state.timeblocking.deadline.ends_with("-10-08"));
         let title = &state.inbox.draft.as_ref().unwrap().title;
-        let range =
-            crate::task_input::detect(title, Local::now().date_naive(), &state.config.projects)
-                .pop()
-                .unwrap()
-                .range;
+        let range = crate::task_input::detect(
+            title,
+            crate::clock::now().date_naive(),
+            &state.config.projects,
+        )
+        .pop()
+        .unwrap()
+        .range;
         let _ = update(&mut state, Action::AcceptToken(range));
         let _ = update(&mut state, Action::Title("Call".into()));
         assert!(state.timeblocking.date.is_empty());
@@ -918,7 +1024,7 @@ mod tests {
         draft.due = "tomorrow".into();
         assert_eq!(
             validate(&draft).unwrap().due,
-            Some(Local::now().date_naive() + Duration::days(1))
+            Some(crate::clock::now().date_naive() + Duration::days(1))
         );
     }
 
@@ -1020,7 +1126,7 @@ mod tests {
         assert_eq!(&draft.title[tokens[0].range.clone()], "today");
         assert_eq!(
             state.timeblocking.date,
-            Local::now().date_naive().to_string()
+            crate::clock::now().date_naive().to_string()
         );
     }
 
@@ -1047,7 +1153,7 @@ mod tests {
         let mut state = state();
         let original = state.calendar.events.clone();
         state.timeblocking.date = "2026-10-01".into();
-        state.timeblocking.busy.insert("task:previous".into());
+        state.timeblocking.busy.insert("task:previous");
         let project = state.config.projects.add("Work".into());
         let _ = update(&mut state, Action::NewTask);
         let _ = update(&mut state, Action::Title("Prepare exam".into()));
@@ -1484,7 +1590,7 @@ mod tests {
         );
         assert_eq!(state.inbox.scheduling, None);
         // The write is in flight, so the task is held until Google answers.
-        assert!(state.timeblocking.busy.contains("task:a"));
+        assert!(state.timeblocking.busy.contains_task("task:a"));
     }
 
     #[test]
@@ -1506,7 +1612,7 @@ mod tests {
     fn the_month_picker_opens_on_this_month_and_steps_through_the_others() {
         let mut state = state();
         let this_month = calendar::first_of_month(calendar::day_at(
-            Local::now(),
+            crate::clock::now(),
             state.config.calendar.day_start_hour(),
         ));
         let _ = update(&mut state, Action::TogglePicker("task:a".into()));
@@ -1536,7 +1642,7 @@ mod tests {
             Action::ScheduleOn("task:a".into(), day("2026-11-12")),
         );
         assert_eq!(state.inbox.picker, None);
-        assert!(state.timeblocking.busy.contains("task:a"));
+        assert!(state.timeblocking.busy.contains_task("task:a"));
     }
 
     #[test]
@@ -1550,106 +1656,4 @@ mod tests {
         let _ = update(&mut state, Action::List(None));
         assert_eq!(state.config.calendar.inbox_list, None);
     }
-}
-
-/// Apply a fully validated voice patch as a new quick-add baseline.
-pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
-    let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
-        return;
-    };
-    // Compute the schedule before changing fields so invalid combinations are atomic.
-    let schedule = if patch.due.is_some() || patch.due_time.is_some() {
-        let day = patch.due.as_deref().unwrap_or(&draft.due);
-        let old = draft.event.as_ref();
-        let time = patch.due_time.clone().unwrap_or_else(|| {
-            old.filter(|e| !e.all_day)
-                .map(|e| e.start.format("%H:%M").to_string())
-                .unwrap_or_default()
-        });
-        let result = if day.is_empty() || time.is_empty() {
-            let day = if day.is_empty() {
-                Some(UNDATED)
-            } else {
-                chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
-            };
-            day.map(|day| {
-                let start = calendar::at_clock(day, 0, 0);
-                (start, start + Duration::days(1), true)
-            })
-        } else {
-            crate::voice::due_start(day, &time).ok().map(|start| {
-                let duration = old
-                    .filter(|e| !e.all_day)
-                    .map(|e| e.end - e.start)
-                    .filter(|d| *d > Duration::zero())
-                    .unwrap_or_else(|| {
-                        Duration::minutes(
-                            patch
-                                .minutes
-                                .or_else(|| old.map(|e| tb::metadata(e).minutes))
-                                .filter(|m| *m > 0)
-                                .unwrap_or(30) as i64,
-                        )
-                    });
-                (start, start + duration, false)
-            })
-        };
-        let Some(result) = result else {
-            draft.error = Some("Invalid due date or time in your time zone".into());
-            return;
-        };
-        Some(result)
-    } else {
-        None
-    };
-    if let Some(value) = patch.title {
-        draft.set_title(value);
-    }
-    if let Some(value) = patch.due {
-        draft.due = value.clone();
-        state.timeblocking.date = value;
-    }
-    if let Some(value) = patch.deadline {
-        draft.deadline = value.clone();
-        state.timeblocking.deadline = value;
-    }
-    if let Some(event) = draft.event.as_mut() {
-        if let Some((start, end, all_day)) = schedule {
-            event.start = start;
-            event.end = end;
-            event.all_day = all_day;
-            state.timeblocking.start_time = if all_day {
-                String::new()
-            } else {
-                start.format("%H:%M").to_string()
-            };
-            state.timeblocking.end_time = if all_day {
-                String::new()
-            } else {
-                end.format("%H:%M").to_string()
-            };
-            state.timeblocking.editing_due_time = false;
-        }
-        if let Some(value) = patch.description {
-            event.details.description = value.clone();
-            state.task_description = iced::widget::text_editor::Content::with_text(&value);
-        }
-        if let Some(data) = event.details.task_data.as_mut() {
-            if let Some(value) = patch.priority {
-                data.metadata.priority = value;
-            }
-            if let Some(value) = patch.minutes {
-                data.metadata.minutes = value;
-            }
-            if let Some(value) = patch.labels {
-                data.metadata.labels = value;
-            }
-            if let Some(value) = patch.projects {
-                data.metadata.projects = value;
-            }
-        }
-    }
-    draft.quick_base = None;
-    draft.quick_applied = None;
-    draft.error = None;
 }

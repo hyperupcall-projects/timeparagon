@@ -1,11 +1,11 @@
 use chrono::{Duration, Local, TimeZone};
 use iced::Size;
 use iced_test::{Simulator, core::Settings};
-use timeslay::{app::State, calendar, config::Config, theme::Catalog, ui};
+use timeslay::{app::State, calendar, ui};
 
 #[test]
 fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     state.calendar.day = Local::now().date_naive();
     let start = Local
@@ -44,7 +44,7 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
         }
     }
 
-    state.weekly = true;
+    state.view = timeslay::app::CalendarView::Week;
     state.week_anchor = state.calendar.day;
     let mut week: Simulator<'_, timeslay::app::Message> = Simulator::with_size(
         Settings::default(),
@@ -58,7 +58,7 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
     );
     drop(week);
 
-    state.weekly = false;
+    state.view = timeslay::app::CalendarView::Day;
     state.config.calendar.inbox_list = Some("tasks:inbox".into());
     for (id, day) in [
         ("inbox", timeslay::timeblocking::UNDATED),
@@ -89,12 +89,15 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 #[test]
 fn range_views_keep_the_day_panel_visible_and_render_in_the_floating_host() {
     for monthly in [false, true] {
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         state.calendar.events.clear();
         state.week_anchor = state.calendar.day;
-        state.weekly = !monthly;
-        state.monthly = monthly;
+        state.view = if monthly {
+            timeslay::app::CalendarView::Month
+        } else {
+            timeslay::app::CalendarView::Week
+        };
         let mut day = Simulator::with_size(
             Settings::default(),
             Size::new(400.0, 900.0),

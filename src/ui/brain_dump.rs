@@ -3,7 +3,6 @@
 //! A page is written in a full-window editor, the same way the notepad is,
 //! and is saved into the config as it is typed.
 
-use chrono::Local;
 use iced::widget::{
     Space, button, column, container, mouse_area, row, scrollable, stack, text, text_editor,
     text_input,
@@ -24,7 +23,7 @@ pub fn editor_id() -> iced::widget::Id {
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let today = Local::now().date_naive();
+    let today = crate::clock::now().date_naive();
     let add = button(text("Add today").size(metrics.label()).center())
         .on_press(msg(Action::Open(today)))
         .style(crate::ui::controls::primary);
@@ -196,11 +195,11 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{app::Screen, config::Config, theme::Catalog};
+    use crate::app::Screen;
     use iced::Size;
 
     fn state() -> State {
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         state.screen = Screen::BrainDump;
         state
     }

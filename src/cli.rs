@@ -3,6 +3,9 @@
 //! The side panel, dock and shortcut daemon share this binary.
 //! With no flags it opens the side panel.
 
+use clap::error::ErrorKind;
+use clap::{ArgGroup, CommandFactory, Parser};
+
 /// What the binary was asked to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -18,118 +21,110 @@ pub enum Mode {
     WebExtension,
 }
 
-/// What to do with the command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    Run { mode: Mode },
-    Help,
-    Version,
+/// The command line, as declared to clap.
+#[derive(Debug, Parser)]
+#[command(
+    name = "timeslay",
+    version,
+    about = "TimeSlay: slay the day with TimeSlay.",
+    after_help = "With no options, TimeSlay opens its side panel.",
+    group(ArgGroup::new("mode").args(["new_task", "sidebar", "dock", "daemon", "webextension"]))
+)]
+struct Args {
+    /// Open the full task creation editor
+    #[arg(long, overrides_with = "new_task")]
+    new_task: bool,
+
+    /// Open the side panel: the full app in a wide strip down the edge of the
+    /// screen (the width and edge are set in the [panel] table of config.toml)
+    #[arg(long, overrides_with = "sidebar")]
+    sidebar: bool,
+
+    /// Open the dock: a very thin strip of today along the edge of the screen,
+    /// a few pixels wide (the width is "Dock width" in Settings)
+    #[arg(long, overrides_with = "dock")]
+    dock: bool,
+
+    /// Run the background process that owns the global shortcuts (Toggle
+    /// Visibility and Toggle Shape) and shows, hides and switches the side
+    /// panel and dock
+    #[arg(long, overrides_with = "daemon")]
+    daemon: bool,
+
+    /// Run the browser native-messaging host: read one message from the
+    /// extension on stdin, add its link to the inbox through the running app,
+    /// and answer on stdout
+    #[arg(long, overrides_with = "webextension")]
+    webextension: bool,
+
+    // Browsers launch a native-messaging host with the caller's origin as an
+    // extra argument, so `--webextension` tolerates positional arguments
+    // instead of failing the way every other mode does.
+    #[arg(hide = true)]
+    origin: Vec<String>,
 }
 
-pub const HELP: &str = "\
-TimeSlay: slay the day with TimeSlay.
+/// Parses the arguments, which include the program name first.
+///
+/// `--help` and `--version` come back as errors that print and exit
+/// successfully through [`clap::Error::exit`].
+pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, clap::Error> {
+    let args = Args::try_parse_from(args)?;
+    let mode = if args.new_task {
+        Mode::NewTask
+    } else if args.sidebar {
+        Mode::Sidebar
+    } else if args.dock {
+        Mode::Dock
+    } else if args.daemon {
+        Mode::Daemon
+    } else if args.webextension {
+        Mode::WebExtension
+    } else {
+        Mode::default()
+    };
 
-Usage: timeslay [OPTIONS]
-
-With no options, TimeSlay opens its side panel.
-
-Options:
-      --new-task       Open the full task creation editor\n      --sidebar        Open the side panel: the full app in a wide strip
-                       down the edge of the screen (the width and edge are
-                       set in the [panel] table of config.toml)
-      --dock           Open the dock: a very thin strip of today along the
-                       edge of the screen, a few pixels wide (the width
-                       is \"Dock width\" in Settings)
-      --daemon         Run the background process that owns the global
-                       shortcuts (Toggle Visibility and Toggle Shape) and
-                       shows, hides and switches the side panel and dock
-      --webextension   Run the browser native-messaging host: read one
-                       message from the extension on stdin, add its link to
-                       the inbox through the running app, and answer on stdout
-  -h, --help           Print this help
-  -V, --version        Print the version
-
-Only one of --new-task, --sidebar, --dock, --daemon and --webextension can be given.
-";
-
-/// Parses the arguments that follow the program name.
-pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
-    let args = args.into_iter();
-    let mut mode: Option<Mode> = None;
-    // Browsers launch a native-messaging host with the caller's origin as an
-    // extra argument, so `--webextension` tolerates arguments it does not
-    // recognize instead of failing the way every other mode does.
-    let mut unexpected: Vec<String> = Vec::new();
-
-    for arg in args {
-        let requested = match arg.as_str() {
-            "-h" | "--help" => return Ok(Action::Help),
-            "-V" | "--version" => return Ok(Action::Version),
-            "--new-task" => Some(Mode::NewTask),
-            "--sidebar" => Some(Mode::Sidebar),
-            "--dock" => Some(Mode::Dock),
-            "--daemon" => Some(Mode::Daemon),
-            "--webextension" => Some(Mode::WebExtension),
-            _ => None,
-        };
-
-        if let Some(requested) = requested {
-            match mode {
-                Some(existing) if existing != requested => {
-                    return Err(
-                        "only one of --new-task, --sidebar, --dock, --daemon and --webextension can be given"
-                            .into(),
-                    );
-                }
-                _ => mode = Some(requested),
-            }
-            continue;
-        }
-
-        unexpected.push(arg);
+    if mode != Mode::WebExtension && !args.origin.is_empty() {
+        return Err(Args::command().error(
+            ErrorKind::UnknownArgument,
+            format!("unexpected argument '{}'", args.origin[0]),
+        ));
     }
-
-    let mode = mode.unwrap_or_default();
-    if mode != Mode::WebExtension {
-        if let Some(arg) = unexpected.first() {
-            return Err(format!("unknown option '{arg}'"));
-        }
-    }
-
-    Ok(Action::Run { mode })
+    Ok(mode)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse_all(list: &[&str]) -> Result<Action, String> {
-        parse(list.iter().map(|arg| (*arg).to_owned()))
-    }
-
-    fn run(mode: Mode) -> Action {
-        Action::Run { mode }
+    fn parse_all(list: &[&str]) -> Result<Mode, clap::Error> {
+        parse(
+            std::iter::once("timeslay")
+                .chain(list.iter().copied())
+                .map(str::to_owned),
+        )
     }
 
     #[test]
     fn no_arguments_open_the_panel() {
-        assert_eq!(parse_all(&[]), Ok(run(Mode::Sidebar)));
+        assert_eq!(parse_all(&[]).unwrap(), Mode::Sidebar);
     }
 
     #[test]
     fn each_mode_has_its_own_flag() {
-        assert_eq!(parse_all(&["--new-task"]), Ok(run(Mode::NewTask)));
-        assert_eq!(parse_all(&["--sidebar"]), Ok(run(Mode::Sidebar)));
-        assert_eq!(parse_all(&["--dock"]), Ok(run(Mode::Dock)));
-        assert_eq!(parse_all(&["--daemon"]), Ok(run(Mode::Daemon)));
-        assert_eq!(parse_all(&["--webextension"]), Ok(run(Mode::WebExtension)));
+        assert_eq!(parse_all(&["--new-task"]).unwrap(), Mode::NewTask);
+        assert_eq!(parse_all(&["--sidebar"]).unwrap(), Mode::Sidebar);
+        assert_eq!(parse_all(&["--dock"]).unwrap(), Mode::Dock);
+        assert_eq!(parse_all(&["--daemon"]).unwrap(), Mode::Daemon);
+        assert_eq!(parse_all(&["--webextension"]).unwrap(), Mode::WebExtension);
     }
 
     #[test]
     fn help_and_version_win_over_everything() {
-        assert_eq!(parse_all(&["--dock", "--help"]), Ok(Action::Help));
-        assert_eq!(parse_all(&["-h"]), Ok(Action::Help));
-        assert_eq!(parse_all(&["-V"]), Ok(Action::Version));
+        let kind = |args: &[&str]| parse_all(args).unwrap_err().kind();
+        assert_eq!(kind(&["--dock", "--help"]), ErrorKind::DisplayHelp);
+        assert_eq!(kind(&["-h"]), ErrorKind::DisplayHelp);
+        assert_eq!(kind(&["-V"]), ErrorKind::DisplayVersion);
     }
 
     #[test]
@@ -151,7 +146,7 @@ mod tests {
 
     #[test]
     fn repeating_a_flag_is_harmless() {
-        assert_eq!(parse_all(&["--dock", "--dock"]), Ok(run(Mode::Dock)));
+        assert_eq!(parse_all(&["--dock", "--dock"]).unwrap(), Mode::Dock);
     }
 
     #[test]
@@ -159,12 +154,12 @@ mod tests {
         // Chrome passes "chrome-extension://<id>/"; Firefox passes the add-on
         // id. Neither may be treated as a mistake.
         assert_eq!(
-            parse_all(&["--webextension", "chrome-extension://abc/"]),
-            Ok(run(Mode::WebExtension)),
+            parse_all(&["--webextension", "chrome-extension://abc/"]).unwrap(),
+            Mode::WebExtension
         );
         assert_eq!(
-            parse_all(&["--webextension", "timeslay@example.org"]),
-            Ok(run(Mode::WebExtension)),
+            parse_all(&["--webextension", "timeslay@example.org"]).unwrap(),
+            Mode::WebExtension
         );
     }
 }

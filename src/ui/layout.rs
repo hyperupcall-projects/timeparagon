@@ -80,7 +80,7 @@ pub fn digit_width(size: f32, characters: usize) -> f32 {
 impl Metrics {
     pub fn of(size: Size) -> Self {
         let breakpoint = Breakpoint::of(size.width);
-        let padding = if breakpoint.is_compact() { 8.0 } else { 8.0 };
+        let padding = 8.0;
         let usable = (size.width - padding * 2.0).max(60.0);
 
         Self {

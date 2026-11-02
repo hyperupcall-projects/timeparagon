@@ -250,8 +250,6 @@ fn read() -> io::Result<Vec<Account>> {
 
 #[cfg(not(target_os = "android"))]
 fn write(accounts: &[Account]) -> io::Result<()> {
-    use std::io::Write;
-
     let path = path()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
     if accounts.is_empty() {
@@ -260,29 +258,13 @@ fn write(accounts: &[Account]) -> io::Result<()> {
             _ => Ok(()),
         };
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let contents = toml::to_string_pretty(&File {
         accounts: accounts.to_vec(),
     })
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
-    // Written beside the real file and renamed into place, readable by this
-    // user only: these are long-lived credentials for a mailbox.
-    let temporary = path.with_extension("toml.tmp");
-    let _ = std::fs::remove_file(&temporary);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents.as_bytes())?;
-    drop(file);
-    std::fs::rename(&temporary, &path)
+    // Readable by this user only: these are long-lived credentials for a mailbox.
+    crate::fsutil::write_atomic(&path, contents.as_bytes(), crate::fsutil::Kind::Private)
 }
 
 #[cfg(target_os = "android")]
@@ -411,8 +393,7 @@ mod tests {
 
     #[test]
     fn adding_needs_an_oauth_client_and_goes_no_further_without_one() {
-        use crate::{config::Config, theme::Catalog};
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         let _ = update(&mut state, Action::Add);
         assert!(!state.accounts.connecting);
         assert!(state.accounts.error.is_some());

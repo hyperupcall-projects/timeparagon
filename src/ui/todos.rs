@@ -8,6 +8,7 @@
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Center, Element, Fill, Length, Padding};
 
+use crate::app::{NavigationMessage};
 use crate::app::{Message, Screen, State};
 use crate::todos::Todo;
 
@@ -64,7 +65,7 @@ fn go_back_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
     button(text("Go back").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .height(metrics.icon_button())
-        .on_press(Message::ScreenSelected(Screen::Calendar))
+        .on_press(Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)))
         .style(crate::ui::controls::secondary)
         .into()
 }

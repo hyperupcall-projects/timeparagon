@@ -235,10 +235,7 @@ mod tests {
     use crate::habits::{self, Draft, RepeatMode};
 
     fn state() -> State {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.screen = Screen::Habits;
         state.habits.loaded = true;
         state
@@ -315,10 +312,10 @@ mod tests {
             .find(|message| matches!(message, Message::Habits(Action::ShowOnCalendar(_))))
             .unwrap();
         let _ = crate::app::update(&mut state, action);
-        assert!(state.monthly && !state.weekly);
+        assert!(state.monthly() && !state.weekly());
         assert_eq!(state.habits.calendar_habit.as_ref().unwrap().id, "one");
         let _ = crate::app::update(&mut state, Message::Habits(Action::CloseCalendar));
-        assert!(!state.monthly);
+        assert!(!state.monthly());
         assert!(state.habits.calendar_habit.is_none());
     }
 
