@@ -79,15 +79,7 @@ fn preview_forms_in_light_and_dark_themes() {
     let Some(directory) = std::env::var_os("TIMESLAY_UI_PREVIEW_DIR") else {
         return;
     };
-    for theme in [
-        "Sakura",
-        "Dark",
-        "Absolute Black",
-        "GitHub Dark",
-        "GitHub Dark High Contrast",
-        "Nord",
-        "Dracula",
-    ] {
+    for theme in ["Light", "Light high contrast", "Dark", "Dark high contrast"] {
         for width in [200.0, 420.0, 900.0] {
             let mut state = state();
             let _ = app::update(&mut state, Message::Inbox(timeslay::inbox::Action::NewTask));

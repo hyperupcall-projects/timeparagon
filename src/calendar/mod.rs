@@ -11,6 +11,8 @@ pub mod notes;
 pub mod oauth;
 pub mod projects;
 pub mod scheduled;
+pub mod sleep;
+pub mod sources;
 pub mod task_metadata;
 pub mod task_sort;
 pub mod time_format;
@@ -58,6 +60,12 @@ impl Calendar {
         self.id.starts_with("tasks:")
     }
 
+    pub fn is_app_calendar(&self, settings: &CalendarSettings) -> bool {
+        !self.is_task_list()
+            && (settings.app_calendar.as_deref() == Some(self.id.as_str())
+                || CalendarSettings::is_app_calendar_name(&self.name))
+    }
+
     /// Lists reserved for the app's task workflow are not calendar sources.
     pub fn is_managed_task_list(&self, settings: &CalendarSettings) -> bool {
         self.is_task_list()
@@ -99,24 +107,34 @@ impl Event {
     /// Apply a local calendar color while preserving explicit event colors and
     /// the separate TimeSlay task, habit and time-block color settings.
     pub fn display_color(&self, settings: &CalendarSettings) -> Color {
+        if self.details.sleep.is_some() {
+            return settings.sleep_color();
+        }
         if !self.is_task()
             && self.details.scheduled.is_none()
             && !self.details.habit
-            && (self.all_day || settings.app_calendar.as_deref() != Some(self.calendar_id.as_str()))
             && self.details.color_id.is_none()
         {
-            settings
-                .calendar_colors
-                .get(&self.calendar_id)
-                .map_or(self.color, |color| color.0)
-        } else {
-            self.color
+            if self.all_day && settings.app_calendar.as_deref() == Some(self.calendar_id.as_str()) {
+                return settings.event_color();
+            }
+            if self.all_day || settings.app_calendar.as_deref() != Some(self.calendar_id.as_str()) {
+                return settings
+                    .calendar_colors
+                    .get(&self.calendar_id)
+                    .map_or(self.color, |color| color.0);
+            }
         }
+        self.color
     }
 
     /// Source used for calendar visibility and overlap ordering.
     pub fn source_id(&self) -> &str {
-        &self.calendar_id
+        if self.details.sleep.is_some() {
+            sleep::SOURCE_ID
+        } else {
+            &self.calendar_id
+        }
     }
 
     /// Whether this came from Google Tasks rather than Google Calendar. Task
@@ -188,6 +206,7 @@ pub enum DraftKind {
     Event,
     TimeBlock,
     Habit,
+    Sleep,
 }
 
 /// A new event being filled in before it is written to Google.
@@ -298,6 +317,7 @@ pub enum SaveScope {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditDraft {
+    pub sleep: Option<sleep::Record>,
     pub options: event_options::EventOptions,
     pub save_menu_open: bool,
     pub delete_menu_open: bool,
@@ -332,6 +352,7 @@ impl EditDraft {
     /// Build an edit draft from an existing event.
     pub fn from_event(event: &Event) -> Self {
         Self {
+            sleep: event.details.sleep.clone(),
             options: event.details.options.clone(),
             save_menu_open: false,
             delete_menu_open: false,
@@ -362,6 +383,18 @@ impl EditDraft {
                 &crate::recurrence::Recurrence::from_lines(&event.details.recurrence),
             ),
         }
+    }
+
+    /// Keep the selected habit occurrence's values and date while loading its
+    /// master's repeat schedule. A scoped save needs the occurrence as its anchor.
+    pub fn from_habit_occurrence(event: &Event, master: &Event) -> Self {
+        let mut draft = Self::from_event(event);
+        draft.series_id = Some(master.id.clone());
+        draft.rule = crate::recurrence::Rule::from_recurrence(
+            master.start.date_naive(),
+            &crate::recurrence::Recurrence::from_lines(&master.details.recurrence),
+        );
+        draft
     }
 
     /// Applies the date field's text, keeping the clock times.
@@ -431,6 +464,8 @@ pub(crate) fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Details {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleep: Option<sleep::Record>,
     pub options: event_options::EventOptions,
     /// Last modification instant reported by Google Tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -451,6 +486,9 @@ pub struct Details {
     pub attendees: Vec<String>,
     /// This is a habit event on the app's TimeSlay calendar.
     pub habit: bool,
+    /// Completion instant for this occurrence; older records may not have one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub habit_completed_at: Option<DateTime<Local>>,
     /// The recurring event master, for an expanded habit or other recurrence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurring_event_id: Option<String>,
@@ -566,7 +604,9 @@ fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
 /// Gives a Google Tasks event its list's color and an app-calendar event the
 /// per-kind color from settings, leaving every other calendar's events alone.
 fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
-    if event.calendar_id.starts_with("tasks:") && event.details.scheduled.is_none() {
+    if event.details.sleep.is_some() {
+        event.color = settings.sleep_color();
+    } else if event.calendar_id.starts_with("tasks:") && event.details.scheduled.is_none() {
         event.color = task_color(settings, &event.calendar_id);
     } else if event.details.scheduled.is_some() {
         // A task's calendar block, on the TimeSlay calendar.
@@ -576,10 +616,16 @@ fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
         if event.details.color_id.is_none() {
             event.color = settings.habit_color();
         }
-    } else if !event.all_day && settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
+    } else if settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
+        && event.details.color_id.is_none()
     {
-        // A plain timed event on the TimeSlay calendar is a time block.
-        event.color = settings.time_block_color();
+        if event.all_day {
+            // A plain all-day event on the TimeSlay calendar.
+            event.color = settings.event_color();
+        } else {
+            // A plain timed event on the TimeSlay calendar is a time block.
+            event.color = settings.time_block_color();
+        }
     }
 }
 
@@ -894,6 +940,13 @@ impl Store {
                 calendar
             })
             .collect();
+        sources.push(Calendar {
+            id: sleep::SOURCE_ID.to_owned(),
+            name: "Sleep".to_owned(),
+            color: settings.sleep_color(),
+            primary: false,
+            selected_by_google: true,
+        });
         // Stable sorting appends newly discovered sources in Google's order.
         sources.sort_by_key(|source| {
             settings
@@ -923,6 +976,25 @@ impl Store {
         } else {
             !settings.disabled.iter().any(|hidden| hidden == id)
         }
+    }
+
+    /// Source and per-kind visibility apply to every calendar view, including
+    /// cached days and task-backed copies of scheduled calendar events.
+    pub fn event_enabled(&self, event: &Event, settings: &CalendarSettings) -> bool {
+        let app_calendar = settings.app_calendar.as_deref().or_else(|| {
+            self.calendars
+                .iter()
+                .find(|calendar| calendar.is_app_calendar(settings))
+                .map(|calendar| calendar.id.as_str())
+        });
+        let kind = sources::TimeSlaySource::of(event, app_calendar.unwrap_or(""));
+        self.calendar_enabled(event.source_id(), settings)
+            && event
+                .details
+                .scheduled
+                .as_ref()
+                .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
+            && kind.is_none_or(|kind| self.calendar_enabled(kind.id(), settings))
     }
 
     /// Gives every Google Tasks list its saved color, and every event on the
@@ -1074,6 +1146,30 @@ impl Store {
             .any(|event| !event.is_task() && event_on_day(event, day, self.day_end_hour))
     }
 
+    /// Update only existing copies of this occurrence, including disk history.
+    pub fn replace_habit_occurrence(&mut self, updated: &Event) {
+        let replace = |events: &mut Vec<Event>| {
+            for event in events {
+                if event.id == updated.id && event.calendar_id == updated.calendar_id {
+                    *event = updated.clone();
+                }
+            }
+        };
+        replace(&mut self.events);
+        for events in self.cache.values_mut() {
+            replace(events);
+        }
+        if let Some(event) = self.detail_event.as_mut()
+            && event.id == updated.id
+            && event.calendar_id == updated.calendar_id
+        {
+            *event = updated.clone();
+        }
+        if let Some(directory) = &self.day_cache {
+            day_cache::update_events(directory, replace);
+        }
+    }
+
     pub fn replace_cached_task(&mut self, previous_id: &str, task: &Event) {
         let key = crate::timeblocking::task_key(task);
         let replace = |events: &mut Vec<Event>| {
@@ -1132,14 +1228,7 @@ impl Store {
             .collect();
         events
             .iter()
-            .filter(|event| self.calendar_enabled(event.source_id(), settings))
-            .filter(|event| {
-                event
-                    .details
-                    .scheduled
-                    .as_ref()
-                    .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
-            })
+            .filter(|event| self.event_enabled(event, settings))
             .filter(move |event| {
                 event.all_day
                     && (!event.is_task()
@@ -1156,14 +1245,7 @@ impl Store {
     ) -> impl Iterator<Item = &'a Event> {
         self.events
             .iter()
-            .filter(|event| self.calendar_enabled(event.source_id(), settings))
-            .filter(|event| {
-                event
-                    .details
-                    .scheduled
-                    .as_ref()
-                    .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
-            })
+            .filter(|event| self.event_enabled(event, settings))
     }
 
     /// The event with this id, if it is still loaded.
@@ -1412,14 +1494,8 @@ impl Store {
         let mut events: Vec<_> = self
             .events_on(day)
             .iter()
-            .filter(|event| self.calendar_enabled(event.source_id(), settings))
-            .filter(|event| {
-                event
-                    .details
-                    .scheduled
-                    .as_ref()
-                    .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
-            })
+            .filter(|event| event.details.sleep.is_none())
+            .filter(|event| self.event_enabled(event, settings))
             .filter(|event| {
                 if event.all_day && event.is_task() {
                     event.start.date_naive() == day
@@ -1459,14 +1535,7 @@ impl Store {
         let mut found: Vec<&Event> = timed_in(
             events
                 .iter()
-                .filter(|event| self.calendar_enabled(event.source_id(), settings))
-                .filter(|event| {
-                    event
-                        .details
-                        .scheduled
-                        .as_ref()
-                        .is_none_or(|link| self.calendar_enabled(&link.calendar_id, settings))
-                }),
+                .filter(|event| self.event_enabled(event, settings)),
             blocks,
             day,
             settings,
@@ -1715,13 +1784,13 @@ pub fn sync_habits(
     api::fetch_habits(&tokens.access_token, app_calendar)
 }
 
-/// Load the series behind a habit occurrence so its start day and repeat
-/// controls describe the actual habit rather than an expanded instance.
+/// Load a habit's repeat schedule without losing the selected occurrence.
+/// The Habits list starts at the first occurrence of its representative series.
 pub fn habit_edit_draft(
     client_id: &str,
     client_secret: &str,
     event: &Event,
-) -> Result<EditDraft, String> {
+) -> Result<(Event, EditDraft), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -1734,10 +1803,15 @@ pub fn habit_edit_draft(
             .as_deref()
             .unwrap_or(&event.id),
     )?;
-    let mut draft = EditDraft::from_event(&master);
-    draft.series_id = Some(master.id);
-    draft.id = event.id.clone();
-    Ok(draft)
+    let occurrence = if event.id == master.id && !master.details.recurrence.is_empty() {
+        api::fetch_first_occurrence(&tokens.access_token, &master)?
+    } else if event.id == master.id {
+        master.clone()
+    } else {
+        event.clone()
+    };
+    let draft = EditDraft::from_habit_occurrence(&occurrence, &master);
+    Ok((occurrence, draft))
 }
 
 /// The fields a habit is written with. `id` is `None` for a new habit.
@@ -2002,9 +2076,19 @@ pub fn delete_task_instance(
     api::delete_task(&tokens.access_token, list_id, task_id)
 }
 
-/// Sets where an event happens on Google. Only the location is sent, so
-/// nothing else about the event changes. Blocking: run it on a worker thread
-/// through [`crate::blocking::run`].
+/// Store completion on one habit occurrence. Blocking: run on a worker thread.
+pub fn set_habit_completed(
+    client_id: &str,
+    client_secret: &str,
+    event: &Event,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::patch_habit_completed(&tokens.access_token, event).map_err(describe_event_write_error)
+}
+
+/// Sets only an event's location on Google. Blocking: run on a worker thread.
 pub fn set_event_location(
     client_id: &str,
     client_secret: &str,
@@ -2380,6 +2464,40 @@ pub fn sample_snapshot() -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn habit_drafts_keep_the_selected_occurrence_and_load_only_the_series_schedule() {
+        let mut master = sample_snapshot().events[1].clone();
+        master.id = "habit-series".into();
+        master.details.habit = true;
+        master.details.recurrence = vec!["RRULE:FREQ=DAILY;COUNT=10".into()];
+        let mut occurrence = master.clone();
+        occurrence.id = "habit-instance".into();
+        occurrence.details.recurring_event_id = Some(master.id.clone());
+        occurrence.details.recurrence.clear();
+        occurrence.start += chrono::Duration::days(4);
+        occurrence.end += chrono::Duration::days(4);
+        // An individual occurrence can have its own title, notes and options.
+        occurrence.title = "Stretch gently".into();
+        occurrence.details.description = "After the run".into();
+        occurrence.details.projects = vec![7];
+        occurrence.details.options.transparency = event_options::Availability::Free;
+        let draft = EditDraft::from_habit_occurrence(&occurrence, &master);
+        assert_eq!(draft.id, occurrence.id);
+        assert_eq!(draft.series_id.as_deref(), Some("habit-series"));
+        assert_eq!(draft.start, occurrence.start);
+        assert_eq!(draft.end, occurrence.end);
+        assert_eq!(draft.date_text, occurrence.start.date_naive().to_string());
+        assert_eq!(draft.title, occurrence.title);
+        assert_eq!(draft.description, occurrence.details.description);
+        assert_eq!(draft.projects.ids, [7]);
+        assert_eq!(draft.options, occurrence.details.options);
+        assert_eq!(draft.rule.repeat, crate::recurrence::RepeatMode::Daily);
+        assert_eq!(draft.rule.count, "10");
+        assert_eq!(draft.rule.ends, crate::recurrence::EndKind::After);
+        assert!(!draft.recurrence_changed);
+        assert!(!draft.loading);
+    }
 
     #[test]
     fn task_edits_and_deletions_preserve_unrelated_cached_dates_on_disk() {

@@ -254,6 +254,7 @@ pub fn block_key(event: &Event) -> String {
 pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
     !event.is_task()
         && !event.details.habit
+        && event.details.sleep.is_none()
         && event.details.scheduled.is_none()
         && !event.all_day
         && settings.app_calendar.as_deref() == Some(&event.calendar_id)

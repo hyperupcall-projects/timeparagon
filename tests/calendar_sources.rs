@@ -138,14 +138,28 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
     };
     assert_eq!(
         ids(&state),
-        ["work", "personal", "tasks:one", "tasks", "tasks:two"]
+        [
+            "work",
+            "personal",
+            "tasks:one",
+            "tasks",
+            "tasks:two",
+            "timeslay:sleep"
+        ]
     );
     let saved = toml::to_string(&state.config).unwrap();
     state.config = toml::from_str(&saved).unwrap();
     state.calendar.calendars.reverse();
     assert_eq!(
         ids(&state),
-        ["work", "personal", "tasks:one", "tasks", "tasks:two"]
+        [
+            "work",
+            "personal",
+            "tasks:one",
+            "tasks",
+            "tasks:two",
+            "timeslay:sleep"
+        ]
     );
     let order = state.config.calendar.source_order.clone();
     let _ = app::update(
@@ -154,7 +168,7 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
     );
     let _ = app::update(
         &mut state,
-        Message::CalendarSourceMoved("tasks:two".into(), false),
+        Message::CalendarSourceMoved("timeslay:sleep".into(), false),
     );
     let _ = app::update(
         &mut state,
@@ -474,6 +488,303 @@ fn legacy_shared_source_order_expands_in_place() {
         .collect();
     assert_eq!(
         sources,
-        ["tasks:one", "tasks:two", "personal", "work", "tasks"]
+        [
+            "tasks:one",
+            "tasks:two",
+            "personal",
+            "work",
+            "tasks",
+            "timeslay:sleep"
+        ]
+    );
+}
+
+#[test]
+fn menu_groups_google_sources_before_all_timeslay_types() {
+    let mut state = state();
+    state
+        .calendar
+        .calendars
+        .iter_mut()
+        .find(|source| source.id == "tasks")
+        .unwrap()
+        .name = "Legacy tasks calendar".into();
+    state.config.calendar.app_calendar = Some("app".into());
+    // Exclude by remembered ID even if renamed, and recognize legacy names.
+    for (id, name) in [("app", "Renamed app calendar"), ("old", "TimeSlayer")] {
+        state.calendar.calendars.push(Calendar {
+            id: id.into(),
+            name: name.into(),
+            color: calendar::colors::TIME_BLOCK,
+            primary: false,
+            selected_by_google: true,
+        });
+    }
+    state.calendar.menu_open = true;
+    for width in [180.0, 200.0, 420.0] {
+        state.main_size = Size::new(width, 4000.0);
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            state.main_size,
+            timeslay::ui::calendar::view(
+                &state,
+                &timeslay::ui::layout::Metrics::of(state.main_size),
+            ),
+        );
+        let calendars_y = ui.find("Google Calendars").unwrap().bounds().y;
+        let tasks_y = ui.find("Google Task Lists").unwrap().bounds().y;
+        let timeslay_y = ui.find("TimeSlay").unwrap().bounds().y;
+        assert!(calendars_y < tasks_y && tasks_y < timeslay_y);
+        for label in ["Personal", "Work"] {
+            let y = ui.find(label).unwrap().bounds().y;
+            assert!(y > calendars_y && y < tasks_y);
+        }
+        for label in ["First task list", "Second task list"] {
+            let y = ui.find(label).unwrap().bounds().y;
+            assert!(y > tasks_y && y < timeslay_y);
+        }
+        for source in calendar::sources::TimeSlaySource::ALL {
+            let bounds = ui.find(source.label()).unwrap().bounds();
+            assert!(
+                bounds.y > timeslay_y,
+                "{} is above TimeSlay at {width}px",
+                source.label()
+            );
+            assert!(bounds.x >= 0.0 && bounds.x + bounds.width <= width);
+            // Click the toggle immediately to the right of the label.
+            ui.point_at(iced::Point::new(
+                bounds.x + bounds.width + 20.0,
+                bounds.center_y(),
+            ));
+            ui.simulate(iced_test::simulator::click());
+        }
+        assert!(ui.find("Renamed app calendar").is_err());
+        assert!(ui.find("TimeSlayer").is_err());
+        let messages: Vec<_> = ui.into_messages().collect();
+        for source in calendar::sources::TimeSlaySource::ALL {
+            assert!(
+                messages.iter().any(|message| matches!(message,
+                    Message::CalendarToggled(id, false) if id == source.id()
+                )),
+                "missing toggle for {} at {width}px",
+                source.label()
+            );
+        }
+    }
+}
+
+#[test]
+fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
+    use calendar::sources::TimeSlaySource;
+
+    let mut state = state();
+    state.config.calendar.app_calendar = Some("app".into());
+    let base = state.calendar.events[0].clone();
+    state.calendar.events.clear();
+    for source in TimeSlaySource::ALL {
+        let mut event = Event {
+            id: source.id().into(),
+            calendar_id: "app".into(),
+            all_day: source == TimeSlaySource::Events,
+            details: Default::default(),
+            ..base.clone()
+        };
+        match source {
+            TimeSlaySource::Habits => event.details.habit = true,
+            TimeSlaySource::Sleep => {
+                event.details.sleep = Some(calendar::sleep::Record::planned(state.calendar.day));
+            }
+            TimeSlaySource::Tasks => {
+                event.id = "task:scheduled".into();
+                event.calendar_id = "tasks:one".into();
+                event.details.scheduled =
+                    Some(calendar::scheduled::Link::new("app".into(), &event).unwrap());
+            }
+            _ => {}
+        }
+        state.calendar.events.push(event);
+    }
+
+    let palette = calendar::colors::palette();
+    for (index, source) in TimeSlaySource::ALL.into_iter().enumerate() {
+        let color = palette[index];
+        let _ = app::update(
+            &mut state,
+            Message::TimeSlayColorPicked(source.id().into(), Some(color)),
+        );
+        assert_eq!(source.custom_color(&state.config.calendar), Some(color));
+        assert_eq!(source.color(&state.config.calendar), color);
+        let event = state
+            .calendar
+            .events
+            .iter()
+            .find(|event| TimeSlaySource::of(event, "app") == Some(source))
+            .unwrap();
+        assert_eq!(
+            event.display_color(&state.config.calendar),
+            color,
+            "{} was not recolored",
+            source.label()
+        );
+    }
+
+    // The menu swatch opens the same picker as a Google source, and resetting
+    // it clears the custom color.
+    state.calendar.menu_open = true;
+    for source in TimeSlaySource::ALL {
+        state.calendar.color_editor = Some(source.id().into());
+        state.main_size = Size::new(420.0, 4000.0);
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            state.main_size,
+            timeslay::ui::calendar::view(
+                &state,
+                &timeslay::ui::layout::Metrics::of(state.main_size),
+            ),
+        );
+        let title = format!("Color for {}", source.label());
+        assert!(ui.find(title.as_str()).is_ok(), "no picker for {title}");
+        ui.click("Reset to default").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(message,
+            Message::TimeSlayColorPicked(id, None) if id == source.id()
+        )));
+        let _ = app::update(
+            &mut state,
+            Message::TimeSlayColorPicked(source.id().into(), None),
+        );
+        assert_eq!(source.custom_color(&state.config.calendar), None);
+    }
+
+    // The old settings section is gone; colors live in the calendar menu.
+    state.calendar.menu_open = false;
+    state.screen = Screen::Settings;
+    let mut ui = Simulator::with_size(
+        Settings::default(),
+        Size::new(420.0, 4000.0),
+        app::view(&state, window::Id::unique()),
+    );
+    assert!(ui.find("TimeSlay colors").is_err());
+}
+
+#[test]
+fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
+    use calendar::sources::TimeSlaySource;
+    let mut state = state();
+    state.config.calendar.app_calendar = Some("app".into());
+    let base = state.calendar.events[0].clone();
+    state.calendar.events.clear();
+    for source in TimeSlaySource::ALL {
+        let mut event = Event {
+            id: source.id().into(),
+            calendar_id: "app".into(),
+            all_day: source == TimeSlaySource::Events,
+            details: Default::default(),
+            ..base.clone()
+        };
+        match source {
+            TimeSlaySource::Habits => event.details.habit = true,
+            TimeSlaySource::Sleep => {
+                event.details.sleep = Some(calendar::sleep::Record::planned(state.calendar.day));
+            }
+            TimeSlaySource::Tasks => {
+                event.id = "task:scheduled".into();
+                event.calendar_id = "tasks:one".into();
+                event.details.scheduled =
+                    Some(calendar::scheduled::Link::new("app".into(), &event).unwrap());
+            }
+            _ => {}
+        }
+        state.calendar.events.push(event);
+    }
+    // A task and an event on other Google sources must remain independent.
+    state.calendar.events.push(base.clone());
+    state.calendar.events.push(Event {
+        id: "task:external".into(),
+        calendar_id: "tasks:two".into(),
+        ..base
+    });
+    let original = state.calendar.events.clone();
+    for source in TimeSlaySource::ALL {
+        let _ = app::update(
+            &mut state,
+            Message::CalendarToggled(source.id().into(), false),
+        );
+        state.config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
+        let mut snapshot = calendar::sample_snapshot();
+        snapshot.events = original.clone();
+        state.calendar.apply_snapshot(snapshot);
+        let visible: Vec<_> = state
+            .calendar
+            .visible_events(&state.config.calendar)
+            .collect();
+        assert_eq!(visible.len(), original.len() - 1, "{}", source.label());
+        assert!(
+            !visible
+                .iter()
+                .any(|event| TimeSlaySource::of(event, "app") == Some(source))
+        );
+        // Check the grid and agenda filtering as well as the shared iterator.
+        for event in state
+            .calendar
+            .timed_events_on(state.calendar.day, &state.config.calendar)
+            .into_iter()
+            .chain(
+                state
+                    .calendar
+                    .task_list_events_on(state.calendar.day, &state.config.calendar),
+            )
+            .chain(
+                state
+                    .calendar
+                    .all_day_events_on(state.calendar.day, &state.config.calendar),
+            )
+        {
+            assert_ne!(TimeSlaySource::of(event, "app"), Some(source));
+        }
+        let _ = app::update(
+            &mut state,
+            Message::CalendarToggled(source.id().into(), true),
+        );
+        assert_eq!(
+            state
+                .calendar
+                .visible_events(&state.config.calendar)
+                .count(),
+            original.len()
+        );
+    }
+}
+
+#[test]
+fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
+    use calendar::sources::TimeSlaySource;
+    let mut state = state();
+    state.config.calendar.app_calendar = Some("app".into());
+    state.config.calendar.disabled = vec!["app".into()];
+    let _ = app::update(&mut state, Message::CalendarMenuToggled);
+    assert!(!state.config.calendar.disabled.iter().any(|id| id == "app"));
+    for source in TimeSlaySource::ALL {
+        assert_eq!(
+            state
+                .calendar
+                .calendar_enabled(source.id(), &state.config.calendar),
+            source == TimeSlaySource::Sleep,
+        );
+    }
+    let _ = app::update(
+        &mut state,
+        Message::CalendarToggled(TimeSlaySource::Habits.id().into(), true),
+    );
+    let _ = app::update(&mut state, Message::CalendarMenuToggled);
+    let _ = app::update(&mut state, Message::CalendarMenuToggled);
+    assert!(
+        state
+            .calendar
+            .calendar_enabled(TimeSlaySource::Habits.id(), &state.config.calendar)
+    );
+    assert!(
+        !state
+            .calendar
+            .calendar_enabled(TimeSlaySource::TimeBlocks.id(), &state.config.calendar)
     );
 }

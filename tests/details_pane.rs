@@ -180,6 +180,97 @@ fn description_popup_cancels_without_changing_the_draft() {
 }
 
 #[test]
+fn description_popup_stages_event_changes_without_saving_the_event() {
+    let mut state = state();
+    let _ = actions(app::update(
+        &mut state,
+        Message::EventOpened("standup".into()),
+    ));
+    let editor = state.editor_window;
+    let original = state.calendar.event("standup").unwrap().clone();
+    let _ = app::update(
+        &mut state,
+        Message::EventEditTitleChanged("New title".into()),
+    );
+    let _ = app::update(&mut state, Message::DescriptionOpen("standup".into()));
+    state.description_editor = iced::widget::text_editor::Content::with_text("New description");
+
+    assert!(actions(app::update(&mut state, Message::DescriptionSave)).is_empty());
+
+    assert!(state.description_popup.is_none());
+    assert_eq!(state.editor_window, editor);
+    assert!(state.details_pane_open);
+    let draft = state.calendar.edit_draft.as_ref().unwrap();
+    assert_eq!(draft.description, "New description");
+    assert_eq!(draft.title, "New title");
+    assert!(!draft.saving);
+    assert_eq!(state.calendar.event("standup"), Some(&original));
+}
+
+#[test]
+fn dragged_habit_stays_editable_after_description_and_project_done() {
+    use calendar::projects::Action as ProjectAction;
+    use timeslay::habits;
+
+    let mut state = state();
+    let start = state.calendar.event("standup").unwrap().start;
+    let end = start + chrono::Duration::minutes(45);
+    let _ = app::update(&mut state, Message::EventDraftStarted { start, end });
+    let _ = app::update(
+        &mut state,
+        Message::EventDraftTitleChanged("Stretch".into()),
+    );
+    let _ = actions(app::update(
+        &mut state,
+        Message::EventDraftKindSelected(calendar::DraftKind::Habit),
+    ));
+    let editor = state.editor_window.expect("the habit editor is open");
+    let _ = app::update(
+        &mut state,
+        Message::DescriptionOpen(habits::NEW_HABIT_ID.into()),
+    );
+    state.description_editor = iced::widget::text_editor::Content::with_text("Slow and steady");
+
+    assert!(actions(app::update(&mut state, Message::DescriptionSave)).is_empty());
+    assert!(state.description_popup.is_none());
+    assert!(
+        !state.habits.busy,
+        "saving a description must not create the habit"
+    );
+    let project = state.config.projects.items[0].id;
+    for action in [
+        ProjectAction::Toggle, // Add project
+        ProjectAction::Add(project),
+        ProjectAction::Toggle, // Done
+    ] {
+        assert!(actions(app::update(&mut state, Message::EventEditProjects(action))).is_empty());
+        assert_eq!(state.editor_window, Some(editor));
+        assert!(state.details_pane_open);
+        assert_eq!(
+            state.calendar.open_event.as_deref(),
+            Some(habits::NEW_HABIT_ID)
+        );
+        assert!(!state.habits.busy);
+    }
+
+    let _ = app::update(&mut state, Message::EventEditStartChanged("10:00".into()));
+    let _ = app::update(
+        &mut state,
+        Message::EventEditTitleChanged("Morning stretch".into()),
+    );
+    let draft = state.calendar.edit_draft.as_ref().unwrap();
+    assert_eq!(draft.title, "Morning stretch");
+    assert_eq!(draft.description, "Slow and steady");
+    assert_eq!(draft.projects.ids, [project]);
+    assert!(!draft.projects.open);
+    assert_eq!(draft.start_text, "10:00");
+    assert_eq!(draft.end_text, "10:45");
+    assert!(!draft.saving);
+    assert_eq!(state.editor_window, Some(editor));
+    assert!(state.calendar.error.is_none());
+}
+
+#[test]
 fn moving_a_habit_start_keeps_its_duration() {
     let mut state = state();
     let mut snapshot = calendar::sample_snapshot();
@@ -209,13 +300,46 @@ fn moving_a_habit_start_keeps_its_duration() {
 fn habit_series_response_is_ignored_after_selecting_another_event() {
     let mut state = state();
     let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let event = state.calendar.event("standup").unwrap().clone();
     let series = state.calendar.edit_draft.clone().unwrap();
     let _ = app::update(&mut state, Message::EventOpened("lunch".into()));
     let _ = app::update(
         &mut state,
-        Message::HabitDetailsLoaded("standup".into(), Ok(series)),
+        Message::HabitDetailsLoaded("standup".into(), Ok((event, series))),
     );
     assert_eq!(state.calendar.edit_draft.as_ref().unwrap().id, "lunch");
+}
+
+#[test]
+fn loading_a_calendar_habit_keeps_the_selected_occurrence_and_sync_source() {
+    let mut state = state();
+    let mut event = state.calendar.events[1].clone();
+    event.details.habit = true;
+    event.details.recurring_event_id = Some("habit-series".into());
+    state.calendar.events[1] = event.clone();
+    // Seed the editor as EventOpened does while its series is loading.
+    state.calendar.open_event = Some(event.id.clone());
+    let mut master = event.clone();
+    master.id = "habit-series".into();
+    master.start -= chrono::Duration::days(10);
+    master.end -= chrono::Duration::days(10);
+    master.details.recurrence = vec!["RRULE:FREQ=DAILY".into()];
+    let draft = calendar::EditDraft::from_habit_occurrence(&event, &master);
+    let _ = app::update(
+        &mut state,
+        Message::HabitDetailsLoaded(event.id.clone(), Ok((event.clone(), draft))),
+    );
+    assert_eq!(
+        state.calendar.open_event.as_deref(),
+        Some(event.id.as_str())
+    );
+    let draft = state.calendar.edit_draft.as_ref().unwrap();
+    assert_eq!(draft.start, event.start);
+    assert_eq!(draft.end, event.end);
+    assert!(
+        state.calendar.detail_event.is_none(),
+        "Calendar sync must keep supplying the original occurrence"
+    );
 }
 
 #[test]
@@ -287,9 +411,14 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
     loaded.loading = false;
     loaded.series_id = Some("off-day-master".into());
     loaded.projects.ids = vec![7];
+    let mut event = state.calendar.event("off-day-master").unwrap().clone();
+    event.id = "off-day-instance".into();
+    event.details.recurring_event_id = Some("off-day-master".into());
+    event.details.recurrence.clear();
+    loaded.id = event.id.clone();
     let _ = app::update(
         &mut state,
-        Message::HabitDetailsLoaded("off-day-master".into(), Ok(loaded)),
+        Message::HabitDetailsLoaded("off-day-master".into(), Ok((event, loaded))),
     );
     let _ = app::update(&mut state, Message::EventEditStartChanged("10:00".into()));
     let draft = state.calendar.edit_draft.as_ref().unwrap();
@@ -297,7 +426,14 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
     assert_eq!(draft.end_text, "10:30");
     assert_eq!(draft.projects.ids, [7]);
     state.calendar.apply_snapshot(calendar::sample_snapshot());
-    assert_eq!(state.calendar.open_event.as_deref(), Some("off-day-master"));
+    assert_eq!(
+        state.calendar.open_event.as_deref(),
+        Some("off-day-instance")
+    );
+    assert_eq!(
+        state.calendar.detail_event.as_ref().unwrap().id,
+        "off-day-instance"
+    );
 }
 
 #[test]
@@ -359,4 +495,36 @@ fn floating_editor_matches_panel_height_with_screen_margins() {
             });
         }
     }
+}
+
+#[test]
+fn saved_habit_edits_refresh_both_the_habits_list_and_calendar() {
+    let mut state = state();
+    state.screen = app::Screen::Habits;
+    let event = state.calendar.events[1].clone();
+    let mut draft = calendar::EditDraft::from_event(&event);
+    draft.saving = true;
+    state.calendar.edit_draft = Some(draft);
+    let task = app::update(&mut state, Message::EventEditSaved(Ok(())));
+    let messages = iced::futures::executor::block_on(async {
+        let mut messages = Vec::new();
+        let mut stream = runtime::task::into_stream(task).unwrap();
+        while let Some(action) = stream.next().await {
+            if let Action::Output(message) = action {
+                messages.push(message);
+            }
+        }
+        messages
+    });
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::Habits(timeslay::habits::Action::Refresh)))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::CalendarSyncRequested))
+    );
+    assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
 }

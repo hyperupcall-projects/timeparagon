@@ -210,21 +210,28 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
 /// overlay has nowhere to go at this width.
 #[test]
 fn the_compact_theme_picker_cycles_on_press() -> Result<(), Error> {
-    let mut state = state();
-    state.screen = Screen::Settings;
+    for (selected, shown, next) in [
+        ("Light", "Light", "Light high contrast"),
+        ("Light high contrast", "Light high contrast", "Dark"),
+        ("Dark", "Dark", "Dark high contrast"),
+        ("Dark high contrast", "Dark high contrast", "Light"),
+        ("Sakura", "Light", "Light high contrast"),
+    ] {
+        let mut state = state();
+        state.screen = Screen::Settings;
+        state.config.appearance.theme = selected.to_owned();
 
-    let mut ui = render(&state, Size::new(200.0, 400.0));
+        let mut ui = render(&state, Size::new(200.0, 400.0));
+        let _ = ui.click(shown)?;
+        let messages: Vec<Message> = ui.into_messages().collect();
 
-    let _ = ui.click("Sakura")?;
-
-    let messages: Vec<Message> = ui.into_messages().collect();
-
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::ThemeSelected(name) if name == "Peony")),
-        "expected the next theme to be selected, got {messages:?}"
-    );
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::ThemeSelected(name) if name == next)),
+            "expected {next} after {selected}, got {messages:?}"
+        );
+    }
 
     Ok(())
 }
@@ -439,7 +446,7 @@ fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
 }
 
 #[test]
-fn the_calendar_menu_lists_calendars_and_the_website_link() {
+fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
     let mut state = state();
     state.screen = Screen::Calendar;
     state.calendar =
@@ -448,16 +455,15 @@ fn the_calendar_menu_lists_calendars_and_the_website_link() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
+    for label in ["Calendars", "Personal", "Work", "Tasks", "Sync now"] {
+        assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
+    }
     for label in [
-        "Calendars",
-        "Personal",
-        "Work",
-        "Tasks",
-        "Sync now",
         "Open Google Calendar",
+        "Open in Google Calendar",
         "Dock to screen edge",
     ] {
-        assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
+        assert!(ui.find(label).is_err(), "{label:?} is still in the menu");
     }
 }
 

@@ -262,15 +262,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 state.calendar.error = None;
                 state.task_description = iced::widget::text_editor::Content::new();
             }
-            let focus = operation::focus(Id::new(TITLE_FIELD));
-            if state.inbox.voice.discovery_needed() {
-                Task::batch([
-                    focus,
-                    crate::voice::update(state, crate::voice::Action::Refresh),
-                ])
-            } else {
-                focus
-            }
+            operation::focus(Id::new(TITLE_FIELD))
         }
         Action::Cancel => {
             // A task being saved cannot be taken back, so keep its popup up

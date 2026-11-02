@@ -1,6 +1,5 @@
-//! The theme catalog: built-ins, our own palettes, and user files.
+//! The four selectable light, dark, and high contrast themes.
 
-pub mod loader;
 pub mod palettes;
 
 use std::sync::LazyLock;
@@ -53,8 +52,10 @@ impl Entry {
         }
     }
 
-    fn from_palette(name: &str, palette: Palette) -> Self {
-        let theme = Theme::custom(name.to_owned(), palette);
+    fn high_contrast(name: &str, palette: Palette, surfaces: [u32; 7]) -> Self {
+        let theme = Theme::custom_with_fn(name.to_owned(), palette, |palette| {
+            palettes::high_contrast_extended(palette, surfaces)
+        });
 
         Self {
             name: name.to_owned(),
@@ -64,25 +65,6 @@ impl Entry {
     }
 }
 
-/// The light themes iced ships that are actually nice to look at, in the
-/// order we want to offer them.
-const BUILT_IN_LIGHT: [Theme; 6] = [
-    Theme::CatppuccinLatte,
-    Theme::KanagawaLotus,
-    Theme::SolarizedLight,
-    Theme::GruvboxLight,
-    Theme::TokyoNightLight,
-    Theme::Light,
-];
-
-/// Existing dark themes, kept available under their original names.
-const BUILT_IN_DARK: [Theme; 4] = [
-    Theme::Dark,
-    Theme::CatppuccinMocha,
-    Theme::TokyoNight,
-    Theme::Ferra,
-];
-
 /// Every theme the picker offers.
 #[derive(Debug, Clone)]
 pub struct Catalog {
@@ -90,59 +72,28 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Builds the catalog, including whatever the user has dropped in their
-    /// themes directory.
+    /// The catalog is fixed; user theme files do not add picker options.
     pub fn load() -> Self {
-        let user = crate::config::themes_dir()
-            .map(|directory| {
-                loader::ensure_example(&directory);
-                loader::load(&directory)
-            })
-            .unwrap_or_default();
-
-        Self::assemble(user)
+        Self::built_in()
     }
 
-    /// Just the themes compiled into the binary.
-    ///
-    /// Used by tests, so they neither read nor write the user's themes
-    /// directory.
     pub fn built_in() -> Self {
-        Self::assemble(Vec::new())
-    }
-
-    fn assemble(user: Vec<Entry>) -> Self {
-        let mut entries: Vec<Entry> = palettes::CUSTOM
-            .iter()
-            .map(|(name, palette)| Entry::from_palette(name, *palette))
-            .collect();
-
-        entries.extend(user);
-        entries.extend(BUILT_IN_LIGHT.iter().cloned().map(Entry::built_in));
-        entries.extend(palettes::DARK.iter().map(|(name, palette, surfaces)| {
-            let theme = Theme::custom_with_fn((*name).to_owned(), *palette, |palette| {
-                palettes::dark_extended(palette, *surfaces)
-            });
-            Entry {
-                name: (*name).to_owned(),
-                accents: Accents::derive(&theme),
-                theme,
-            }
-        }));
-        entries.extend(BUILT_IN_DARK.iter().cloned().map(Entry::built_in));
-
-        // A user theme sharing a name with an earlier entry would make the
-        // picker ambiguous, so the first one wins.
-        let mut seen = Vec::new();
-        entries.retain(|entry| {
-            let fresh = !seen.contains(&entry.name);
-            if fresh {
-                seen.push(entry.name.clone());
-            }
-            fresh
-        });
-
-        Self { entries }
+        Self {
+            entries: vec![
+                Entry::built_in(Theme::Light),
+                Entry::high_contrast(
+                    "Light high contrast",
+                    palettes::LIGHT_HIGH_CONTRAST,
+                    palettes::LIGHT_HIGH_CONTRAST_SURFACES,
+                ),
+                Entry::built_in(Theme::Dark),
+                Entry::high_contrast(
+                    "Dark high contrast",
+                    palettes::DARK_HIGH_CONTRAST,
+                    palettes::DARK_HIGH_CONTRAST_SURFACES,
+                ),
+            ],
+        }
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -156,8 +107,7 @@ impl Catalog {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
-    /// Looks up a theme, falling back to the first one if the configured name
-    /// no longer exists (a renamed or deleted user theme).
+    /// Falls back to Light when the configured theme has been removed.
     pub fn resolve(&self, name: &str) -> &Entry {
         self.get(name).unwrap_or_else(|| {
             self.entries
@@ -199,29 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn our_palettes_come_first_in_the_catalog() {
-        let catalog = Catalog {
-            entries: palettes::CUSTOM
-                .iter()
-                .map(|(name, palette)| Entry::from_palette(name, *palette))
-                .collect(),
-        };
-
-        assert_eq!(catalog.names().first().unwrap(), "Sakura");
+    fn the_catalog_only_offers_the_four_supported_themes() {
+        let expected = ["Light", "Light high contrast", "Dark", "Dark high contrast"];
+        assert_eq!(Catalog::built_in().names(), expected);
+        assert_eq!(Catalog::load().names(), expected);
     }
 
     #[test]
-    fn an_unknown_theme_name_falls_back_instead_of_panicking() {
-        let catalog = Catalog {
-            entries: vec![Entry::from_palette("Sakura", palettes::SAKURA)],
-        };
-
-        assert_eq!(catalog.resolve("Deleted By User").name, "Sakura");
-    }
-
-    #[test]
-    fn built_in_entries_are_named_the_way_iced_names_them() {
-        let entry = Entry::built_in(Theme::CatppuccinLatte);
-        assert_eq!(entry.name, "Catppuccin Latte");
+    fn a_removed_or_unknown_theme_falls_back_to_light() {
+        let catalog = Catalog::built_in();
+        for name in ["Sakura", "GitHub Dark", "Deleted By User"] {
+            assert!(catalog.get(name).is_none());
+            assert_eq!(catalog.resolve(name).name, "Light");
+        }
     }
 }

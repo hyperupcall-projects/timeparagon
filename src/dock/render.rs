@@ -45,6 +45,14 @@ const HOUR_GRAY: Color = Color {
     a: 0.55,
 };
 const HOUR_LINE_HEIGHT: f32 = 1.0;
+/// Padding inside the right-click menu, and the height of each of its rows.
+const MENU_PADDING: f32 = 6.0;
+const MENU_ROW_HEIGHT: f32 = 22.0;
+/// Width of the colour dot at the start of a menu row.
+const MENU_DOT: f32 = 8.0;
+/// Roughly how wide one character is at the menu's body size, used to keep a
+/// long title on a single row.
+const MENU_CHAR_WIDTH: f32 = 7.0;
 
 /// The theme colors the dock paints with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -194,7 +202,7 @@ impl Layout {
     }
 
     /// The distance along the strip at which a minute is drawn.
-    fn along_of(&self, minute: f32) -> f32 {
+    pub fn along_of(&self, minute: f32) -> f32 {
         let start = self.axis_start();
         let header = self.header();
         start + header + minute / DAY_MINUTES as f32 * (self.day_length() - 2.0 * header).max(1.0)
@@ -301,7 +309,7 @@ impl Layout {
         }
     }
 
-    /// The segment under a pointer position, if any.
+    /// The segment under a pointer position, the topmost when several overlap.
     pub fn hit(&self, segments: &[Segment], x: f64, y: f64) -> Option<usize> {
         let (x, y) = (x as f32, y as f32);
         if x < self.content_x
@@ -321,8 +329,63 @@ impl Layout {
             return None;
         }
 
-        segments.iter().position(|segment| {
+        segments.iter().rposition(|segment| {
             let (left, top, width, height) = self.segment_rect(segment);
+            x >= left && x < left + width && y >= top && y < top + height
+        })
+    }
+
+    /// The minute into the day at a pointer position, if it is over the
+    /// strip's day band rather than a button.
+    pub fn minute_at(&self, x: f64, y: f64) -> Option<f32> {
+        let (x, y) = (x as f32, y as f32);
+        if x < self.content_x
+            || x >= self.content_x + self.content_width
+            || y < self.content_y
+            || y >= self.content_y + self.content_height
+        {
+            return None;
+        }
+
+        let along = if self.vertical() {
+            y - self.content_y
+        } else {
+            x - self.content_x
+        };
+        let header = self.header();
+        let span = (self.day_length() - 2.0 * header).max(1.0);
+        if along < header || along >= header + span {
+            return None;
+        }
+        Some((along - header) / span * DAY_MINUTES as f32)
+    }
+
+    /// Height of a right-click menu with `rows` items.
+    pub fn menu_height(rows: usize) -> f32 {
+        MENU_PADDING * 2.0 + MENU_ROW_HEIGHT * rows as f32
+    }
+
+    /// The rectangle of the whole right-click menu, hanging beside `anchor`.
+    pub fn menu_rect(&self, anchor: f32, rows: usize) -> (f32, f32, f32, f32) {
+        self.card_rect(anchor, Self::menu_height(rows))
+    }
+
+    /// The rectangle of the menu row at `index`.
+    pub fn menu_row_rect(&self, anchor: f32, rows: usize, index: usize) -> (f32, f32, f32, f32) {
+        let (x, y, w, _) = self.menu_rect(anchor, rows);
+        (
+            x + MENU_PADDING,
+            y + MENU_PADDING + MENU_ROW_HEIGHT * index as f32,
+            (w - 2.0 * MENU_PADDING).max(0.0),
+            MENU_ROW_HEIGHT,
+        )
+    }
+
+    /// The menu row under a pointer position, if any.
+    pub fn hit_menu(&self, anchor: f32, rows: usize, x: f64, y: f64) -> Option<usize> {
+        let (x, y) = (x as f32, y as f32);
+        (0..rows).find(|&index| {
+            let (left, top, width, height) = self.menu_row_rect(anchor, rows, index);
             x >= left && x < left + width && y >= top && y < top + height
         })
     }
@@ -339,6 +402,28 @@ impl Layout {
     }
 }
 
+/// One event in the right-click menu.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MenuItem {
+    /// The event's id, so choosing it can promote it.
+    pub id: String,
+    pub title: String,
+    pub color: Color,
+    /// Whether this event is the one currently painted on top.
+    pub on_top: bool,
+}
+
+/// The right-click menu: every event that includes the minute that was clicked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Menu {
+    /// Where along the strip the click landed.
+    pub anchor: f32,
+    /// Topmost event first.
+    pub items: Vec<MenuItem>,
+    /// The row the pointer is over, if any.
+    pub hovered: Option<usize>,
+}
+
 /// What to paint this frame.
 pub struct Scene<'a> {
     pub segments: &'a [Segment],
@@ -346,6 +431,10 @@ pub struct Scene<'a> {
     pub hovered: Option<usize>,
     /// The segment whose full card was left open by a click.
     pub pinned: Option<usize>,
+    /// The segment the user promoted to the top of the stack.
+    pub promoted: Option<usize>,
+    /// The right-click menu, when one is open.
+    pub menu: Option<&'a Menu>,
     /// Minutes past midnight at which the strip's day begins, which places
     /// the hour lines.
     pub day_offset_min: i32,
@@ -510,6 +599,7 @@ impl Renderer {
         let now = scene.now_minute;
         for (index, segment) in scene.segments.iter().enumerate() {
             let hovered = scene.hovered == Some(index);
+            let promoted = scene.promoted == Some(index);
             let past = now.is_some_and(|now| (segment.end_min as f32) < now);
             let mut alpha = if past && !hovered { PAST_ALPHA } else { 1.0 };
             if segment.completed {
@@ -529,6 +619,8 @@ impl Renderer {
 
             if hovered {
                 stroke_rounded(pixmap, layout, rect, 2.0, palette.text, 1.0);
+            } else if promoted {
+                stroke_rounded(pixmap, layout, rect, 2.0, palette.accent, 1.0);
             } else if scene.pinned == Some(index) {
                 stroke_rounded(pixmap, layout, rect, 2.0, palette.accent, 1.0);
             }
@@ -591,7 +683,9 @@ impl Renderer {
             }
         }
 
-        let card = if scene.add_hovered {
+        let card = if let Some(menu) = scene.menu {
+            Some(self.paint_menu(layout, palette, menu, pixmap))
+        } else if scene.add_hovered {
             let card = Card {
                 title: "New inbox task".into(),
                 when: "Click to add".into(),
@@ -703,6 +797,80 @@ impl Renderer {
                 cursor,
             );
             cursor += block.height + BLOCK_GAP;
+        }
+
+        PixelRect::from_logical(layout, rect, 2.0)
+    }
+
+    /// Paints the right-click menu beside the strip and returns the patch it
+    /// covers. Each row names one event covering the clicked minute; the row
+    /// under the pointer is highlighted.
+    fn paint_menu(
+        &mut self,
+        layout: &Layout,
+        palette: &Palette,
+        menu: &Menu,
+        pixmap: &mut Pixmap,
+    ) -> PixelRect {
+        let rows = menu.items.len();
+        let rect = layout.menu_rect(menu.anchor, rows);
+        let (_, _, card_width, _) = rect;
+
+        fill_rounded(pixmap, layout, rect, CARD_RADIUS, palette.card, 1.0);
+        stroke_rounded(pixmap, layout, rect, CARD_RADIUS, palette.border, 1.0);
+
+        let text_width = (card_width - 2.0 * CARD_PADDING).max(10.0);
+        let Self { text, warmup, .. } = self;
+        let (font_system, swash) = text_system(text, warmup);
+
+        for (index, item) in menu.items.iter().enumerate() {
+            let (row_x, row_y, row_w, row_h) = layout.menu_row_rect(menu.anchor, rows, index);
+            if menu.hovered == Some(index) {
+                fill_rounded(
+                    pixmap,
+                    layout,
+                    (row_x, row_y, row_w, row_h),
+                    4.0,
+                    palette.accent,
+                    0.18,
+                );
+            }
+
+            let dot = MENU_DOT.min(row_h);
+            fill_rounded(
+                pixmap,
+                layout,
+                (row_x + 4.0, row_y + (row_h - dot) / 2.0, dot, dot),
+                dot / 2.0,
+                item.color,
+                1.0,
+            );
+
+            let text_x = row_x + 4.0 + dot + 6.0;
+            let label = menu_label(&item.title, text_width);
+            let weight = if item.on_top {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            };
+            let block = text_block(
+                font_system,
+                layout,
+                &label,
+                BODY_SIZE,
+                weight,
+                text_color(palette.text),
+                text_width,
+            );
+            draw_block(
+                pixmap,
+                layout,
+                font_system,
+                swash,
+                &block,
+                text_x,
+                row_y + (row_h - block.height) / 2.0,
+            );
         }
 
         PixelRect::from_logical(layout, rect, 2.0)
@@ -945,6 +1113,17 @@ fn text_color(color: Color) -> TextColor {
     TextColor::rgba(b, g, r, a)
 }
 
+/// Trims a menu label so it stays on one row at the menu's body size.
+fn menu_label(text: &str, width: f32) -> String {
+    let limit = (width / MENU_CHAR_WIDTH).floor().max(1.0) as usize;
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut short: String = text.chars().take(limit.saturating_sub(1)).collect();
+    short.push('…');
+    short
+}
+
 fn paint_for(color: Color, alpha: f32) -> Paint<'static> {
     let mut paint = Paint::default();
     paint.set_color_rgba8(
@@ -1072,10 +1251,12 @@ mod tests {
             lines: vec!["Room 4".into()],
         };
         Segment {
+            id: format!("{start_min}-{end_min}"),
             start_min,
             end_min,
             color: Color::from_rgb(0.2, 0.4, 0.9),
             completed: false,
+            priority: 0,
             full: Card {
                 lines: vec!["Room 4".into(), "Everything else".into()],
                 ..card.clone()
@@ -1126,6 +1307,8 @@ mod tests {
             now_minute: None,
             hovered: None,
             pinned: None,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines,
             button_hovered: false,
@@ -1159,6 +1342,8 @@ mod tests {
             now_minute: None,
             hovered,
             pinned,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
@@ -1245,6 +1430,8 @@ mod tests {
             now_minute: None,
             hovered: None,
             pinned: None,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
@@ -1297,6 +1484,96 @@ mod tests {
     }
 
     #[test]
+    fn hit_returns_the_segment_that_is_painted_last() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let mut bottom = segment(600, 660);
+        bottom.id = "bottom".into();
+        let mut top = segment(600, 660);
+        top.id = "top".into();
+        // Back to front: `top` is the last element and so sits on top.
+        let segments = [bottom, top];
+
+        let (_, y, _, h) = layout.segment_rect(&segments[1]);
+
+        assert_eq!(layout.hit(&segments, 5.0, (y + h / 2.0) as f64), Some(1));
+    }
+
+    #[test]
+    fn minute_at_inverts_along_of() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let y = layout.along_of(600.0);
+
+        let minute = layout
+            .minute_at((layout.content_x + 1.0) as f64, y as f64)
+            .unwrap();
+
+        assert!((minute - 600.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_menu_row_under_the_pointer_is_found() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let (anchor, rows) = (300.0, 3);
+
+        for index in 0..rows {
+            let (x, y, w, h) = layout.menu_row_rect(anchor, rows, index);
+            assert_eq!(
+                layout.hit_menu(anchor, rows, (x + w / 2.0) as f64, (y + h / 2.0) as f64),
+                Some(index)
+            );
+        }
+        let (x, y, _, _) = layout.menu_rect(anchor, rows);
+        assert_eq!(
+            layout.hit_menu(anchor, rows, x as f64 - 20.0, y as f64),
+            None
+        );
+    }
+
+    #[test]
+    fn an_open_menu_paints_beside_the_strip() {
+        let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
+        let (width, height) = layout.pixel_size();
+        let menu = Menu {
+            anchor: 300.0,
+            items: vec![MenuItem {
+                id: "a".into(),
+                title: "Standup".into(),
+                color: Color::from_rgb(0.2, 0.6, 0.3),
+                on_top: true,
+            }],
+            hovered: None,
+        };
+        let scene = Scene {
+            segments: &[],
+            now_minute: None,
+            hovered: None,
+            pinned: None,
+            promoted: None,
+            menu: Some(&menu),
+            day_offset_min: 0,
+            hour_lines: false,
+            button_hovered: false,
+            add_hovered: false,
+            back_label: "",
+            side: DockSide::Left,
+            palette: palette(),
+        };
+        let mut pixmap = Pixmap::new(width, height).unwrap();
+
+        Renderer::default().paint(&layout, &scene, &mut pixmap);
+
+        let (x, y, w, h) = layout.menu_rect(menu.anchor, menu.items.len());
+        assert_eq!(
+            pixmap
+                .pixel((x + w / 2.0) as u32, (y + h / 2.0) as u32)
+                .unwrap()
+                .alpha(),
+            255
+        );
+        assert_eq!(pixmap.pixel(150, 20).unwrap().alpha(), 0);
+    }
+
+    #[test]
     fn the_back_button_sits_at_the_start_and_inside_the_strip_width() {
         let layout = Layout::new(&DockConfig::default(), 316, 1440, 1);
         let (x, y, w, h) = layout.button_rect();
@@ -1328,6 +1605,8 @@ mod tests {
             now_minute: None,
             hovered: None,
             pinned: None,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: true,
@@ -1366,6 +1645,8 @@ mod tests {
             now_minute: Some(600.0),
             hovered: None,
             pinned: None,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
@@ -1407,6 +1688,8 @@ mod tests {
             now_minute: None,
             hovered: Some(0),
             pinned: None,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
@@ -1433,6 +1716,8 @@ mod tests {
             now_minute: None,
             hovered,
             pinned: None,
+            promoted: None,
+            menu: None,
             day_offset_min: 0,
             hour_lines: false,
             button_hovered: false,
@@ -1477,6 +1762,8 @@ mod tests {
                 now_minute: None,
                 hovered: Some(hovered),
                 pinned: None,
+                promoted: None,
+                menu: None,
                 day_offset_min: 0,
                 hour_lines: false,
                 button_hovered: false,

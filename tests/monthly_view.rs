@@ -182,3 +182,79 @@ fn month_navigation_remains_reachable_at_small_widths() {
         }
     }
 }
+
+#[test]
+fn habit_month_filters_other_events_and_retains_completion_history() {
+    use timeslay::habits::{Action, Habit, Recurrence};
+    let mut state = state();
+    let day = date(2026, 8, 16);
+    let mut completed = state.calendar.events_on(day)[0].clone();
+    completed.id = "stretch-instance".into();
+    completed.title = "Stretch".into();
+    completed.details.habit = true;
+    completed.details.recurring_event_id = Some("stretch-master".into());
+    completed.completed = true;
+    completed.details.habit_completed_at = Some(completed.start + Duration::minutes(20));
+    state.habits.calendar_habit = Some(Habit {
+        id: "stretch-master".into(),
+        calendar_id: completed.calendar_id.clone(),
+        title: "Stretch".into(),
+        notes: String::new(),
+        start: completed.start,
+        end: completed.end,
+        recurrence: Recurrence::from_lines(&[]),
+        color_id: None,
+    });
+    let mut pending = completed.clone();
+    pending.id = "another-series-instance".into();
+    pending.details.recurring_event_id = Some("another-series".into());
+    pending.completed = false;
+    pending.details.habit_completed_at = None;
+    let mut other = completed.clone();
+    other.id = "other-habit".into();
+    other.title = "Read".into();
+    other.details.recurring_event_id = Some("reading".into());
+    let dates = state.calendar_dates();
+    let mut snapshot = calendar::sample_snapshot();
+    snapshot.day = day;
+    snapshot.events = vec![completed.clone(), pending, other];
+    state.calendar.apply_week_snapshot(snapshot, &dates);
+    let format = state.config.appearance.time_format;
+    let label = format!(
+        "Completed at {}",
+        calendar::time_format::clock(completed.details.habit_completed_at.unwrap(), format)
+    );
+    let mut ui = render(&state, Size::new(1100.0, 1100.0));
+    assert!(ui.find(label.as_str()).is_ok());
+    assert!(ui.find("Not completed").is_ok());
+    assert!(ui.find("Read").is_err());
+    assert!(ui.find("Not scheduled").is_ok());
+    ui.click("Mark complete").unwrap();
+    let action = ui.into_messages().find(|message| matches!(message, Message::WeekDayAction(d, inner) if *d == day && matches!(inner.as_ref(), Message::Habits(Action::ToggleCompleted(_))))).unwrap();
+    let _ = app::update(&mut state, action);
+    assert_eq!(state.calendar.day, day);
+    assert!(state.habits.completing.contains("another-series-instance"));
+    // A write response arriving after navigation updates the cached day too.
+    let _ = app::update(&mut state, Message::CalendarDayOpened(date(2026, 8, 17)));
+    completed.details.habit_completed_at = Some(completed.start + Duration::minutes(25));
+    let _ = app::update(
+        &mut state,
+        Message::Habits(Action::CompletionSaved(
+            completed.id.clone(),
+            Ok(completed.clone()),
+        )),
+    );
+    assert_eq!(
+        state
+            .calendar
+            .events_on(day)
+            .iter()
+            .find(|e| e.id == completed.id)
+            .unwrap()
+            .details
+            .habit_completed_at,
+        completed.details.habit_completed_at
+    );
+    let _ = app::update(&mut state, Message::CalendarViewMonthShift(1));
+    assert!(state.habits.calendar_habit.is_some());
+}

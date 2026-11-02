@@ -49,9 +49,9 @@ There's week and month views, just like any other calendar app:
 	- Habits
 		- These are standard calendar events that are colored differently.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
-	- Sleep (TODO)
-		- These are standard calendar events that are automatically calculated from the next day's first event.
-		- Automatic shutdown.
+	- Sleep
+		- Automatically create events for sleep.
+		- Automatic shutdown (TODO).
 - Capture and manage tasks:
 	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
 	- Create tasks:

@@ -648,15 +648,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dark_neutral_buttons_keep_readable_text_in_each_active_state() {
+    fn high_contrast_neutral_buttons_keep_readable_text_in_each_active_state() {
         let catalog = crate::theme::Catalog::built_in();
-        for name in [
-            "Absolute Black",
-            "GitHub Dark",
-            "GitHub Dark High Contrast",
-            "Nord",
-            "Dracula",
-        ] {
+        for name in ["Light high contrast", "Dark high contrast"] {
             let theme = &catalog.get(name).unwrap().theme;
             for status in [
                 button::Status::Active,
