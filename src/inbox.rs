@@ -646,8 +646,17 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
 }
 
 fn create(state: &mut State) -> Task<Message> {
-    if state.inbox.voice.active() {
+    let Some((settings, task)) = prepare_create(state) else {
         return Task::none();
+    };
+    blocking::run(move || write(&settings, task))
+        .map(|result| Message::Inbox(Action::Created(result)))
+}
+
+/// Validates the draft and marks it saving, without touching Google.
+fn prepare_create(state: &mut State) -> Option<(crate::config::CalendarSettings, NewTask)> {
+    if state.inbox.voice.active() {
+        return None;
     }
     if let Some(draft) = state
         .inbox
@@ -666,25 +675,24 @@ fn create(state: &mut State) -> Task<Message> {
     let deadline = state.timeblocking.deadline.clone();
     let due = state.timeblocking.date.clone();
     let Some(draft) = state.inbox.draft.as_mut() else {
-        return Task::none();
+        return None;
     };
     draft.deadline = deadline;
     draft.due = due;
     if draft.saving || draft.fetching {
-        return Task::none();
+        return None;
     }
     let task = match validate(draft) {
         Ok(task) => task,
         Err(error) => {
             draft.error = Some(error);
-            return Task::none();
+            return None;
         }
     };
     draft.saving = true;
     draft.error = None;
     let settings = state.config.calendar.clone();
-    blocking::run(move || write(&settings, task))
-        .map(|result| Message::Inbox(Action::Created(result)))
+    Some((settings, task))
 }
 
 /// Creates the task on Google. A link whose title was never read gets one more
@@ -1119,7 +1127,8 @@ mod tests {
         let tokens = draft.quick_tokens(&state.config.projects);
         assert_eq!(tokens.len(), 2);
         let _ = update(&mut state, Action::AcceptToken(tokens[0].range.clone()));
-        let _ = update(&mut state, Action::Create);
+        // Not `Action::Create`: that would write a real task to Google.
+        assert!(prepare_create(&mut state).is_some());
         let draft = state.inbox.draft.as_ref().unwrap();
         assert_eq!(draft.title, "Plan Café @home tomorrow");
         let metadata = tb::metadata(draft.event.as_ref().unwrap());

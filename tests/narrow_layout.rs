@@ -11,6 +11,7 @@ use iced::{Element, Point, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
+use timeslay::app::MonthPicker;
 use timeslay::app::{self, Message, Screen, State};
 use timeslay::app::{
     CalendarMessage, EventMessage, KeepMessage, NavigationMessage, NotepadMessage, SettingsMessage,
@@ -411,7 +412,7 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Message::Calendar(CalendarMessage::CalendarMonthToggled)
+            Message::Calendar(CalendarMessage::CalendarMonthToggled(MonthPicker::Panel))
         )),
         "expected the month button to open the month picker, got {messages:?}"
     );
@@ -446,11 +447,31 @@ fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Message::Calendar(CalendarMessage::CalendarDaySelected(day))
+            Message::Calendar(CalendarMessage::CalendarMonthDayPicked(MonthPicker::Panel, day))
                 if *day == chrono::NaiveDate::from_ymd_opt(2026, 10, 15).unwrap()
         )),
         "expected the tapped day to be selected, got {messages:?}"
     );
+
+    Ok(())
+}
+
+/// The picker keeps its own size in a roomy panel rather than spreading out,
+/// and still opens from the panel while a range overview is up.
+#[test]
+fn the_panel_month_picker_fits_its_contents_beside_an_overview() -> Result<(), Error> {
+    let mut state = state();
+    state.screen = Screen::Calendar;
+    state.calendar =
+        timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+    state.view = timeslay::app::CalendarView::Week;
+    state.calendar.month_open = true;
+
+    let mut ui = render(&state, Size::new(800.0, 700.0));
+    let first = ui.find("15")?.bounds();
+    let title = ui.find("October 2026")?.bounds();
+    assert!(first.width < 60.0, "cell stretched to {}", first.width);
+    assert!(title.x < 200.0, "picker is spread across the panel");
 
     Ok(())
 }
@@ -2315,22 +2336,20 @@ fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
     assert!(state.timeblocking.block.is_none());
     let mut ui = render(&state, Size::new(900.0, 720.0));
     for label in [
-        "FOCUS · TIME BLOCK",
+        "Start Pomodoro",
         "Write proposal",
         "Review the draft",
         "Gather references",
+        "ACTUAL",
+        "PLANNED",
         "Start",
         "Stop",
-        "Complete",
-        "Completed ✓",
+        "30m",
     ] {
         assert!(ui.find(label).is_ok(), "missing {label}");
     }
-    if std::env::var_os("FOCUS_PREVIEW").is_some() {
-        ui.snapshot(&iced::Theme::Light)
-            .unwrap()
-            .matches_image(std::path::Path::new("/tmp/focus-preview"))
-            .unwrap();
+    for removed in ["FOCUS · TIME BLOCK", "Work history", "Ignore Task"] {
+        assert!(ui.find(removed).is_err(), "{removed} should be gone");
     }
     drop(ui);
     let _ = app::update(
@@ -2437,6 +2456,181 @@ fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(), Erro
         );
     }
     Ok(())
+}
+
+/// Every task shows twice, in the task card and on the timeline, and both have
+/// to be on screen at once with no scrolling, however many tasks there are.
+#[test]
+fn focused_timeline_fits_the_window_without_scrolling() {
+    use timeslay::timeblocking as tb;
+    for (width, height) in [
+        (480.0, 900.0),
+        (480.0, 600.0),
+        (900.0, 720.0),
+        (200.0, 720.0),
+    ] {
+        let mut state = focus_state();
+        let template = state.calendar.event("task:second").unwrap().clone();
+        let mut meta = tb::metadata(&template);
+        // Far more than the block's hour holds.
+        meta.minutes = 45;
+        for (index, id) in ["task:planned", "task:second", "task:errand"]
+            .iter()
+            .enumerate()
+        {
+            let mut task = template.clone();
+            task.id = (*id).into();
+            task.title = format!("Fitted task {index}");
+            meta.order = 10 + index as i64;
+            set_task_metadata(&mut task, "", meta.clone());
+            if state.calendar.event_mut(id).is_some() {
+                *state.calendar.event_mut(id).unwrap() = task;
+            } else {
+                state.calendar.add_event(task);
+            }
+        }
+        let mut ui = render(&state, Size::new(width, height));
+        let copies = title_bounds(&mut ui, "Fitted task 2");
+        assert_eq!(copies.len(), 2, "at {width}x{height}");
+        let last = copies[1];
+        assert!(
+            last.y >= 0.0 && last.y + last.height <= height,
+            "{last:?} overflows at {width}x{height}"
+        );
+    }
+}
+
+/// Every copy of a title in the view, in drawing order.
+fn title_bounds(ui: &mut Simulator<'_>, title: &str) -> Vec<iced::Rectangle> {
+    use iced_test::selector::Candidate;
+    let found = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let collected = found.clone();
+    let title = title.to_owned();
+    // Selecting nothing keeps the search going to the end of the tree.
+    let _ = ui.find(move |candidate: Candidate<'_>| -> Option<()> {
+        if let Candidate::Text {
+            content, bounds, ..
+        } = candidate
+            && content == title
+        {
+            collected.lock().unwrap().push(bounds);
+        }
+        None
+    });
+    found.lock().unwrap().clone()
+}
+
+#[test]
+fn the_pomodoro_starts_and_stops_the_current_task() {
+    use timeslay::timeblocking::{self as tb, Action};
+    let mut state = focus_state();
+    let planned = tb::task_key(state.calendar.event("task:planned").unwrap());
+    let second = tb::task_key(state.calendar.event("task:second").unwrap());
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::StopWork("task:planned".into())),
+    );
+    assert!(state.config.task_work.active().is_none());
+
+    // Nothing is running, so the first task still to do is the current one.
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+    assert!(state.config.pomodoro.running());
+    assert!(state.config.task_work.running(&planned));
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+    assert!(!state.config.pomodoro.running());
+    assert!(state.config.task_work.active().is_none());
+
+    // Whichever task was last chosen is the one that comes back.
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::StartWork("task:second".into())),
+    );
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+    assert!(state.config.task_work.running(&second));
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+    assert!(state.config.task_work.active().is_none());
+    let block = state.calendar.event("standup").unwrap();
+    assert_eq!(tb::current_task(&state, block).unwrap().id, "task:second");
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+    assert!(state.config.task_work.running(&second));
+
+    // Resetting a running clock stops it, and so stops the task too.
+    let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroReset));
+    assert!(!state.config.pomodoro.running());
+    assert!(state.config.task_work.active().is_none());
+}
+
+#[test]
+fn a_focused_task_line_completes_with_its_circle_and_opens_with_its_title() -> Result<(), Error> {
+    let state = focus_state();
+    let mut ui = render(&state, Size::new(480.0, 900.0));
+    let _ = ui.click("Review the draft")?;
+    let title = ui.find("Review the draft")?.bounds();
+    ui.point_at(iced::Point::new(title.x - 15.0, title.center_y()));
+    ui.simulate([
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        )),
+    ]);
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(messages.iter().any(
+        |m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "task:second")
+    ));
+    assert!(
+        messages.iter().any(
+            |m| matches!(m, Message::Task(TaskMessage::TaskToggled(id)) if id == "task:second")
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn a_task_opened_from_the_focus_view_sits_beside_it_and_closes_first() {
+    let mut state = focus_state();
+    let main = iced::window::Id::unique();
+    let editor = iced::window::Id::unique();
+    state.main_window = Some(main);
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("task:second".into())),
+    );
+    assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
+    assert_eq!(state.calendar.open_event.as_deref(), Some("task:second"));
+    assert!(state.details_pane_open);
+    state.editor_window = Some(editor);
+    for (window, focus_shown) in [(main, true), (editor, false)] {
+        let mut ui = at(Size::new(480.0, 900.0), app::view(&state, window));
+        assert_eq!(ui.find("Start Pomodoro").is_ok(), focus_shown, "{window:?}");
+    }
+    let _ = app::update(&mut state, Message::Event(EventMessage::EventClosed));
+    assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
+}
+
+#[test]
+#[ignore = "writes previews to /tmp/focus-preview for looking at by hand"]
+fn focus_view_preview() {
+    use timeslay::timeblocking::Action;
+    std::fs::create_dir_all("/tmp/focus-preview").unwrap();
+    for (name, size, running) in [
+        ("idle-480", Size::new(480.0, 1000.0), false),
+        ("running-480", Size::new(480.0, 1000.0), true),
+        ("running-260", Size::new(260.0, 800.0), true),
+        ("idle-900", Size::new(900.0, 720.0), false),
+    ] {
+        let mut state = focus_state();
+        if running {
+            let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+        }
+        let mut ui = render(&state, size);
+        for (theme, shade) in [(iced::Theme::Light, "light"), (iced::Theme::Dark, "dark")] {
+            let path = format!("/tmp/focus-preview/{name}-{shade}");
+            let _ = ui
+                .snapshot(&theme)
+                .unwrap()
+                .matches_image(std::path::Path::new(&path));
+        }
+    }
 }
 
 #[test]

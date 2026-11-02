@@ -1,6 +1,7 @@
-//! A focused, fixed-scale timeline for one time block.
+//! One time block as a page: a Pomodoro clock, its tasks with their timers, and
+//! a timeline that fits the window.
 use super::layout::Metrics;
-use crate::app::TaskMessage;
+use crate::app::{EventMessage, TaskMessage};
 use crate::calendar::time_format::TimeFormat;
 use crate::{
     app::{Message, State},
@@ -11,36 +12,39 @@ use crate::{
 use chrono::{DateTime, Local, Utc};
 use iced::widget::canvas::{Frame, Geometry, Path, Stroke, Text};
 use iced::widget::{
-    Space, button, canvas, column, container, mouse_area, responsive, row, stack, text,
+    Space, button, canvas, column, container, mouse_area, progress_bar, responsive, rich_text, row,
+    span, stack, text,
 };
 use iced::{Color, Element, Fill, Length, Point, Rectangle, Size, Theme, mouse};
+
+/// Below this width a task's timers move under its title.
+const NARROW_BELOW: f32 = 380.0;
+/// Below this height the page scrolls instead of crushing the timeline.
+const SHORT_BELOW: f32 = 480.0;
+const SHORT_TIMELINE: f32 = 240.0;
+/// The columns of a task line, which the card's headings line up with.
+const ACTUAL_WIDTH: f32 = 62.0;
+const PLANNED_WIDTH: f32 = 56.0;
+const ACTION_WIDTH: f32 = 54.0;
+const LINE_SPACING: f32 = 6.0;
+/// Room above and below the timeline for the outermost time labels.
+const TIMELINE_INSET: f32 = 10.0;
+/// The closest two time labels can be without overlapping.
+const MARK_SPACING: f32 = 13.0;
 
 fn msg(action: Action) -> Message {
     Message::TimeBlocking(action)
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let width = metrics.size.width * 0.95;
-    let height = metrics.size.height * 0.90;
     let block = state
         .timeblocking
         .focus
         .as_deref()
         .and_then(|id| state.calendar.event(id));
+    let narrow = metrics.size.width < NARROW_BELOW;
+    let short = metrics.size.height < SHORT_BELOW;
     let body: Element<'a, Message> = if let Some(block) = block {
-        let tasks = tb::assigned_all(state, block);
-        let done = tasks
-            .iter()
-            .filter(|e| tb::task_status(e) == tb::TaskStatus::Completed)
-            .count();
-        let ignored = tasks
-            .iter()
-            .filter(|e| tb::task_status(e) == tb::TaskStatus::Ignored)
-            .count();
-        let planned: u64 = tasks
-            .iter()
-            .map(|e| u64::from(tb::metadata(e).minutes))
-            .sum();
         let dump_day = block.start.date_naive();
         let dump_label = if state.config.brain_dump.get(dump_day).is_some() {
             "Brain dump"
@@ -49,91 +53,64 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         };
         let header = column![
             row![
-                text("FOCUS · TIME BLOCK")
-                    .size(11)
-                    .style(text::secondary)
+                text(block.title.clone())
+                    .size(if narrow { 18 } else { 22 })
                     .width(Fill),
-                button("Close")
+                button(text("Close").size(13))
                     .on_press(msg(Action::CloseView))
                     .style(crate::ui::controls::ghost)
-            ],
-            text(block.title.clone()).size(if width < 360.0 { 19 } else { 25 }),
-            text(format!(
-                "{} · {} – {}",
-                block.start.format("%a, %b %-d"),
-                crate::calendar::time_format::clock(
-                    block.start,
-                    state.config.appearance.time_format
-                ),
-                crate::calendar::time_format::clock(block.end, state.config.appearance.time_format)
-            ))
-            .size(13)
-            .style(text::secondary),
+            ]
+            .align_y(iced::Center),
             row![
                 text(format!(
-                    "{done}/{} complete · {ignored} ignored · {planned}m planned",
-                    tasks.len()
+                    "{} · {} – {}",
+                    block.start.format("%a, %b %-d"),
+                    crate::calendar::time_format::clock(
+                        block.start,
+                        state.config.appearance.time_format
+                    ),
+                    crate::calendar::time_format::clock(
+                        block.end,
+                        state.config.appearance.time_format
+                    )
                 ))
-                .size(12)
-                .width(Fill)
-                .style(text::secondary),
-                button(dump_label)
+                .size(13)
+                .style(text::secondary)
+                .width(Fill),
+                button(text(dump_label).size(12))
+                    .padding([2, 6])
                     .on_press(Message::BrainDump(crate::brain_dump::Action::Open(
                         dump_day,
                     )))
                     .style(crate::ui::controls::ghost),
-                button("Work history")
-                    .on_press(msg(Action::ToggleHistory))
-                    .style(crate::ui::controls::ghost)
-            ],
+            ]
+            .align_y(iced::Center),
         ]
-        .spacing(5);
-        // At narrow widths the header and Pomodoro leave no room for a
-        // timeline viewport, so everything below the header scrolls as one.
-        let compact = width < 360.0;
-        let mut body = column![header].spacing(10);
-        if !compact {
-            body = body.push(pomodoro(state));
-        }
+        .spacing(2);
+        let mut body = column![header, pomodoro(state, narrow)].spacing(8);
         if let Some(error) = &state.calendar.error {
             body = body.push(text(error).size(12).style(text::danger));
         }
-        if tasks.is_empty() {
-            body = body.push(
-                text("No tasks assigned. Open this block to plan your work.")
-                    .size(14)
-                    .style(text::secondary),
-            );
-        }
+        body = body.push(task_list(state, block, metrics, narrow, short));
         let block_id = block.id.clone();
-        body = body.push(
-            responsive(move |size| {
-                let block = state
-                    .calendar
-                    .event(&block_id)
-                    .expect("block exists while view is rendered");
-                let content: Element<'a, Message> = if compact {
-                    let mut content =
-                        column![timeline(state, block, size), pomodoro(state)].spacing(10);
-                    if let Some(history) = history(state, block) {
-                        content = content.push(history);
-                    }
-                    content.into()
-                } else {
-                    timeline(state, block, size)
-                };
-                crate::ui::controls::scrollable(content)
-                    .id(iced::widget::Id::new("focused-block-timeline"))
-                    .width(Fill)
-                    .height(Fill)
-                    .into()
-            })
-            .height(Fill),
-        );
-        if !compact && let Some(history) = history(state, block) {
-            body = body.push(history);
+        let schedule = responsive(move |size| {
+            let block = state
+                .calendar
+                .event(&block_id)
+                .expect("block exists while view is rendered");
+            timeline(state, block, size)
+        });
+        if short {
+            // Too little room for everything: only now does the page scroll,
+            // and the timeline inside it still fits its own height.
+            crate::ui::controls::scrollable(
+                body.push(schedule.height(Length::Fixed(SHORT_TIMELINE))),
+            )
+            .height(Fill)
+            .into()
+        } else {
+            body.push(schedule.height(Fill)).into()
         }
-        body.into()
     } else {
         column![
             text("This time block is no longer available"),
@@ -141,114 +118,378 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ]
         .into()
     };
-    let card = container(body)
-        .padding(if width < 320.0 { 10 } else { 20 })
-        .width(Length::Fixed(width))
-        .height(Length::Fixed(height))
-        .style(|theme: &Theme| {
+    // The whole window, like every other page: nothing behind it is reachable,
+    // so the press and scroll handlers stop input from falling through.
+    mouse_area(
+        container(body)
+            .padding(8)
+            .width(Fill)
+            .height(Fill)
+            .style(|theme: &Theme| {
+                let p = theme.extended_palette();
+                container::Style {
+                    background: Some(p.background.weakest.color.into()),
+                    text_color: Some(p.background.base.text),
+                    ..Default::default()
+                }
+            }),
+    )
+    .on_press(Message::Ignored)
+    .on_scroll(|_| Message::Ignored)
+    .into()
+}
+
+/// One app-wide clock: changing blocks does not create competing timers.
+fn pomodoro(state: &State, narrow: bool) -> Element<'_, Message> {
+    let timer = &state.config.pomodoro;
+    let on_break = timer.phase == crate::pomodoro::Phase::Break;
+    let clock = text(format!(
+        "{} · {}",
+        if on_break { "Break" } else { "Work" },
+        task_work::clock(timer.remaining)
+    ))
+    .size(18);
+    let mut controls = row![
+        button(
+            text(if timer.running() {
+                "Stop Pomodoro"
+            } else {
+                "Start Pomodoro"
+            })
+            .size(13)
+        )
+        .on_press(msg(Action::PomodoroToggle))
+        .style(if timer.running() {
+            crate::ui::controls::danger
+        } else {
+            crate::ui::controls::primary
+        })
+    ]
+    .spacing(4)
+    .align_y(iced::Center);
+    if !timer.fresh() {
+        controls = controls.push(
+            button(text("Reset").size(13))
+                .on_press(msg(Action::PomodoroReset))
+                .style(crate::ui::controls::ghost),
+        );
+    }
+    let top: Element<'_, Message> = if narrow {
+        column![clock, controls].spacing(6).into()
+    } else {
+        row![clock.width(Fill), controls]
+            .spacing(8)
+            .align_y(iced::Center)
+            .into()
+    };
+    let detail: Element<'_, Message> = if timer.fresh() {
+        let mut lengths = row![].spacing(12);
+        for (work, minutes, label) in [
+            (true, timer.work_minutes, "Work"),
+            (false, timer.break_minutes, "Break"),
+        ] {
+            lengths = lengths.push(
+                row![
+                    text(format!("{label}: {minutes}m"))
+                        .size(12)
+                        .style(text::secondary),
+                    button(text("−").size(13))
+                        .padding([0, 7])
+                        .style(crate::ui::controls::ghost)
+                        .on_press(msg(Action::PomodoroMinutes(work, -1))),
+                    button(text("+").size(13))
+                        .padding([0, 7])
+                        .style(crate::ui::controls::ghost)
+                        .on_press(msg(Action::PomodoroMinutes(work, 1))),
+                ]
+                .align_y(iced::Center),
+            );
+        }
+        lengths.wrap().into()
+    } else {
+        let spent = 1.0 - timer.remaining as f32 / timer.duration().max(1) as f32;
+        progress_bar(0.0..=1.0, spent.clamp(0.0, 1.0))
+            .girth(4)
+            .style(move |theme: &Theme| {
+                let p = theme.extended_palette();
+                progress_bar::Style {
+                    background: crate::ui::controls::edge_color(theme).into(),
+                    bar: if on_break {
+                        p.success.base.color
+                    } else {
+                        p.primary.base.color
+                    }
+                    .into(),
+                    border: iced::Border {
+                        radius: 2.0.into(),
+                        ..Default::default()
+                    },
+                }
+            })
+            .into()
+    };
+    container(column![top, detail].spacing(6))
+        .padding([8, 10])
+        .width(Fill)
+        .style(crate::ui::controls::card_surface)
+        .into()
+}
+
+/// The block's tasks at a glance: tick one off, see actual against planned
+/// time, and start or stop it, with the current task standing out.
+fn task_list<'a>(
+    state: &'a State,
+    block: &'a Event,
+    metrics: &Metrics,
+    narrow: bool,
+    short: bool,
+) -> Element<'a, Message> {
+    let tasks = tb::assigned_all(state, block);
+    if tasks.is_empty() {
+        return container(
+            text("No tasks assigned. Open this block to plan your work.")
+                .size(14)
+                .style(text::secondary),
+        )
+        .padding(10)
+        .width(Fill)
+        .style(crate::ui::controls::card_surface)
+        .into();
+    }
+    let now = state
+        .timeblocking
+        .work_now
+        .unwrap_or_else(crate::clock::utc_now);
+    let current = tb::current_task(state, block).map(|task| task.id.as_str());
+    let mut lines = column![].spacing(2);
+    for task in tasks {
+        lines = lines.push(task_line(
+            state,
+            task,
+            now,
+            current == Some(task.id.as_str()),
+            narrow,
+        ));
+    }
+    let mut card = column![].spacing(2);
+    if !narrow {
+        card = card.push(
+            row![
+                Space::new().width(Fill),
+                text("ACTUAL")
+                    .size(10)
+                    .style(text::secondary)
+                    .width(ACTUAL_WIDTH)
+                    .align_x(iced::Right),
+                text("PLANNED")
+                    .size(10)
+                    .style(text::secondary)
+                    .width(PLANNED_WIDTH)
+                    .align_x(iced::Right),
+                Space::new().width(ACTION_WIDTH),
+            ]
+            .spacing(LINE_SPACING)
+            .padding([0, 8]),
+        );
+    }
+    // A long list scrolls by itself so the timeline below keeps its share.
+    let list: Element<'a, Message> = if short {
+        lines.into()
+    } else {
+        container(crate::ui::controls::scrollable(lines))
+            .max_height((metrics.size.height * 0.4).max(160.0))
+            .into()
+    };
+    container(card.push(list))
+        .padding(6)
+        .width(Fill)
+        .style(crate::ui::controls::card_surface)
+        .into()
+}
+
+fn task_line<'a>(
+    state: &'a State,
+    task: &'a Event,
+    now: DateTime<Utc>,
+    current: bool,
+    narrow: bool,
+) -> Element<'a, Message> {
+    let key = tb::task_key(task);
+    let log = &state.config.task_work;
+    let running = log.running(&key);
+    let seconds = log.seconds(&key, now);
+    let minutes = tb::metadata(task).minutes;
+    let overtime = minutes > 0 && seconds > u64::from(minutes) * 60;
+    let done = tb::task_status(task) == tb::TaskStatus::Completed;
+    let mut check = button(text(if done { "✓" } else { "" }).size(13).center())
+        .width(22)
+        .height(22)
+        .padding(0)
+        .style(move |theme: &Theme, status| {
             let p = theme.extended_palette();
-            container::Style {
-                background: Some(p.background.weakest.color.into()),
-                text_color: Some(p.background.base.text),
+            let edge = match status {
+                button::Status::Hovered | button::Status::Pressed => p.success.base.color,
+                _ => p.background.strong.color,
+            };
+            button::Style {
+                background: done.then(|| p.success.base.color.into()),
+                text_color: p.success.base.text,
                 border: iced::Border {
-                    radius: crate::ui::controls::RADIUS_CARD.into(),
-                    color: p.background.strong.color,
-                    width: 1.0,
-                },
-                shadow: iced::Shadow {
-                    color: Color::BLACK.scale_alpha(0.4),
-                    offset: iced::Vector::new(0.0, 10.0),
-                    blur_radius: 30.0,
+                    color: if done { p.success.base.color } else { edge },
+                    width: 1.5,
+                    radius: 11.0.into(),
                 },
                 ..Default::default()
             }
         });
-    let backdrop =
-        mouse_area(
-            container(Space::new())
-                .width(Fill)
-                .height(Fill)
-                .style(|_| container::Style {
-                    background: Some(crate::ui::controls::SCRIM.into()),
-                    ..Default::default()
-                }),
+    if state.timeblocking.busy.is_empty() {
+        check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
+    }
+    let title = button(title_text(
+        task,
+        if current { 15.0 } else { 14.0 },
+        current,
+        text::Wrapping::Word,
+    ))
+    .width(Fill)
+    .padding([2, 4])
+    .style(crate::ui::controls::ghost)
+    .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())));
+    let actual = text(if seconds == 0 && !running {
+        "--:--".to_owned()
+    } else {
+        task_work::clock(seconds)
+    })
+    .size(if current { 14 } else { 13 })
+    .style(if overtime && !task.completed {
+        text::danger
+    } else if running {
+        text::success
+    } else if seconds == 0 || task.completed {
+        text::secondary
+    } else {
+        text::default
+    });
+    let planned_label = match (minutes, narrow) {
+        (0, false) => "--:--".to_owned(),
+        (0, true) => "/ --:--".to_owned(),
+        (minutes, false) => super::inbox::format_duration(minutes),
+        (minutes, true) => format!("/ {}", super::inbox::format_duration(minutes)),
+    };
+    let mut planned = button(text(planned_label).size(13).style(text::secondary))
+        .padding([2, 2])
+        .style(crate::ui::controls::ghost);
+    if !state.timeblocking.busy.contains_task(&task.id) {
+        planned = planned.on_press(msg(Action::EditEstimate(task.id.clone())));
+    }
+    let action: Element<'a, Message> = if task.completed {
+        Space::new().width(ACTION_WIDTH).into()
+    } else {
+        let on_break = state.config.pomodoro.running()
+            && state.config.pomodoro.phase == crate::pomodoro::Phase::Break;
+        let mut control = button(
+            text(if running {
+                "Stop"
+            } else if on_break {
+                "Next"
+            } else {
+                "Start"
+            })
+            .size(13)
+            .center()
+            .width(Fill),
         )
-        .on_press(msg(Action::CloseView))
-        .on_scroll(|_| Message::Ignored);
-    let foreground = container(
-        mouse_area(card)
-            .on_press(Message::Ignored)
-            .on_scroll(|_| Message::Ignored),
-    )
-    .center_x(Fill)
-    .center_y(Fill);
-    stack![backdrop, foreground].into()
+        .width(ACTION_WIDTH)
+        .padding([3, 4])
+        .style(if running {
+            crate::ui::controls::danger
+        } else {
+            crate::ui::controls::primary
+        });
+        if running || !state.timeblocking.busy.contains_task(&task.id) {
+            control = control.on_press(msg(if running {
+                Action::StopWork(task.id.clone())
+            } else {
+                Action::StartWork(task.id.clone())
+            }));
+        }
+        control.into()
+    };
+    let content: Element<'a, Message> = if narrow {
+        column![
+            row![check, title].spacing(4).align_y(iced::Center),
+            row![actual, planned, Space::new().width(Fill), action]
+                .spacing(4)
+                .align_y(iced::Center),
+        ]
+        .spacing(2)
+        .into()
+    } else {
+        row![
+            check,
+            title,
+            container(actual)
+                .width(ACTUAL_WIDTH)
+                .align_right(ACTUAL_WIDTH),
+            container(planned)
+                .width(PLANNED_WIDTH)
+                .align_right(PLANNED_WIDTH),
+            action,
+        ]
+        .spacing(LINE_SPACING)
+        .align_y(iced::Center)
+        .into()
+    };
+    container(content)
+        .padding([3, 8])
+        .width(Fill)
+        .style(move |theme: &Theme| container::Style {
+            background: current.then(|| theme.extended_palette().background.weak.color.into()),
+            border: iced::Border {
+                radius: crate::ui::controls::RADIUS_ROW.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
-/// One app-wide clock: changing blocks does not create competing timers.
-fn pomodoro(state: &State) -> Element<'_, Message> {
-    let timer = &state.config.pomodoro;
-    let phase = match timer.phase {
-        crate::pomodoro::Phase::Work => "Work",
-        crate::pomodoro::Phase::Break => "Break",
-    };
-    let mut controls = row![
-        text(format!(
-            "Pomodoro · {phase} · {}",
-            task_work::clock(timer.remaining)
-        ))
-        .size(18),
-        button(if timer.running() {
-            "Pause"
-        } else if timer.fresh() {
-            "Start Pomodoro"
+/// A task's title in the focus view. Ignored tasks are struck through and
+/// finished ones fade, wherever the title is drawn.
+fn title_text<'a>(
+    task: &'a Event,
+    size: f32,
+    bold: bool,
+    wrapping: text::Wrapping,
+) -> Element<'a, Message> {
+    let font = iced::Font {
+        weight: if bold {
+            iced::font::Weight::Bold
         } else {
-            "Resume"
-        })
-        .on_press(msg(Action::PomodoroToggle)),
-        button("Reset")
-            .on_press(msg(Action::PomodoroReset))
-            .style(crate::ui::controls::ghost),
-    ]
-    .spacing(8)
-    .align_y(iced::Center);
-    for (work, minutes, label) in [
-        (true, timer.work_minutes, "Work"),
-        (false, timer.break_minutes, "Break"),
-    ] {
-        let mut minus = button("−").style(crate::ui::controls::ghost);
-        let mut plus = button("+").style(crate::ui::controls::ghost);
-        if timer.fresh() {
-            minus = minus.on_press(msg(Action::PomodoroMinutes(work, -1)));
-            plus = plus.on_press(msg(Action::PomodoroMinutes(work, 1)));
-        }
-        controls = controls.push(
-            row![text(format!("{label}: {minutes}m")).size(12), minus, plus].align_y(iced::Center),
-        );
-    }
-    let mut body = column![
-        controls.wrap(),
-        text(format!(
-            "Pomodoro totals · Work {} · Break {}",
-            task_work::clock(timer.work_seconds),
-            task_work::clock(timer.break_seconds)
-        ))
-        .size(12),
-    ]
-    .spacing(4);
-    let help = if timer.running() && timer.phase == crate::pomodoro::Phase::Break {
-        match &timer.target {
-            Some(target) => format!("On break · Next task: {}. Choose another task with ‘Use after break’.", target.task_title),
-            None => "On break · Choose a task with ‘Use after break’ to resume it in the next work session.".into(),
-        }
-    } else {
-        "One timer across all blocks. Task Start/Stop also works independently. Breaks stop task work; work sessions resume it. Pause/Reset affects only the Pomodoro clock.".into()
+            iced::font::Weight::Normal
+        },
+        ..iced::Font::default()
     };
-    body = body.push(text(help).size(11).style(text::secondary));
-    container(body)
-        .padding(10)
-        .style(crate::ui::controls::surface)
-        .into()
+    if tb::task_status(task) == tb::TaskStatus::Ignored {
+        rich_text::<(), _, _, _>([span(task.title.as_str()).strikethrough(true).font(font)])
+            .size(size)
+            .width(Fill)
+            .wrapping(wrapping)
+            .style(text::secondary)
+            .into()
+    } else {
+        text(&task.title)
+            .size(size)
+            .font(font)
+            .width(Fill)
+            .wrapping(wrapping)
+            .style(if task.completed {
+                text::secondary
+            } else {
+                text::default
+            })
+            .into()
+    }
 }
 
 /// Edit the exact start and end of a work session. A blank end keeps the
@@ -365,35 +606,33 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     stack![backdrop, foreground].into()
 }
 
-/// Fit the block to the available height; use a larger scrollable surface only
-/// when tasks need more room for their controls. The mapping stays fixed while ticking.
+/// The room a task takes on the timeline: its estimate, or a short default.
+fn slot_seconds(task: &Event) -> f32 {
+    match tb::metadata(task).minutes {
+        0 => 15.0 * 60.0,
+        minutes => minutes as f32 * 60.0,
+    }
+}
+
+/// Pixels per second that fit the block and every task into `height`. Tasks
+/// estimated past the block's end shrink the scale rather than overflowing.
+fn fit_scale(height: f32, duration: f32, slots: &[f32]) -> f32 {
+    let span = duration.max(slots.iter().sum());
+    (height - 2.0 * TIMELINE_INSET).max(1.0) / span.max(1.0)
+}
+
+/// The block's tasks in order against the clock, fitted to the height it is
+/// given. It never scrolls, so a card holds nothing but the task's title; the
+/// gutter names the time each task starts and ends.
 fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, Message> {
+    if size.height < 48.0 {
+        return Space::new().width(0.0).height(0.0).into();
+    }
     let tasks = tb::assigned_all(state, block);
     let duration = (block.end - block.start).num_seconds().max(60) as f32;
-    let slots: Vec<f32> = tasks
-        .iter()
-        .map(|e| {
-            let minutes = tb::metadata(e).minutes;
-            if minutes == 0 {
-                15.0 * 60.0
-            } else {
-                minutes as f32 * 60.0
-            }
-        })
-        .collect();
-    let min_card = if size.width < 280.0 {
-        250.0
-    } else if size.width < 380.0 {
-        190.0
-    } else {
-        150.0
-    };
-    let scale = slots.iter().fold(
-        (size.height - 64.0).max(100.0) / duration,
-        |scale, seconds| scale.max((min_card + 10.0) / seconds),
-    );
-    let content_seconds: f32 = slots.iter().sum();
-    let height = duration.max(content_seconds) * scale + 64.0;
+    let slots: Vec<f32> = tasks.iter().map(|task| slot_seconds(task)).collect();
+    let scale = fit_scale(size.height, duration, &slots);
+    let height = Length::Fixed(size.height);
     let now = state
         .timeblocking
         .work_now
@@ -404,20 +643,25 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
     } else {
         SESSION_LANE + SESSION_GAP
     };
+    let mut marks = vec![0.0, duration];
+    let mut elapsed = 0.0;
+    for seconds in &slots {
+        elapsed += seconds;
+        marks.push(elapsed);
+    }
+    marks.sort_by(f32::total_cmp);
+    marks.dedup();
     let lines = Timeline {
         time_format: state.config.appearance.time_format,
         start: block.start,
         end: block.end,
         now,
         scale,
+        marks,
         needle: false,
     };
-    let mut layers: Vec<Element<'a, Message>> = vec![
-        canvas(lines)
-            .width(Fill)
-            .height(Length::Fixed(height))
-            .into(),
-    ];
+    let mut layers: Vec<Element<'a, Message>> =
+        vec![canvas(lines).width(Fill).height(height).into()];
     if !bars.is_empty() {
         layers.push(
             canvas(WorkLane {
@@ -427,21 +671,19 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
                 bars: bars.clone(),
             })
             .width(Fill)
-            .height(Length::Fixed(height))
+            .height(height)
             .into(),
         );
     }
-    let mut offset = 32.0;
+    let gutter = if size.width < 280.0 { 47 } else { 67 };
+    let mut offset = TIMELINE_INSET;
     for (task, seconds) in tasks.iter().zip(slots.iter()) {
-        let card = task_card(state, task, now, size.width < 380.0);
         layers.push(
             column![
                 Space::new().height(Length::Fixed(offset)),
                 row![
-                    Space::new().width(if size.width < 280.0 { 47 } else { 67 }),
-                    container(card)
-                        .height(Length::Fixed(seconds * scale - 8.0))
-                        .width(Fill),
+                    Space::new().width(gutter),
+                    timeline_card(state, task, (seconds * scale - 2.0).max(1.0)),
                     Space::new().width(8.0 + lane)
                 ]
             ]
@@ -456,64 +698,16 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
             end: block.end,
             now,
             scale,
+            marks: Vec::new(),
             needle: true,
         })
         .width(Fill)
-        .height(Length::Fixed(height))
+        .height(height)
         .into(),
     );
-    stack(layers).height(Length::Fixed(height)).into()
+    stack(layers).width(Fill).height(height).into()
 }
 
-/// The block's saved work sessions, while the history is toggled open.
-fn history<'a>(state: &'a State, block: &Event) -> Option<Element<'a, Message>> {
-    if !state.timeblocking.history_open {
-        return None;
-    }
-    let key = tb::block_key(block);
-    let now = state
-        .timeblocking
-        .work_now
-        .unwrap_or_else(crate::clock::utc_now);
-    let mut history = column![text("Saved work sessions").size(14)].spacing(6);
-    let sessions: Vec<_> = state
-        .config
-        .task_work
-        .sessions
-        .iter()
-        .filter(|s| s.block_key.as_deref() == Some(&key))
-        .collect();
-    if sessions.is_empty() {
-        history = history.push(text("No work sessions yet").size(12).style(text::secondary));
-    }
-    for session in sessions.into_iter().rev() {
-        history = history.push(
-            text(format!(
-                "{} · {} {} → {} · {}",
-                session.task_title,
-                session.started_at.with_timezone(&Local).format("%b %-d"),
-                crate::calendar::time_format::clock(
-                    session.started_at.with_timezone(&Local),
-                    state.config.appearance.time_format
-                ),
-                session
-                    .stopped_at
-                    .map(|t| crate::calendar::time_format::clock(
-                        t.with_timezone(&Local),
-                        state.config.appearance.time_format
-                    ))
-                    .unwrap_or_else(|| "running".into()),
-                task_work::clock(session.seconds(now))
-            ))
-            .size(12),
-        );
-    }
-    Some(
-        container(crate::ui::controls::scrollable(history))
-            .max_height(135)
-            .into(),
-    )
-}
 /// How wide the lane of worked-time boxes is, and the gap between it and the
 /// task cards. The lane is only reserved while the block has work sessions.
 const SESSION_LANE: f32 = 34.0;
@@ -571,8 +765,8 @@ impl WorkLane {
         let duration = (self.end - self.start).num_seconds().max(60) as f32;
         let start = ((bar.start - self.start).num_seconds() as f32).clamp(0.0, duration);
         let end = ((bar.end - self.start).num_seconds() as f32).clamp(0.0, duration);
-        let top = 32.0 + start * self.scale;
-        let bottom = 32.0 + end * self.scale;
+        let top = TIMELINE_INSET + start * self.scale;
+        let bottom = TIMELINE_INSET + end * self.scale;
         Rectangle {
             x: (bounds.width - SESSION_LANE - 4.0).max(0.0),
             y: top,
@@ -692,157 +886,66 @@ impl canvas::Program<Message> for WorkLane {
     }
 }
 
-fn task_card<'a>(
-    state: &'a State,
-    task: &'a Event,
-    now: DateTime<Utc>,
-    compact: bool,
-) -> Element<'a, Message> {
-    let key = tb::task_key(task);
-    let log = &state.config.task_work;
-    let running = log.running(&key);
-    let seconds = log.seconds(&key, now);
-    let minutes = tb::metadata(task).minutes;
-    let overtime = minutes > 0 && seconds > u64::from(minutes) * 60;
-    let busy = state.timeblocking.busy.contains_task(&task.id);
-    let ignored = tb::task_status(task) == tb::TaskStatus::Ignored;
-    let mut completion = button(
-        text(if task.completed && !ignored {
-            "Completed ✓"
+/// One task on the timeline: its title, and a click away from its editor.
+fn timeline_card<'a>(state: &'a State, task: &'a Event, height: f32) -> Element<'a, Message> {
+    let running = state.config.task_work.running(&tb::task_key(task));
+    let completed = task.completed;
+    // A card too short for a second line keeps one, cut off, over a wrapped
+    // first line that would hide half the title.
+    let title = title_text(
+        task,
+        if height < 20.0 { 11.0 } else { 13.0 },
+        false,
+        if height < 36.0 {
+            text::Wrapping::None
         } else {
-            "Complete"
+            text::Wrapping::Word
+        },
+    );
+    // A tall card's title sits by the time it starts, as on the calendar.
+    let title = container(title)
+        .align_y(if height < 36.0 {
+            iced::Alignment::Center
+        } else {
+            iced::Alignment::Start
         })
-        .size(12),
-    )
-    .style(crate::ui::controls::ghost);
-    if state.timeblocking.busy.is_empty() {
-        completion = completion.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
-    }
-    let mut ignore = button(
-        text(if ignored {
-            "Unignore Task"
-        } else {
-            "Ignore Task"
-        })
-        .size(12),
-    )
-    .style(crate::ui::controls::ghost);
-    if state.timeblocking.busy.is_empty() {
-        ignore = ignore.on_press(Message::Task(TaskMessage::TaskIgnoreToggled(
-            task.id.clone(),
-        )));
-    }
-    let actions = column![completion, ignore].spacing(3);
-    let title = super::timeblocking::task_title(task, if compact { 14.0 } else { 17.0 });
-    let heading: Element<'a, Message> = if compact {
-        column![title, actions].spacing(3).into()
-    } else {
-        row![title, actions].align_y(iced::Center).spacing(8).into()
-    };
-    let clock = text(task_work::clock(seconds))
-        .size(if compact { 20 } else { 24 })
-        .style(if overtime && !task.completed {
-            text::danger
-        } else if task.completed {
-            text::secondary
-        } else {
-            text::default
-        });
-    let estimate = text(if minutes == 0 {
-        "No estimate · 15m on timeline".into()
-    } else if overtime {
-        format!(
-            "{} over · {}m estimated",
-            task_work::clock(seconds - u64::from(minutes) * 60),
-            minutes
-        )
-    } else {
-        format!("{}m estimated", minutes)
-    })
-    .size(12)
-    .style(if overtime && !task.completed {
-        text::danger
-    } else {
-        text::secondary
-    });
-    let mut details = column![
-        heading,
-        row![clock, Space::new().width(Fill)].align_y(iced::Center),
-        estimate,
-        super::timeblocking::estimate_button(state, task, 12.0)
-    ]
-    .spacing(4);
-    if !task.completed {
-        let mut control = button(
-            text(if running {
-                "Stop"
-            } else if state.config.pomodoro.running()
-                && state.config.pomodoro.phase == crate::pomodoro::Phase::Break
-            {
-                "Use after break"
-            } else {
-                "Start"
-            })
-            .size(13),
-        )
-        .style(if running {
-            button::danger
-        } else {
-            crate::ui::controls::primary
-        });
-        if running || !busy {
-            control = control.on_press(msg(if running {
-                Action::StopWork(task.id.clone())
-            } else {
-                Action::StartWork(task.id.clone())
-            }));
-        }
-        let sessions = log.sessions.iter().filter(|s| s.task_key == key).count();
-        details = details.push(
-            row![
-                control,
-                text(if running {
-                    "Working now".to_owned()
-                } else if sessions == 0 {
-                    "Not started".to_owned()
-                } else {
-                    format!("{sessions} saved sessions")
-                })
-                .size(11)
-                .style(text::secondary)
-            ]
-            .spacing(10)
-            .align_y(iced::Center),
-        );
-    }
-    container(crate::ui::controls::scrollable(details))
-        .padding(if compact { 8 } else { 12 })
+        .padding(if height < 36.0 { [0, 0] } else { [4, 0] })
         .width(Fill)
         .height(Fill)
-        .style(move |theme: &Theme| {
+        .clip(true);
+    button(title)
+        .padding([0, 8])
+        .width(Fill)
+        .height(Length::Fixed(height))
+        .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
+        .style(move |theme: &Theme, status| {
             let p = theme.extended_palette();
-            container::Style {
+            let card = crate::ui::controls::card_color(theme);
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
                 background: Some(
-                    if task.completed {
+                    if running {
+                        p.primary.weak.color
+                    } else if completed || hovered {
                         p.background.weak.color
                     } else {
-                        p.background.weakest.color
+                        card.color
                     }
                     .into(),
                 ),
-                text_color: Some(if task.completed {
-                    p.background.weak.text.scale_alpha(0.65)
+                text_color: if running {
+                    p.primary.weak.text
                 } else {
-                    p.background.base.text
-                }),
+                    card.text
+                },
                 border: iced::Border {
                     color: if running {
                         p.primary.strong.color
                     } else {
-                        p.background.strong.color
+                        crate::ui::controls::edge_color(theme)
                     },
-                    width: if running { 2.0 } else { 1.0 },
-                    radius: 8.0.into(),
+                    width: 1.0,
+                    radius: crate::ui::controls::RADIUS_SMALL.into(),
                 },
                 ..Default::default()
             }
@@ -855,6 +958,8 @@ struct Timeline {
     end: DateTime<Local>,
     now: DateTime<Utc>,
     scale: f32,
+    /// Seconds into the block worth naming: where each task starts and ends.
+    marks: Vec<f32>,
     needle: bool,
 }
 impl canvas::Program<Message> for Timeline {
@@ -882,7 +987,7 @@ impl canvas::Program<Message> for Timeline {
         };
         if self.needle {
             let elapsed = (self.now - self.start.with_timezone(&Utc)).num_seconds() as f32;
-            let y = 32.0 + elapsed.clamp(0.0, duration) * self.scale;
+            let y = TIMELINE_INSET + elapsed.clamp(0.0, duration) * self.scale;
             let red = Color::from_rgb8(231, 66, 57);
             line(&mut frame, y, red, 1.5);
             frame.fill(&Path::circle(Point::new(gutter, y), 4.5), red);
@@ -893,51 +998,60 @@ impl canvas::Program<Message> for Timeline {
             } else {
                 ""
             };
-            frame.fill_text(Text {
-                content: format!(
-                    "Now {}{}",
-                    crate::calendar::time_format::clock(
-                        self.now.with_timezone(&Local),
-                        self.time_format
-                    ),
-                    suffix
+            let content = format!(
+                "Now {}{}",
+                crate::calendar::time_format::clock(
+                    self.now.with_timezone(&Local),
+                    self.time_format
                 ),
-                position: Point::new(gutter + 8.0, (y - 16.0).max(0.0)),
-                color: red,
-                size: iced::Pixels(11.0),
+                suffix
+            );
+            // A pill at the far end, where it is least likely to sit on a title.
+            let size = Size::new(content.chars().count() as f32 * 6.0 + 10.0, 16.0);
+            let corner = Point::new(
+                (bounds.width - size.width).max(gutter),
+                (y - size.height / 2.0).clamp(0.0, (bounds.height - size.height).max(0.0)),
+            );
+            frame.fill(&Path::rounded_rectangle(corner, size, 8.0.into()), red);
+            frame.fill_text(Text {
+                content,
+                position: Point::new(corner.x + size.width / 2.0, corner.y + size.height / 2.0),
+                color: Color::WHITE,
+                size: iced::Pixels(10.0),
+                align_x: iced::alignment::Horizontal::Center.into(),
+                align_y: iced::alignment::Vertical::Center,
                 ..Default::default()
             });
         } else {
             let palette = theme.extended_palette();
-            let mut seconds = 0.0;
-            while seconds < duration {
-                let y = 32.0 + seconds * self.scale;
-                line(&mut frame, y, palette.background.strong.color, 1.0);
+            let mut labelled = f32::NEG_INFINITY;
+            for &seconds in &self.marks {
+                let y = TIMELINE_INSET + seconds * self.scale;
+                if seconds == duration {
+                    line(
+                        &mut frame,
+                        y,
+                        palette.background.base.text.scale_alpha(0.5),
+                        1.5,
+                    );
+                } else {
+                    line(&mut frame, y, palette.background.strong.color, 1.0);
+                }
+                // Short tasks can start too close together to name each one.
+                if y - labelled < MARK_SPACING {
+                    continue;
+                }
+                labelled = y;
                 let when = self.start + chrono::Duration::seconds(seconds as i64);
                 frame.fill_text(Text {
                     content: crate::calendar::time_format::clock(when, self.time_format),
-                    position: Point::new(2.0, y + 3.0),
+                    position: Point::new(2.0, y),
                     color: palette.background.base.text.scale_alpha(0.6),
                     size: iced::Pixels(11.0),
+                    align_y: iced::alignment::Vertical::Center,
                     ..Default::default()
                 });
-                // Limit labels on very long events, keeping at most 96 grid lines.
-                seconds += (duration / 96.0 / 900.0).ceil().max(1.0) * 900.0;
             }
-            let y = 32.0 + duration * self.scale;
-            line(
-                &mut frame,
-                y,
-                palette.background.base.text.scale_alpha(0.5),
-                1.5,
-            );
-            frame.fill_text(Text {
-                content: crate::calendar::time_format::clock(self.end, self.time_format),
-                position: Point::new(2.0, y + 3.0),
-                color: palette.background.base.text.scale_alpha(0.6),
-                size: iced::Pixels(11.0),
-                ..Default::default()
-            });
         }
         vec![frame.into_geometry()]
     }

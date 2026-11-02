@@ -127,6 +127,23 @@ case $abi in
         ;;
 esac
 
+# --- Version ---------------------------------------------------------------
+# `dx` always writes versionCode 1 and takes versionName from the Dioxus crate,
+# so every release would look like the same version to Android and to updaters.
+# Use the application's version instead; it is patched in after `dx` runs.
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$repo_root/Cargo.toml" | head -n 1)
+version_number=${version%%[-+]*}
+version_major=${version_number%%.*}
+version_rest=${version_number#*.}
+version_minor=${version_rest%%.*}
+version_patch=${version_rest#*.}
+case $version_major$version_minor$version_patch in
+    ''|*[!0-9]*) fail "cannot read a version from Cargo.toml: '$version'" ;;
+esac
+[ "$version_minor" -lt 1000 ] && [ "$version_patch" -lt 1000 ] || fail \
+    "minor and patch versions must be below 1000: $version"
+version_code=$((version_major * 1000000 + version_minor * 1000 + version_patch))
+
 command -v dx >/dev/null 2>&1 || fail \
     "dx was not found. Install it with: cargo binstall dioxus-cli@0.7.10"
 
@@ -200,6 +217,7 @@ export PATH
 echo "SDK:  $sdk"
 echo "NDK:  $ndk"
 echo "ABI:  $abi_name ($triple)"
+echo "Version: $version (code $version_code)"
 
 # --- Rust target -----------------------------------------------------------
 if command -v rustup >/dev/null 2>&1; then
@@ -285,6 +303,9 @@ cp -R "$repo_root/dioxus/android/res/." "$android_main/res/"
 # `dx` puts its default icons back, which would clash with the PNGs the launcher
 # icon step below left here last time.
 rm -f "$android_main"/res/mipmap-*/ic_launcher.png
+# `dx` only replaces the library for the ABI it is building, so one left by an
+# earlier build for another ABI would be packaged too.
+rm -rf "$android_main/jniLibs"
 
 # --- Build -----------------------------------------------------------------
 cd "$repo_root"
@@ -316,6 +337,13 @@ for app_dir in "$repo_root"/target/dx/*/"$profile"/android/app; do
     done
     # The adaptive icon would take precedence over the PNGs on Android 8+.
     rm -rf "$res/mipmap-anydpi-v26"
+    gradle_file=$app_dir/app/build.gradle.kts
+    sed -i -E \
+        -e "s/^( *versionCode = ).*/\\1$version_code/" \
+        -e "s/^( *versionName = ).*/\\1\"$version\"/" \
+        "$gradle_file"
+    grep -q "versionCode = $version_code\$" "$gradle_file" || fail \
+        "could not set the version in $gradle_file"
     if [ "$profile" = release ]; then gradle_task=assembleRelease; else gradle_task=assembleDebug; fi
     (cd "$app_dir" && sh ./gradlew "$gradle_task")
 done

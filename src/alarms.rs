@@ -350,6 +350,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.alarms.mode = true;
             state.calendar.menu_open = false;
             state.calendar.month_open = false;
+            state.overview_month_open = false;
             state.calendar.open_event = None;
 
             close_editor(state)
@@ -470,6 +471,7 @@ fn open(state: &mut State, id: u64) {
     });
     state.calendar.menu_open = false;
     state.calendar.month_open = false;
+    state.overview_month_open = false;
 }
 
 /// Puts the popup away, writing any edit that was still waiting.

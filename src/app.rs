@@ -63,6 +63,14 @@ pub enum CalendarView {
     Month,
 }
 
+/// The two month pickers: the day panel's and the range overview's. Each opens,
+/// steps and picks on its own, so using one leaves the other where it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonthPicker {
+    Panel,
+    Overview,
+}
+
 /// The boxes in the shared border settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderLayer {
@@ -333,6 +341,14 @@ pub struct State {
     pub week_anchor: chrono::NaiveDate,
     pub week_hover: Option<chrono::NaiveDate>,
     pub week_scroll_x: f32,
+    /// Whether the month picker is showing over the range overview. The day
+    /// panel's own picker is `calendar.month_open`.
+    pub overview_month_open: bool,
+    /// The first day of the month the overview's picker is showing.
+    pub overview_month: chrono::NaiveDate,
+    /// The day panel moved to a day outside the range in view, which a range
+    /// sync would not fetch.
+    pub panel_day_wanted: bool,
     /// The day whose full list is open from its "N more" in the two-week view.
     pub two_week_more: Option<chrono::NaiveDate>,
     /// What the Projects tab is in the middle of.
@@ -628,10 +644,12 @@ pub enum CalendarMessage {
     CalendarDayShift(i64),
     /// Jump the day in view to a specific date, from the month picker.
     CalendarDaySelected(chrono::NaiveDate),
-    /// Open or close the month picker.
-    CalendarMonthToggled,
-    /// Move the month picker by a number of months, positive or negative.
-    CalendarMonthShift(i32),
+    /// Open or close a month picker.
+    CalendarMonthToggled(MonthPicker),
+    /// Move a month picker by a number of months, positive or negative.
+    CalendarMonthShift(MonthPicker, i32),
+    /// A day tapped in a month picker. It moves only what that picker belongs to.
+    CalendarMonthDayPicked(MonthPicker, chrono::NaiveDate),
 }
 
 /// Tasks: dragging, completing and deleting them.
@@ -811,6 +829,12 @@ impl State {
             week_anchor: calendar::day_at(crate::clock::now(), day_end_hour),
             week_hover: None,
             week_scroll_x: 0.0,
+            overview_month_open: false,
+            overview_month: calendar::first_of_month(calendar::day_at(
+                crate::clock::now(),
+                day_end_hour,
+            )),
+            panel_day_wanted: false,
             two_week_more: None,
             projects: Default::default(),
             travel: Default::default(),
@@ -1275,6 +1299,10 @@ fn range_view_transition(
     was_weekly: bool,
     close: Task<Message>,
 ) -> Task<Message> {
+    if !state.range_view_active() {
+        state.overview_month_open = false;
+        state.panel_day_wanted = false;
+    }
     if was_weekly == state.range_view_active() {
         return close;
     }
@@ -1700,6 +1728,10 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     }
     if state.timeblocking.focus.is_some() {
         return match key.as_ref() {
+            // A task opened from the view closes before the view does.
+            Key::Named(Named::Escape) if state.calendar.open_event.is_some() => {
+                Some(Message::Event(EventMessage::EventClosed))
+            }
             Key::Named(Named::Escape) => Some(Message::TimeBlocking(
                 crate::timeblocking::Action::CloseView,
             )),
@@ -1726,7 +1758,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         && state.calendar.open_event.is_none()
         && key == Key::Named(Named::Escape)
     {
-        return Some(Message::Calendar(CalendarMessage::CalendarTwoWeekMore(None)));
+        return Some(Message::Calendar(CalendarMessage::CalendarTwoWeekMore(
+            None,
+        )));
     }
     if modifiers.command() {
         return match key.as_ref() {
@@ -2057,6 +2091,9 @@ fn show_cached_calendar(state: &mut State) -> Task<Message> {
 }
 
 fn fetch_pending_calendar_days(state: &mut State, fetched: &[chrono::NaiveDate]) -> Task<Message> {
+    if state.panel_day_wanted {
+        return sync_calendar(state);
+    }
     let pending = std::mem::take(&mut state.calendar_fetch_pending);
     // Only navigation to dates outside the completed request needs a follow-up.
     // A successful, genuinely empty day must not start an endless fetch loop.
@@ -2092,14 +2129,18 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
         return Task::none();
     }
 
-    state.calendar_fetch_pending.clear();
+    // The range's own pending days wait for the panel's day, not the other way.
+    let panel_day = std::mem::take(&mut state.panel_day_wanted);
+    if !panel_day {
+        state.calendar_fetch_pending.clear();
+    }
     state.calendar.sync = SyncState::Syncing;
     state.calendar.error = None;
 
     let settings = state.config.calendar.clone();
     let day = state.calendar.day;
     let revision = state.timeblocking.revision;
-    if state.range_view_active() {
+    if state.range_view_active() && !panel_day {
         let anchor = state.week_anchor;
         let dates = state.calendar_dates();
         let fetched_dates = dates.clone();

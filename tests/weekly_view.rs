@@ -2,7 +2,9 @@ use chrono::{Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
-use timeslay::app::{CalendarMessage, EventMessage, NavigationMessage, SystemMessage, TaskMessage};
+use timeslay::app::{
+    CalendarMessage, EventMessage, MonthPicker, NavigationMessage, SystemMessage, TaskMessage,
+};
 use timeslay::{
     app::{self, Message, Screen, State},
     calendar::{self, Store},
@@ -656,8 +658,8 @@ fn overview_stays_open_across_all_panel_tabs() -> Result<(), Error> {
 #[test]
 fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result<(), Error> {
     let mut state = state();
-    state.calendar.month_open = true;
-    state.calendar.month = date(1);
+    state.overview_month_open = true;
+    state.overview_month = date(1);
     let mut ui = render(&state, Size::new(900.0, 700.0));
     let point = ui.find("15")?.bounds().center();
     ui.point_at(point);
@@ -674,10 +676,13 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, Message::Calendar(CalendarMessage::CalendarDaySelected(day)) if *day == date(15)))
+            .any(|m| matches!(m, Message::Calendar(CalendarMessage::CalendarMonthDayPicked(MonthPicker::Overview, day)) if *day == date(15)))
     );
+    let mut ui = render(&state, Size::new(1400.0, 700.0));
+    assert!(ui.find("15")?.bounds().width < 60.0);
+    drop(ui);
 
-    state.calendar.month_open = false;
+    state.overview_month_open = false;
     for width in [180.0, 260.0, 900.0] {
         let mut ui = render_main(&state, Size::new(width, 700.0));
         let switcher = timeslay::ui::calendar_view_label(&state);

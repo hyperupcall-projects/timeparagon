@@ -229,8 +229,8 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         draft_overlay(state, metrics)
     } else if state.alarms.editor.is_some() {
         super::super::alarms::editor_overlay(state, metrics)
-    } else if state.calendar.month_open {
-        month_overlay(state, metrics)
+    } else if state.overview_month_open {
+        month_overlay(state, MonthPicker::Overview, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
     } else {

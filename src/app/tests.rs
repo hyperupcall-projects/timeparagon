@@ -1201,7 +1201,7 @@ fn the_month_picker_opens_on_the_month_of_the_day_in_view() {
 
     let _ = update(
         &mut state,
-        Message::Calendar(CalendarMessage::CalendarMonthToggled),
+        Message::Calendar(CalendarMessage::CalendarMonthToggled(MonthPicker::Panel)),
     );
 
     assert!(state.calendar.month_open);
@@ -1212,7 +1212,7 @@ fn the_month_picker_opens_on_the_month_of_the_day_in_view() {
 
     let _ = update(
         &mut state,
-        Message::Calendar(CalendarMessage::CalendarMonthToggled),
+        Message::Calendar(CalendarMessage::CalendarMonthToggled(MonthPicker::Panel)),
     );
     assert!(!state.calendar.month_open);
 }
@@ -1224,7 +1224,7 @@ fn stepping_the_month_crosses_the_year_boundary() {
 
     let _ = update(
         &mut state,
-        Message::Calendar(CalendarMessage::CalendarMonthShift(1)),
+        Message::Calendar(CalendarMessage::CalendarMonthShift(MonthPicker::Panel, 1)),
     );
     assert_eq!(
         state.calendar.month,
@@ -1233,7 +1233,7 @@ fn stepping_the_month_crosses_the_year_boundary() {
 
     let _ = update(
         &mut state,
-        Message::Calendar(CalendarMessage::CalendarMonthShift(-2)),
+        Message::Calendar(CalendarMessage::CalendarMonthShift(MonthPicker::Panel, -2)),
     );
     assert_eq!(
         state.calendar.month,
@@ -1249,11 +1249,130 @@ fn picking_a_day_closes_the_month_picker_and_moves_the_view() {
 
     let _ = update(
         &mut state,
-        Message::Calendar(CalendarMessage::CalendarDaySelected(day)),
+        Message::Calendar(CalendarMessage::CalendarMonthDayPicked(
+            MonthPicker::Panel,
+            day,
+        )),
     );
 
     assert_eq!(state.calendar.day, day);
     assert!(!state.calendar.month_open);
+}
+
+#[test]
+fn the_panel_and_overview_month_pickers_open_independently() {
+    let mut state = State::blank();
+    state.view = CalendarView::Week;
+    let toggle = |picker| Message::Calendar(CalendarMessage::CalendarMonthToggled(picker));
+
+    let _ = update(&mut state, toggle(MonthPicker::Panel));
+    assert!(state.calendar.month_open);
+    assert!(!state.overview_month_open);
+
+    let _ = update(&mut state, toggle(MonthPicker::Overview));
+    assert!(state.calendar.month_open);
+    assert!(state.overview_month_open);
+
+    let _ = update(&mut state, toggle(MonthPicker::Panel));
+    assert!(!state.calendar.month_open);
+    assert!(state.overview_month_open);
+}
+
+#[test]
+fn the_panel_and_overview_month_pickers_step_independently() {
+    let mut state = State::blank();
+    state.view = CalendarView::Week;
+    let panel = state.calendar.month;
+    let overview = state.overview_month;
+
+    let _ = update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMonthShift(
+            MonthPicker::Overview,
+            2,
+        )),
+    );
+    assert_eq!(state.calendar.month, panel);
+    assert_ne!(state.overview_month, overview);
+}
+
+#[test]
+fn a_day_picked_in_one_month_picker_leaves_the_other_side_alone() {
+    let mut state = State::blank();
+    state.view = CalendarView::Week;
+    state.calendar.month_open = true;
+    state.overview_month_open = true;
+    let anchor = state.week_anchor;
+    let far = |days| anchor + chrono::Duration::days(days);
+
+    let _ = update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMonthDayPicked(
+            MonthPicker::Panel,
+            far(60),
+        )),
+    );
+    assert_eq!(state.calendar.day, far(60));
+    assert_eq!(state.week_anchor, anchor);
+    assert!(!state.calendar.month_open);
+    assert!(state.overview_month_open);
+
+    state.calendar.month_open = true;
+    let _ = update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMonthDayPicked(
+            MonthPicker::Overview,
+            far(90),
+        )),
+    );
+    assert_eq!(state.week_anchor, far(90));
+    assert_eq!(state.calendar.day, far(60));
+    assert!(!state.overview_month_open);
+    assert!(state.calendar.month_open);
+}
+
+#[test]
+fn a_panel_day_outside_the_range_is_fetched_on_its_own() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    state.calendar.connection = Connection::SignedIn;
+    state.view = CalendarView::Week;
+    let day = state.week_anchor + chrono::Duration::days(60);
+
+    let _ = update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMonthDayPicked(
+            MonthPicker::Panel,
+            day,
+        )),
+    );
+
+    assert_eq!(state.calendar.sync, SyncState::Syncing);
+    assert!(!state.panel_day_wanted);
+}
+
+#[test]
+fn a_panel_day_picked_during_a_sync_is_fetched_when_it_finishes() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    state.calendar.connection = Connection::SignedIn;
+    state.calendar.sync = SyncState::Syncing;
+    state.view = CalendarView::Week;
+    let day = state.week_anchor + chrono::Duration::days(60);
+
+    let _ = update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMonthDayPicked(
+            MonthPicker::Panel,
+            day,
+        )),
+    );
+    assert!(state.panel_day_wanted);
+
+    state.calendar.sync = SyncState::Idle;
+    let _ = fetch_pending_calendar_days(&mut state, &[]);
+    assert!(!state.panel_day_wanted);
+    assert_eq!(state.calendar.sync, SyncState::Syncing);
 }
 
 #[test]

@@ -127,7 +127,10 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 /// exists, otherwise the main view. Keep this list shared so new dialogs cannot
 /// accidentally be rendered in both windows.
 fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, metrics: &Metrics) {
-    if state.timeblocking.focus.is_some() {
+    // A task opened from the focus view must not end up underneath it.
+    if state.timeblocking.focus.is_some()
+        && !(state.editor_window.is_some() && state.calendar.open_event.is_some())
+    {
         layers.push(timeblocking::focus_overlay(state, metrics));
     }
     if state.timeblocking.session_edit.is_some() {
@@ -273,6 +276,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         // Fall back to the main view when there is no floating editor.
         if state.editor_window.is_none() {
             push_dialogs(&mut layers, state, &metrics);
+        } else if state.timeblocking.focus.is_some() && state.details_pane_open {
+            // The floating editor is showing a task beside the focus view.
+            layers.push(timeblocking::focus_overlay(state, &metrics));
         }
         // The floating task card is drawn last so it is never hidden, and it is
         // only added while a task is actually in the air.

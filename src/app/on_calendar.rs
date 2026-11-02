@@ -366,7 +366,11 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 state.week_scroll_x = 0.0;
             }
             state.calendar.menu_open = false;
-            state.calendar.month_open = false;
+            if state.range_view_active() {
+                state.overview_month_open = false;
+            } else {
+                state.calendar.month_open = false;
+            }
             let scroll = if state.range_view_active() {
                 ui::calendar::scroll_week_to_start()
             } else {
@@ -389,8 +393,10 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 state.week_anchor = day;
                 state.week_hover = None;
                 state.week_scroll_x = 0.0;
+                state.overview_month_open = false;
+            } else {
+                state.calendar.month_open = false;
             }
-            state.calendar.month_open = false;
             let scroll = if state.range_view_active() {
                 ui::calendar::scroll_week_to_start()
             } else {
@@ -398,31 +404,72 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             };
             Task::batch([close, scroll, show_cached_calendar(state)])
         }
-        CalendarMessage::CalendarMonthToggled => {
+        CalendarMessage::CalendarMonthToggled(MonthPicker::Panel) => {
             state.calendar.month_open = !state.calendar.month_open;
             // The picker opens on the month of the day in view, and the menu
-            // gets out of its way.
+            // gets out of its way. A range view is showing the menu itself.
             if state.calendar.month_open {
-                state.calendar.month = calendar::first_of_month(if state.range_view_active() {
-                    state.week_anchor
-                } else {
-                    state.calendar.day
-                });
+                state.calendar.month = calendar::first_of_month(state.calendar.day);
+                if !state.range_view_active() {
+                    state.calendar.menu_open = false;
+                }
+            }
+            Task::none()
+        }
+        CalendarMessage::CalendarMonthToggled(MonthPicker::Overview) => {
+            state.overview_month_open = !state.overview_month_open;
+            if state.overview_month_open {
+                state.overview_month = calendar::first_of_month(state.week_anchor);
                 state.calendar.menu_open = false;
             }
             Task::none()
         }
-        CalendarMessage::CalendarMonthShift(months) => {
+        CalendarMessage::CalendarMonthShift(picker, months) => {
+            let month = match picker {
+                MonthPicker::Panel => &mut state.calendar.month,
+                MonthPicker::Overview => &mut state.overview_month,
+            };
             let step = chrono::Months::new(months.unsigned_abs());
             let shifted = if months >= 0 {
-                state.calendar.month.checked_add_months(step)
+                month.checked_add_months(step)
             } else {
-                state.calendar.month.checked_sub_months(step)
+                month.checked_sub_months(step)
             };
-            if let Some(month) = shifted {
-                state.calendar.month = month;
+            if let Some(shifted) = shifted {
+                *month = shifted;
             }
             Task::none()
+        }
+        CalendarMessage::CalendarMonthDayPicked(MonthPicker::Panel, day) => {
+            let today =
+                calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+            state.calendar.set_day(day, today);
+            state.calendar.month_open = false;
+            if !state.range_view_active() {
+                return show_cached_calendar(state);
+            }
+            state.panel_day_wanted = state.calendar.is_signed_in()
+                && !state.calendar.has_calendar_events_on(day)
+                && !state.calendar_dates().contains(&day);
+            if state.panel_day_wanted {
+                sync_calendar(state)
+            } else {
+                Task::none()
+            }
+        }
+        CalendarMessage::CalendarMonthDayPicked(MonthPicker::Overview, day) => {
+            state.two_week_more = None;
+            state.calendar.open_event = None;
+            let close = crate::timeblocking::close(state);
+            state.week_anchor = day;
+            state.week_hover = None;
+            state.week_scroll_x = 0.0;
+            state.overview_month_open = false;
+            Task::batch([
+                close,
+                ui::calendar::scroll_week_to_start(),
+                show_cached_calendar(state),
+            ])
         }
     }
 }

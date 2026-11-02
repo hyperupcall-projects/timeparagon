@@ -111,7 +111,9 @@ pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 days[0].format("%b %-d"),
                 days.last().unwrap().format("%b %-d")
             ),
-            Message::Calendar(CalendarMessage::CalendarMonthToggled),
+            Message::Calendar(CalendarMessage::CalendarMonthToggled(
+                crate::app::MonthPicker::Overview,
+            )),
         ));
     }
     bar = bar

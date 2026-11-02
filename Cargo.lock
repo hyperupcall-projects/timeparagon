@@ -7554,7 +7554,7 @@ dependencies = [
 
 [[package]]
 name = "timeslay-core"
-version = "0.1.0"
+version = "0.12.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7579,7 +7579,7 @@ dependencies = [
 
 [[package]]
 name = "timeslay-dioxus"
-version = "0.1.0"
+version = "0.12.1"
 dependencies = [
  "chrono",
  "dioxus",
