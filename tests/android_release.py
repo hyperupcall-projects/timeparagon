@@ -28,6 +28,9 @@ class AndroidReleaseTests(unittest.TestCase):
         config.parent.mkdir()
         self.config_text = '[application]\nname = "TimeSlay"\n'
         config.write_text(self.config_text)
+        (self.root / "Cargo.toml").write_text('version = "0.13.1"\n')
+        (self.root / "dioxus/android/kotlin").mkdir(parents=True)
+        (self.root / "dioxus/android/res").mkdir(parents=True)
         self.apk = self.root / "target/dx/TimeSlay/release/android/app/app/build/outputs/apk/release/app-release.apk"
         self.apk.parent.mkdir(parents=True)
         self.apk.write_bytes(b"fixture apk")
@@ -59,8 +62,16 @@ if os.environ.get('DEBUGGABLE'): print('application-debuggable')
 """)
         self.tool(build_tools / "apksigner", """
 if os.environ.get('SIGNATURE_FAIL'): sys.exit(1)
-print('Signer #1 certificate DN: CN=' + ('Android Debug' if os.environ.get('DEBUG_SIGNER') else 'Release'))
-print('Signer #1 certificate SHA-256 digest: ' + os.environ.get('SIGNER_DIGEST', ''))
+dn = 'Android Debug' if os.environ.get('DEBUG_SIGNER') else 'Release'
+digest = os.environ.get('SIGNER_DIGEST', '')
+prefixes = ['V2 Signer: ', 'V3.0 Signer: '] if os.environ.get('MULTI_SCHEME') else \
+           ['V2 Signer: '] if os.environ.get('NEW_APKSIGNER') else ['Signer #1 ']
+if os.environ.get('EXTRA_SIGNER'):
+    prefixes.append('Signer #2 ')
+for prefix in prefixes:
+    signer_digest = '0' * 64 if prefix == 'Signer #2 ' else digest
+    print(prefix + 'certificate DN: CN=' + dn)
+    print(prefix + 'certificate SHA-256 digest: ' + signer_digest)
 """)
         self.env["SIGNER_DIGEST"] = hashlib.sha256(b"fixture certificate").hexdigest()
 
@@ -95,6 +106,19 @@ print('Signer #1 certificate SHA-256 digest: ' + os.environ.get('SIGNER_DIGEST',
 
     def test_expected_release_signer_is_accepted(self):
         self.build(accepted=True)
+
+    def test_new_apksigner_output_format_is_accepted(self):
+        # build-tools 37.0.0 labels signers "V2 Signer:" rather than "Signer #1".
+        self.build(accepted=True, NEW_APKSIGNER="1")
+
+    def test_new_apksigner_format_unexpected_key_is_rejected(self):
+        self.build(NEW_APKSIGNER="1", SIGNER_DIGEST="0" * 64)
+
+    def test_same_signer_for_multiple_schemes_is_accepted(self):
+        self.build(accepted=True, MULTI_SCHEME="1")
+
+    def test_multiple_different_signers_are_rejected(self):
+        self.build(EXTRA_SIGNER="1")
 
 
 if __name__ == "__main__":

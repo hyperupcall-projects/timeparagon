@@ -389,9 +389,14 @@ if [ "$profile" = release ]; then
         -storepass:env TIMESLAY_KEYSTORE_PASSWORD -file "$release_cert" >/dev/null 2>&1 || \
         fail "could not read the configured signing certificate"
     expected_digest=$(sha256sum "$release_cert" | cut -d' ' -f1)
-    signer_count=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest:' "$apk.certs" || true)
-    actual_digest=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$apk.certs")
-    [ "$signer_count" -eq 1 ] && [ "$actual_digest" = "$expected_digest" ] || \
+    # The label differs between build-tools versions: 34.0.0 prints
+    # `Signer #1 certificate SHA-256 digest: ...` while 37.0.0 prints
+    # `V2 Signer: certificate SHA-256 digest: ...`. One signer can be listed
+    # once per signature scheme, so compare the set of distinct digests.
+    signer_digests=$(sed -n 's/^.*Signer.* certificate SHA-256 digest: //p' "$apk.certs" |
+        sort -u)
+    signer_count=$(printf '%s\n' "$signer_digests" | grep -c . || true)
+    [ "$signer_count" -eq 1 ] && [ "$signer_digests" = "$expected_digest" ] || \
         fail "the APK signer does not match the configured release key"
     rm -f "$apk.certs"
     echo "Verified: release APK is not debuggable and matches the configured signing key"
