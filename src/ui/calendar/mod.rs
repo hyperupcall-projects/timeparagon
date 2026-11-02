@@ -48,7 +48,7 @@ use crate::app::{
     CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, SettingsMessage,
     SystemMessage, TaskMessage,
 };
-use crate::app::{Message, State};
+use crate::app::{Message, MonthPicker, State};
 use crate::calendar::colors::{self, on_color};
 use crate::calendar::layout::{self, Span};
 use crate::calendar::{self, Event};
@@ -113,7 +113,12 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // widget throws away the day grid's scroll state, which jumps the bar.
     // Event details are no longer an overlay: they are a pane beside the view.
     let overlay = if state.range_view_active() {
-        Space::new().width(0).height(0).into()
+        // The range view hosts its own dialogs, but this picker is the panel's.
+        if state.calendar.month_open {
+            month_overlay(state, MonthPicker::Panel, metrics)
+        } else {
+            Space::new().width(0).height(0).into()
+        }
     } else if state
         .calendar
         .draft
@@ -124,7 +129,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     } else if state.alarms.editor.is_some() {
         super::alarms::editor_overlay(state, metrics)
     } else if state.calendar.month_open {
-        month_overlay(state, metrics)
+        month_overlay(state, MonthPicker::Panel, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
     } else {

@@ -47,7 +47,9 @@ TIMESLAY_KEY_ALIAS=timeslay \
 ./scripts/build-android.sh --install
 ```
 
-The APK is copied to `dist/timeslay-<abi>-<profile>.apk`.
+The APK is copied to `dist/timeslay-<abi>-<profile>.apk`. Its `versionName` is the
+version in the root `Cargo.toml`, and its `versionCode` is
+`major * 1000000 + minor * 1000 + patch`.
 
 The default (debug) APK is debuggable and debug-signed: use it for development
 only. `--release` builds Gradle's release variant, signs it with the keystore

@@ -21,7 +21,7 @@ fn popup(kind: &str) -> (State, &'static str) {
         }
         "focus" => {
             state.timeblocking.focus = Some("standup".into());
-            "FOCUS · TIME BLOCK"
+            "Start Pomodoro"
         }
         "session" => {
             state.config.task_work.start(

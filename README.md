@@ -123,11 +123,10 @@ cargo run -p timeslay --release
 
 ## Roadmap
 
-- Finalize flow
-- Fix UI panel bugs and stuff.
-- meal planning/grocery list
+- Perfect event/task flow, fix ui bugs
+- lists/meal planning
 	- lists in general
-- meeting agenda
+- meeting agenda?
 - Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
 - People/contacts
 - Start/shutdown/review rituals for day/week/month

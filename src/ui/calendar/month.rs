@@ -221,7 +221,9 @@ pub(super) fn range_heading<'a>(
 ) -> Element<'a, Message> {
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let title = button(text(label).size(metrics.label()))
-        .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled))
+        .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled(
+            MonthPicker::Overview,
+        )))
         .style(crate::ui::controls::secondary);
     let menu = button(text("Menu").size(metrics.label()))
         .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
@@ -313,8 +315,8 @@ pub(super) fn range_layers<'a>(
         .is_some_and(|d| !d.editor_open)
     {
         draft_overlay(state, metrics)
-    } else if state.calendar.month_open {
-        month_overlay(state, metrics)
+    } else if state.overview_month_open {
+        month_overlay(state, MonthPicker::Overview, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
     } else {
@@ -338,40 +340,50 @@ pub(crate) fn weekly_view_width(settings: &crate::config::CalendarSettings) -> f
     columns + padding * 2.0
 }
 
+/// How wide a day is in the month picker, unless the window is narrower.
+const PICKER_CELL_WIDTH: f32 = 36.0;
+const PICKER_CELL_GAP: f32 = 2.0;
+
 /// The month picker: a grid of the month's days, with arrows to step a month
-/// at a time. Tapping a day jumps the day view to it.
-pub(super) fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+/// at a time. Tapping a day jumps whatever `picker` belongs to there, and the
+/// card is only as wide as its seven columns.
+pub(super) fn month_overlay<'a>(
+    state: &'a State,
+    picker: MonthPicker,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
     let dismiss = mouse_area(
         container(iced::widget::Space::new())
             .width(Fill)
             .height(Fill),
     )
-    .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled));
+    .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled(
+        picker,
+    )));
 
-    let month = state.calendar.month;
-    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
-    let selected = if state.monthly() {
-        state.week_anchor
-    } else if state.weekly() || state.two_weekly() {
-        state.week_hover.unwrap_or(state.week_anchor)
-    } else {
-        state.calendar.day
+    let month = match picker {
+        MonthPicker::Panel => state.calendar.month,
+        MonthPicker::Overview => state.overview_month,
     };
-    let preview = if state.weekly() {
-        Some(calendar::week_dates(
+    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+    let selected = match picker {
+        MonthPicker::Panel => state.calendar.day,
+        MonthPicker::Overview if state.monthly() => state.week_anchor,
+        MonthPicker::Overview => state.week_hover.unwrap_or(state.week_anchor),
+    };
+    let preview = match picker {
+        MonthPicker::Overview if state.weekly() => Some(calendar::week_dates(
             selected,
             state.config.calendar.weekly_days(),
-        ))
-    } else if state.two_weekly() {
-        Some(calendar::two_week_dates(selected))
-    } else {
-        None
+        )),
+        MonthPicker::Overview if state.two_weekly() => Some(calendar::two_week_dates(selected)),
+        _ => None,
     };
 
     let title = row![
         nav_button(
             "◀",
-            Message::Calendar(CalendarMessage::CalendarMonthShift(-1)),
+            Message::Calendar(CalendarMessage::CalendarMonthShift(picker, -1)),
             metrics
         ),
         text(calendar::month_heading(month))
@@ -380,7 +392,7 @@ pub(super) fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
             .center(),
         nav_button(
             "▶",
-            Message::Calendar(CalendarMessage::CalendarMonthShift(1)),
+            Message::Calendar(CalendarMessage::CalendarMonthShift(picker, 1)),
             metrics
         ),
     ]
@@ -395,7 +407,7 @@ pub(super) fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
             .style(text::secondary)
             .into()
     }))
-    .spacing(2.0)
+    .spacing(PICKER_CELL_GAP)
     .width(Fill);
 
     let days = calendar::month_grid(month);
@@ -403,18 +415,33 @@ pub(super) fn month_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
     for week in days.chunks(7) {
         let cells: Vec<Element<'a, Message>> = week
             .iter()
-            .map(|&date| day_cell(date, month, selected, today, preview.as_deref(), metrics))
+            .map(|&date| {
+                day_cell(
+                    date,
+                    month,
+                    selected,
+                    today,
+                    preview.as_deref(),
+                    picker,
+                    metrics,
+                )
+            })
             .collect();
-        weeks.push(row(cells).spacing(2.0).width(Fill).into());
+        weeks.push(row(cells).spacing(PICKER_CELL_GAP).width(Fill).into());
     }
 
-    let panel = column![title, weekdays, column(weeks).spacing(2.0).width(Fill),]
-        .spacing(metrics.spacing)
-        .width(Fill);
+    let panel = column![
+        title,
+        weekdays,
+        column(weeks).spacing(PICKER_CELL_GAP).width(Fill),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
 
+    let width = PICKER_CELL_WIDTH * 7.0 + PICKER_CELL_GAP * 6.0 + metrics.padding * 2.0;
     let card = container(panel)
         .padding(metrics.padding)
-        .width(Length::Fill)
+        .width(width.min(metrics.size.width - metrics.padding * 2.0))
         .style(crate::ui::controls::surface);
 
     let aligned = column![
@@ -435,6 +462,7 @@ pub(super) fn day_cell<'a>(
     selected: NaiveDate,
     today: NaiveDate,
     preview: Option<&[NaiveDate]>,
+    picker: MonthPicker,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let in_month = date.month() == month.month() && date.year() == month.year();
@@ -451,8 +479,8 @@ pub(super) fn day_cell<'a>(
     .width(Fill)
     .height(32)
     .padding(0)
-    .on_press(Message::Calendar(CalendarMessage::CalendarDaySelected(
-        date,
+    .on_press(Message::Calendar(CalendarMessage::CalendarMonthDayPicked(
+        picker, date,
     )))
     .style(move |theme, status| {
         if is_selected {

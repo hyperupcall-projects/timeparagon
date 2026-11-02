@@ -404,7 +404,7 @@ fn field_line<'a>(
 }
 
 /// "1h 30m", "45m" or "2h", so a long estimate stays readable.
-fn format_duration(minutes: u32) -> String {
+pub(super) fn format_duration(minutes: u32) -> String {
     let hours = minutes / 60;
     let minutes = minutes % 60;
     match (hours, minutes) {

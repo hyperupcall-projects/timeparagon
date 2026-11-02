@@ -37,13 +37,24 @@ pub(super) fn header<'a>(
         calendar::day_heading(day, today)
     };
 
+    let month_open = if weekly {
+        state.overview_month_open
+    } else {
+        state.calendar.month_open
+    };
     let month = button(
         text(format!("{} ▾", calendar::month_short(day.month())))
             .size(metrics.label())
             .center(),
     )
-    .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled))
-    .style(if state.calendar.month_open {
+    .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled(
+        if weekly {
+            MonthPicker::Overview
+        } else {
+            MonthPicker::Panel
+        },
+    )))
+    .style(if month_open {
         crate::ui::controls::primary
     } else {
         crate::ui::controls::secondary
