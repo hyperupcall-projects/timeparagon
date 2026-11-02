@@ -136,19 +136,37 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             }
             task
         }
-        EventDraftMessage::EventDraftKindSelected(kind) => {
+        EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::TimeBlock) => {
+            // A time block is planned in the block panel, not filled in as an
+            // event, so choosing it writes the block and opens that panel.
             let app_calendar = state.config.calendar.app_calendar.clone();
+            let Some(draft) = state.calendar.draft.as_mut() else {
+                return Task::none();
+            };
+            if draft.saving {
+                return Task::none();
+            }
+            draft.kind = calendar::DraftKind::TimeBlock;
+            if let Some(calendar_id) = app_calendar {
+                draft.calendar_id = calendar_id;
+            }
+            draft.calendar_dropdown_open = false;
+            update(state, EventDraftMessage::EventDraftSaveRequested)
+        }
+        EventDraftMessage::EventDraftKindSelected(kind) => {
             let default_calendar = state.calendar.default_calendar_id(&state.config.calendar);
             if let Some(draft) = state.calendar.draft.as_mut() {
+                if draft.saving {
+                    return Task::none();
+                }
                 draft.kind = kind;
                 draft.editor_open = true;
-                // A time block always lives on the app's TimeSlay calendar;
-                // switching back to an event returns to the normal default.
+                // An ordinary event uses the normal default calendar.
                 if let Some(calendar_id) = match kind {
-                    calendar::DraftKind::TimeBlock | calendar::DraftKind::Sleep => app_calendar,
                     calendar::DraftKind::Event
                     | calendar::DraftKind::Habit
                     | calendar::DraftKind::Task => default_calendar,
+                    calendar::DraftKind::Sleep | calendar::DraftKind::TimeBlock => None,
                 } {
                     draft.calendar_id = calendar_id;
                 }
@@ -177,6 +195,9 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             let Some(draft) = state.calendar.draft.clone() else {
                 return Task::none();
             };
+            if draft.saving {
+                return Task::none();
+            }
 
             if draft.end <= draft.start {
                 state.calendar.error = Some("The end time has to be after the start".to_owned());
@@ -189,20 +210,10 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             let is_block = draft.kind == calendar::DraftKind::TimeBlock
                 || state.config.calendar.app_calendar.as_deref()
                     == Some(draft.calendar_id.as_str());
-            let calendar_id = if draft.kind == calendar::DraftKind::TimeBlock {
-                state
-                    .config
-                    .calendar
-                    .app_calendar
-                    .clone()
-                    .unwrap_or_else(|| draft.calendar_id.clone())
-            } else {
-                draft.calendar_id.clone()
-            };
             let color = if is_block {
                 state.config.calendar.time_block_color()
             } else {
-                state.calendar.calendar_color(&calendar_id)
+                state.calendar.calendar_color(&draft.calendar_id)
             };
             let description = if is_block {
                 calendar::event_description(&draft.description, "Time Block", &[])
@@ -223,22 +234,43 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             };
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
+            let known_app = state.config.calendar.app_calendar.clone();
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.saving = true;
+            }
             state.calendar.error = None;
 
             blocking::run(move || {
-                let id = calendar::create_event(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &draft.title,
-                    &description,
-                    color_id,
-                    draft.start,
-                    draft.end,
-                    &recurrence,
-                    &draft.projects.ids,
-                    Some(&draft.options),
-                )?;
+                // A block resolves (and, if need be, creates) the app's own
+                // calendar; an event is written to the calendar it was given.
+                let (id, calendar_id) = if draft.kind == calendar::DraftKind::TimeBlock {
+                    calendar::create_time_block(
+                        &client_id,
+                        &client_secret,
+                        known_app.as_deref(),
+                        &draft.title,
+                        &description,
+                        color_id,
+                        draft.start,
+                        draft.end,
+                        &draft.projects.ids,
+                    )?
+                } else {
+                    let id = calendar::create_event(
+                        &client_id,
+                        &client_secret,
+                        &draft.calendar_id,
+                        &draft.title,
+                        &description,
+                        color_id,
+                        draft.start,
+                        draft.end,
+                        &recurrence,
+                        &draft.projects.ids,
+                        Some(&draft.options),
+                    )?;
+                    (id, draft.calendar_id.clone())
+                };
 
                 Ok(calendar::Event {
                     id,
@@ -265,12 +297,38 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             .map(|v0| Message::EventDraft(EventDraftMessage::EventDraftSaved(v0)))
         }
         EventDraftMessage::EventDraftSaved(Ok(event)) => {
+            let was_block = state
+                .calendar
+                .draft
+                .as_ref()
+                .is_some_and(|draft| draft.kind == calendar::DraftKind::TimeBlock);
             state.calendar.draft = None;
+            // A block that had to create the TimeSlay calendar makes that
+            // calendar the remembered app calendar.
+            let remember = was_block && state.config.calendar.app_calendar.is_none();
+            if remember {
+                state.config.calendar.app_calendar = Some(event.calendar_id.clone());
+            }
+            let block = was_block.then(|| event.id.clone());
             state.calendar.add_event(event);
-            refresh_week_after_write(state)
+            let mut tasks = vec![refresh_week_after_write(state)];
+            if remember {
+                tasks.push(crate::app::queue_save(state));
+            }
+            if let Some(id) = block {
+                // The block is planned in the right-hand panel, not on the
+                // event form it was never sent to.
+                tasks.push(Task::done(Message::TimeBlocking(
+                    crate::timeblocking::Action::Plan(id),
+                )));
+            }
+            Task::batch(tasks)
         }
         EventDraftMessage::EventDraftSaved(Err(error)) => {
             // The popup stays open so the half-filled event is not lost.
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.saving = false;
+            }
             log::warn!("could not create the event: {error}");
             state.calendar.error = Some(error);
             Task::none()

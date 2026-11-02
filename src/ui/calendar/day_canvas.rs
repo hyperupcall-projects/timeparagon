@@ -378,11 +378,19 @@ impl canvas::Program<Message> for DayCanvas {
                         continue;
                     }
                     let rect = self.block_rect(block, bounds.width);
-                    let (view, _) = block_actions(rect);
-                    if view.contains(point) {
+                    let (_, focus, plan) = block_actions(rect);
+                    if focus.contains(point) {
                         return Some(
                             canvas::Action::publish(Message::TimeBlocking(
                                 crate::timeblocking::Action::View(block.id.clone()),
+                            ))
+                            .and_capture(),
+                        );
+                    }
+                    if plan.contains(point) {
+                        return Some(
+                            canvas::Action::publish(Message::TimeBlocking(
+                                crate::timeblocking::Action::Plan(block.id.clone()),
                             ))
                             .and_capture(),
                         );
@@ -540,8 +548,8 @@ impl canvas::Program<Message> for DayCanvas {
 
         if let Some(point) = cursor.position_in(bounds) {
             for block in self.blocks.iter().filter(|block| block.time_block) {
-                let (view, _) = block_actions(self.block_rect(block, bounds.width));
-                if view.contains(point) {
+                let (_, focus, plan) = block_actions(self.block_rect(block, bounds.width));
+                if focus.contains(point) || plan.contains(point) {
                     return mouse::Interaction::Pointer;
                 }
             }
@@ -787,7 +795,7 @@ impl DayCanvas {
             let title_size = if self.compact { 11.0 } else { 12.0 };
             let mut label_bounds = block_bounds;
             if block.time_block {
-                label_bounds = block_actions(block_bounds).1;
+                label_bounds = block_actions(block_bounds).0;
             }
             if label_bounds.height >= 14.0 {
                 draw_block_label(
@@ -800,27 +808,29 @@ impl DayCanvas {
                 );
             }
             if block.time_block {
-                let (view, _) = block_actions(block_bounds);
-                frame.fill(
-                    &Path::rounded_rectangle(view.position(), view.size(), EVENT_RADIUS.into()),
-                    Color::WHITE.scale_alpha(0.27),
-                );
-                // Keep the label inside its third even in overlapping columns.
-                let size =
-                    10.0 * ((view.width - 2.0).max(0.0) / text_width_of("View", 10.0)).min(1.0);
-                if size > 0.0 {
-                    fill_glyphs(
-                        frame,
-                        Text {
-                            content: "View".into(),
-                            position: Point::new(view.center_x(), view.center_y()),
-                            color: ink,
-                            size: Pixels(size),
-                            align_x: iced::alignment::Horizontal::Center.into(),
-                            align_y: iced::alignment::Vertical::Center,
-                            ..Text::default()
-                        },
+                let (_, focus, plan) = block_actions(block_bounds);
+                for (rect, name) in [(focus, "Focus"), (plan, "Plan")] {
+                    frame.fill(
+                        &Path::rounded_rectangle(rect.position(), rect.size(), EVENT_RADIUS.into()),
+                        Color::WHITE.scale_alpha(0.27),
                     );
+                    // Keep the label inside its box even in overlapping columns.
+                    let size =
+                        10.0 * ((rect.width - 2.0).max(0.0) / text_width_of(name, 10.0)).min(1.0);
+                    if size > 0.0 {
+                        fill_glyphs(
+                            frame,
+                            Text {
+                                content: name.into(),
+                                position: Point::new(rect.center_x(), rect.center_y()),
+                                color: ink,
+                                size: Pixels(size),
+                                align_x: iced::alignment::Horizontal::Center.into(),
+                                align_y: iced::alignment::Vertical::Center,
+                                ..Text::default()
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -1441,20 +1451,25 @@ pub(super) fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color
     );
 }
 
-/// The full-height left third opens the focused time-block view at every
-/// width. The remaining two thirds show the title and open the editable panel
-/// through the usual click/drag handling.
-pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
-    let view = Rectangle {
-        width: bounds.width / 3.0,
+/// A time block is split into the label on the left, with Focus stacked over
+/// Plan on the right. Anything outside the two buttons opens the details card
+/// through the usual click/drag handling. Returns (label, focus, plan).
+pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectangle) {
+    let label = Rectangle {
+        width: bounds.width * 0.6,
         ..bounds
     };
-    let edit = Rectangle {
-        x: bounds.x + view.width,
-        width: bounds.width - view.width,
+    let focus = Rectangle {
+        x: bounds.x + label.width,
+        width: bounds.width - label.width,
+        height: bounds.height / 2.0,
         ..bounds
     };
-    (view, edit)
+    let plan = Rectangle {
+        y: bounds.y + focus.height,
+        ..focus
+    };
+    (label, focus, plan)
 }
 
 /// Blends a color toward white, for the lighter shade an unconfirmed time

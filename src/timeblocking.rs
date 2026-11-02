@@ -169,6 +169,7 @@ pub struct WeekListPlacement {
 #[derive(Debug, Clone)]
 pub enum Action {
     View(String),
+    Plan(String),
     CloseView,
     StartWork(String),
     StopWork(String),
@@ -524,6 +525,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 iced::advanced::widget::operation::focusable::unfocus(),
             );
             return Task::batch([resize, unfocus]);
+        }
+        Action::Plan(id) => {
+            if !event(state, &id).is_some_and(|e| is_block(e, &state.config.calendar)) {
+                return Task::none();
+            }
+            state.calendar.open_event = None;
+            state.calendar.detail_event = None;
+            state.calendar.menu_open = false;
+            return open(state, id);
         }
         Action::CloseView => {
             state.timeblocking.focus = None;

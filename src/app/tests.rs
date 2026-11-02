@@ -50,38 +50,114 @@ fn flash(settings: config::Flash) -> Flash {
 }
 
 #[test]
-fn event_and_time_block_choices_open_the_creation_pane_without_saving() {
-    for kind in [calendar::DraftKind::Event, calendar::DraftKind::TimeBlock] {
-        let mut state = State::blank();
-        state.config.calendar.app_calendar = Some("timeslay".into());
-        let start =
-            calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
-        let end = start + chrono::Duration::minutes(45);
-        state.calendar.begin_draft("primary".into(), start, end);
-        let _ = update(
-            &mut state,
-            Message::EventDraft(EventDraftMessage::EventDraftTitleChanged("Planning".into())),
-        );
-        let _ = update(
-            &mut state,
-            Message::EventDraft(EventDraftMessage::EventDraftKindSelected(kind)),
-        );
-        let draft = state.calendar.draft.as_ref().unwrap();
-        assert!(draft.editor_open);
-        assert!(state.details_pane_open);
-        assert_eq!(draft.title, "Planning");
-        assert_eq!((draft.start, draft.end), (start, end));
-        assert_eq!(draft.kind, kind);
-        if kind == calendar::DraftKind::TimeBlock {
-            assert_eq!(draft.calendar_id, "timeslay");
+fn choosing_an_event_opens_the_creation_pane_without_saving() {
+    let mut state = State::blank();
+    let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+    let end = start + chrono::Duration::minutes(45);
+    state.calendar.begin_draft("primary".into(), start, end);
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftTitleChanged("Planning".into())),
+    );
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+            calendar::DraftKind::Event,
+        )),
+    );
+    let draft = state.calendar.draft.as_ref().unwrap();
+    assert!(draft.editor_open);
+    assert!(state.details_pane_open);
+    assert_eq!(draft.title, "Planning");
+    assert_eq!((draft.start, draft.end), (start, end));
+    assert_eq!(draft.kind, calendar::DraftKind::Event);
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftCancelled),
+    );
+    assert!(state.calendar.draft.is_none());
+    assert!(!state.details_pane_open);
+}
+
+#[test]
+fn choosing_a_time_block_starts_the_block_write_instead_of_the_event_form() {
+    let mut state = State::blank();
+    state.config.calendar.app_calendar = Some("timeslay".into());
+    let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+    let end = start + chrono::Duration::minutes(45);
+    state.calendar.begin_draft("primary".into(), start, end);
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(
+            "Deep work".into(),
+        )),
+    );
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+            calendar::DraftKind::TimeBlock,
+        )),
+    );
+    let draft = state.calendar.draft.as_ref().unwrap();
+    assert_eq!(draft.kind, calendar::DraftKind::TimeBlock);
+    assert_eq!(draft.calendar_id, "timeslay");
+    assert!(draft.saving, "the block write is already in flight");
+    assert!(
+        !draft.editor_open,
+        "a time block is planned in the panel, not the event form"
+    );
+}
+
+#[test]
+fn a_saved_time_block_opens_the_block_panel() {
+    let mut state = State::blank();
+    state.config.calendar.app_calendar = Some("timeslay".into());
+    let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+    let end = start + chrono::Duration::minutes(45);
+    let mut draft = calendar::Draft::new("timeslay".into(), start, end);
+    draft.kind = calendar::DraftKind::TimeBlock;
+    draft.saving = true;
+    state.calendar.draft = Some(draft);
+    let block = calendar::Event {
+        id: "block-1".into(),
+        calendar_id: "timeslay".into(),
+        title: "Deep work".into(),
+        start,
+        end,
+        all_day: false,
+        color: calendar::colors::TIME_BLOCK,
+        completed: false,
+        details: calendar::Details::default(),
+    };
+    let task = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftSaved(Ok(block))),
+    );
+    assert!(state.calendar.draft.is_none());
+    assert!(
+        messages(task).iter().any(|message| matches!(
+            message,
+            Message::TimeBlocking(crate::timeblocking::Action::Plan(id)) if id == "block-1"
+        )),
+        "a new block is planned in the right-hand panel"
+    );
+}
+
+/// The messages a task resolves to, for asserting on what an update queued.
+fn messages(task: Task<Message>) -> Vec<Message> {
+    use iced_test::runtime::{Action, task};
+    block_on(async {
+        let Some(mut stream) = task::into_stream(task) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        while let Some(action) = stream.next().await {
+            if let Action::Output(value) = action {
+                out.push(value);
+            }
         }
-        let _ = update(
-            &mut state,
-            Message::EventDraft(EventDraftMessage::EventDraftCancelled),
-        );
-        assert!(state.calendar.draft.is_none());
-        assert!(!state.details_pane_open);
-    }
+        out
+    })
 }
 
 #[test]

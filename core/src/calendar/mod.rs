@@ -243,6 +243,9 @@ pub struct Draft {
     pub rule: crate::recurrence::Rule,
     /// Whether the calendar dropdown is open.
     pub calendar_dropdown_open: bool,
+    /// A write to Google is in flight, so the draft must not be submitted
+    /// again or edited underneath it.
+    pub saving: bool,
 }
 
 impl Draft {
@@ -263,6 +266,7 @@ impl Draft {
             end_text: clock_label(end),
             rule: crate::recurrence::Rule::never(start.date_naive()),
             calendar_dropdown_open: false,
+            saving: false,
         }
     }
 
@@ -2221,6 +2225,51 @@ pub fn create_event(
         options,
     )
     .map_err(describe_event_write_error)
+}
+
+/// Creates a time block on the app's single TimeSlay calendar and returns its
+/// id together with the calendar it landed on.
+///
+/// Unlike [`create_event`], the calendar is resolved here: when its id is not
+/// known yet it is found by name or created, so a block never ends up on the
+/// user's primary calendar and is recognized as a block everywhere. Blocks do
+/// not repeat, so there are no recurrence lines. Blocking: run it on a worker
+/// thread through the app's `blocking::run`.
+#[allow(clippy::too_many_arguments)]
+pub fn create_time_block(
+    client_id: &str,
+    client_secret: &str,
+    known_calendar: Option<&str>,
+    title: &str,
+    description: &str,
+    color_id: Option<&str>,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+    projects: &[u64],
+) -> Result<(String, String), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let calendar_id = match known_calendar {
+        Some(id) => id.to_owned(),
+        None => scheduled::app_calendar(&tokens.access_token)?,
+    };
+
+    let id = api::insert_event(
+        &tokens.access_token,
+        &calendar_id,
+        title,
+        description,
+        color_id,
+        start,
+        end,
+        &[],
+        projects,
+        None,
+    )
+    .map_err(describe_event_write_error)?;
+
+    Ok((id, calendar_id))
 }
 
 /// Updates an existing event on Google: title, description, start and end.
