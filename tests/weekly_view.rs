@@ -2,11 +2,10 @@ use chrono::{Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
+use timeslay::app::{CalendarMessage, EventMessage, NavigationMessage, SystemMessage, TaskMessage};
 use timeslay::{
     app::{self, Message, Screen, State},
     calendar::{self, Store},
-    config::Config,
-    theme::Catalog,
 };
 
 fn date(day: u32) -> NaiveDate {
@@ -23,7 +22,7 @@ fn at(day: u32, hour: u32) -> chrono::DateTime<Local> {
 }
 
 fn state() -> State {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     let mut snapshot = calendar::sample_snapshot();
     snapshot.day = date(15);
     let mut block = snapshot
@@ -59,7 +58,7 @@ fn state() -> State {
         events: Vec::new(),
         ..snapshot.clone()
     });
-    state.weekly = true;
+    state.view = timeslay::app::CalendarView::Week;
     state.week_anchor = date(15);
     state
         .calendar
@@ -68,7 +67,7 @@ fn state() -> State {
 }
 
 fn render(state: &State, size: Size) -> Simulator<'_, Message> {
-    let view: Element<'_, Message> = if state.weekly || state.monthly {
+    let view: Element<'_, Message> = if state.range_view_active() {
         timeslay::ui::editor_window(state)
     } else {
         app::view(state, iced::window::Id::unique())
@@ -104,7 +103,7 @@ fn floating_window_fits_every_weekly_heading() {
     use timeslay::{app::Sidebar, panel::Side};
 
     for (days, width, sidebar) in [(7, 100, false), (8, 200, false), (8, 150, true)] {
-        let mut state = State::new(Config::default(), Catalog::built_in());
+        let mut state = State::blank();
         state.config.calendar.weekly_days = days;
         state.config.calendar.weekly_day_width = width;
         state.calendar.set_day(date(15), date(15));
@@ -115,7 +114,10 @@ fn floating_window_fits_every_weekly_heading() {
             });
         }
         state.main_window = Some(iced::window::Id::unique());
-        let task = app::update(&mut state, Message::CalendarModeSelected(true));
+        let task = app::update(
+            &mut state,
+            Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+        );
         let size = block_on(async {
             let mut stream = task::into_stream(task).unwrap();
             let mut size = None;
@@ -189,7 +191,10 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
     let mut state = state();
     let _ = app::update(
         &mut state,
-        Message::WeekDayAction(date(14), Box::new(Message::EventOpened("standup".into()))),
+        Message::Calendar(CalendarMessage::WeekDayAction(
+            date(14),
+            Box::new(Message::Event(EventMessage::EventOpened("standup".into()))),
+        )),
     );
     assert_eq!(state.week_anchor, date(15));
     assert_eq!(state.calendar.day, date(14));
@@ -207,10 +212,12 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
 
     let _ = app::update(
         &mut state,
-        Message::WeekDayAction(
+        Message::Calendar(CalendarMessage::WeekDayAction(
             date(15),
-            Box::new(Message::EventOpened("task:thursday".into())),
-        ),
+            Box::new(Message::Event(EventMessage::EventOpened(
+                "task:thursday".into(),
+            ))),
+        )),
     );
     assert_eq!(state.calendar.day, date(15));
     assert_eq!(state.week_anchor, date(15));
@@ -225,7 +232,7 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
     ui.simulate(iced_test::simulator::click());
     assert!(
         ui.into_messages()
-            .any(|message| matches!(message, Message::EventClosed))
+            .any(|message| matches!(message, Message::Event(EventMessage::EventClosed)))
     );
     let mut ui = render(&state, Size::new(328.0, 900.0));
     let pane = ui.find("Complete task").unwrap().bounds();
@@ -234,10 +241,12 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
 
     let _ = app::update(
         &mut state,
-        Message::WeekDayAction(
+        Message::Calendar(CalendarMessage::WeekDayAction(
             date(21),
-            Box::new(Message::EventOpened("last-event".into())),
-        ),
+            Box::new(Message::Event(EventMessage::EventOpened(
+                "last-event".into(),
+            ))),
+        )),
     );
     let mut ui = render(&state, Size::new(1500.0, 700.0));
     let selected = ui.find("Wed Oct 21").unwrap().bounds();
@@ -250,9 +259,15 @@ fn weekly_navigation_uses_the_anchor_not_the_last_opened_day() {
     let mut state = state();
     let _ = app::update(
         &mut state,
-        Message::WeekDayAction(date(14), Box::new(Message::EventOpened("standup".into()))),
+        Message::Calendar(CalendarMessage::WeekDayAction(
+            date(14),
+            Box::new(Message::Event(EventMessage::EventOpened("standup".into()))),
+        )),
     );
-    let _ = app::update(&mut state, Message::CalendarDayShift(8));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarDayShift(8)),
+    );
     assert_eq!(state.week_anchor, date(23));
     assert!(state.timeblocking.block.is_none());
 }
@@ -294,11 +309,11 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
     task.completed = true;
     let _ = app::update(
         &mut state,
-        Message::TaskCompletionSaved(
+        Message::Task(TaskMessage::TaskCompletionSaved(
             "task:thursday".into(),
             timeslay::timeblocking::TaskStatus::Active,
             Ok(task),
-        ),
+        )),
     );
     assert!(
         state
@@ -309,7 +324,7 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
     );
     let _ = app::update(
         &mut state,
-        Message::TaskDeleted("task:thursday".into(), Ok(())),
+        Message::Task(TaskMessage::TaskDeleted("task:thursday".into(), Ok(()))),
     );
     assert!(
         !state
@@ -349,11 +364,11 @@ fn weekly_canvas_click_reports_the_clicked_day() -> Result<(), Error> {
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Message::WeekDayAction(day, action)
+            Message::Calendar(CalendarMessage::WeekDayAction(day, action))
                 if *day == date(14)
                     && matches!(
                         action.as_ref(),
-                        Message::EventOpened(id) if id == "standup"
+                        Message::Event(EventMessage::EventOpened(id)) if id == "standup"
                     ) || *day == date(14) && matches!(
                         action.as_ref(),
                         Message::TimeBlocking(timeslay::timeblocking::Action::View(id)) if id == "standup"
@@ -373,8 +388,8 @@ fn weekly_all_day_task_opens_the_task_for_its_column() -> Result<(), Error> {
     let _ = ui.click("Thursday task")?;
     assert!(ui.into_messages().any(|message| matches!(
         message,
-        Message::WeekDayAction(day, action)
-            if day == date(15) && matches!(*action, Message::EventOpened(ref id) if id == "task:thursday")
+        Message::Calendar(CalendarMessage::WeekDayAction(day, action))
+            if day == date(15) && matches!(*action, Message::Event(EventMessage::EventOpened(ref id)) if id == "task:thursday")
     )));
     Ok(())
 }
@@ -392,11 +407,14 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
         },
         legacy_key: None,
     });
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let mut ui = render(&state, Size::new(328.0, 900.0));
     let _ = ui.click("Thursday task")?;
     assert!(ui.into_messages().any(|message| matches!(
-        message, Message::EventOpened(id) if id == "task:thursday"
+        message, Message::Event(EventMessage::EventOpened(id)) if id == "task:thursday"
     )));
     let mut ui = render(&state, Size::new(328.0, 900.0));
     let _ = ui.click("Close")?;
@@ -426,8 +444,7 @@ fn overview_buttons_toggle_from_every_screen() -> Result<(), Error> {
         ] {
             for monthly in [false, true] {
                 let mut state = state();
-                state.weekly = false;
-                state.monthly = false;
+                state.view = timeslay::app::CalendarView::Day;
                 state.screen = screen;
                 let show = if monthly { "Show month" } else { "Show week" };
                 let hide = if monthly { "Hide month" } else { "Hide week" };
@@ -448,23 +465,28 @@ fn overview_buttons_toggle_from_every_screen() -> Result<(), Error> {
                     .find(|m| {
                         matches!(
                             m,
-                            Message::CalendarModeSelected(true)
-                                | Message::CalendarMonthViewSelected
+                            Message::Calendar(CalendarMessage::CalendarModeSelected(true))
+                                | Message::Calendar(CalendarMessage::CalendarMonthViewSelected)
                         )
                     })
                     .unwrap();
                 let _ = app::update(&mut state, message);
                 assert_eq!(state.screen, screen);
-                assert_eq!(state.monthly, monthly);
-                assert_eq!(state.weekly, !monthly);
+                assert_eq!(state.monthly(), monthly);
+                assert_eq!(state.weekly(), !monthly);
                 let mut ui = render_main(&state, Size::new(width, 900.0));
                 ui.click(hide)?;
                 let message = ui
                     .into_messages()
-                    .find(|m| matches!(m, Message::CalendarModeSelected(false)))
+                    .find(|m| {
+                        matches!(
+                            m,
+                            Message::Calendar(CalendarMessage::CalendarModeSelected(false))
+                        )
+                    })
                     .unwrap();
                 let _ = app::update(&mut state, message);
-                assert!(!state.weekly && !state.monthly);
+                assert!(!state.weekly() && !state.monthly());
             }
         }
     }
@@ -475,18 +497,26 @@ fn overview_buttons_toggle_from_every_screen() -> Result<(), Error> {
 fn schedule_opens_day_panel_without_hiding_the_overview() -> Result<(), Error> {
     for monthly in [false, true] {
         let mut state = state();
-        state.weekly = !monthly;
-        state.monthly = monthly;
+        state.view = if monthly {
+            timeslay::app::CalendarView::Month
+        } else {
+            timeslay::app::CalendarView::Week
+        };
         let mut ui = render_main(&state, Size::new(180.0, 700.0));
         ui.click("Schedule")?;
         let message = ui
             .into_messages()
-            .find(|m| matches!(m, Message::ScreenSelected(Screen::Calendar)))
+            .find(|m| {
+                matches!(
+                    m,
+                    Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar))
+                )
+            })
             .unwrap();
         let _ = app::update(&mut state, message);
         assert_eq!(state.screen, Screen::Calendar);
-        assert_eq!(state.weekly, !monthly);
-        assert_eq!(state.monthly, monthly);
+        assert_eq!(state.weekly(), !monthly);
+        assert_eq!(state.monthly(), monthly);
     }
     Ok(())
 }
@@ -508,11 +538,13 @@ fn first_overview_click_preserves_the_sidebar_through_window_startup() -> Result
             Screen::Triaged,
         ] {
             let mut state = state();
-            state.weekly = false;
-            state.monthly = false;
+            state.view = timeslay::app::CalendarView::Day;
             let main = iced::window::Id::unique();
             state.main_window = Some(main);
-            let _ = app::update(&mut state, Message::ScreenSelected(screen));
+            let _ = app::update(
+                &mut state,
+                Message::Navigation(NavigationMessage::ScreenSelected(screen)),
+            );
             state.timeblocking.available_query = "keep my filter".into();
             state.timeblocking.available_all = true;
             state.timeblocking.available_planned = true;
@@ -525,15 +557,21 @@ fn first_overview_click_preserves_the_sidebar_through_window_startup() -> Result
                 let _ = app::update(&mut state, message);
             }
             let floating = state.editor_window.expect("overview window");
-            let _ = app::update(&mut state, Message::WindowOpened(floating));
-            let _ = app::update(&mut state, Message::EditorWindowOpened(floating));
+            let _ = app::update(
+                &mut state,
+                Message::System(SystemMessage::WindowOpened(floating)),
+            );
+            let _ = app::update(
+                &mut state,
+                Message::System(SystemMessage::EditorWindowOpened(floating)),
+            );
             assert_eq!(state.screen, screen);
             assert_eq!(state.main_window, Some(main));
             assert_eq!(state.timeblocking.available_query, "keep my filter");
             assert!(state.timeblocking.available_all);
             assert!(state.timeblocking.available_planned);
-            assert_eq!(state.monthly, monthly);
-            assert_eq!(state.weekly, !monthly);
+            assert_eq!(state.monthly(), monthly);
+            assert_eq!(state.weekly(), !monthly);
         }
     }
     Ok(())
@@ -544,14 +582,13 @@ fn overview_stays_open_across_all_panel_tabs() -> Result<(), Error> {
     for monthly in [false, true] {
         let mut state = state();
         state.main_window = Some(iced::window::Id::unique());
-        state.weekly = false;
-        state.monthly = false;
+        state.view = timeslay::app::CalendarView::Day;
         let _ = app::update(
             &mut state,
             if monthly {
-                Message::CalendarMonthViewSelected
+                Message::Calendar(CalendarMessage::CalendarMonthViewSelected)
             } else {
-                Message::CalendarModeSelected(true)
+                Message::Calendar(CalendarMessage::CalendarModeSelected(true))
             },
         );
         let floating = state.editor_window.unwrap();
@@ -570,12 +607,15 @@ fn overview_stays_open_across_all_panel_tabs() -> Result<(), Error> {
             Screen::Settings,
             Screen::Calendar,
         ] {
-            let _ = app::update(&mut state, Message::ScreenSelected(screen));
+            let _ = app::update(
+                &mut state,
+                Message::Navigation(NavigationMessage::ScreenSelected(screen)),
+            );
             assert_eq!(state.screen, screen);
             assert_eq!(state.editor_window, Some(floating));
             assert_eq!(state.week_anchor, anchor);
-            assert_eq!(state.weekly, !monthly);
-            assert_eq!(state.monthly, monthly);
+            assert_eq!(state.weekly(), !monthly);
+            assert_eq!(state.monthly(), monthly);
             let mut panel = render_main(&state, Size::new(260.0, 900.0));
             assert!(
                 panel
@@ -599,10 +639,15 @@ fn overview_stays_open_across_all_panel_tabs() -> Result<(), Error> {
         panel.click(if monthly { "Hide month" } else { "Hide week" })?;
         let hide = panel
             .into_messages()
-            .find(|m| matches!(m, Message::CalendarModeSelected(false)))
+            .find(|m| {
+                matches!(
+                    m,
+                    Message::Calendar(CalendarMessage::CalendarModeSelected(false))
+                )
+            })
             .unwrap();
         let _ = app::update(&mut state, hide);
-        assert!(!state.weekly && !state.monthly);
+        assert!(!state.weekly() && !state.monthly());
         assert!(state.editor_window.is_none());
     }
     Ok(())
@@ -624,12 +669,12 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, Message::WeekHover(Some(day)) if *day == date(15)))
+            .any(|m| matches!(m, Message::Calendar(CalendarMessage::WeekHover(Some(day))) if *day == date(15)))
     );
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, Message::CalendarDaySelected(day) if *day == date(15)))
+            .any(|m| matches!(m, Message::Calendar(CalendarMessage::CalendarDaySelected(day)) if *day == date(15)))
     );
 
     state.calendar.month_open = false;
@@ -641,10 +686,10 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
         let hide = ui.find("Hide week")?.bounds();
         assert!(hide.x >= 0.0 && hide.x + hide.width <= width);
         let _ = ui.click("Hide week")?;
-        assert!(
-            ui.into_messages()
-                .any(|m| matches!(m, Message::CalendarModeSelected(false)))
-        );
+        assert!(ui.into_messages().any(|m| matches!(
+            m,
+            Message::Calendar(CalendarMessage::CalendarModeSelected(false))
+        )));
     }
     let mut ui = render(&state, Size::new(180.0, 240.0));
     let heading = ui.find("Wed Oct 14")?.bounds();
@@ -784,7 +829,10 @@ fn task_list_switch_preserves_week_and_cards_show_start_times_and_open_details()
     let mut state = state();
     state.config.appearance.time_format =
         timeslay::calendar::time_format::TimeFormat::TwentyFourHour;
-    let _ = app::update(&mut state, Message::CalendarTaskListToggled(true));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarTaskListToggled(true)),
+    );
     assert!(state.config.calendar.weekly_task_list);
     assert_eq!(state.week_anchor, date(15));
     let saved = toml::to_string(&state.config.calendar).unwrap();
@@ -800,10 +848,13 @@ fn task_list_switch_preserves_week_and_cards_show_start_times_and_open_details()
     );
     let _ = ui.click("Thursday task")?;
     assert!(ui.into_messages().any(|message| matches!(message,
-        Message::WeekDayAction(day, action) if day == date(15)
-            && matches!(*action, Message::EventOpened(ref id) if id == "task:thursday")
+        Message::Calendar(CalendarMessage::WeekDayAction(day, action)) if day == date(15)
+            && matches!(*action, Message::Event(EventMessage::EventOpened(ref id)) if id == "task:thursday")
     )));
-    let _ = app::update(&mut state, Message::CalendarTaskListToggled(false));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarTaskListToggled(false)),
+    );
     assert!(!state.config.calendar.weekly_task_list);
     assert_eq!(state.week_anchor, date(15));
     Ok(())
@@ -851,13 +902,13 @@ fn board_cards_drag_from_title_badges_and_footer_without_opening_or_completing()
         ui.point_at(position);
         ui.simulate([Event::Mouse(mouse::Event::CursorMoved { position })]);
         let messages: Vec<_> = ui.into_messages().collect();
-        assert!(messages.iter().any(|m| matches!(m, Message::WeekDayAction(day, inner)
+        assert!(messages.iter().any(|m| matches!(m, Message::Calendar(CalendarMessage::WeekDayAction(day, inner))
             if *day == date(15) && matches!(&**inner, Message::TimeBlocking(Action::Drag(id, _)) if id == "task:first"))), "{messages:?}");
         assert!(
             !messages
                 .iter()
-                .any(|m| matches!(m, Message::WeekDayAction(_, inner)
-            if matches!(&**inner, Message::EventOpened(_) | Message::TaskToggled(_))))
+                .any(|m| matches!(m, Message::Calendar(CalendarMessage::WeekDayAction(_, inner))
+            if matches!(&**inner, Message::Event(EventMessage::EventOpened(_)) | Message::Task(TaskMessage::TaskToggled(_)))))
         );
     }
     Ok(())
@@ -892,7 +943,7 @@ fn board_drop_targets_cover_before_after_events_and_empty_days() -> Result<(), E
             ))]);
             let messages: Vec<_> = ui.into_messages().collect();
             assert!(
-                matches!(&messages[..], [Message::WeekDayAction(day, inner)]
+                matches!(&messages[..], [Message::Calendar(CalendarMessage::WeekDayAction(day, inner))]
                 if *day == expected_day && matches!(&**inner, Message::TimeBlocking(Action::DropWeekList { target: Some(id), after: a }) if id == target && *a == after)),
                 "{point:?}: {messages:?}"
             );
@@ -904,7 +955,7 @@ fn board_drop_targets_cover_before_after_events_and_empty_days() -> Result<(), E
     ui.simulate([Event::Mouse(mouse::Event::ButtonReleased(
         mouse::Button::Left,
     ))]);
-    assert!(ui.into_messages().any(|m| matches!(m, Message::WeekDayAction(day, inner)
+    assert!(ui.into_messages().any(|m| matches!(m, Message::Calendar(CalendarMessage::WeekDayAction(day, inner))
         if day == date(19) && matches!(*inner, Message::TimeBlocking(Action::DropWeekList { target: None, .. })))));
     Ok(())
 }
@@ -932,13 +983,13 @@ fn board_reordering_is_persistent_and_keeps_schedule_and_block_membership() {
         state.timeblocking.dragging = Some("task:first".into());
         let _ = app::update(
             &mut state,
-            Message::WeekDayAction(
+            Message::Calendar(CalendarMessage::WeekDayAction(
                 date(15),
                 Box::new(Message::TimeBlocking(Action::DropWeekList {
                     target: target.map(str::to_owned),
                     after,
                 })),
-            ),
+            )),
         );
         assert_eq!(
             tb::weekly_list_events(&state, date(15))
@@ -967,10 +1018,10 @@ fn add_task_on_a_board_day_opens_a_timed_task_for_that_day() {
     let mut state = board_state();
     let _ = app::update(
         &mut state,
-        Message::WeekDayAction(
+        Message::Calendar(CalendarMessage::WeekDayAction(
             date(14),
             Box::new(Message::TimeBlocking(Action::NewWeekTask)),
-        ),
+        )),
     );
     let task = state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap();
     assert!(!task.all_day);

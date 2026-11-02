@@ -1,4 +1,5 @@
 //! Remote-backed task metadata and Google Tasks time-block operations.
+use crate::app::CalendarMessage;
 use crate::{
     app::{Message, State},
     blocking,
@@ -8,12 +9,85 @@ use crate::{
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone};
 use iced::Task;
 
-mod model;
-pub use model::*;
+pub use timeslay_core::timeblocking::*;
 
 pub const PANEL_WIDTH: f32 = 400.0;
-/// Busy-set key for a todo that does not have a task id until Google creates it.
-pub(crate) const ADDING_TODO: &str = "adding-todo";
+/// A save in progress, and what its result will be for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BusyKey {
+    Task(String),
+    /// A todo that does not have a task id until Google creates it.
+    AddingTodo,
+}
+
+impl BusyKey {
+    /// The task this save is for, which matches no task while adding a todo.
+    fn task_id(&self) -> &str {
+        match self {
+            Self::Task(id) => id,
+            Self::AddingTodo => "",
+        }
+    }
+}
+
+impl From<String> for BusyKey {
+    fn from(id: String) -> Self {
+        Self::Task(id)
+    }
+}
+
+impl From<&str> for BusyKey {
+    fn from(id: &str) -> Self {
+        Self::Task(id.to_owned())
+    }
+}
+
+/// Which saves are in flight.
+#[derive(Debug, Default)]
+pub struct Busy {
+    tasks: std::collections::HashSet<String>,
+    adding_todo: bool,
+}
+
+impl Busy {
+    pub fn insert(&mut self, key: impl Into<BusyKey>) {
+        match key.into() {
+            BusyKey::Task(id) => {
+                self.tasks.insert(id);
+            }
+            BusyKey::AddingTodo => self.adding_todo = true,
+        }
+    }
+
+    pub fn remove(&mut self, key: &BusyKey) {
+        match key {
+            BusyKey::Task(id) => {
+                self.tasks.remove(id);
+            }
+            BusyKey::AddingTodo => self.adding_todo = false,
+        }
+    }
+
+    pub fn remove_task(&mut self, id: &str) {
+        self.tasks.remove(id);
+    }
+
+    pub fn contains_task(&self, id: &str) -> bool {
+        self.tasks.contains(id)
+    }
+
+    pub fn adding_todo(&self) -> bool {
+        self.adding_todo
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty() && !self.adding_todo
+    }
+
+    pub fn len(&self) -> usize {
+        self.tasks.len() + usize::from(self.adding_todo)
+    }
+}
 const MAX_TODO_CHARS: usize = 1024;
 #[derive(Default)]
 pub struct Workspace {
@@ -66,7 +140,7 @@ pub struct Workspace {
     pub drag_pointer: Option<iced::Point>,
     /// The surface whose coordinates `drag_pointer` uses.
     pub drag_window: Option<iced::window::Id>,
-    pub busy: std::collections::HashSet<String>,
+    pub busy: Busy,
     /// A task whose fields are being saved without closing its details pane.
     pub keep_open: Option<String>,
     /// Text that narrows the backlog by task title or list name.
@@ -91,6 +165,8 @@ pub struct WeekListPlacement {
     pub after: bool,
 }
 
+// Messages only live until the next update, so a large variant costs nothing lasting.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
     View(String),
@@ -214,8 +290,8 @@ pub enum Action {
         after: bool,
     },
     NewWeekTask,
-    Saved(String, Result<Event, String>),
-    SavedMany(String, Result<Vec<Event>, String>),
+    Saved(BusyKey, Result<Event, String>),
+    SavedMany(BusyKey, Result<Vec<Event>, String>),
 }
 fn take_drag(state: &mut State) -> Option<String> {
     state.timeblocking.drag_pointer = None;
@@ -316,7 +392,7 @@ pub fn close(state: &mut State) -> Task<Message> {
     state.timeblocking.available_all = false;
     state.timeblocking.available_planned = false;
     // A save still in flight keeps the draft so its result can land on the same field.
-    if !state.timeblocking.busy.contains(ADDING_TODO) {
+    if !state.timeblocking.busy.adding_todo() {
         state.timeblocking.todo_open = false;
         state.timeblocking.todo_draft.clear();
         state.timeblocking.todo_error = None;
@@ -325,7 +401,7 @@ pub fn close(state: &mut State) -> Task<Message> {
 }
 pub fn open(state: &mut State, id: String) -> Task<Message> {
     if state.timeblocking.block.as_deref() != Some(id.as_str())
-        && !state.timeblocking.busy.contains(ADDING_TODO)
+        && !state.timeblocking.busy.adding_todo()
     {
         state.timeblocking.todo_open = false;
         state.timeblocking.todo_draft.clear();
@@ -380,14 +456,14 @@ pub(crate) fn schedule_created(
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     // Writes started before creation opened still finish in their own workspace.
-    if matches!(&action, Action::Saved(_, _) | Action::SavedMany(_, _)) {
-        if let Some(previous) = state.inbox.workspace.take() {
-            let draft_workspace = std::mem::replace(&mut state.timeblocking, *previous);
-            let task = update(state, action);
-            let previous = std::mem::replace(&mut state.timeblocking, draft_workspace);
-            state.inbox.workspace = Some(Box::new(previous));
-            return task;
-        }
+    if matches!(&action, Action::Saved(_, _) | Action::SavedMany(_, _))
+        && let Some(previous) = state.inbox.workspace.take()
+    {
+        let draft_workspace = std::mem::replace(&mut state.timeblocking, *previous);
+        let task = update(state, action);
+        let previous = std::mem::replace(&mut state.timeblocking, draft_workspace);
+        state.inbox.workspace = Some(Box::new(previous));
+        return task;
     }
 
     // Triaging is a review step: the task cannot leave the Inbox until every
@@ -411,7 +487,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 event(state, &id).map(crate::calendar::EditDraft::from_event);
             state.timeblocking.focus = Some(id);
             state.timeblocking.history_open = false;
-            state.timeblocking.work_now = Some(chrono::Utc::now());
+            state.timeblocking.work_now = Some(crate::clock::utc_now());
             state.calendar.open_event = None;
             state.calendar.menu_open = false;
             state.calendar.month_open = false;
@@ -429,7 +505,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::WorkTick => {
-            let now = chrono::Utc::now();
+            let now = crate::clock::utc_now();
             state.timeblocking.work_now = Some(now);
             if advance_pomodoro(state, now) {
                 return crate::app::queue_save(state);
@@ -437,7 +513,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::PomodoroToggle => {
-            let now = chrono::Utc::now();
+            let now = crate::clock::utc_now();
             advance_pomodoro(state, now);
             let timer = &mut state.config.pomodoro;
             if timer.running() {
@@ -470,7 +546,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return crate::app::queue_save(state);
         }
         Action::PomodoroReset => {
-            let now = chrono::Utc::now();
+            let now = crate::clock::utc_now();
             advance_pomodoro(state, now);
             state.config.pomodoro.reset();
             return crate::app::queue_save(state);
@@ -573,7 +649,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             session.stopped_at = end.map(|end| end.with_timezone(&chrono::Utc));
             state.timeblocking.session_edit = None;
             state.timeblocking.session_error = None;
-            state.timeblocking.work_now = Some(chrono::Utc::now());
+            state.timeblocking.work_now = Some(crate::clock::utc_now());
             return crate::app::queue_save(state);
         }
         Action::CloseSession => {
@@ -588,17 +664,17 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if index < state.config.task_work.sessions.len() {
                 state.config.task_work.sessions.remove(index);
                 state.timeblocking.session_error = None;
-                state.timeblocking.work_now = Some(chrono::Utc::now());
+                state.timeblocking.work_now = Some(crate::clock::utc_now());
                 return crate::app::queue_save(state);
             }
             return Task::none();
         }
         Action::StartWork(id) => {
-            let now = chrono::Utc::now();
+            let now = crate::clock::utc_now();
             advance_pomodoro(state, now);
-            let Some(task) = event(state, &id)
-                .filter(|e| e.is_task() && !e.completed && !state.timeblocking.busy.contains(&id))
-            else {
+            let Some(task) = event(state, &id).filter(|e| {
+                e.is_task() && !e.completed && !state.timeblocking.busy.contains_task(&id)
+            }) else {
                 return Task::none();
             };
             if state.config.pomodoro.running()
@@ -624,7 +700,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return crate::app::queue_save(state);
         }
         Action::StopWork(id) => {
-            let now = chrono::Utc::now();
+            let now = crate::clock::utc_now();
             advance_pomodoro(state, now);
             if let Some(task) = event(state, &id) {
                 let key = task_key(task);
@@ -820,7 +896,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             let Some(task) = event(state, &id).filter(|e| e.is_task()) else {
                 return Task::none();
             };
-            if state.timeblocking.busy.contains(&id) {
+            if state.timeblocking.busy.contains_task(&id) {
                 return Task::none();
             }
             state.timeblocking.estimate = metadata(task).minutes.to_string();
@@ -916,7 +992,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 .events
                 .iter()
                 .filter(|e| e.is_task() && e.id != id && e.id != target.id)
-                .map(|e| metadata(e))
+                .map(metadata)
                 .filter(|other| other.block == m.block && other.order < m.order)
                 .map(|other| other.order)
                 .max();
@@ -934,35 +1010,38 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
             (id, Change::Day(state.calendar.day))
         }
-        Action::SavedMany(id, result) => {
-            state.timeblocking.busy.remove(&id);
+        Action::SavedMany(key, result) => {
+            state.timeblocking.busy.remove(&key);
             let mut tasks = Vec::new();
             match result {
                 Ok(events) => {
                     for (index, event) in events.into_iter().enumerate() {
-                        let previous_id = if index == 0 {
-                            id.clone()
+                        let previous = if index == 0 {
+                            key.clone()
                         } else {
-                            event.id.clone()
+                            BusyKey::Task(event.id.clone())
                         };
-                        tasks.push(update(state, Action::Saved(previous_id, Ok(event))));
+                        tasks.push(update(state, Action::Saved(previous, Ok(event))));
                     }
                 }
                 Err(error) => {
                     state.timeblocking.sync_notice = Some(error.clone());
-                    tasks.push(update(state, Action::Saved(id, Err(error))));
+                    tasks.push(update(state, Action::Saved(key, Err(error))));
                 }
             }
             // Also reconciles a partially successful cross-service write.
-            tasks.push(Task::done(Message::CalendarSyncRequested));
+            tasks.push(Task::done(Message::Calendar(
+                CalendarMessage::CalendarSyncRequested,
+            )));
             return Task::batch(tasks);
         }
-        Action::Saved(id, result) => {
+        Action::Saved(key, result) => {
             state.timeblocking.revision += 1;
-            state.timeblocking.busy.remove(&id);
+            state.timeblocking.busy.remove(&key);
+            let id = key.task_id();
             let mut refresh_week = false;
-            let editing_estimate = state.timeblocking.estimate_task.as_deref() == Some(&id);
-            let renaming = state.timeblocking.renaming.as_deref() == Some(&id);
+            let editing_estimate = state.timeblocking.estimate_task.as_deref() == Some(id);
+            let renaming = state.timeblocking.renaming.as_deref() == Some(id);
             let keep_open = state
                 .timeblocking
                 .keep_open
@@ -976,7 +1055,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         state.timeblocking.title_error = None;
                         state.timeblocking.editing_title = false;
                     }
-                    if id == ADDING_TODO {
+                    if key == BusyKey::AddingTodo {
                         state.timeblocking.todo_draft.clear();
                         state.timeblocking.todo_error = None;
                         state.timeblocking.todo_open = false;
@@ -992,7 +1071,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                                 Some(format!("tasks:{}", link.list_id));
                         }
                     }
-                    if keep_open && state.calendar.open_event.as_deref() == Some(&id) {
+                    if keep_open && state.calendar.open_event.as_deref() == Some(id) {
                         state.timeblocking.editing_due_time = false;
                         state.timeblocking.editing_deadline_time = false;
                     }
@@ -1001,7 +1080,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         .calendar
                         .events
                         .retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
-                    state.calendar.replace_cached_task(&id, &event);
+                    state.calendar.replace_cached_task(id, &event);
                     if state.range_view_active() {
                         refresh_week = true;
                     }
@@ -1012,7 +1091,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                         .take_if(|p| p.task == id)
                     {
                         for order in state.config.calendar.weekly_task_order.values_mut() {
-                            order.retain(|old| old != &id);
+                            order.retain(|old| old != id);
                         }
                         place_week_card(
                             state,
@@ -1032,13 +1111,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 Err(error) if editing_estimate => state.timeblocking.estimate_error = Some(error),
                 Err(error) if renaming => {
                     state.timeblocking.renaming = None;
-                    if state.calendar.open_event.as_deref() == Some(&id) {
+                    if state.calendar.open_event.as_deref() == Some(id) {
                         state.timeblocking.title_error = Some(error);
                     } else {
                         state.calendar.error = Some(error);
                     }
                 }
-                Err(error) if id == ADDING_TODO => {
+                Err(error) if key == BusyKey::AddingTodo => {
                     state.timeblocking.todo_error = Some(error);
                     state.timeblocking.todo_open = true;
                 }
@@ -1248,7 +1327,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return iced::widget::operation::focus(iced::widget::Id::new("time-block-todo"));
         }
         Action::CloseTodo => {
-            if state.timeblocking.busy.contains(ADDING_TODO) {
+            if state.timeblocking.busy.adding_todo() {
                 return Task::none();
             }
             state.timeblocking.todo_open = false;
@@ -1367,7 +1446,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         .cloned()
         .collect();
     blocking::run(move || save_and_reflow(task, settings, change, order, blocks, related))
-        .map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone(), result)))
+        .map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone().into(), result)))
 }
 
 /// Timed tasks and calendar events, with locally saved board placement applied.
@@ -1529,13 +1608,14 @@ fn add_todo(state: &mut State, block_id: &str) -> Task<Message> {
         .collect();
     state.timeblocking.todo_error = None;
     state.timeblocking.revision += 1;
-    state.timeblocking.busy.insert(ADDING_TODO.to_owned());
+    state.timeblocking.busy.insert(BusyKey::AddingTodo);
     blocking::run(move || {
         create_and_assign(title, settings, key, start, end, order, blocks, related)
     })
-    .map(|result| Message::TimeBlocking(Action::SavedMany(ADDING_TODO.to_owned(), result)))
+    .map(|result| Message::TimeBlocking(Action::SavedMany(BusyKey::AddingTodo, result)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_and_assign(
     title: String,
     settings: CalendarSettings,
@@ -1552,7 +1632,7 @@ fn create_and_assign(
         settings.app_calendar.as_deref(),
         settings.time_block_list.as_deref(),
     )?;
-    let created_at = chrono::Utc::now();
+    let created_at = crate::clock::utc_now();
     let created = calendar::api::insert_task(&token, &list_id, &title)?;
     let mut task = new_todo_event(&list_id, &created, start);
     let mut database = crate::task_db::open()?;
@@ -1709,7 +1789,7 @@ fn refresh_block(state: &mut State, id: &str) -> Task<Message> {
     state.timeblocking.revision += 1;
     state.timeblocking.busy.insert(first.clone());
     blocking::run(move || reflow(&block, &tasks, &settings))
-        .map(move |result| Message::TimeBlocking(Action::SavedMany(first.clone(), result)))
+        .map(move |result| Message::TimeBlocking(Action::SavedMany(first.clone().into(), result)))
 }
 
 fn reflow(
@@ -1783,16 +1863,16 @@ fn save(
                 "Rename task",
             )?;
             task.title = title;
-            if let Some(link) = &data.metadata.schedule {
-                if !link.pending {
-                    calendar::scheduled::request(
-                        "PATCH",
-                        &link.event_url(),
-                        &token,
-                        Some(&calendar::scheduled::content(&task, link)),
-                    )
-                    .map_err(|error| error.message)?;
-                }
+            if let Some(link) = &data.metadata.schedule
+                && !link.pending
+            {
+                calendar::scheduled::request(
+                    "PATCH",
+                    &link.event_url(),
+                    &token,
+                    Some(&calendar::scheduled::content(&task, link)),
+                )
+                .map_err(|error| error.message)?;
             }
         }
         Change::Description(value) => {
@@ -2074,17 +2154,16 @@ fn schedule_with(
     end: DateTime<Local>,
 ) -> Result<(), String> {
     let old = data.metadata.schedule.clone();
-    if let Some(link) = &old {
-        if task.id != format!("task:{}", link.task_id)
-            || task.calendar_id != format!("tasks:{}", link.list_id)
-        {
-            task.id = format!("task:{}", link.task_id);
-            task.calendar_id = format!("tasks:{}", link.list_id);
-            task.details.link = format!(
-                "https://tasks.google.com/task/{}",
-                urlencoding::encode(&link.task_id)
-            );
-        }
+    if let Some(link) = &old
+        && (task.id != format!("task:{}", link.task_id)
+            || task.calendar_id != format!("tasks:{}", link.list_id))
+    {
+        task.id = format!("task:{}", link.task_id);
+        task.calendar_id = format!("tasks:{}", link.list_id);
+        task.details.link = format!(
+            "https://tasks.google.com/task/{}",
+            urlencoding::encode(&link.task_id)
+        );
     }
     let (destination_calendar, destination_list) = remote.destinations(
         settings
@@ -2217,7 +2296,7 @@ mod tests {
             } else {
                 Err("Could not save".to_owned())
             };
-            let _ = update(&mut state, Action::Saved(id.clone(), result));
+            let _ = update(&mut state, Action::Saved(id.clone().into(), result));
             assert!(state.timeblocking.pending_week_drop.is_none());
             if success {
                 assert_eq!(
@@ -2336,7 +2415,7 @@ mod tests {
         let scratch = std::env::temp_dir().join(format!(
             "tt-schedule-{}-{}.sqlite",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            crate::clock::utc_now().timestamp_nanos_opt().unwrap()
         ));
         let mut database = crate::task_db::Database::open(&scratch).unwrap();
         let mut data = database.import(&task).unwrap();
@@ -2540,10 +2619,7 @@ mod tests {
             let calls = remote.calls.borrow();
             assert!(calls.iter().any(|call| call == "remove"));
             assert!(calls.iter().any(|call| call == "day:original-task:None"));
-            let mut state = State::new(
-                crate::config::Config::default(),
-                crate::theme::Catalog::built_in(),
-            );
+            let mut state = State::blank();
             state.config.calendar = settings;
             state.config.calendar.inbox_list = Some(task.calendar_id.clone());
             assert!(crate::inbox::untriaged(&state, &task));
@@ -2886,7 +2962,7 @@ mod tests {
         let _ = update(&mut state, Action::RequireEstimate(false));
         let _ = update(&mut state, Action::Triage("task:deep".into()));
         assert!(state.inbox.error.is_none());
-        assert!(state.timeblocking.busy.contains("task:deep"));
+        assert!(state.timeblocking.busy.contains_task("task:deep"));
     }
 
     #[test]
@@ -2920,7 +2996,7 @@ mod tests {
         state.timeblocking.date.clear();
         let _ = update(&mut state, Action::Reschedule("task:deep".into()));
         assert!(state.calendar.error.is_none());
-        assert!(state.timeblocking.busy.contains("task:deep"));
+        assert!(state.timeblocking.busy.contains_task("task:deep"));
         assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
     }
 
@@ -2947,20 +3023,17 @@ mod tests {
         let mut task = calendar::sample_snapshot().events.remove(0);
         task.id = "task:deadline".into();
         task.calendar_id = "tasks:list".into();
-        task.start = Local::now() + chrono::Duration::days(5);
-        let yesterday = (Local::now() - chrono::Duration::days(1)).date_naive();
+        task.start = crate::clock::now() + chrono::Duration::days(5);
+        let yesterday = (crate::clock::now() - chrono::Duration::days(1)).date_naive();
         task.details.description = format!("DUE: {yesterday}\nNotes");
         assert!(overdue(&task));
         task.details.description.clear();
-        task.start = Local::now() - chrono::Duration::days(5);
+        task.start = crate::clock::now() - chrono::Duration::days(5);
         assert!(!overdue(&task));
     }
 
     fn estimate_state() -> State {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         let task = state.calendar.event_mut("deep").unwrap();
         task.id = "task:deep".into();
@@ -2993,7 +3066,7 @@ mod tests {
         assert!(state.config.task_work.active().is_some());
         let _ = update(&mut state, Action::PomodoroReset);
         assert!(state.config.task_work.active().is_some());
-        let now = chrono::Utc::now();
+        let now = crate::clock::utc_now();
         state.config.pomodoro.running_since = Some(now);
         assert!(advance_pomodoro(
             &mut state,
@@ -3018,10 +3091,7 @@ mod tests {
 
     #[test]
     fn a_work_session_can_have_its_start_and_end_edited_or_removed() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
         let start = Local.with_ymd_and_hms(2026, 10, 28, 9, 0, 0).unwrap();
         let end = Local.with_ymd_and_hms(2026, 10, 28, 10, 0, 0).unwrap();
@@ -3095,7 +3165,7 @@ mod tests {
             let _ = update(&mut state, Action::SaveEstimate("task:deep".into()));
             assert!(state.timeblocking.estimate_error.is_some());
             assert!(state.timeblocking.estimate_task.is_some());
-            assert!(!state.timeblocking.busy.contains("task:deep"));
+            assert!(!state.timeblocking.busy.contains_task("task:deep"));
             assert!(state.calendar.error.is_none());
         }
         let _ = update(&mut state, Action::Estimate("60".into()));
@@ -3188,7 +3258,7 @@ mod tests {
 
         state.timeblocking.title = format!("  {original} revised  ");
         state.timeblocking.renaming = Some("task:deep".into());
-        state.timeblocking.busy.insert("task:deep".into());
+        state.timeblocking.busy.insert("task:deep");
         let _ = update(
             &mut state,
             Action::Saved("task:deep".into(), Err("Not connected to Google".into())),
@@ -3219,7 +3289,7 @@ mod tests {
         let mut state = estimate_state();
         state.timeblocking.todo_open = true;
         state.timeblocking.todo_draft = "Call the client".into();
-        state.timeblocking.busy.insert(ADDING_TODO.to_owned());
+        state.timeblocking.busy.insert(BusyKey::AddingTodo);
         let event = new_todo_event(
             "has-time",
             &calendar::api::CreatedTask {
@@ -3228,10 +3298,10 @@ mod tests {
                 title: "Call the client".into(),
                 link: "https://tasks.google.com/task/fresh".into(),
             },
-            Local::now(),
+            crate::clock::now(),
         );
         assert!(event.is_task());
-        let _ = update(&mut state, Action::Saved(ADDING_TODO.into(), Ok(event)));
+        let _ = update(&mut state, Action::Saved(BusyKey::AddingTodo, Ok(event)));
         assert!(state.timeblocking.todo_draft.is_empty());
         assert!(!state.timeblocking.todo_open);
         assert!(state.timeblocking.busy.is_empty());
@@ -3242,10 +3312,10 @@ mod tests {
 
         state.timeblocking.todo_open = true;
         state.timeblocking.todo_draft = "Call the client".into();
-        state.timeblocking.busy.insert(ADDING_TODO.to_owned());
+        state.timeblocking.busy.insert(BusyKey::AddingTodo);
         let _ = update(
             &mut state,
-            Action::Saved(ADDING_TODO.into(), Err("Not connected to Google".into())),
+            Action::Saved(BusyKey::AddingTodo, Err("Not connected to Google".into())),
         );
         assert!(state.timeblocking.todo_open);
         assert_eq!(state.timeblocking.todo_draft, "Call the client");

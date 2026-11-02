@@ -2,7 +2,7 @@
 use super::layout::Metrics;
 use crate::app::{Message, State};
 use crate::calendar::time_format::TimeFormat;
-use chrono::{Datelike, Local, Months, NaiveDate, NaiveTime, Timelike};
+use chrono::{Datelike, Months, NaiveDate, NaiveTime, Timelike};
 use iced::widget::{
     Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
 };
@@ -57,11 +57,11 @@ pub fn update(state: &mut State, action: Action) -> iced::Task<Message> {
         }
         Action::Close => state.picker = None,
         Action::Move(days) => {
-            if let Some(p) = &mut state.picker {
-                if let Some(day) = p.focus.checked_add_signed(chrono::Duration::days(days)) {
-                    p.focus = day;
-                    p.month = crate::calendar::first_of_month(day);
-                }
+            if let Some(p) = &mut state.picker
+                && let Some(day) = p.focus.checked_add_signed(chrono::Duration::days(days))
+            {
+                p.focus = day;
+                p.month = crate::calendar::first_of_month(day);
             }
         }
         Action::Month(delta) => {
@@ -79,11 +79,11 @@ pub fn update(state: &mut State, action: Action) -> iced::Task<Message> {
             }
         }
         Action::Year(year) => {
-            if let Some(p) = &mut state.picker {
-                if let Some(day) = p.month.with_year(year) {
-                    p.month = day;
-                    p.focus = day;
-                }
+            if let Some(p) = &mut state.picker
+                && let Some(day) = p.month.with_year(year)
+            {
+                p.month = day;
+                p.focus = day;
             }
         }
         Action::ToggleTime => {
@@ -160,9 +160,9 @@ pub fn date<'a>(
         trigger = trigger.on_press(msg(Action::Open(Picker {
             value: value.into(),
             month: crate::calendar::first_of_month(
-                day.unwrap_or_else(|| Local::now().date_naive()),
+                day.unwrap_or_else(|| crate::clock::now().date_naive()),
             ),
-            focus: day.unwrap_or_else(|| Local::now().date_naive()),
+            focus: day.unwrap_or_else(|| crate::clock::now().date_naive()),
             change: Arc::new(change),
             optional,
             with_time,
@@ -276,7 +276,7 @@ pub fn overlay<'a>(
         .value
         .get(..10)
         .and_then(|v| NaiveDate::parse_from_str(v, "%Y-%m-%d").ok());
-    let today = Local::now().date_naive();
+    let today = crate::clock::now().date_naive();
     let arrow = |caption, delta| {
         button(text(caption).center())
             .padding([6, 10])
@@ -646,6 +646,7 @@ pub fn secondary(t: &Theme, s: button::Status) -> button::Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::EventDraftMessage;
 
     #[test]
     fn high_contrast_neutral_buttons_keep_readable_text_in_each_active_state() {
@@ -684,7 +685,9 @@ mod tests {
             value: value.into(),
             month: crate::calendar::first_of_month(day),
             focus: day,
-            change: Arc::new(Message::EventDraftDateChanged),
+            change: Arc::new(|v0| {
+                Message::EventDraft(EventDraftMessage::EventDraftDateChanged(v0))
+            }),
             optional: true,
             with_time,
             time: NaiveTime::from_hms_opt(23, 47, 0),
@@ -699,10 +702,7 @@ mod tests {
     }
     #[test]
     fn calendar_navigation_crosses_month_and_year_boundaries() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         let _ = update(&mut state, Action::Open(picker("", false)));
         let _ = update(&mut state, Action::Move(1));
         assert_eq!(

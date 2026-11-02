@@ -129,36 +129,33 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for QuickInput<'_>
         viewport: &Rectangle,
     ) {
         let state = tree.children[0].state.downcast_mut::<InputState>();
-        if state.is_focused() {
-            if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        if state.is_focused()
+            && let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
                 modifiers,
                 ..
             }) = event
+            && modifiers.is_empty()
+        {
+            let value = iced::widget::text_input::Value::new(self.value);
+            if let iced::widget::text_input::cursor::State::Index(index) =
+                state.cursor().state(&value)
             {
-                if modifiers.is_empty() {
-                    let value = iced::widget::text_input::Value::new(self.value);
-                    if let iced::widget::text_input::cursor::State::Index(index) =
-                        state.cursor().state(&value)
-                    {
-                        let byte = value.until(index).to_string().len();
-                        if let Some(token) = self
-                            .tokens
-                            .iter()
-                            .find(|t| t.range.start < byte && byte <= t.range.end)
-                        {
-                            let new_index = iced::widget::text_input::Value::new(
-                                &self.value[..token.range.start],
-                            )
+                let byte = value.until(index).to_string().len();
+                if let Some(token) = self
+                    .tokens
+                    .iter()
+                    .find(|t| t.range.start < byte && byte <= t.range.end)
+                {
+                    let new_index =
+                        iced::widget::text_input::Value::new(&self.value[..token.range.start])
                             .len();
-                            state.move_cursor_to(new_index);
-                            shell.publish(Message::Inbox(crate::inbox::Action::AcceptToken(
-                                token.range.clone(),
-                            )));
-                            shell.capture_event();
-                            return;
-                        }
-                    }
+                    state.move_cursor_to(new_index);
+                    shell.publish(Message::Inbox(crate::inbox::Action::AcceptToken(
+                        token.range.clone(),
+                    )));
+                    shell.capture_event();
+                    return;
                 }
             }
         }
@@ -282,7 +279,7 @@ mod tests {
         for title in ["tomorrow", "Café and a very long title before tomorrow"] {
             let tokens = crate::task_input::detect(
                 title,
-                chrono::Local::now().date_naive(),
+                crate::clock::now().date_naive(),
                 &Default::default(),
             );
             let range = tokens[0].range.clone();
@@ -317,7 +314,7 @@ mod tests {
         for (title, accept) in [("Café {oct 8}", true), ("Café {oct 8} ", false)] {
             let tokens = crate::task_input::detect(
                 title,
-                chrono::Local::now().date_naive(),
+                crate::clock::now().date_naive(),
                 &Default::default(),
             );
             let range = tokens[0].range.clone();

@@ -619,9 +619,7 @@ impl Renderer {
 
             if hovered {
                 stroke_rounded(pixmap, layout, rect, 2.0, palette.text, 1.0);
-            } else if promoted {
-                stroke_rounded(pixmap, layout, rect, 2.0, palette.accent, 1.0);
-            } else if scene.pinned == Some(index) {
+            } else if promoted || scene.pinned == Some(index) {
                 stroke_rounded(pixmap, layout, rect, 2.0, palette.accent, 1.0);
             }
         }
@@ -669,18 +667,17 @@ impl Renderer {
         paint_button(pixmap, layout, scene);
 
         paint_add(pixmap, layout, scene);
-        if layout.border_radius > 0.0 {
-            if let Some(path) = rounded_path(layout, layout.strip_rect(), layout.border_radius) {
-                if let Some(mut mask) = tiny_skia::Mask::new(pixmap.width(), pixmap.height()) {
-                    mask.fill_path(
-                        &path,
-                        tiny_skia::FillRule::Winding,
-                        true,
-                        tiny_skia::Transform::identity(),
-                    );
-                    pixmap.apply_mask(&mask);
-                }
-            }
+        if layout.border_radius > 0.0
+            && let Some(path) = rounded_path(layout, layout.strip_rect(), layout.border_radius)
+            && let Some(mut mask) = tiny_skia::Mask::new(pixmap.width(), pixmap.height())
+        {
+            mask.fill_path(
+                &path,
+                tiny_skia::FillRule::Winding,
+                true,
+                tiny_skia::Transform::identity(),
+            );
+            pixmap.apply_mask(&mask);
         }
 
         let card = if let Some(menu) = scene.menu {

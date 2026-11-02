@@ -235,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn dismissed_ranges_follow_unicode_edits_and_drop_when_replaced() {
         let mut ranges = vec![6..14, 15..20];
         remap_ignored("Café tomorrow @home", "🍵 Café tomorrow @home", &mut ranges);

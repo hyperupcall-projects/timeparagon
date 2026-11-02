@@ -271,10 +271,9 @@ fn expand_home(text: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::theme::Catalog;
 
     fn state() -> State {
-        State::new(Config::default(), Catalog::built_in())
+        State::blank()
     }
 
     fn names(state: &State) -> Vec<String> {

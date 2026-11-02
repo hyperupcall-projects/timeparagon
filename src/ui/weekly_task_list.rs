@@ -10,6 +10,7 @@ use iced::{
 };
 
 use super::layout::Metrics;
+use crate::app::{CalendarMessage, EventMessage, TaskMessage};
 use crate::{
     app::{Message, State},
     calendar::{self, Event as CalendarEvent},
@@ -88,7 +89,7 @@ fn duration_badge<'a>(minutes: i64) -> Element<'a, Message> {
 
 /// The reference's quiet toolbar, with week navigation available between its ends.
 pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let today = calendar::day_at(chrono::Local::now(), state.config.calendar.day_start_hour());
+    let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let control = |label: String, action: Message| {
         button(text(label).size(11))
             .padding([3, 6])
@@ -116,9 +117,15 @@ pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     };
     let shift = i64::from(state.config.calendar.weekly_days());
     let mut bar = row![
-        control("▦ Today".into(), Message::CalendarDaySelected(today)),
+        control(
+            "▦ Today".into(),
+            Message::Calendar(CalendarMessage::CalendarDaySelected(today))
+        ),
         Space::new().width(Fill),
-        control("‹".into(), Message::CalendarDayShift(-shift))
+        control(
+            "‹".into(),
+            Message::Calendar(CalendarMessage::CalendarDayShift(-shift))
+        )
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -130,15 +137,18 @@ pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 days[0].format("%b %-d"),
                 days.last().unwrap().format("%b %-d")
             ),
-            Message::CalendarMonthToggled,
+            Message::Calendar(CalendarMessage::CalendarMonthToggled),
         ));
     }
     bar = bar
-        .push(control("›".into(), Message::CalendarDayShift(shift)))
+        .push(control(
+            "›".into(),
+            Message::Calendar(CalendarMessage::CalendarDayShift(shift)),
+        ))
         .push(Space::new().width(Fill))
         .push(control(
             "▦ Board".into(),
-            Message::CalendarTaskListToggled(false),
+            Message::Calendar(CalendarMessage::CalendarTaskListToggled(false)),
         ));
     container(bar)
         .padding([9, 8])
@@ -172,7 +182,9 @@ pub(super) fn view<'a>(
                 horizontal: scrollable::Scrollbar::new().width(4).scroller_width(4),
             })
             .id(widget::Id::new("cal-week"))
-            .on_scroll(|viewport| Message::WeekScrolled(viewport.absolute_offset().x))
+            .on_scroll(|viewport| {
+                Message::Calendar(CalendarMessage::WeekScrolled(viewport.absolute_offset().x))
+            })
             .width(Fill)
             .height(Fill),
         )
@@ -190,7 +202,7 @@ pub(super) fn view<'a>(
 
 /// Scroll both axes while a lifted card is held near the viewport edges.
 pub(super) fn auto_scroll(state: &State) -> iced::Task<Message> {
-    if !state.weekly
+    if !state.weekly()
         || !state.config.calendar.weekly_task_list
         || state.timeblocking.dragging.is_none()
     {
@@ -345,7 +357,9 @@ fn day_column<'a>(
     } else {
         Message::Ignored
     });
-    Element::from(day_view).map(move |message| Message::WeekDayAction(day, Box::new(message)))
+    Element::from(day_view).map(move |message| {
+        Message::Calendar(CalendarMessage::WeekDayAction(day, Box::new(message)))
+    })
 }
 
 fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
@@ -423,7 +437,7 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
     let open = button(body)
         .width(Fill)
         .padding([8, 10])
-        .on_press(Message::EventOpened(event.id.clone()))
+        .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
         .style(|theme: &Theme, _| button::Style {
             text_color: palette(theme).ink,
             ..Default::default()
@@ -451,7 +465,7 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
                 }
             });
         if state.timeblocking.busy.is_empty() {
-            check = check.on_press(Message::TaskToggled(event.id.clone()));
+            check = check.on_press(Message::Task(TaskMessage::TaskToggled(event.id.clone())));
         }
         footer = footer.push(check);
     }
@@ -492,22 +506,22 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
             .align_y(Alignment::Center),
         );
     }
-    if projects.is_empty() && labels.is_empty() {
-        if let Some(calendar) = state
+    if projects.is_empty()
+        && labels.is_empty()
+        && let Some(calendar) = state
             .calendar
             .calendars
             .iter()
             .find(|c| c.id == event.calendar_id)
-        {
-            tags = tags.push(
-                row![
-                    text("#").size(13).color(color),
-                    text(calendar.name.clone()).size(11)
-                ]
-                .spacing(3)
-                .align_y(Alignment::Center),
-            );
-        }
+    {
+        tags = tags.push(
+            row![
+                text("#").size(13).color(color),
+                text(calendar.name.clone()).size(11)
+            ]
+            .spacing(3)
+            .align_y(Alignment::Center),
+        );
     }
     footer = footer.push(container(tags).style(|theme: &Theme| container::Style {
         text_color: Some(palette(theme).muted),

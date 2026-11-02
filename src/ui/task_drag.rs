@@ -225,6 +225,7 @@ impl iced::advanced::widget::Widget<Message, Theme, Renderer> for DraggableTask<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::EventMessage;
     use iced::{
         Point,
         widget::{button, container, row, text},
@@ -237,7 +238,7 @@ mod tests {
                 let content = container(row![
                     button("Task title")
                         .width(180)
-                        .on_press(Message::EventOpened("task".into())),
+                        .on_press(Message::Event(EventMessage::EventOpened("task".into()))),
                     text("30m")
                 ])
                 .padding(10)
@@ -270,7 +271,7 @@ mod tests {
                 assert_eq!(
                     messages
                         .iter()
-                        .any(|m| matches!(m, Message::EventOpened(_))),
+                        .any(|m| matches!(m, Message::Event(EventMessage::EventOpened(_)))),
                     !drag && (10.0..190.0).contains(&x)
                 );
             }
@@ -280,7 +281,7 @@ mod tests {
     #[test]
     fn dropping_on_a_button_reorders_without_clicking_it() {
         let content = button("Task title")
-            .on_press(Message::EventOpened("target".into()))
+            .on_press(Message::Event(EventMessage::EventOpened("target".into())))
             .width(300)
             .height(50);
         let mut ui = iced_test::Simulator::with_size(

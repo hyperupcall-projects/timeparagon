@@ -1,15 +1,14 @@
 //! Calendar selection and multiline forms exercised through the real widget tree.
 use iced::{Size, widget::text_editor};
 use iced_test::{Simulator, core::Settings};
+use timeslay::app::{EventDraftMessage, EventMessage};
 use timeslay::{
     app::{self, Message, State},
-    config::Config,
-    theme::Catalog,
     ui,
 };
 
 fn state() -> State {
-    State::new(Config::default(), Catalog::built_in())
+    State::blank()
 }
 
 #[test]
@@ -49,28 +48,41 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
     ));
     let _ = app::update(
         &mut state,
-        Message::EventDraftDescriptionChanged("First line\nSecond line".into()),
+        Message::EventDraft(EventDraftMessage::EventDraftDescriptionChanged(
+            "First line\nSecond line".into(),
+        )),
     );
-    assert_eq!(state.form_editors[0].text(), "First line\nSecond line");
+    assert_eq!(
+        state.form_editors.event_draft.text(),
+        "First line\nSecond line"
+    );
     let _ = app::update(
         &mut state,
-        Message::FormEdited(0, text_editor::Action::Edit(text_editor::Edit::Insert('!'))),
+        Message::Event(EventMessage::FormEdited(
+            timeslay::app::FormField::EventDraft,
+            text_editor::Action::Edit(text_editor::Edit::Insert('!')),
+        )),
     );
-    let expected = state.form_editors[0].text();
+    let expected = state.form_editors.event_draft.text();
     assert!(expected.contains('\n'));
     assert_eq!(state.calendar.draft.as_ref().unwrap().description, expected);
     let _ = app::update(
         &mut state,
-        Message::EventDraftKindSelected(timeslay::calendar::DraftKind::Habit),
+        Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+            timeslay::calendar::DraftKind::Habit,
+        )),
     );
     assert!(state.habits.draft.is_none());
-    assert_eq!(state.form_editors[1].text(), expected);
+    assert_eq!(state.form_editors.event_edit.text(), expected);
     assert_eq!(
         state.calendar.edit_draft.as_ref().unwrap().description,
         expected
     );
     let id = state.calendar.open_event.clone().unwrap();
-    let _ = app::update(&mut state, Message::DescriptionOpen(id));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::DescriptionOpen(id)),
+    );
     assert_eq!(state.description_editor.text(), expected);
 }
 
@@ -124,7 +136,7 @@ fn time_picker_retains_the_other_segment() {
             "23:47",
             true,
             13.0,
-            Message::EventDraftStartChanged,
+            |v0| Message::EventDraft(EventDraftMessage::EventDraftStartChanged(v0)),
         );
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
@@ -142,7 +154,7 @@ fn time_picker_retains_the_other_segment() {
         ]);
         assert!(
             form.into_messages()
-                .any(|m| matches!(m, Message::EventDraftStartChanged(value) if value==expected))
+                .any(|m| matches!(m, Message::EventDraft(EventDraftMessage::EventDraftStartChanged(value)) if value==expected))
         );
     }
 }
@@ -161,7 +173,7 @@ fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
             value,
             true,
             13.0,
-            Message::EventDraftStartChanged,
+            |v0| Message::EventDraft(EventDraftMessage::EventDraftStartChanged(v0)),
         );
         let mut form: Simulator<'_, Message> = Simulator::with_size(
             Settings::default(),
@@ -179,7 +191,7 @@ fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
         ]);
         assert!(
             form.into_messages().any(
-                |m| matches!(m, Message::EventDraftStartChanged(actual) if actual == expected)
+                |m| matches!(m, Message::EventDraft(EventDraftMessage::EventDraftStartChanged(actual)) if actual == expected)
             ),
             "{value} -> {expected}"
         );
@@ -193,7 +205,7 @@ fn compact_picker_displays_short_periods_and_preserves_stored_time() {
         "13:30",
         true,
         13.0,
-        Message::EventDraftStartChanged,
+        |v0| Message::EventDraft(EventDraftMessage::EventDraftStartChanged(v0)),
     );
     let mut form: Simulator<'_, Message> = Simulator::with_size(
         Settings::default(),
@@ -210,6 +222,8 @@ fn compact_picker_displays_short_periods_and_preserves_stored_time() {
             delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
         }),
     ]);
-    assert!(form.into_messages().any(|m| matches!(m,
-        Message::EventDraftStartChanged(value) if value == "01:30")));
+    assert!(
+        form.into_messages().any(|m| matches!(m,
+        Message::EventDraft(EventDraftMessage::EventDraftStartChanged(value)) if value == "01:30"))
+    );
 }

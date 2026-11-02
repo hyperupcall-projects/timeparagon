@@ -418,7 +418,7 @@ mod tests {
         let f = (encode_sequence(0x1000_0046),);
 
         assert!(same_keys(&[f.clone(), j.clone()], &[j.clone(), f.clone()]));
-        assert!(!same_keys(&[j.clone()], &[j, f]));
+        assert!(!same_keys(std::slice::from_ref(&j), &[j.clone(), f]));
         assert!(same_keys(&[], &[]));
     }
 

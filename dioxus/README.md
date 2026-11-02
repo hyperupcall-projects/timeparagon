@@ -1,38 +1,31 @@
-# TimeSlay — Dioxus day view
+# TimeSlay
 
-This is the Dioxus implementation of TimeSlay. It deliberately implements
-one screen: **the day**. Everything on it comes from the same Google Calendar
-and Google Tasks data the iced application uses.
+The mobile application mainly only shows the day view.
 
-The iced application is still the root package of this repository and is
-untouched. Both apps share data through the renderer-agnostic
-`timeslay-core` crate:
+Both apps share data and code via the `timeslay-core` crate:
 
 - the config at `~/.config/timeslay/config.toml`,
 - the OAuth token at `~/.config/timeslay/google-token.toml`,
 - the local task database and time-block metadata,
-- the calendar sync and Google Tasks code in `core/` / `src/calendar/`.
+- the calendar sync and Google Tasks code in `core/`.
 
-`timeslay-core` contains no iced UI, which is what lets it cross-compile for
-Android.
+## Usage
 
-## Run it
+Be sure to install the development dependencies:
+
+```sh
+sudo apt-get -y install webkit2gtk-4.1 gtk+-3.0 libxdo-dev
+```
+
+### Desktop
+
+To test the desktop builds of Dioxus:
 
 ```sh
 cargo run -p timeslay-dioxus
 ```
 
-Dioxus desktop needs the usual WebKitGTK and GTK 3 development packages on
-Linux (`webkit2gtk-4.1`, `gtk+-3.0`), plus `libxdo-dev` for Dioxus's native menu
-dependencies.
-
-The iced app still builds and runs with the normal command:
-
-```sh
-cargo run -p timeslay --release
-```
-
-## Android APK
+### Android
 
 ```sh
 ./scripts/build-android.sh
@@ -123,7 +116,7 @@ the same relative layout as it does on desktop.
 Both apps keep `config.toml` in step through Google Drive's hidden **app data
 folder** (the `drive.appdata` scope). The folder is private to the app: it does
 not appear in Drive and the app cannot see any of your other files. The sync is
-`src/config_sync.rs`, shared by the iced app and this one.
+`core/src/config_sync.rs`, shared by the iced app and this one.
 
 - `config.toml` is watched; an edit is uploaded a couple of seconds after it
   settles. Drive is polled every 30 seconds, and a newer copy replaces the

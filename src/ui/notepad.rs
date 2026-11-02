@@ -7,6 +7,7 @@
 use iced::widget::{button, column, container, row, scrollable, text, text_editor};
 use iced::{Element, Fill, Length};
 
+use crate::app::NotepadMessage;
 use crate::app::{Message, State};
 use crate::config;
 
@@ -30,7 +31,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let editor = text_editor(&state.notepad)
         .id(input_id())
         .placeholder("Write anything. It is kept between sessions.")
-        .on_action(Message::NotepadEdited)
+        .on_action(|v0| Message::Notepad(NotepadMessage::NotepadEdited(v0)))
         .size(size)
         .height(Fill);
 
@@ -71,14 +72,14 @@ fn text_size<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let smaller = size_button(
         "A-",
-        Message::NotepadFontSizeChanged(-step),
+        Message::Notepad(NotepadMessage::NotepadFontSizeChanged(-step)),
         metrics,
         size > config::Notepad::MIN_FONT_SIZE,
     );
 
     let bigger = size_button(
         "A+",
-        Message::NotepadFontSizeChanged(step),
+        Message::Notepad(NotepadMessage::NotepadFontSizeChanged(step)),
         metrics,
         size < config::Notepad::MAX_FONT_SIZE,
     );

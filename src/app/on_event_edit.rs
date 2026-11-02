@@ -1,0 +1,242 @@
+//! The form for editing an event.
+
+use super::*;
+
+pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Message> {
+    match message {
+        EventEditMessage::EventEditOptions(action) => {
+            if let Some(draft) = &mut state.calendar.edit_draft
+                && !draft.loading
+                && !draft.saving
+            {
+                draft.options.update(action);
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditRequested(id) => {
+            state.calendar.begin_edit(&id);
+            Task::none()
+        }
+        EventEditMessage::EventEditProjects(action) => {
+            if let calendar::projects::Action::Add(id) = &action
+                && state.config.projects.get(*id).is_none()
+            {
+                return Task::none();
+            }
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.projects.update(action);
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditTitleChanged(title) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.title = title;
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditDescriptionChanged(description) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.description = description;
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditDateChanged(text) => {
+            let habit = state
+                .calendar
+                .open_event
+                .as_deref()
+                .and_then(|id| state.calendar.event(id))
+                .is_some_and(|event| event.details.habit);
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                let duration = draft.end - draft.start;
+                draft.set_date_text(text);
+                if habit {
+                    draft.end = draft.start + duration;
+                    draft.end_date_text = draft.end.date_naive().to_string();
+                }
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditRecurrence(action) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.recurrence_changed = true;
+                if matches!(&action, crate::recurrence::Action::SkipAdd) {
+                    match draft.rule.add_skip() {
+                        Ok(()) => state.calendar.error = None,
+                        Err(error) => state.calendar.error = Some(error),
+                    }
+                } else {
+                    draft.rule.apply_action(action, draft.start.date_naive());
+                }
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditStartChanged(text) => {
+            let habit = state
+                .calendar
+                .open_event
+                .as_deref()
+                .and_then(|id| state.calendar.event(id))
+                .is_some_and(|event| event.details.habit);
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                let duration = draft.end - draft.start;
+                draft.set_start_text(text);
+                draft.all_day = false;
+                if habit {
+                    draft.end = draft.start + duration;
+                    draft.end_text = calendar::clock_label(draft.end);
+                    draft.end_date_text = draft.end.date_naive().to_string();
+                }
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditEndChanged(text) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.set_end_text(text);
+                draft.all_day = false;
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditCalendarSelected(id) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.calendar_id = id;
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditCancelled => {
+            state.calendar.edit_draft = None;
+            Task::none()
+        }
+        EventEditMessage::EventEditDeleteMenuToggled => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.delete_menu_open = !draft.delete_menu_open;
+                draft.save_menu_open = false;
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditSaveMenuToggled => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.save_menu_open = !draft.save_menu_open;
+                draft.delete_menu_open = false;
+            }
+            Task::none()
+        }
+
+        request @ (EventEditMessage::EventEditSaveRequested
+        | EventEditMessage::EventEditSaveScoped(_)) => {
+            let scope = match request {
+                EventEditMessage::EventEditSaveScoped(scope) => scope,
+                _ => calendar::SaveScope::Current,
+            };
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.save_menu_open = false;
+                draft.delete_menu_open = false;
+            }
+            let Some(draft) = state.calendar.edit_draft.clone() else {
+                return Task::none();
+            };
+
+            if draft.loading || draft.saving {
+                return Task::none();
+            }
+            if draft.title.trim().is_empty() {
+                state.calendar.error = Some("Enter a title".into());
+                return Task::none();
+            }
+            if draft.end <= draft.start {
+                state.calendar.error = Some("The end time has to be after the start".to_owned());
+                return Task::none();
+            }
+
+            if draft.id == crate::habits::NEW_HABIT_ID {
+                if state.habits.busy {
+                    return Task::none();
+                }
+                if let Err(error) = draft.recurrence_lines() {
+                    state.calendar.error = Some(error);
+                    return Task::none();
+                }
+                let settings = state.config.calendar.clone();
+                let color_id = state
+                    .calendar
+                    .event(&draft.id)
+                    .and_then(|event| event.details.color_id.clone());
+                state.habits.busy = true;
+                state.calendar.error = None;
+                return blocking::run(move || {
+                    calendar::create_habit(
+                        &settings.client_id,
+                        &settings.client_secret,
+                        &draft,
+                        color_id.as_deref(),
+                    )
+                })
+                .map(|result| Message::Habits(crate::habits::Action::Saved(result)));
+            }
+
+            let is_block = state
+                .calendar
+                .event(&draft.id)
+                .is_some_and(|event| crate::timeblocking::is_block(event, &state.config.calendar));
+            let description = if is_block {
+                calendar::event_description(&draft.description, "Time Block", &[])
+            } else {
+                draft.description.clone()
+            };
+            let color_id = if is_block {
+                calendar::colors::event_id(state.config.calendar.time_block_color())
+            } else {
+                None
+            };
+            let Some(original) = state.calendar.event(&draft.id).cloned() else {
+                return Task::none();
+            };
+            if let Err(error) = draft.recurrence_lines() {
+                state.calendar.error = Some(error);
+                return Task::none();
+            }
+            let settings = state.config.calendar.clone();
+            state.calendar.error = None;
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.saving = true;
+            }
+            blocking::run(move || {
+                calendar::save_event_scope(
+                    &settings.client_id,
+                    &settings.client_secret,
+                    &original,
+                    &draft,
+                    scope,
+                    &description,
+                    color_id,
+                )
+            })
+            .map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
+        }
+        EventEditMessage::EventEditSaved(Ok(())) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.editing_title = false;
+                draft.saving = false;
+            }
+            // Keep the inline draft as the user left it until the calendar
+            // sync brings the saved event back, so fields do not flicker.
+            if state.screen == Screen::Habits {
+                Task::batch([
+                    Task::done(Message::Habits(crate::habits::Action::Refresh)),
+                    refresh_week_after_write(state),
+                ])
+            } else {
+                refresh_week_after_write(state)
+            }
+        }
+        EventEditMessage::EventEditSaved(Err(error)) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.saving = false;
+            }
+            // The popup stays open so the half-filled edit is not lost.
+            log::warn!("could not update the event: {error}");
+            state.calendar.error = Some(error);
+            Task::none()
+        }
+    }
+}

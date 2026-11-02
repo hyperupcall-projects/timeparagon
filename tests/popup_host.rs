@@ -3,15 +3,12 @@ use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
 use timeslay::{
     app::{self, Message, State},
-    calendar,
-    config::Config,
-    inbox,
-    theme::Catalog,
+    calendar, inbox,
     ui::controls::Picker,
 };
 
 fn popup(kind: &str) -> (State, &'static str) {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     let label = match kind {
         "description" => {

@@ -1,11 +1,10 @@
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
 use iced::{Element, Size};
 use iced_test::{Simulator, core::Settings};
+use timeslay::app::{CalendarMessage, EventMessage};
 use timeslay::{
     app::{self, Message, State},
     calendar::{self, Store},
-    config::Config,
-    theme::Catalog,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -13,7 +12,7 @@ fn date(year: i32, month: u32, day: u32) -> NaiveDate {
 }
 
 fn state() -> State {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     let mut snapshot = calendar::sample_snapshot();
     snapshot.day = date(2026, 8, 15); // Six-week month, including July and September.
     let template = snapshot
@@ -40,7 +39,7 @@ fn state() -> State {
         events: vec![],
         ..snapshot.clone()
     });
-    state.monthly = true;
+    state.view = timeslay::app::CalendarView::Month;
     state.week_anchor = snapshot.day;
     let dates = state.calendar_dates();
     state.calendar.apply_week_snapshot(snapshot, &dates);
@@ -70,7 +69,10 @@ fn whole_month_survives_cache_pruning_and_day_interactions() {
     let last = *dates.last().unwrap();
     let _ = app::update(
         &mut state,
-        Message::WeekDayAction(last, Box::new(Message::EventOpened(last.to_string()))),
+        Message::Calendar(CalendarMessage::WeekDayAction(
+            last,
+            Box::new(Message::Event(EventMessage::EventOpened(last.to_string()))),
+        )),
     );
     assert_eq!(state.calendar.day, last);
     assert_eq!(state.week_anchor, date(2026, 8, 15));
@@ -90,11 +92,14 @@ fn navigation_steps_calendar_months_across_years_and_leap_february() {
         (date(2028, 2, 29), 1, date(2028, 3, 1)),
     ] {
         state.week_anchor = origin;
-        let _ = app::update(&mut state, Message::CalendarViewMonthShift(shift));
+        let _ = app::update(
+            &mut state,
+            Message::Calendar(CalendarMessage::CalendarViewMonthShift(shift)),
+        );
         assert_eq!(state.week_anchor, expected);
         assert_eq!(state.calendar.day, expected);
-        assert!(state.monthly);
-        assert!(!state.weekly);
+        assert!(state.monthly());
+        assert!(!state.weekly());
     }
 }
 
@@ -108,7 +113,7 @@ fn month_event_click_selects_its_day_and_opens_details() {
         state.config.appearance.time_format,
     );
     ui.click(format!("{clock} Meeting on {day}")).unwrap();
-    let action = ui.into_messages().find(|m| matches!(m, Message::WeekDayAction(d, inner) if *d == day && matches!(inner.as_ref(), Message::EventOpened(_)))).unwrap();
+    let action = ui.into_messages().find(|m| matches!(m, Message::Calendar(CalendarMessage::WeekDayAction(d, inner)) if *d == day && matches!(inner.as_ref(), Message::Event(EventMessage::EventOpened(_))))).unwrap();
     let _ = app::update(&mut state, action);
     assert_eq!(state.calendar.day, day);
     assert_eq!(state.week_anchor.month(), 8);
@@ -128,14 +133,14 @@ fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
             .into_messages()
             .find(|m| {
                 matches!(m,
-                    Message::WeekDayAction(d, inner)
-                        if *d == day && matches!(inner.as_ref(), Message::CalendarDayOpened(_))
+                    Message::Calendar(CalendarMessage::WeekDayAction(d, inner))
+                        if *d == day && matches!(inner.as_ref(), Message::Calendar(CalendarMessage::CalendarDayOpened(_)))
                 )
             })
             .unwrap();
         let _ = app::update(&mut state, action);
         assert_eq!(state.calendar.day, day);
-        assert!(state.monthly && !state.weekly);
+        assert!(state.monthly() && !state.weekly());
         assert_eq!(state.week_anchor, anchor);
         assert_eq!(state.calendar_dates(), dates);
         assert!(
@@ -160,12 +165,21 @@ fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
 #[test]
 fn calendar_modes_are_exclusive() {
     let mut state = state();
-    let _ = app::update(&mut state, Message::CalendarModeSelected(false));
-    assert!(!state.monthly && !state.weekly);
-    let _ = app::update(&mut state, Message::CalendarMonthViewSelected);
-    assert!(state.monthly && !state.weekly);
-    let _ = app::update(&mut state, Message::CalendarModeSelected(true));
-    assert!(state.weekly && !state.monthly);
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarModeSelected(false)),
+    );
+    assert!(!state.monthly() && !state.weekly());
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+    );
+    assert!(state.monthly() && !state.weekly());
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+    );
+    assert!(state.weekly() && !state.monthly());
 }
 
 #[test]
@@ -230,12 +244,15 @@ fn habit_month_filters_other_events_and_retains_completion_history() {
     assert!(ui.find("Read").is_err());
     assert!(ui.find("Not scheduled").is_ok());
     ui.click("Mark complete").unwrap();
-    let action = ui.into_messages().find(|message| matches!(message, Message::WeekDayAction(d, inner) if *d == day && matches!(inner.as_ref(), Message::Habits(Action::ToggleCompleted(_))))).unwrap();
+    let action = ui.into_messages().find(|message| matches!(message, Message::Calendar(CalendarMessage::WeekDayAction(d, inner)) if *d == day && matches!(inner.as_ref(), Message::Habits(Action::ToggleCompleted(_))))).unwrap();
     let _ = app::update(&mut state, action);
     assert_eq!(state.calendar.day, day);
     assert!(state.habits.completing.contains("another-series-instance"));
     // A write response arriving after navigation updates the cached day too.
-    let _ = app::update(&mut state, Message::CalendarDayOpened(date(2026, 8, 17)));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarDayOpened(date(2026, 8, 17))),
+    );
     completed.details.habit_completed_at = Some(completed.start + Duration::minutes(25));
     let _ = app::update(
         &mut state,
@@ -255,6 +272,9 @@ fn habit_month_filters_other_events_and_retains_completion_history() {
             .habit_completed_at,
         completed.details.habit_completed_at
     );
-    let _ = app::update(&mut state, Message::CalendarViewMonthShift(1));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarViewMonthShift(1)),
+    );
     assert!(state.habits.calendar_habit.is_some());
 }

@@ -4,25 +4,19 @@
 //! Google Tasks and time-block metadata. Those modules live here without any
 //! desktop UI dependencies, so they also cross-compile for Android.
 //!
-//! `calendar`, `config_sync`, `hex`, `task_db` and the pure part of
-//! `timeblocking` are shared verbatim with the iced crate via `#[path]`;
-//! `config` is the minimal data-only part of the iced crate's config. The iced
-//! application keeps its own full version and remains unchanged on desktop.
+//! `config` holds the `[calendar]` settings both apps share and the minimal
+//! data-only config the Dioxus app reads. The iced application embeds those
+//! same settings in its full config.
 
-pub mod config;
-
-#[path = "../../src/calendar/mod.rs"]
 pub mod calendar;
-#[path = "../../src/config_sync.rs"]
+pub mod clock;
+pub mod config;
 pub mod config_sync;
-#[path = "../../src/hex.rs"]
+pub mod fsutil;
 pub mod hex;
-#[path = "../../src/recurrence.rs"]
 pub mod recurrence;
-#[path = "../../src/task_db.rs"]
 pub mod task_db;
-#[path = "../../src/timeblocking/model.rs"]
 pub mod timeblocking;
 
 /// The color type used by calendar events and settings.
-pub use iced::Color;
+pub use iced_core::Color;

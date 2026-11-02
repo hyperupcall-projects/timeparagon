@@ -26,8 +26,11 @@ pub mod render;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// An open menu's rectangle, as the input region wants it.
+type MenuRect = (i32, i32, i32, i32);
+
 use anyhow::{Context, Result, anyhow};
-use chrono::{Local, NaiveDate};
+use chrono::NaiveDate;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -120,7 +123,7 @@ pub fn run() -> Result<()> {
     let mut store = Store::new(day_start_hour);
     store.apply_task_colors(&app_config.calendar);
     store.cache_days_in(crate::config::cache_days_dir());
-    let today = calendar::day_at(Local::now(), day_start_hour);
+    let today = calendar::day_at(crate::clock::now(), day_start_hour);
     store.set_day(today, today);
 
     let mut event_loop: EventLoop<Dock> = EventLoop::try_new()?;
@@ -319,12 +322,10 @@ fn watch_config(sender: channel::Sender<Config>) -> Option<notify::RecommendedWa
                         event.kind,
                         notify::EventKind::Create(_) | notify::EventKind::Modify(_)
                     )
+                    && let Ok(contents) = std::fs::read_to_string(&watched_path)
+                    && let Ok(config) = toml::from_str::<Config>(&contents)
                 {
-                    if let Ok(contents) = std::fs::read_to_string(&watched_path)
-                        && let Ok(config) = toml::from_str::<Config>(&contents)
-                    {
-                        let _ = sender.send(config);
-                    }
+                    let _ = sender.send(config);
                 }
             })?;
         watcher.watch(&parent, notify::RecursiveMode::NonRecursive)?;
@@ -361,9 +362,9 @@ fn spawn_ipc(
                 }
                 match command {
                     "toggle-reservation" => {
-                        let mut config = Config::load();
-                        config.views.dock_reserve_space = !config.views.dock_reserve_space;
-                        match config.save() {
+                        match Config::update_on_disk(|config| {
+                            config.views.dock_reserve_space = !config.views.dock_reserve_space;
+                        }) {
                             Ok(()) => ipc::OK.to_owned(),
                             Err(error) => {
                                 log::error!("could not save dock reservation: {error}");
@@ -410,7 +411,7 @@ fn spawn_sync(
             let every = Duration::from_secs(u64::from(calendar.sync_minutes.max(1)) * 60);
 
             loop {
-                let day = calendar::day_at(Local::now(), hour);
+                let day = calendar::day_at(crate::clock::now(), hour);
                 let result = calendar::sync_day(
                     &calendar.client_id,
                     &calendar.client_secret,
@@ -484,7 +485,7 @@ struct Dock {
     /// one while the next is filled, so there are normally two.
     frames: Vec<Frame>,
     /// The layout and open-menu rectangle the input region was last set for.
-    regions_for: Option<(Layout, Option<(i32, i32, i32, i32)>)>,
+    regions_for: Option<(Layout, Option<MenuRect>)>,
     wake: Option<mpsc::Sender<()>>,
     exit: bool,
 }
@@ -537,7 +538,10 @@ impl Dock {
 
     /// Moves the "now" line, and follows the clock into a new day.
     fn tick(&mut self) {
-        let today = calendar::day_at(Local::now(), self.app_config.calendar.day_start_hour());
+        let today = calendar::day_at(
+            crate::clock::now(),
+            self.app_config.calendar.day_start_hour(),
+        );
         if today != self.day {
             self.store.set_day(today, today);
             self.day = today;
@@ -578,7 +582,7 @@ impl Dock {
             return;
         };
 
-        let now = model::now_minute(Local::now(), self.day, &self.app_config.calendar);
+        let now = model::now_minute(crate::clock::now(), self.day, &self.app_config.calendar);
         let promoted = self
             .promoted
             .as_deref()

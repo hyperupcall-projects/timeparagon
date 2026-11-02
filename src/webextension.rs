@@ -478,24 +478,25 @@ fn prepare(
         None => None,
     };
 
-    if request.fetch.unwrap_or(true) && !url.is_empty() {
-        if let Some(source) = integrations::recognize(url) {
-            let auth = Auth {
-                settings: settings.clone(),
-            };
-            let details = integrations::fetch(&source, &auth)
-                .map_err(|error| format!("Could not read {url}: {error}"))?;
-            // A title the person wrote is theirs; only a blank one (or the bare
-            // link) is replaced by what the page calls itself.
-            if !details.title.trim().is_empty() && (title.is_empty() || title == url) {
-                title = details.title;
-            }
-            if due.is_none() {
-                due = details.due;
-            }
-            if deadline_value.is_none() {
-                deadline_value = details.deadline;
-            }
+    if request.fetch.unwrap_or(true)
+        && !url.is_empty()
+        && let Some(source) = integrations::recognize(url)
+    {
+        let auth = Auth {
+            settings: settings.clone(),
+        };
+        let details = integrations::fetch(&source, &auth)
+            .map_err(|error| format!("Could not read {url}: {error}"))?;
+        // A title the person wrote is theirs; only a blank one (or the bare
+        // link) is replaced by what the page calls itself.
+        if !details.title.trim().is_empty() && (title.is_empty() || title == url) {
+            title = details.title;
+        }
+        if due.is_none() {
+            due = details.due;
+        }
+        if deadline_value.is_none() {
+            deadline_value = details.deadline;
         }
     }
 
@@ -556,14 +557,14 @@ fn clamp_notes(notes: &str, url: &str) -> String {
         return notes.to_owned();
     }
     let marker = "\n\n[truncated by TimeSlay: the message was longer than Google Tasks allows]";
-    if !url.is_empty() {
-        if let Some(at) = notes.rfind(url) {
-            let before = &notes[..at];
-            let after = &notes[at..];
-            let room = MAX_NOTES.saturating_sub(marker.chars().count() + after.chars().count());
-            let head: String = before.chars().take(room).collect();
-            return format!("{head}{marker}{after}");
-        }
+    if !url.is_empty()
+        && let Some(at) = notes.rfind(url)
+    {
+        let before = &notes[..at];
+        let after = &notes[at..];
+        let room = MAX_NOTES.saturating_sub(marker.chars().count() + after.chars().count());
+        let head: String = before.chars().take(room).collect();
+        return format!("{head}{marker}{after}");
     }
     let room = MAX_NOTES.saturating_sub(marker.chars().count());
     let head: String = notes.chars().take(room).collect();
@@ -647,7 +648,7 @@ mod tests {
         let mut cursor = Cursor::new(bytes);
         let value = read_message(&mut cursor).unwrap().unwrap();
         let back: Reply = serde_json::from_value(value).unwrap();
-        assert_eq!(back.ok, true);
+        assert!(back.ok);
         assert_eq!(back.task.unwrap().title, "Hello");
     }
 

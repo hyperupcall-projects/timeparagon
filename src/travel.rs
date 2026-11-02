@@ -346,10 +346,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
 
         Action::OpenMaps(leg) => {
-            if let Some(url) = maps_url(&state.config.travel, leg) {
-                if let Err(error) = crate::calendar::oauth::open_in_browser(&url) {
-                    log::warn!("could not open the map: {error}");
-                }
+            if let Some(url) = maps_url(&state.config.travel, leg)
+                && let Err(error) = crate::calendar::oauth::open_in_browser(&url)
+            {
+                log::warn!("could not open the map: {error}");
             }
             Task::none()
         }
@@ -1037,22 +1037,22 @@ fn write_cache(path: &Path, routes: &[(RouteKey, Route)]) -> std::io::Result<()>
         })
         .collect();
 
-    // Written beside the file and renamed over it, so a crash leaves the old
-    // cache rather than half of the new one.
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, serde_json::to_string(&stored)?)?;
-    std::fs::rename(temporary, path)
+    crate::fsutil::write_atomic(
+        path,
+        serde_json::to_string(&stored)?.as_bytes(),
+        crate::fsutil::Kind::Cache,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::theme::Catalog;
+
     use serde_json::json;
 
     fn state() -> State {
-        State::new(Config::default(), Catalog::built_in())
+        State::blank()
     }
 
     fn place(travel: &mut TravelSettings, name: &str, mapbox: &str) -> u64 {
@@ -1191,10 +1191,7 @@ mod tests {
 
     #[test]
     fn a_calendar_event_given_a_place_keeps_it_whatever_google_says() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
         let work = place(&mut state.config.travel, "Work", "g-work");
         state.config.travel.places[0].address = "1 Main St".into();

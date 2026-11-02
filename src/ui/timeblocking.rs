@@ -1,4 +1,5 @@
 use super::layout::Metrics;
+use crate::app::{EventMessage, TaskMessage};
 use crate::calendar::time_format::TimeFormat;
 use crate::{
     app::{Message, State},
@@ -42,12 +43,12 @@ pub fn task_row<'a>(
             }
             total > (block.end - block.start).num_minutes().max(0) as u64
         });
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let mut check = button(text(if task.completed { "●" } else { "○" })).style(button::text);
     if state.timeblocking.busy.is_empty() {
-        check = check.on_press(Message::TaskToggled(task.id.clone()));
+        check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
     let mut title_content = column![task_title(task, metrics.label())].spacing(2);
     let status = if busy {
@@ -69,7 +70,7 @@ pub fn task_row<'a>(
     let title = button(title_content)
         .width(Fill)
         .style(button::text)
-        .on_press(Message::EventOpened(task.id.clone()));
+        .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())));
     let handle = text("⠿").size(17);
     let mut line = row![handle, check].spacing(4).align_y(iced::Center);
     // Where the task came from, if a service we know put it here.
@@ -82,7 +83,7 @@ pub fn task_row<'a>(
     if backlog {
         line = line.push(
             button(text("Reschedule").size(metrics.label()))
-                .on_press(Message::EventOpened(task.id.clone()))
+                .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
                 .style(button::text),
         );
     }
@@ -109,7 +110,7 @@ pub fn task_row<'a>(
     }
     if backlog {
         if let Some(due) = tb::due(task) {
-            let late = due.is_past(chrono::Local::now().naive_local());
+            let late = due.is_past(crate::clock::now().naive_local());
             content = content.push(
                 text(due_label(&due, state.config.appearance.time_format))
                     .size(metrics.label() - 1.0)
@@ -216,7 +217,7 @@ pub(super) fn drag_ghost<'a>(
 /// "Due Today", "Due Tomorrow", or "Due Mon, Oct 26" (with the year when it
 /// isn't this one), followed by the time when the deadline has one.
 fn due_label(due: &crate::calendar::deadline::Deadline, time_format: TimeFormat) -> String {
-    let today = chrono::Local::now().date_naive();
+    let today = crate::clock::now().date_naive();
     let day = if due.date == today {
         "Today".to_owned()
     } else if today.succ_opt() == Some(due.date) {
@@ -260,7 +261,7 @@ pub(super) fn editable_title<'a>(
     task: &'a Event,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let size = metrics.label() + 6.0;
@@ -445,7 +446,7 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 }
 
 pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let mut estimate =
@@ -475,7 +476,7 @@ fn date_field<'a>(
     metrics: &Metrics,
     deadline: bool,
 ) -> Element<'a, Message> {
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let value = if deadline {
@@ -584,10 +585,8 @@ fn date_field<'a>(
         }
         body = body.push(times).push(save);
     }
-    if deadline {
-        if let Err(error) = crate::calendar::deadline::check(&task.details.description) {
-            body = body.push(text(error).size(metrics.label()).style(text::danger));
-        }
+    if deadline && let Err(error) = crate::calendar::deadline::check(&task.details.description) {
+        body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
     body.into()
 }
@@ -606,7 +605,7 @@ fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
 /// The task's projects, plus a searchable picker for adding more.
 fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let projects = tb::metadata(task).projects;
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
 
@@ -718,7 +717,7 @@ fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Eleme
 /// matching labels already used elsewhere as suggestions.
 fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let labels = tb::metadata(task).labels;
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
 
@@ -796,7 +795,7 @@ fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elemen
 /// The task's priority: none, P1 or P2.
 fn priority_field<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
     let current = tb::metadata(task).priority;
-    let busy = state.timeblocking.busy.contains(&task.id)
+    let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
 
@@ -866,7 +865,7 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
             } else {
                 "Complete task"
             },
-            Message::TaskToggled(task.id.clone()),
+            Message::Task(TaskMessage::TaskToggled(task.id.clone())),
         ),
         (
             if status == tb::TaskStatus::Ignored {
@@ -874,22 +873,27 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
             } else {
                 "Ignore Task"
             },
-            Message::TaskIgnoreToggled(task.id.clone()),
+            Message::Task(TaskMessage::TaskIgnoreToggled(task.id.clone())),
         ),
         ("Move to inbox", msg(Action::MoveToInbox(task.id.clone()))),
         (
             "Move to backlog",
             msg(Action::BacklogPicker(task.id.clone())),
         ),
-        ("Delete task", Message::TaskDeleteRequested(task.id.clone())),
+        (
+            "Delete task",
+            Message::Task(TaskMessage::TaskDeleteRequested(task.id.clone())),
+        ),
     ] {
         let mut action_button = button(text(label).size(metrics.label()).center().width(Fill))
             .width(Fill)
-            .style(if matches!(&action, Message::TaskToggled(_)) {
-                crate::ui::controls::primary
-            } else {
-                crate::ui::controls::secondary
-            });
+            .style(
+                if matches!(&action, Message::Task(TaskMessage::TaskToggled(_))) {
+                    crate::ui::controls::primary
+                } else {
+                    crate::ui::controls::secondary
+                },
+            );
         if state.timeblocking.busy.is_empty() {
             action_button = action_button.on_press(action);
         }
@@ -930,10 +934,12 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let tasks = tb::assigned(state, block);
     let capacity = (block.end - block.start).num_minutes().max(0) as u32;
     let block_id = block.id.clone();
-    let compact_weekly = state.weekly && metrics.size.width < 240.0;
+    let compact_weekly = state.weekly() && metrics.size.width < 240.0;
     let delete = button(text("Delete").size(metrics.label()).center().width(Fill))
         .width(Fill)
-        .on_press(Message::EventDeleteRequested(block_id.clone()))
+        .on_press(Message::Event(EventMessage::EventDeleteRequested(
+            block_id.clone(),
+        )))
         .style(crate::ui::controls::secondary);
     let close = button(text("Close").size(metrics.label()).center().width(Fill))
         .width(Fill)
@@ -1073,7 +1079,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 /// which opens a field that creates a Google Task in this block. Dropping a
 /// task on the box assigns it without opening the field.
 fn planned_slot<'a>(state: &'a State, block_id: &str, metrics: &Metrics) -> Element<'a, Message> {
-    let adding = state.timeblocking.busy.contains(tb::ADDING_TODO);
+    let adding = state.timeblocking.busy.adding_todo();
     let open = state.timeblocking.todo_open || adding || state.timeblocking.todo_error.is_some();
     let dragging = state.timeblocking.dragging.is_some();
     let plus = container(text("+").size(28)).center_x(Fill);
@@ -1094,7 +1100,7 @@ fn planned_slot<'a>(state: &'a State, block_id: &str, metrics: &Metrics) -> Elem
 
 /// A free-text line that becomes a Google Task in this block.
 fn todo_editor<'a>(state: &'a State, block_id: &str, metrics: &Metrics) -> Element<'a, Message> {
-    let adding = state.timeblocking.busy.contains(tb::ADDING_TODO);
+    let adding = state.timeblocking.busy.adding_todo();
     let ready =
         state.timeblocking.busy.is_empty() && !state.timeblocking.todo_draft.trim().is_empty();
     let mut input = text_input("Write a task", &state.timeblocking.todo_draft)
@@ -1279,7 +1285,7 @@ pub(super) fn estimate_button<'a>(
     let minutes = tb::metadata(task).minutes;
     let mut control =
         button(text(format!("Estimate: {minutes}m")).size(label_size)).style(button::text);
-    if !state.timeblocking.busy.contains(&task.id) {
+    if !state.timeblocking.busy.contains_task(&task.id) {
         control = control.on_press(msg(Action::EditEstimate(task.id.clone())));
     }
     control.into()
@@ -1294,7 +1300,7 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         .and_then(|id| tb::event(state, id));
     let mut body = column![text("Estimated completion time").size(18)].spacing(10);
     if let Some(task) = task {
-        let busy = state.timeblocking.busy.contains(&task.id)
+        let busy = state.timeblocking.busy.contains_task(&task.id)
             || (task.id == crate::inbox::DRAFT_ID
                 && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
         let mut input = text_input("Minutes", &state.timeblocking.estimate)
@@ -1369,10 +1375,7 @@ mod tests {
 
     #[test]
     fn inbox_button_moves_the_selected_task() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         let task = state.calendar.event_mut("deep").unwrap();
         task.id = "task:deep".into();
@@ -1391,10 +1394,7 @@ mod tests {
 
     #[test]
     fn backlog_picker_offers_every_group_and_selects_the_task_destination() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         let task = state.calendar.event_mut("deep").unwrap();
         task.id = "task:deep".into();
@@ -1434,10 +1434,7 @@ mod tests {
 
     #[test]
     fn task_title_click_starts_inline_editing() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
         let task = state.calendar.event_mut("deep").unwrap();
         task.id = "task:deep".into();
@@ -1458,10 +1455,7 @@ mod tests {
 
     #[test]
     fn both_date_sections_offer_clear_and_matching_scheduling_actions() {
-        let mut state = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut state = State::blank();
         state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
         let task = state.calendar.event_mut("deep").unwrap();
         task.id = "task:deep".into();
@@ -1502,10 +1496,7 @@ mod tests {
     #[test]
     fn estimate_popup_covers_the_time_block_view_at_narrow_and_wide_widths() {
         for width in [200.0, 800.0] {
-            let mut state = State::new(
-                crate::config::Config::default(),
-                crate::theme::Catalog::built_in(),
-            );
+            let mut state = State::blank();
             state.calendar =
                 crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
             let task = state.calendar.event_mut("deep").unwrap();

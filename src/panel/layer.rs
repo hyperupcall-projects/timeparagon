@@ -234,22 +234,22 @@ fn update_app(panel: &mut Panel, message: app::Message) -> Task<Message> {
     let previous = panel.app.config.views.panel_reserve_space;
     let previous_width = panel.width;
     let previous_top = crate::ui::editor_window_top(&panel.app);
-    if let app::Message::WindowResized(id, size) = &message
+    if let app::Message::System(app::SystemMessage::WindowResized(id, size)) = &message
         && Some(*id) == panel.id
     {
         panel.width = size.width.round().max(1.0) as u32;
     }
     let closed = match &message {
-        app::Message::WindowClosed(id) => Some(*id),
+        app::Message::System(app::SystemMessage::WindowClosed(id)) => Some(*id),
         _ => None,
     };
     let was_open = panel.app.inbox.draft.is_some();
     let task = if panel.commands.is_some() {
         if let app::Message::Inbox(action) = message {
-            if let crate::inbox::Action::Created(Ok(event)) = &action {
-                if let Some(created) = &panel.created {
-                    let _ = created.send(Ok(event.clone()));
-                }
+            if let crate::inbox::Action::Created(Ok(event)) = &action
+                && let Some(created) = &panel.created
+            {
+                let _ = created.send(Ok(event.clone()));
             }
             crate::inbox::update(&mut panel.app, action)
         } else {
@@ -310,8 +310,10 @@ fn update_app(panel: &mut Panel, message: app::Message) -> Task<Message> {
 
 fn update(panel: &mut Panel, message: Message) -> Task<Message> {
     match message {
-        Message::App(app::Message::TaskPopoverBounds(bounds))
-        | Message::Runtime(Action::Output(app::Message::TaskPopoverBounds(bounds))) => {
+        Message::App(app::Message::System(app::SystemMessage::TaskPopoverBounds(bounds)))
+        | Message::Runtime(Action::Output(app::Message::System(
+            app::SystemMessage::TaskPopoverBounds(bounds),
+        ))) => {
             if let Some(id) = panel.id.filter(|_| panel.app.task_creation_window) {
                 let x = bounds.x.floor() as i32;
                 let y = bounds.y.floor() as i32;
@@ -667,10 +669,7 @@ mod tests {
     }
 
     fn panel() -> Panel {
-        let mut app = State::new(
-            crate::config::Config::default(),
-            crate::theme::Catalog::built_in(),
-        );
+        let mut app = State::blank();
         app.sidebar = Some(app::Sidebar {
             width: 200.0,
             side: Side::Left,
@@ -762,10 +761,12 @@ mod tests {
             crate::config::DockSide::Left,
             crate::config::DockSide::Right,
         ] {
-            let mut views = ViewSettings::default();
-            views.dock_side = side;
-            views.dock_left_margin = Some(12.0);
-            views.dock_right_margin = Some(18.0);
+            let mut views = ViewSettings {
+                dock_side: side,
+                dock_left_margin: Some(12.0),
+                dock_right_margin: Some(18.0),
+                ..Default::default()
+            };
             let (_, _, unreserved) = task_popover(&views);
             views.dock_reserve_space = true;
             let (_, _, reserved) = task_popover(&views);
@@ -907,7 +908,7 @@ mod tests {
         for (enabled, expected) in [(true, 216), (false, 0)] {
             let messages = outputs(update_app(
                 &mut panel,
-                app::Message::PanelReserveSpaceToggled(enabled),
+                app::Message::Settings(app::SettingsMessage::PanelReserveSpaceToggled(enabled)),
             ));
             assert!(messages.iter().any(|message| matches!(message,
                 Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::ExclusiveZoneChange(zone)))
@@ -926,7 +927,7 @@ mod tests {
                 let expected = 200 + (margin * 2.0) as u32;
                 let mut pending = std::collections::VecDeque::from(outputs(update_app(
                     &mut panel,
-                    app::Message::ScreenMarginChanged(margin),
+                    app::Message::Settings(app::SettingsMessage::ScreenMarginChanged(margin)),
                 )));
                 let mut reserved = None;
                 let mut resized = None;
@@ -988,7 +989,10 @@ mod tests {
             matches!(messages.as_slice(), [Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::ExclusiveZoneChange(190)))] if *target == id)
         );
         panel.app.panel_expected_close = true;
-        let _ = update_app(&mut panel, app::Message::WindowClosed(id));
+        let _ = update_app(
+            &mut panel,
+            app::Message::System(app::SystemMessage::WindowClosed(id)),
+        );
         assert!(panel.id.is_none());
         assert!(panel.app.main_window.is_none());
         assert!(panel.app.config.views.panel_reserve_space);

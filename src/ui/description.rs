@@ -1,5 +1,6 @@
 //! A compact description shared by task, event and habit details.
 use super::layout::Metrics;
+use crate::app::EventMessage;
 use crate::app::{Message, State};
 use iced::widget::{Space, button, column, container, mouse_area, row, stack, text, text_editor};
 use iced::{Element, Fill};
@@ -19,7 +20,7 @@ pub fn preview<'a>(id: &str, value: &str, metrics: &Metrics) -> Element<'a, Mess
             })
             .size(size)
         )
-        .on_press(Message::DescriptionOpen(id.to_owned()))
+        .on_press(Message::Event(EventMessage::DescriptionOpen(id.to_owned())))
         .style(super::controls::secondary)
         .width(Fill),
     ]
@@ -33,7 +34,7 @@ pub fn overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         text("Description").size(metrics.label() + 6.0),
         text_editor(&state.description_editor)
             .placeholder("Add description…")
-            .on_action(Message::DescriptionEdited)
+            .on_action(|v0| Message::Event(EventMessage::DescriptionEdited(v0)))
             .size(metrics.label())
             .height((metrics.size.height - 180.0).clamp(80.0, 480.0)),
     ]
@@ -45,9 +46,9 @@ pub fn overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
     let card = container(
         description.push(
             row![
-                button("Save description").on_press(Message::DescriptionSave),
+                button("Save description").on_press(Message::Event(EventMessage::DescriptionSave)),
                 button("Cancel")
-                    .on_press(Message::DescriptionClose)
+                    .on_press(Message::Event(EventMessage::DescriptionClose))
                     .style(super::controls::secondary),
             ]
             .spacing(8),
@@ -67,7 +68,7 @@ pub fn overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                     ..Default::default()
                 })
         )
-        .on_press(Message::DescriptionClose)
+        .on_press(Message::Event(EventMessage::DescriptionClose))
         .on_scroll(|_| Message::Ignored),
         container(
             mouse_area(card)
@@ -125,7 +126,7 @@ mod tests {
             .unwrap();
             assert!(ui.into_messages().any(|message| matches!(
                 message,
-                Message::DescriptionOpen(id) if id == "item-id"
+                Message::Event(EventMessage::DescriptionOpen(id)) if id == "item-id"
             )));
         }
     }

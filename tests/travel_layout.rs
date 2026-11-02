@@ -5,10 +5,10 @@ use iced::{Element, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
+use timeslay::app::NavigationMessage;
 use timeslay::app::{self, Message, Screen, State};
 use timeslay::calendar::{Store, sample_snapshot};
-use timeslay::config::{Config, TravelMode};
-use timeslay::theme::Catalog;
+use timeslay::config::TravelMode;
 use timeslay::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
 
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
@@ -26,7 +26,7 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
 /// A day with a start and end at home and meetings at two other places.
 /// Returns the state with the ids of home, the office and the cafe.
 fn state() -> (State, u64, u64, u64) {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.calendar = Store::with_snapshot(sample_snapshot());
 
     let travel = &mut state.config.travel;
@@ -71,7 +71,7 @@ fn toggle_travel_is_left_of_set_alarm_at_every_width() -> Result<(), Error> {
         if (toggle.y - alarm.y).abs() < 1.0 {
             assert!(toggle.x + toggle.width <= alarm.x, "order at {width}px");
         } else {
-            assert!(toggle.y > alarm.y || toggle.y < alarm.y);
+            assert!(toggle.y != alarm.y);
         }
         assert!(alarm.x + alarm.width <= menu.x || alarm.y != menu.y);
 
@@ -119,9 +119,10 @@ fn the_travel_item_is_in_the_more_menu() -> Result<(), Error> {
 
         let _ = ui.click("Travel")?;
         assert!(
-            messages(ui)
-                .iter()
-                .any(|m| matches!(m, Message::ScreenSelected(Screen::Travel))),
+            messages(ui).iter().any(|m| matches!(
+                m,
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Travel))
+            )),
             "at {width}px"
         );
     }

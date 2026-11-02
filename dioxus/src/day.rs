@@ -100,7 +100,7 @@ impl Theme {
 
 /// The calendar day that `now` belongs to, honoring the configured end of day.
 pub fn today(settings: &CalendarSettings) -> NaiveDate {
-    calendar::day_at(Local::now(), settings.day_start_hour())
+    calendar::day_at(timeslay_core::clock::now(), settings.day_start_hour())
 }
 
 /// Pulls calendars, events and Google Tasks for one day.
@@ -261,7 +261,13 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         .map(|block| (tb::block_key(&block.event), block_ref(block, day, offset)))
         .collect();
 
-    let all_day = all_day_events(&events, settings, &loaded_block_keys, &priority);
+    let all_day = all_day_events(
+        &events,
+        &snapshot.calendars,
+        settings,
+        &loaded_block_keys,
+        &priority,
+    );
     let timed = timed_events(
         &events,
         snapshot,
@@ -276,9 +282,9 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
     );
     let (task_groups, tasks_hidden) = task_groups(&events, snapshot, settings, &block_refs);
 
-    let today = calendar::day_at(Local::now(), hour_start);
-    let now_min =
-        (day == today).then(|| minutes_into_day(Local::now(), day, offset).clamp(0, 24 * 60));
+    let today = calendar::day_at(timeslay_core::clock::now(), hour_start);
+    let now_min = (day == today)
+        .then(|| minutes_into_day(timeslay_core::clock::now(), day, offset).clamp(0, 24 * 60));
 
     DayModel {
         day,
@@ -297,7 +303,7 @@ fn view_bounds(day: NaiveDate, offset: i32) -> (DateTime<Local>, DateTime<Local>
     let start = Local
         .from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
         .earliest()
-        .unwrap_or_else(Local::now)
+        .unwrap_or_else(timeslay_core::clock::now)
         + Duration::minutes(i64::from(offset));
     (start, start + Duration::days(1))
 }
@@ -331,25 +337,6 @@ fn is_time_block(
         && event.details.sleep.is_none()
         && (settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
             || assigned_keys.contains(&tb::block_key(event)))
-}
-
-/// Mirrors `Store::calendar_enabled` for a source id.
-fn source_enabled(id: &str, settings: &CalendarSettings) -> bool {
-    if id.starts_with("tasks:") {
-        settings.show_tasks
-    } else {
-        !settings.disabled.iter().any(|hidden| hidden == id)
-    }
-}
-
-/// Mirrors `Store::visible_events`.
-fn event_enabled(event: &Event, settings: &CalendarSettings) -> bool {
-    source_enabled(event.source_id(), settings)
-        && event
-            .details
-            .scheduled
-            .as_ref()
-            .is_none_or(|link| source_enabled(&link.calendar_id, settings))
 }
 
 /// Mirrors `omit_managed_tasks_event`: app-owned scheduled copies are shown
@@ -387,6 +374,7 @@ fn calendar_name(snapshot: &Snapshot, id: &str) -> String {
 
 fn all_day_events(
     events: &[Event],
+    calendars: &[calendar::Calendar],
     settings: &CalendarSettings,
     block_keys: &HashSet<String>,
     priority: &impl Fn(&Event) -> usize,
@@ -394,7 +382,7 @@ fn all_day_events(
     let mut all_day: Vec<_> = events
         .iter()
         .filter(|event| !event.is_task() && event.all_day)
-        .filter(|event| event_enabled(event, settings))
+        .filter(|event| calendar::event_enabled(calendars, event, settings))
         .filter(|event| !managed_copy(event, settings, block_keys))
         .cloned()
         .collect();
@@ -424,7 +412,7 @@ fn timed_events(
         .iter()
         .filter(|event| !event.all_day)
         .filter(|event| event.start < view_end && event.end > view_start)
-        .filter(|event| event_enabled(event, settings))
+        .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
         .filter(|event| !managed_copy(event, settings, block_keys))
         // A task that already sits inside a visible block is read in that
         // block's popup, not drawn a second time as a chip on the grid.
@@ -492,7 +480,7 @@ fn build_blocks(
     let mut blocks: Vec<TimeBlock> = events
         .iter()
         .filter(|event| is_time_block(event, settings, assigned_keys))
-        .filter(|event| event_enabled(event, settings))
+        .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
         .map(|block| {
             let key = tb::block_key(block);
             let mut tasks: Vec<&Event> = events

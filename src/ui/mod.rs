@@ -33,6 +33,7 @@ mod weekly_task_list;
 use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text, tooltip};
 use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
 
+use crate::app::{CalendarMessage, NavigationMessage, SystemMessage};
 use crate::app::{Message, Screen, State};
 
 use layout::Metrics;
@@ -49,25 +50,27 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         }
         if state.range_view_active() {
             let metrics = Metrics::of(size);
-            let content = if state.monthly {
+            let content = if state.monthly() {
                 calendar::monthly_view(state, &metrics)
             } else {
                 calendar::weekly_view(state, &metrics)
             };
             let mut view_header =
-                row![text(if state.monthly { "Month" } else { "Week" }).size(metrics.label()),]
+                row![text(if state.monthly() { "Month" } else { "Week" }).size(metrics.label()),]
                     .spacing(12)
                     .align_y(Alignment::Center);
-            if state.weekly && !state.monthly {
+            if state.weekly() && !state.monthly() {
                 view_header = view_header.push(
                     iced::widget::toggler(state.config.calendar.weekly_task_list)
                         .label("Show task list")
                         .text_size(metrics.label())
-                        .on_toggle(Message::CalendarTaskListToggled),
+                        .on_toggle(|v0| {
+                            Message::Calendar(CalendarMessage::CalendarTaskListToggled(v0))
+                        }),
                 );
             }
             let body: Element<'_, Message> =
-                if state.weekly && state.config.calendar.weekly_task_list {
+                if state.weekly() && state.config.calendar.weekly_task_list {
                     content
                 } else {
                     column![view_header.padding([4, 8]), content]
@@ -169,8 +172,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
             if state.task_creation_window {
                 // The dock normally accepts input only over its bottom-aligned
                 // task card. The map replaces it and fills the entire surface.
-                let bounds =
-                    |size: Size| Message::TaskPopoverBounds(iced::Rectangle::with_size(size));
+                let bounds = |size: Size| {
+                    Message::System(SystemMessage::TaskPopoverBounds(
+                        iced::Rectangle::with_size(size),
+                    ))
+                };
                 return iced::widget::sensor(map)
                     .on_show(bounds)
                     .on_resize(bounds)
@@ -303,9 +309,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state.task_creation_window {
         return content.into();
     }
+    let content: Element<'_, Message> = match &state.config_error {
+        Some(error) => column![
+            container(text(error).size(13).style(text::danger))
+                .width(Fill)
+                .padding([4, 8]),
+            content,
+        ]
+        .into(),
+        None => content.into(),
+    };
     let body = window_frame(
         state,
-        content.into(),
+        content,
         if state.sidebar.is_some() {
             "sidebar-body"
         } else {
@@ -543,7 +559,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let view = tab(
         labels[0],
         state.screen == Screen::Calendar,
-        Message::ScreenSelected(Screen::Calendar),
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
         metrics,
         fit,
     );
@@ -552,10 +568,16 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         tasks_open,
         match state.screen {
             // Within the section, Tasks keeps the tab that is open.
-            Screen::Overdue => Message::ScreenSelected(Screen::Overdue),
-            Screen::Triaged => Message::ScreenSelected(Screen::Triaged),
-            Screen::Backlog => Message::ScreenSelected(Screen::Backlog),
-            _ => Message::ScreenSelected(Screen::Inbox),
+            Screen::Overdue => {
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Overdue))
+            }
+            Screen::Triaged => {
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Triaged))
+            }
+            Screen::Backlog => {
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Backlog))
+            }
+            _ => Message::Navigation(NavigationMessage::ScreenSelected(Screen::Inbox)),
         },
         metrics,
         fit,
@@ -563,28 +585,28 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let projects = tab(
         labels[2],
         state.screen == Screen::Projects,
-        Message::ScreenSelected(Screen::Projects),
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects)),
         metrics,
         fit,
     );
     let note = tab(
         labels[3],
         state.screen == Screen::Notepad,
-        Message::ScreenSelected(Screen::Notepad),
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad)),
         metrics,
         fit,
     );
     let more = tab(
         labels[4],
         more_active,
-        Message::MoreMenuToggled,
+        Message::Navigation(NavigationMessage::MoreMenuToggled),
         metrics,
         fit,
     );
     let settings = tab(
         labels[5],
         state.screen == Screen::Settings,
-        Message::ScreenSelected(Screen::Settings),
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings)),
         metrics,
         fit,
     );
@@ -621,8 +643,8 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 controls::secondary
             })
     };
-    let week_active = state.range_view_active() && state.weekly;
-    let month_active = state.range_view_active() && state.monthly;
+    let week_active = state.range_view_active() && state.weekly();
+    let month_active = state.range_view_active() && state.monthly();
     let overviews = container(
         row![
             overview_button(
@@ -632,7 +654,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                     "Show week"
                 },
                 week_active,
-                Message::CalendarModeSelected(!week_active),
+                Message::Calendar(CalendarMessage::CalendarModeSelected(!week_active)),
             ),
             overview_button(
                 if month_active {
@@ -642,9 +664,9 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 },
                 month_active,
                 if month_active {
-                    Message::CalendarModeSelected(false)
+                    Message::Calendar(CalendarMessage::CalendarModeSelected(false))
                 } else {
-                    Message::CalendarMonthViewSelected
+                    Message::Calendar(CalendarMessage::CalendarMonthViewSelected)
                 },
             ),
         ]
@@ -669,7 +691,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             tab(
                 label,
                 state.screen == screen,
-                Message::ScreenSelected(screen),
+                Message::Navigation(NavigationMessage::ScreenSelected(screen)),
                 metrics,
                 fit,
             )
@@ -791,17 +813,25 @@ fn view_half_style(active: bool) -> impl Fn(&iced::Theme, button::Status) -> but
 /// left-hand navigation group.
 fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
-        .on_press(Message::ViewMenuToggled);
+        .on_press(Message::Navigation(NavigationMessage::ViewMenuToggled));
 
     let mut panel = column![].spacing(4.0).width(Fill);
     for (label, selected, message) in [
         (
             "Schedule",
             state.screen == Screen::Calendar,
-            Message::ScreenSelected(Screen::Calendar),
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
         ),
-        ("Week", state.weekly, Message::CalendarModeSelected(true)),
-        ("Month", state.monthly, Message::CalendarMonthViewSelected),
+        (
+            "Week",
+            state.weekly(),
+            Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+        ),
+        (
+            "Month",
+            state.monthly(),
+            Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+        ),
     ] {
         panel = panel.push(
             button(text(label).size(metrics.label()).center().width(Fill))
@@ -840,7 +870,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 /// The More menu: Travel, Habits and Keep, in a card below the menu bar.
 fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
-        .on_press(Message::MoreMenuToggled);
+        .on_press(Message::Navigation(NavigationMessage::MoreMenuToggled));
 
     let mut panel = column![].spacing(4.0).width(Fill);
     for (label, screen) in MORE_LABELS.iter().zip([
@@ -852,7 +882,9 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         panel = panel.push(
             button(text(*label).size(metrics.label()).center().width(Fill))
                 .width(Fill)
-                .on_press(Message::ScreenSelected(screen))
+                .on_press(Message::Navigation(NavigationMessage::ScreenSelected(
+                    screen,
+                )))
                 .style(if state.screen == screen {
                     crate::ui::controls::primary
                 } else {

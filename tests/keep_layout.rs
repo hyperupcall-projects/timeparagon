@@ -1,13 +1,9 @@
 use iced::{Size, widget::image::Handle};
 use iced_test::{Simulator, core::Settings};
-use timeslay::{
-    app::{self, Screen, State},
-    config::Config,
-    theme::Catalog,
-};
+use timeslay::app::{self, Screen, State};
 
 fn state() -> State {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.screen = Screen::KeepNotes;
     for index in 0..6 {
         state.keep.snapshot.notes.push(timeslay::keep::Note {

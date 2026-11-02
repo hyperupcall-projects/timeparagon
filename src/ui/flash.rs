@@ -7,6 +7,7 @@
 use iced::widget::{container, mouse_area};
 use iced::{Color, Element, Fill};
 
+use crate::app::SystemMessage;
 use crate::app::{Message, State};
 
 pub fn view(state: &State) -> Element<'_, Message> {
@@ -42,7 +43,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         tint.into()
     } else {
         mouse_area(tint)
-            .on_press(Message::Dismiss)
+            .on_press(Message::System(SystemMessage::Dismiss))
             .interaction(iced::mouse::Interaction::Pointer)
             .into()
     }

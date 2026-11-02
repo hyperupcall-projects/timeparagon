@@ -66,8 +66,8 @@ fn update(state: &mut Probe, message: Message) -> Task<Message> {
         Message::Captured(screenshot) => {
             let expected = state.expected.unwrap();
             let logical = Size::new(
-                screenshot.size.width as f32 / screenshot.scale_factor as f32,
-                screenshot.size.height as f32 / screenshot.scale_factor as f32,
+                screenshot.size.width as f32 / screenshot.scale_factor,
+                screenshot.size.height as f32 / screenshot.scale_factor,
             );
             eprintln!("render buffer {logical:?} logical pixels");
             assert!(

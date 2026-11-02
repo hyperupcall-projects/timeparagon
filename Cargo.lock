@@ -7406,12 +7406,13 @@ dependencies = [
 
 [[package]]
 name = "timeslay"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "cef-dll-sys",
  "chrono",
+ "clap",
  "cosmic-text",
  "directories",
  "env_logger",
@@ -7422,28 +7423,24 @@ dependencies = [
  "iced_runtime",
  "iced_test",
  "iced_webview_v2",
- "jni 0.21.1",
  "linkify",
  "log",
- "ndk-context",
  "notify",
  "notify-rust",
  "pipewire",
  "rfd",
  "rodio",
- "rusqlite",
  "serde",
  "serde_ignored",
  "serde_json",
- "sha2",
  "smithay-client-toolkit 0.20.0",
  "tempfile",
+ "timeslay-core",
  "tiny-skia",
  "toml 1.1.6+spec-1.1.0",
  "ureq 2.12.1",
  "url",
  "urlencoding",
- "webbrowser",
  "winit-common",
  "zbus",
 ]
@@ -7466,6 +7463,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "ureq 2.12.1",
  "urlencoding",
@@ -7482,6 +7480,16 @@ dependencies = [
  "ndk-context",
  "timeslay-core",
  "tokio",
+]
+
+[[package]]
+name = "timeslay-migrate"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "timeslay",
+ "urlencoding",
 ]
 
 [[package]]

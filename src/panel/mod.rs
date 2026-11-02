@@ -126,10 +126,10 @@ impl Controller {
             Action::ToggleVisibility => self.toggle_visibility(),
             Action::ToggleShape => self.toggle_shape(),
             Action::ToggleReservation => {
-                if let Some(shape) = self.visible().first() {
-                    if let Err(error) = ipc::request(shape.socket(), "toggle-reservation") {
-                        log::warn!("could not toggle reservation: {error}");
-                    }
+                if let Some(shape) = self.visible().first()
+                    && let Err(error) = ipc::request(shape.socket(), "toggle-reservation")
+                {
+                    log::warn!("could not toggle reservation: {error}");
                 }
             }
         }
@@ -177,10 +177,10 @@ impl Controller {
             Err(error) => {
                 log::error!("could not switch to the {to:?}: {error:#}");
                 // Do not leave the screen empty because the other shape failed.
-                if !visible.is_empty() {
-                    if let Err(error) = from.show() {
-                        log::error!("could not restore the {from:?}: {error:#}");
-                    }
+                if !visible.is_empty()
+                    && let Err(error) = from.show()
+                {
+                    log::error!("could not restore the {from:?}: {error:#}");
                 }
             }
         }

@@ -12,8 +12,11 @@ use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
 use timeslay::app::{self, Message, Screen, State};
+use timeslay::app::{
+    CalendarMessage, EventMessage, KeepMessage, NavigationMessage, NotepadMessage, SettingsMessage,
+    TaskMessage,
+};
 use timeslay::config::Config;
-use timeslay::theme::Catalog;
 
 /// The widths that matter: the enforced minimum, the width the layout was
 /// designed around, the compact/normal boundary, and the jump to two columns.
@@ -23,7 +26,7 @@ const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
 const HEIGHT: f32 = 340.0;
 
 fn state() -> State {
-    State::new(Config::default(), Catalog::built_in())
+    State::blank()
 }
 
 type Simulator<'a> = Sim<'a, Message>;
@@ -111,9 +114,12 @@ fn alarm_mode_explains_itself() {
 /// is, and it fits the narrowest window.
 #[test]
 fn the_alarm_popup_is_usable_at_every_width() -> Result<(), Error> {
+    // The label below is measured from the clock, which must not tick meanwhile.
+    let _clock = timeslay::clock::freeze(timeslay::clock::utc_now());
     for width in WIDTHS {
         let mut state = state();
-        let at = timeslay::alarms::minute_of(Local::now()) + chrono::Duration::minutes(45);
+        let at =
+            timeslay::alarms::minute_of(timeslay::clock::now()) + chrono::Duration::minutes(45);
         let id = state.alarms.add(at, state.config.alarm.clone());
         let _ = app::update(
             &mut state,
@@ -156,8 +162,9 @@ fn the_alarm_popup_is_usable_at_every_width() -> Result<(), Error> {
 /// The popup shows the alarm's own settings, not the timer's.
 #[test]
 fn the_alarm_popup_reflects_the_alarm_being_edited() {
+    let _clock = timeslay::clock::freeze(timeslay::clock::utc_now());
     let mut state = state();
-    let at = timeslay::alarms::minute_of(Local::now()) + chrono::Duration::minutes(150);
+    let at = timeslay::alarms::minute_of(timeslay::clock::now()) + chrono::Duration::minutes(150);
     let mut profile = state.config.alarm.clone();
     profile.sound.volume = 41;
     let id = state.alarms.add(at, profile);
@@ -228,7 +235,7 @@ fn the_compact_theme_picker_cycles_on_press() -> Result<(), Error> {
         assert!(
             messages
                 .iter()
-                .any(|message| matches!(message, Message::ThemeSelected(name) if name == next)),
+                .any(|message| matches!(message, Message::Settings(SettingsMessage::ThemeSelected(name)) if name == next)),
             "expected {next} after {selected}, got {messages:?}"
         );
     }
@@ -400,9 +407,10 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::CalendarMonthToggled)),
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Calendar(CalendarMessage::CalendarMonthToggled)
+        )),
         "expected the month button to open the month picker, got {messages:?}"
     );
 
@@ -436,7 +444,7 @@ fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Message::CalendarDaySelected(day)
+            Message::Calendar(CalendarMessage::CalendarDaySelected(day))
                 if *day == chrono::NaiveDate::from_ymd_opt(2026, 10, 15).unwrap()
         )),
         "expected the tapped day to be selected, got {messages:?}"
@@ -553,10 +561,13 @@ fn tasks_has_its_own_tabs_and_more_opens_a_menu() -> Result<(), Error> {
     let _ = ui.click("More")?;
     assert!(
         ui.into_messages()
-            .any(|m| matches!(m, Message::MoreMenuToggled))
+            .any(|m| matches!(m, Message::Navigation(NavigationMessage::MoreMenuToggled)))
     );
 
-    let _ = app::update(&mut state, Message::MoreMenuToggled);
+    let _ = app::update(
+        &mut state,
+        Message::Navigation(NavigationMessage::MoreMenuToggled),
+    );
     assert!(state.more_menu_open);
     let mut ui = render(&state, Size::new(420.0, 600.0));
     for label in timeslay::ui::MORE_LABELS {
@@ -565,7 +576,10 @@ fn tasks_has_its_own_tabs_and_more_opens_a_menu() -> Result<(), Error> {
     drop(ui);
 
     // Choosing a destination closes the menu.
-    let _ = app::update(&mut state, Message::ScreenSelected(Screen::KeepNotes));
+    let _ = app::update(
+        &mut state,
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::KeepNotes)),
+    );
     assert!(!state.more_menu_open);
 
     Ok(())
@@ -578,7 +592,12 @@ fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), 
     ui.click(tab_label(200.0, 2))?;
     let message = ui
         .into_messages()
-        .find(|message| matches!(message, Message::ScreenSelected(Screen::Projects)))
+        .find(|message| {
+            matches!(
+                message,
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects))
+            )
+        })
         .expect("Projects should select its view");
     let _ = app::update(&mut state, message);
     assert_eq!(state.screen, Screen::Projects);
@@ -608,7 +627,7 @@ fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), 
         Message::Projects(timeslay::projects::Action::Edit(id)),
     );
     let mut ui = render(&state, Size::new(200.0, 700.0));
-    for label in ["Name", "Color", "Folder", "Browse…", "Save", "Cancel"] {
+    for label in ["Name", "Color", "Folder path", "Browse…", "Save", "Cancel"] {
         assert!(
             ui.find(label).is_ok(),
             "{label:?} is missing from the editor"
@@ -628,9 +647,10 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::ScreenSelected(Screen::Settings))),
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings))
+        )),
         "clicking the tab produced {messages:?}"
     );
 
@@ -653,6 +673,8 @@ fn google_task_lists_can_be_given_individual_colors() -> Result<(), Error> {
         selected_by_google: true,
     });
     state.calendar.color_editor = Some("tasks:errands".into());
+    // The menu's height follows the window, as the app would report it.
+    state.main_size = Size::new(200.0, 700.0);
 
     let mut ui = render(&state, Size::new(200.0, 700.0));
 
@@ -667,7 +689,7 @@ fn google_task_lists_can_be_given_individual_colors() -> Result<(), Error> {
 
     assert!(
         messages.iter().any(
-            |message| matches!(message, Message::TaskColorPicked(id, None) if id == "tasks:errands")
+            |message| matches!(message, Message::Settings(SettingsMessage::TaskColorPicked(id, None)) if id == "tasks:errands")
         ),
         "expected the reset to be offered, got {messages:?}"
     );
@@ -813,7 +835,7 @@ fn a_long_event_keeps_its_buttons_out_of_the_scroll() -> Result<(), Error> {
         assert!(
             messages
                 .iter()
-                .any(|message| matches!(message, Message::EventClosed)),
+                .any(|message| matches!(message, Message::Event(EventMessage::EventClosed))),
             "the Close button should be reachable at {size:?} without scrolling, got {messages:?}"
         );
     }
@@ -951,7 +973,7 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
     assert!(
         messages
             .iter()
-            .any(|message| matches!(message, Message::EventOpened(id) if id == "second")),
+            .any(|message| matches!(message, Message::Event(EventMessage::EventOpened(id)) if id == "second")),
         "clicking another event should open it, got {messages:?}"
     );
 
@@ -990,9 +1012,10 @@ fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Erro
 
     let messages: Vec<Message> = ui.into_messages().collect();
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::CalendarResyncRequested)),
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Calendar(CalendarMessage::CalendarResyncRequested)
+        )),
         "clicking resync produced {messages:?}"
     );
 
@@ -1033,9 +1056,10 @@ fn the_habits_item_opens_the_habits() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::ScreenSelected(Screen::Habits))),
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Habits))
+        )),
         "clicking the item produced {messages:?}"
     );
 
@@ -1053,9 +1077,10 @@ fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::ScreenSelected(Screen::Notepad))),
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad))
+        )),
         "clicking the tab produced {messages:?}"
     );
 
@@ -1090,9 +1115,10 @@ fn the_text_size_can_be_changed_from_the_notepad() -> Result<(), Error> {
     let messages: Vec<Message> = ui.into_messages().collect();
 
     assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::NotepadFontSizeChanged(10))),
+        messages.iter().any(|message| matches!(
+            message,
+            Message::Notepad(NotepadMessage::NotepadFontSizeChanged(10))
+        )),
         "clicking A+ produced {messages:?}"
     );
 
@@ -1158,11 +1184,13 @@ fn timeblocking_state() -> State {
         .iter_mut()
         .find(|e| e.id == "standup")
         .unwrap();
+    // `earliest`: 1am happens twice on the day the clocks go back.
     block.start = chrono::Local::now()
         .date_naive()
         .and_hms_opt(1, 0, 0)
         .unwrap()
         .and_local_timezone(Local)
+        .earliest()
         .unwrap();
     block.end = block.start + chrono::Duration::hours(1);
     let key = block_key(block);
@@ -1219,7 +1247,10 @@ fn timeblocking_state() -> State {
 #[test]
 fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> Result<(), Error> {
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
     assert!(state.floating_editors());
     assert!(state.calendar.open_event.is_none());
@@ -1260,8 +1291,14 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
     )));
     drop(state);
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
-    let _ = app::update(&mut state, Message::ScreenSelected(Screen::Backlog));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Backlog)),
+    );
     assert!(state.timeblocking.block.is_none());
     Ok(())
 }
@@ -1270,7 +1307,10 @@ fn time_block_click_opens_a_panel_and_keeps_it_open_when_switching_blocks() -> R
 fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
 
     for width in [500.0, 660.0] {
         let mut ui = render(&state, Size::new(width, 720.0));
@@ -1282,7 +1322,7 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
         let _ = ui.click("Delete")?;
         assert!(ui.into_messages().any(|message| matches!(
             message,
-            Message::EventDeleteRequested(id) if id == "standup"
+            Message::Event(EventMessage::EventDeleteRequested(id)) if id == "standup"
         )));
     }
 
@@ -1293,16 +1333,22 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
             .any(|message| matches!(message, Message::TimeBlocking(Action::Close)))
     );
 
-    let _ = app::update(&mut state, Message::EventDeleteRequested("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventDeleteRequested("standup".into())),
+    );
     assert_eq!(state.calendar.pending_delete.as_deref(), Some("standup"));
     let mut ui = render(&state, Size::new(660.0, 720.0));
     assert!(ui.find("Delete this event?").is_ok());
     let _ = ui.click("Cancel")?;
     assert!(
         ui.into_messages()
-            .any(|message| matches!(message, Message::EventDeleteCancelled))
+            .any(|message| matches!(message, Message::Event(EventMessage::EventDeleteCancelled)))
     );
-    let _ = app::update(&mut state, Message::EventDeleteCancelled);
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventDeleteCancelled),
+    );
     assert!(state.calendar.event("standup").is_some());
     assert!(state.timeblocking.block.is_some());
     Ok(())
@@ -1312,7 +1358,10 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
 fn event_details_sit_to_the_right_of_the_time_block_editor() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let _ = app::update(
         &mut state,
         Message::TimeBlocking(Action::Details("task:planned".into())),
@@ -1338,7 +1387,10 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
     let mut state = timeblocking_state();
     let id = "task:planned";
     let metrics = timeslay::ui::layout::Metrics::of(Size::new(400.0, 1200.0));
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let original = state.calendar.event(id).unwrap().clone();
     for (ignore, expected) in [
         (false, TaskStatus::Completed),
@@ -1352,9 +1404,9 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
     ] {
         let previous = tb::task_status(state.calendar.event(id).unwrap());
         let message = if ignore {
-            Message::TaskIgnoreToggled(id.into())
+            Message::Task(TaskMessage::TaskIgnoreToggled(id.into()))
         } else {
-            Message::TaskToggled(id.into())
+            Message::Task(TaskMessage::TaskToggled(id.into()))
         };
         let _ = app::update(&mut state, message);
         let task = state.calendar.event(id).unwrap().clone();
@@ -1363,9 +1415,13 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
         assert_eq!((task.start, task.end), (original.start, original.end));
         let _ = app::update(
             &mut state,
-            Message::TaskCompletionSaved(id.into(), previous, Ok(task)),
+            Message::Task(TaskMessage::TaskCompletionSaved(
+                id.into(),
+                previous,
+                Ok(task),
+            )),
         );
-        assert!(!state.timeblocking.busy.contains(id));
+        assert!(!state.timeblocking.busy.contains_task(id));
         let task = state.calendar.event(id).unwrap();
         let mut actions = at(
             Size::new(260.0, 240.0),
@@ -1386,7 +1442,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
             "Ignore Task"
         })?;
         assert!(actions.into_messages().any(|message| matches!(message,
-            Message::TaskIgnoreToggled(id) if id == "task:planned")));
+            Message::Task(TaskMessage::TaskIgnoreToggled(id)) if id == "task:planned")));
         assert!(
             tb::assigned(&state, state.calendar.event("standup").unwrap())
                 .iter()
@@ -1405,16 +1461,30 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
     }
 
     // A rejected unignore restores the ignored marker and keeps the assignment.
-    let _ = app::update(&mut state, Message::TaskIgnoreToggled(id.into()));
+    let _ = app::update(
+        &mut state,
+        Message::Task(TaskMessage::TaskIgnoreToggled(id.into())),
+    );
     let task = state.calendar.event(id).unwrap().clone();
     let _ = app::update(
         &mut state,
-        Message::TaskCompletionSaved(id.into(), TaskStatus::Active, Ok(task)),
+        Message::Task(TaskMessage::TaskCompletionSaved(
+            id.into(),
+            TaskStatus::Active,
+            Ok(task),
+        )),
     );
-    let _ = app::update(&mut state, Message::TaskIgnoreToggled(id.into()));
     let _ = app::update(
         &mut state,
-        Message::TaskCompletionSaved(id.into(), TaskStatus::Ignored, Err("Offline".into())),
+        Message::Task(TaskMessage::TaskIgnoreToggled(id.into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Task(TaskMessage::TaskCompletionSaved(
+            id.into(),
+            TaskStatus::Ignored,
+            Err("Offline".into()),
+        )),
     );
     assert_eq!(
         tb::task_status(state.calendar.event(id).unwrap()),
@@ -1439,8 +1509,12 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
     use timeslay::travel::{Action as Travel, PickTarget};
 
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
-    let size = Size::new(560.0, 1000.0);
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("task:backlog".into())),
+    );
+    // Tall enough to fit the whole editor, since a click needs its target on screen.
+    let size = Size::new(560.0, 2000.0);
 
     let mut ui = render(&state, size);
     for label in [
@@ -1520,7 +1594,10 @@ fn the_task_editor_adds_custom_labels() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
 
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("task:backlog".into())),
+    );
     state.timeblocking.label_draft = "deep work".into();
 
     let mut ui = render(&state, Size::new(560.0, 1000.0));
@@ -1539,7 +1616,10 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
         for width in WIDTHS {
             let mut state = timeblocking_state();
             state.screen = screen;
-            let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+            let _ = app::update(
+                &mut state,
+                Message::Event(EventMessage::EventOpened("task:backlog".into())),
+            );
             let size = Size::new(width, 800.0);
             // Render the independent details editor at its configured width.
             let render_size = Size::new(width + 360.0, 800.0);
@@ -1561,14 +1641,14 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
             }
             let _ = ui.click("Ignore Task")?;
             assert!(ui.into_messages().any(|message| matches!(message,
-                Message::TaskIgnoreToggled(id) if id == "task:backlog")));
+                Message::Task(TaskMessage::TaskIgnoreToggled(id)) if id == "task:backlog")));
             let mut ui = render(&state, render_size);
             let _ = ui.click("Delete task")?;
             assert!(ui.into_messages().any(|message| matches!(message,
-                Message::TaskDeleteRequested(id) if id == "task:backlog")));
+                Message::Task(TaskMessage::TaskDeleteRequested(id)) if id == "task:backlog")));
             let _ = app::update(
                 &mut state,
-                Message::TaskDeleteRequested("task:backlog".into()),
+                Message::Task(TaskMessage::TaskDeleteRequested("task:backlog".into())),
             );
             assert!(state.calendar.event("task:backlog").is_some());
             assert!(state.timeblocking.busy.is_empty());
@@ -1578,11 +1658,14 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
                     .is_ok()
             );
             let _ = ui.click("Cancel")?;
-            assert!(
-                ui.into_messages()
-                    .any(|message| matches!(message, Message::EventDeleteCancelled))
+            assert!(ui.into_messages().any(|message| matches!(
+                message,
+                Message::Event(EventMessage::EventDeleteCancelled)
+            )));
+            let _ = app::update(
+                &mut state,
+                Message::Event(EventMessage::EventDeleteCancelled),
             );
-            let _ = app::update(&mut state, Message::EventDeleteCancelled);
             assert!(state.calendar.event("task:backlog").is_some());
             assert!(state.calendar.pending_delete.is_none());
         }
@@ -1598,7 +1681,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
     );
     let _ = app::update(
         &mut state,
-        Message::TaskDeleteConfirmed("task:planned".into()),
+        Message::Task(TaskMessage::TaskDeleteConfirmed("task:planned".into())),
     );
     assert!(
         state.timeblocking.busy.is_empty(),
@@ -1606,16 +1689,16 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
     );
     let _ = app::update(
         &mut state,
-        Message::TaskDeleteRequested("task:planned".into()),
+        Message::Task(TaskMessage::TaskDeleteRequested("task:planned".into())),
     );
     let _ = app::update(
         &mut state,
-        Message::TaskDeleteConfirmed("task:planned".into()),
+        Message::Task(TaskMessage::TaskDeleteConfirmed("task:planned".into())),
     );
-    assert!(state.timeblocking.busy.contains("task:planned"));
+    assert!(state.timeblocking.busy.contains_task("task:planned"));
     let _ = app::update(
         &mut state,
-        Message::TaskDeleted("task:planned".into(), Ok(())),
+        Message::Task(TaskMessage::TaskDeleted("task:planned".into(), Ok(()))),
     );
     assert!(state.calendar.event("task:planned").is_none());
     assert!(state.calendar.event("standup").is_some());
@@ -1628,7 +1711,10 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let _ = app::update(
         &mut state,
         Message::TimeBlocking(Action::AvailableAll(true)),
@@ -1676,7 +1762,10 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
 fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let _ = app::update(
         &mut state,
         Message::TimeBlocking(Action::AvailableAll(true)),
@@ -1745,7 +1834,10 @@ fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<()
         .unwrap();
     task.end = task.start + chrono::Duration::minutes(30);
     state.calendar.add_event(task);
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let _ = app::update(
         &mut state,
         Message::TimeBlocking(Action::AvailableAll(true)),
@@ -1809,7 +1901,10 @@ fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<()
         Message::TimeBlocking(Action::AvailablePlanned(true)),
     );
     let _ = app::update(&mut state, Message::TimeBlocking(Action::Close));
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     assert!(!state.timeblocking.available_planned);
     assert!(!state.timeblocking.available_all);
     Ok(())
@@ -1838,7 +1933,10 @@ fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error
         .and_local_timezone(Local)
         .unwrap();
     task.end = task.start + chrono::Duration::days(1);
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
 
     let size = Size::new(400.0, 1000.0);
     let metrics = timeslay::ui::layout::Metrics::of(size);
@@ -1893,12 +1991,13 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
     assert!(ui.find("Send invoice").is_ok());
     let _ = ui.click("Research outline")?;
     let messages: Vec<_> = ui.into_messages().collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| matches!(m, Message::EventOpened(id) if id == "task:backlog"))
+    assert!(messages.iter().any(
+        |m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "task:backlog")
+    ));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("task:backlog".into())),
     );
-    let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
     assert_eq!(state.timeblocking.title, "Research outline");
     let mut ui = render(&state, Size::new(420.0, 720.0));
     for label in [
@@ -2076,15 +2175,20 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     let _ = ui.click(tab_label(260.0, 1))?;
     let message = ui
         .into_messages()
-        .find(|m| matches!(m, Message::ScreenSelected(Screen::Inbox)))
+        .find(|m| {
+            matches!(
+                m,
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Inbox))
+            )
+        })
         .expect("Tasks should open the section");
     let _ = app::update(&mut state, message);
     let mut ui = render(&state, Size::new(260.0, 600.0));
     let _ = ui.click("Backlog")?;
-    assert!(
-        ui.into_messages()
-            .any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog)))
-    );
+    assert!(ui.into_messages().any(|m| matches!(
+        m,
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Backlog))
+    )));
     Ok(())
 }
 
@@ -2154,7 +2258,10 @@ fn a_sync_started_before_a_task_edit_cannot_replace_the_edited_tasks() {
     state.timeblocking.revision = 2;
     let _ = app::update(
         &mut state,
-        Message::CalendarSyncedAt(1, Ok(timeslay::calendar::sample_snapshot())),
+        Message::Calendar(CalendarMessage::CalendarSyncedAt(
+            1,
+            Ok(timeslay::calendar::sample_snapshot()),
+        )),
     );
     assert!(state.calendar.event("task:planned").is_some());
     assert!(state.calendar.event("task:backlog").is_some());
@@ -2169,7 +2276,7 @@ fn focus_state() -> State {
     block.end = block.start + chrono::Duration::hours(1);
     let block_key = tb::block_key(block);
     let planned = state.calendar.event_mut("task:planned").unwrap();
-    let mut meta = tb::metadata(&planned);
+    let mut meta = tb::metadata(planned);
     meta.minutes = 30;
     planned.details.task_data.as_mut().unwrap().metadata = meta.clone();
     let key = tb::task_key(planned);
@@ -2240,7 +2347,10 @@ fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
     use timeslay::timeblocking::{self as tb, Action};
     let mut state = focus_state();
     let key = tb::task_key(state.calendar.event("task:planned").unwrap());
-    let _ = app::update(&mut state, Message::TaskToggled("task:planned".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Task(TaskMessage::TaskToggled("task:planned".into())),
+    );
     assert!(!state.config.task_work.running(&key));
     assert!(state.calendar.event("task:planned").unwrap().completed);
     let block = state.calendar.event("standup").unwrap();
@@ -2339,7 +2449,10 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
         .find(|e| e.id == "task:planned")
         .unwrap()
         .completed = true;
-    let _ = app::update(&mut state, Message::CalendarSynced(Ok(snapshot)));
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarSynced(Ok(snapshot))),
+    );
     assert!(state.config.task_work.active().is_none());
     let block = state.calendar.event("standup").unwrap();
     assert!(
@@ -2356,18 +2469,18 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
         state.more_menu_open = true;
         let mut ui = render(&state, Size::new(width, HEIGHT));
         ui.click("Keep")?;
-        assert!(
-            ui.into_messages()
-                .any(|m| matches!(m, Message::ScreenSelected(Screen::KeepNotes)))
-        );
+        assert!(ui.into_messages().any(|m| matches!(
+            m,
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::KeepNotes))
+        )));
         state.more_menu_open = false;
         state.screen = Screen::Inbox;
         let mut ui = render(&state, Size::new(width, HEIGHT));
         ui.click("Backlog")?;
-        assert!(
-            ui.into_messages()
-                .any(|m| matches!(m, Message::ScreenSelected(Screen::Backlog)))
-        );
+        assert!(ui.into_messages().any(|m| matches!(
+            m,
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Backlog))
+        )));
         state.screen = Screen::KeepNotes;
         let mut ui = render(&state, Size::new(width, HEIGHT));
         for label in ["Refresh", "Reconnect", "Active", "Labels"] {
@@ -2391,7 +2504,7 @@ fn keep_edit_opens_the_selected_note() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(260.0, 720.0));
     ui.click("Edit")?;
     assert!(ui.into_messages().any(
-        |m| matches!(m, Message::KeepEdit(url) if url == "https://keep.google.com/#NOTE/test-note")
+        |m| matches!(m, Message::Keep(KeepMessage::KeepEdit(url)) if url == "https://keep.google.com/#NOTE/test-note")
     ));
     Ok(())
 }
@@ -2402,7 +2515,10 @@ fn switching_to_keep_closes_time_block_views_and_starts_refresh() {
     state.timeblocking.block = Some("standup".into());
 
     state.timeblocking.dragging = Some("task:planned".into());
-    let _ = app::update(&mut state, Message::ScreenSelected(Screen::KeepNotes));
+    let _ = app::update(
+        &mut state,
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::KeepNotes)),
+    );
     assert_eq!(state.screen, Screen::KeepNotes);
     assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.focus.is_none());
@@ -2445,7 +2561,10 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
             .unwrap()
             .details
             .description = "DUE: 2026-12-31\nNotes".into();
-        let _ = app::update(&mut state, Message::EventOpened("task:backlog".into()));
+        let _ = app::update(
+            &mut state,
+            Message::Event(EventMessage::EventOpened("task:backlog".into())),
+        );
         assert_eq!(state.timeblocking.deadline, "2026-12-31");
         let mut ui = render(&state, Size::new(width, 720.0));
         for label in [
@@ -2528,7 +2647,7 @@ fn backlog_sections_are_ordered_and_accept_drops_on_headers_and_tasks() -> Resul
         let _ = app::update(&mut state, message);
     }
     assert!(state.timeblocking.dragging.is_none());
-    assert!(state.timeblocking.busy.contains("task:backlog"));
+    assert!(state.timeblocking.busy.contains_task("task:backlog"));
     Ok(())
 }
 

@@ -2,18 +2,21 @@
 
 use iced::{Size, Task, futures::StreamExt, window};
 use iced_test::runtime::{self, Action, window::Action as WindowAction};
+use timeslay::app::{
+    CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, NavigationMessage,
+    SettingsMessage,
+};
 use timeslay::{
     app::{self, LayoutField, Message, State},
     calendar,
     config::Config,
-    theme::Catalog,
 };
 
 /// The pane width the default settings ship with.
 const DETAIL: f32 = 360.0;
 
 fn state() -> State {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.main_window = Some(window::Id::unique());
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     state
@@ -59,7 +62,7 @@ fn opening_and_closing_details_never_resizes_the_main_window() {
     assert!(
         actions(app::update(
             &mut state,
-            Message::EventOpened("all-day".into())
+            Message::Event(EventMessage::EventOpened("all-day".into()))
         ))
         .is_empty()
     );
@@ -68,12 +71,15 @@ fn opening_and_closing_details_never_resizes_the_main_window() {
     assert!(
         actions(app::update(
             &mut state,
-            Message::EventOpened("lunch".into())
+            Message::Event(EventMessage::EventOpened("lunch".into()))
         ))
         .is_empty()
     );
     assert_eq!(state.editor_window, Some(editor));
-    let closed = actions(app::update(&mut state, Message::EventClosed));
+    let closed = actions(app::update(
+        &mut state,
+        Message::Event(EventMessage::EventClosed),
+    ));
     assert!(
         closed
             .iter()
@@ -93,12 +99,15 @@ fn the_details_width_setting_resizes_only_the_editor_live() {
     let mut state = state();
     let _ = actions(app::update(
         &mut state,
-        Message::EventOpened("all-day".into()),
+        Message::Event(EventMessage::EventOpened("all-day".into())),
     ));
     let editor = state.editor_window.unwrap();
     let height = state.main_size.height - timeslay::ui::editor_window_top(&state);
     let result = assert_resize(
-        app::update(&mut state, Message::DetailWidthChanged(240.0)),
+        app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::DetailWidthChanged(240.0)),
+        ),
         Size::new(240.0, height),
     );
     assert!(
@@ -116,7 +125,9 @@ fn layout_number_steps_the_details_width_through_the_message() {
     let before = LayoutField::DetailWidth.value(&state);
     let _ = app::update(
         &mut state,
-        Message::ViewLayoutInputSubmitted(LayoutField::DetailWidth),
+        Message::Settings(SettingsMessage::ViewLayoutInputSubmitted(
+            LayoutField::DetailWidth,
+        )),
     );
     assert_eq!(state.config.views.detail_width(), before);
 
@@ -130,12 +141,12 @@ fn navigating_away_closes_only_the_editor_window() {
     let original = state.main_size;
     let _ = actions(app::update(
         &mut state,
-        Message::EventOpened("all-day".into()),
+        Message::Event(EventMessage::EventOpened("all-day".into())),
     ));
     let editor = state.editor_window.unwrap();
     let result = actions(app::update(
         &mut state,
-        Message::ScreenSelected(app::Screen::Notepad),
+        Message::Navigation(NavigationMessage::ScreenSelected(app::Screen::Notepad)),
     ));
     assert!(
         result
@@ -155,7 +166,10 @@ fn navigating_away_closes_only_the_editor_window() {
 #[test]
 fn description_popup_cancels_without_changing_the_draft() {
     let mut state = state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let before = state
         .calendar
         .edit_draft
@@ -163,15 +177,20 @@ fn description_popup_cancels_without_changing_the_draft() {
         .unwrap()
         .description
         .clone();
-    let _ = app::update(&mut state, Message::DescriptionOpen("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::DescriptionOpen("standup".into())),
+    );
     assert_eq!(state.description_editor.text(), before);
     let _ = app::update(
         &mut state,
-        Message::DescriptionEdited(iced::widget::text_editor::Action::Edit(
-            iced::widget::text_editor::Edit::Paste(std::sync::Arc::new("Changed".to_owned())),
+        Message::Event(EventMessage::DescriptionEdited(
+            iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Paste(
+                std::sync::Arc::new("Changed".to_owned()),
+            )),
         )),
     );
-    let _ = app::update(&mut state, Message::DescriptionClose);
+    let _ = app::update(&mut state, Message::Event(EventMessage::DescriptionClose));
     assert!(state.description_popup.is_none());
     assert_eq!(
         state.calendar.edit_draft.as_ref().unwrap().description,
@@ -184,18 +203,27 @@ fn description_popup_stages_event_changes_without_saving_the_event() {
     let mut state = state();
     let _ = actions(app::update(
         &mut state,
-        Message::EventOpened("standup".into()),
+        Message::Event(EventMessage::EventOpened("standup".into())),
     ));
     let editor = state.editor_window;
     let original = state.calendar.event("standup").unwrap().clone();
     let _ = app::update(
         &mut state,
-        Message::EventEditTitleChanged("New title".into()),
+        Message::EventEdit(EventEditMessage::EventEditTitleChanged("New title".into())),
     );
-    let _ = app::update(&mut state, Message::DescriptionOpen("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::DescriptionOpen("standup".into())),
+    );
     state.description_editor = iced::widget::text_editor::Content::with_text("New description");
 
-    assert!(actions(app::update(&mut state, Message::DescriptionSave)).is_empty());
+    assert!(
+        actions(app::update(
+            &mut state,
+            Message::Event(EventMessage::DescriptionSave)
+        ))
+        .is_empty()
+    );
 
     assert!(state.description_popup.is_none());
     assert_eq!(state.editor_window, editor);
@@ -215,23 +243,34 @@ fn dragged_habit_stays_editable_after_description_and_project_done() {
     let mut state = state();
     let start = state.calendar.event("standup").unwrap().start;
     let end = start + chrono::Duration::minutes(45);
-    let _ = app::update(&mut state, Message::EventDraftStarted { start, end });
     let _ = app::update(
         &mut state,
-        Message::EventDraftTitleChanged("Stretch".into()),
+        Message::EventDraft(EventDraftMessage::EventDraftStarted { start, end }),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftTitleChanged("Stretch".into())),
     );
     let _ = actions(app::update(
         &mut state,
-        Message::EventDraftKindSelected(calendar::DraftKind::Habit),
+        Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+            calendar::DraftKind::Habit,
+        )),
     ));
     let editor = state.editor_window.expect("the habit editor is open");
     let _ = app::update(
         &mut state,
-        Message::DescriptionOpen(habits::NEW_HABIT_ID.into()),
+        Message::Event(EventMessage::DescriptionOpen(habits::NEW_HABIT_ID.into())),
     );
     state.description_editor = iced::widget::text_editor::Content::with_text("Slow and steady");
 
-    assert!(actions(app::update(&mut state, Message::DescriptionSave)).is_empty());
+    assert!(
+        actions(app::update(
+            &mut state,
+            Message::Event(EventMessage::DescriptionSave)
+        ))
+        .is_empty()
+    );
     assert!(state.description_popup.is_none());
     assert!(
         !state.habits.busy,
@@ -243,7 +282,13 @@ fn dragged_habit_stays_editable_after_description_and_project_done() {
         ProjectAction::Add(project),
         ProjectAction::Toggle, // Done
     ] {
-        assert!(actions(app::update(&mut state, Message::EventEditProjects(action))).is_empty());
+        assert!(
+            actions(app::update(
+                &mut state,
+                Message::EventEdit(EventEditMessage::EventEditProjects(action))
+            ))
+            .is_empty()
+        );
         assert_eq!(state.editor_window, Some(editor));
         assert!(state.details_pane_open);
         assert_eq!(
@@ -253,10 +298,15 @@ fn dragged_habit_stays_editable_after_description_and_project_done() {
         assert!(!state.habits.busy);
     }
 
-    let _ = app::update(&mut state, Message::EventEditStartChanged("10:00".into()));
     let _ = app::update(
         &mut state,
-        Message::EventEditTitleChanged("Morning stretch".into()),
+        Message::EventEdit(EventEditMessage::EventEditStartChanged("10:00".into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditTitleChanged(
+            "Morning stretch".into(),
+        )),
     );
     let draft = state.calendar.edit_draft.as_ref().unwrap();
     assert_eq!(draft.title, "Morning stretch");
@@ -282,14 +332,20 @@ fn moving_a_habit_start_keeps_its_duration() {
         .details
         .habit = true;
     state.calendar = calendar::Store::with_snapshot(snapshot);
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
     let original = state.calendar.edit_draft.as_ref().unwrap();
     let duration = original.end - original.start;
     let _ = app::update(
         &mut state,
-        Message::EventEditDateChanged("2026-11-02".into()),
+        Message::EventEdit(EventEditMessage::EventEditDateChanged("2026-11-02".into())),
     );
-    let _ = app::update(&mut state, Message::EventEditStartChanged("23:30".into()));
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditStartChanged("23:30".into())),
+    );
     let draft = state.calendar.edit_draft.as_ref().unwrap();
     assert_eq!(draft.start.date_naive().to_string(), "2026-11-02");
     assert_eq!(calendar::clock_label(draft.start), "23:30");
@@ -299,13 +355,22 @@ fn moving_a_habit_start_keeps_its_duration() {
 #[test]
 fn habit_series_response_is_ignored_after_selecting_another_event() {
     let mut state = state();
-    let _ = app::update(&mut state, Message::EventOpened("standup".into()));
-    let event = state.calendar.event("standup").unwrap().clone();
-    let series = state.calendar.edit_draft.clone().unwrap();
-    let _ = app::update(&mut state, Message::EventOpened("lunch".into()));
     let _ = app::update(
         &mut state,
-        Message::HabitDetailsLoaded("standup".into(), Ok((event, series))),
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
+    let event = state.calendar.event("standup").unwrap().clone();
+    let series = state.calendar.edit_draft.clone().unwrap();
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("lunch".into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::HabitDetailsLoaded(
+            "standup".into(),
+            Ok((event, series)),
+        )),
     );
     assert_eq!(state.calendar.edit_draft.as_ref().unwrap().id, "lunch");
 }
@@ -327,7 +392,10 @@ fn loading_a_calendar_habit_keeps_the_selected_occurrence_and_sync_source() {
     let draft = calendar::EditDraft::from_habit_occurrence(&event, &master);
     let _ = app::update(
         &mut state,
-        Message::HabitDetailsLoaded(event.id.clone(), Ok((event.clone(), draft))),
+        Message::Event(EventMessage::HabitDetailsLoaded(
+            event.id.clone(),
+            Ok((event.clone(), draft)),
+        )),
     );
     assert_eq!(
         state.calendar.open_event.as_deref(),
@@ -342,12 +410,49 @@ fn loading_a_calendar_habit_keeps_the_selected_occurrence_and_sync_source() {
     );
 }
 
+/// The week and month overview stays open across the panel's tabs and has a
+/// details pane of its own, so a new habit is edited there rather than in a
+/// second window.
+#[test]
+fn new_habit_with_the_overview_open_is_edited_inside_the_overview() {
+    use timeslay::{app::Screen, habits};
+    for open_overview in [
+        Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+        Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+    ] {
+        let mut state = state();
+        let _ = app::update(&mut state, open_overview);
+        let _ = app::update(
+            &mut state,
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Habits)),
+        );
+        assert!(state.range_view_active());
+
+        let _ = app::update(&mut state, Message::Habits(habits::Action::New));
+
+        assert_eq!(
+            state.calendar.open_event.as_deref(),
+            Some(habits::NEW_HABIT_ID)
+        );
+        assert!(!state.details_pane_open);
+        let mut ui = iced_test::simulator::Simulator::with_size(
+            iced::Settings::default(),
+            Size::new(1216.0, 900.0),
+            timeslay::ui::editor_window(&state),
+        );
+        assert!(
+            ui.find("Notifications").is_ok(),
+            "no editor in {:?}",
+            state.view
+        );
+    }
+}
+
 #[test]
 fn new_habit_uses_the_shared_right_pane_and_width_setting() {
     use timeslay::{app::Screen, habits};
     let mut state = state();
     state.screen = Screen::Habits;
-    state.weekly = true; // Calendar range preferences must not affect this tab.
     let original = state.main_size;
     let task = app::update(&mut state, Message::Habits(habits::Action::New));
     let _ = actions(task);
@@ -367,13 +472,19 @@ fn new_habit_uses_the_shared_right_pane_and_width_setting() {
             .all(|event| event.id != habits::NEW_HABIT_ID)
     );
     assert_resize(
-        app::update(&mut state, Message::DetailWidthChanged(280.0)),
+        app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::DetailWidthChanged(280.0)),
+        ),
         Size::new(
             280.0,
             original.height - timeslay::ui::editor_window_top(&state),
         ),
     );
-    let _ = actions(app::update(&mut state, Message::EventClosed));
+    let _ = actions(app::update(
+        &mut state,
+        Message::Event(EventMessage::EventClosed),
+    ));
     assert!(state.editor_window.is_none());
     assert!(state.calendar.detail_event.is_none());
     assert!(state.calendar.edit_draft.is_none());
@@ -418,9 +529,15 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
     loaded.id = event.id.clone();
     let _ = app::update(
         &mut state,
-        Message::HabitDetailsLoaded("off-day-master".into(), Ok((event, loaded))),
+        Message::Event(EventMessage::HabitDetailsLoaded(
+            "off-day-master".into(),
+            Ok((event, loaded)),
+        )),
     );
-    let _ = app::update(&mut state, Message::EventEditStartChanged("10:00".into()));
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditStartChanged("10:00".into())),
+    );
     let draft = state.calendar.edit_draft.as_ref().unwrap();
     assert_eq!(draft.start_text, "10:00");
     assert_eq!(draft.end_text, "10:30");
@@ -442,9 +559,15 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
     let mut state = state();
     state.screen = Screen::Habits;
     let _ = app::update(&mut state, Message::Habits(habits::Action::New));
-    let _ = app::update(&mut state, Message::EventEditSaveRequested);
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditSaveRequested),
+    );
     assert_eq!(state.calendar.error.as_deref(), Some("Enter a title"));
-    let _ = app::update(&mut state, Message::EventEditTitleChanged("Stretch".into()));
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditTitleChanged("Stretch".into())),
+    );
     let _ = app::update(
         &mut state,
         Message::Habits(habits::Action::Saved(Err("Offline".into()))),
@@ -479,7 +602,10 @@ fn floating_editor_matches_panel_height_with_screen_margins() {
             state.sidebar = Some(app::Sidebar { width: 200.0, side });
             state.config.views.margin = margin;
             state.main_size = Size::new(200.0 + margin * 2.0, 900.0);
-            let task = app::update(&mut state, Message::EventOpened("all-day".into()));
+            let task = app::update(
+                &mut state,
+                Message::Event(EventMessage::EventOpened("all-day".into())),
+            );
             iced::futures::executor::block_on(async {
                 let mut stream = runtime::task::into_stream(task).unwrap();
                 let mut opened = false;
@@ -505,7 +631,10 @@ fn saved_habit_edits_refresh_both_the_habits_list_and_calendar() {
     let mut draft = calendar::EditDraft::from_event(&event);
     draft.saving = true;
     state.calendar.edit_draft = Some(draft);
-    let task = app::update(&mut state, Message::EventEditSaved(Ok(())));
+    let task = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditSaved(Ok(()))),
+    );
     let messages = iced::futures::executor::block_on(async {
         let mut messages = Vec::new();
         let mut stream = runtime::task::into_stream(task).unwrap();
@@ -521,10 +650,9 @@ fn saved_habit_edits_refresh_both_the_habits_list_and_calendar() {
             .iter()
             .any(|message| matches!(message, Message::Habits(timeslay::habits::Action::Refresh)))
     );
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, Message::CalendarSyncRequested))
-    );
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Message::Calendar(CalendarMessage::CalendarSyncRequested)
+    )));
     assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
 }

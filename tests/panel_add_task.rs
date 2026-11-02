@@ -1,15 +1,13 @@
 use iced::{Size, widget::Id};
 use iced_test::{Simulator, core::Settings};
+use timeslay::app::{EventMessage, SystemMessage};
 use timeslay::{
     app::{self, Message, Sidebar, State},
-    calendar,
-    config::Config,
-    inbox, panel,
-    theme::Catalog,
+    calendar, inbox, panel,
 };
 
 fn state(side: panel::Side, width: f32) -> State {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.sidebar = Some(Sidebar { width, side });
     state.main_window = Some(iced::window::Id::unique());
     state.main_size = Size::new(width + state.screen_margin_width(), 700.0);
@@ -34,7 +32,10 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
 
             // Task details, the block editor, then details beside the editor.
             for event in ["all-day", "standup", "lunch"] {
-                let _ = app::update(&mut state, Message::EventOpened(event.into()));
+                let _ = app::update(
+                    &mut state,
+                    Message::Event(EventMessage::EventOpened(event.into())),
+                );
                 let mut ui = Simulator::with_size(
                     Settings::default(),
                     state.main_size,
@@ -93,7 +94,7 @@ fn panel_plus_opens_the_inbox_task_form() {
 
 #[test]
 fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.task_creation_window = true;
     let _ = app::update(&mut state, Message::Inbox(inbox::Action::NewTask));
     for width in [240.0, 480.0] {
@@ -136,7 +137,7 @@ fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
 
 #[test]
 fn dock_task_card_bottom_matches_the_dock_surface_at_short_and_tall_heights() {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.task_creation_window = true;
     let _ = app::update(&mut state, Message::Inbox(inbox::Action::NewTask));
     for height in [700.0, 1600.0] {
@@ -155,7 +156,7 @@ fn dock_task_card_bottom_matches_the_dock_surface_at_short_and_tall_heights() {
 
 #[test]
 fn dock_map_input_region_covers_the_surface_and_returns_to_the_task_card() {
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    let mut state = State::blank();
     state.task_creation_window = true;
     let _ = app::update(&mut state, Message::Inbox(inbox::Action::NewTask));
     for height in [700.0, 1600.0] {
@@ -176,7 +177,7 @@ fn dock_map_input_region_covers_the_surface_and_returns_to_the_task_card() {
             ))]);
             assert!(
                 ui.into_messages().any(|message| matches!(
-                    message, Message::TaskPopoverBounds(bounds) if bounds == expected
+                    message, Message::System(SystemMessage::TaskPopoverBounds(bounds)) if bounds == expected
                 )),
                 "missing input bounds {expected:?} (map open: {map_open})"
             );

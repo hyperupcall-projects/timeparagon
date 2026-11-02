@@ -179,10 +179,10 @@ fn sweep_stale(root: &std::path::Path) {
             continue;
         };
         if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-            if let Ok(connection) = connection() {
-                if let Ok(proxy) = proxy(&connection) {
-                    let _ = proxy.call::<_, _, ()>("unloadEffect", &(name(pid).as_str(),));
-                }
+            if let Ok(connection) = connection()
+                && let Ok(proxy) = proxy(&connection)
+            {
+                let _ = proxy.call::<_, _, ()>("unloadEffect", &(name(pid).as_str(),));
             }
             let _ = std::fs::remove_dir_all(entry.path());
         }

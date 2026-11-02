@@ -21,14 +21,20 @@ fn old_configs_keep_overlays_and_reservations_round_trip_independently() {
 
 #[test]
 fn radii_and_reservation_shortcut_are_independent_and_persist() {
+    use timeslay::app::SettingsMessage;
     use timeslay::{
         app::{self, Message, State},
         panel::Action,
-        theme::Catalog,
     };
-    let mut state = State::new(Config::default(), Catalog::built_in());
-    let _ = app::update(&mut state, Message::DockBorderRadiusChanged(12.0));
-    let _ = app::update(&mut state, Message::PanelBorderRadiusChanged(7.0));
+    let mut state = State::blank();
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::DockBorderRadiusChanged(12.0)),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::PanelBorderRadiusChanged(7.0)),
+    );
     state
         .config
         .panel
@@ -47,16 +53,17 @@ fn radii_and_reservation_shortcut_are_independent_and_persist() {
 
 #[test]
 fn shortcut_command_toggles_only_panel_reservation() {
-    use timeslay::{
-        app::{self, Message, PanelCommand, State},
-        theme::Catalog,
-    };
-    let mut state = State::new(Config::default(), Catalog::built_in());
+    use timeslay::app::SystemMessage;
+    use timeslay::app::{self, Message, PanelCommand, State};
+    let mut state = State::blank();
     let (tx, rx) = std::sync::mpsc::channel();
     state.panel_command_rx = Some(rx);
     for enabled in [true, false] {
         tx.send(PanelCommand::ToggleReservation).unwrap();
-        let _ = app::update(&mut state, Message::PanelCommandPolled);
+        let _ = app::update(
+            &mut state,
+            Message::System(SystemMessage::PanelCommandPolled),
+        );
         assert_eq!(state.config.views.panel_reserve_space, enabled);
         assert!(!state.config.views.dock_reserve_space);
     }
