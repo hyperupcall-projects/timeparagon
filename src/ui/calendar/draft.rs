@@ -155,22 +155,26 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
             .size(metrics.label() + 2.0)
             .width(Fill);
         let kind_button = |label: &'static str, kind: calendar::DraftKind| {
-            let selected = draft.kind == kind;
             button(text(label).size(metrics.label()).center())
                 .width(Fill)
                 .on_press(Message::EventDraft(
                     EventDraftMessage::EventDraftKindSelected(kind),
                 ))
-                .style(if selected {
-                    crate::ui::controls::primary
-                } else {
-                    crate::ui::controls::secondary
-                })
+                .style(crate::ui::controls::secondary)
         };
-        let kinds: Element<'a, Message> = row![
-            kind_button("Event", calendar::DraftKind::Event),
-            kind_button("Time Block", calendar::DraftKind::TimeBlock),
-            kind_button("Habit", calendar::DraftKind::Habit),
+        let kinds: Element<'a, Message> = column![
+            row![
+                kind_button("Event", calendar::DraftKind::Event),
+                kind_button("Time Block", calendar::DraftKind::TimeBlock),
+            ]
+            .spacing(6.0)
+            .width(Fill),
+            row![
+                kind_button("Task", calendar::DraftKind::Task),
+                kind_button("Habit", calendar::DraftKind::Habit),
+            ]
+            .spacing(6.0)
+            .width(Fill),
         ]
         .spacing(6.0)
         .width(Fill)
@@ -186,7 +190,7 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
         .on_press(Message::Ignored);
 
         let width = 340.0_f32.min((size.width - 16.0).max(1.0));
-        let height = (metrics.label() * 2.0 + 64.0).min(size.height);
+        let height = (metrics.label() * 3.0 + 84.0).min(size.height);
         let anchor = CREATE_ANCHOR.with(|a| a.get());
         let root = ROOT_BOUNDS.with(|r| r.get());
         let anchor = Rectangle {

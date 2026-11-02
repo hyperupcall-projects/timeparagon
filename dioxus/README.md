@@ -149,7 +149,7 @@ current time (or 8am on another day), and the time-block popup becomes a bottom 
 ## What the day view shows
 
 - **All-day events** from every visible calendar, in the left rail.
-- **Every Google Task for the day**, grouped by task list. Completed and
+- **Every Google Task for the day** on a visible list, grouped by task list. Completed and
   ignored tasks stay visible with their status, estimate, and a link to the
   time block they belong to.
 - **The timed grid** with calendar events and time blocks, using the same
@@ -168,6 +168,9 @@ by a task's metadata is still recognized even if the id changes.
 
 - Only the Dioxus crate enables the desktop/mobile renderers; the root
   workspace defaults to the iced package (`default-members = ["."]`).
-- The day view has no settings screen. On Android it only asks for the Google
-  client ID and secret. Configure the task lists and visible calendars in the
-  iced application; this crate reloads the same config at startup.
+- The **☰** button opens the Calendars sheet, which switches Google calendars,
+  task lists and TimeSlay event kinds on or off. It saves to the shared
+  `[calendar]` settings, so the choice syncs to your other devices through
+  Google Drive. Tasks inside a time block's popup stay visible.
+- The ⚙ button only edits the Google client ID and secret. Other settings live
+  in the iced application; this crate reloads the same config when it changes.

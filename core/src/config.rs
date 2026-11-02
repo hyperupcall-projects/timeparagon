@@ -378,6 +378,35 @@ fn save_google_client_at(
     client_id: &str,
     client_secret: &str,
 ) -> io::Result<()> {
+    edit_calendar_table(path, |calendar| {
+        calendar.insert("client_id".into(), client_id.trim().into());
+        calendar.insert("client_secret".into(), client_secret.trim().into());
+    })
+}
+
+/// Saves which sources are switched off, leaving the rest of the file alone.
+pub fn save_calendar_visibility(settings: &CalendarSettings) -> io::Result<()> {
+    let path = config_path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
+    save_calendar_visibility_at(&path, settings)
+}
+
+fn save_calendar_visibility_at(
+    path: &std::path::Path,
+    settings: &CalendarSettings,
+) -> io::Result<()> {
+    edit_calendar_table(path, |calendar| {
+        calendar.insert("disabled".into(), settings.disabled.clone().into());
+        calendar.insert("show_tasks".into(), settings.show_tasks.into());
+    })
+}
+
+/// Rewrites only the given keys of `[calendar]`. The Dioxus app's [`Config`] is
+/// a subset of the file, so saving that struct would drop the desktop settings.
+fn edit_calendar_table(
+    path: &std::path::Path,
+    edit: impl FnOnce(&mut toml::Table),
+) -> io::Result<()> {
     crate::fsutil::locked(path, || {
         let mut document = match fs::read_to_string(path) {
             Ok(text) => toml::from_str::<toml::Table>(&text)
@@ -392,8 +421,7 @@ fn save_google_client_at(
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "[calendar] is not a table")
             })?;
-        calendar.insert("client_id".into(), client_id.trim().into());
-        calendar.insert("client_secret".into(), client_secret.trim().into());
+        edit(calendar);
 
         let text = toml::to_string_pretty(&document)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -464,6 +492,38 @@ mod tests {
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_visibility_keeps_other_settings_and_refuses_a_broken_file() {
+        let dir = std::env::temp_dir().join(format!("tt-visibility-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "[window]\nwidth = 900\n\n[calendar]\nclient_id = \"id\"\ndisabled = [\"old\"]\n",
+        )
+        .unwrap();
+
+        let settings = CalendarSettings {
+            disabled: vec!["work".into(), "timeslay:habits".into()],
+            show_tasks: false,
+            ..CalendarSettings::default()
+        };
+        save_calendar_visibility_at(&path, &settings).unwrap();
+
+        let saved: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.calendar.disabled, settings.disabled);
+        assert!(!saved.calendar.show_tasks);
+        assert_eq!(saved.calendar.client_id, "id");
+        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(table["window"]["width"].as_integer(), Some(900));
+
+        fs::write(&path, "not [ toml").unwrap();
+        assert!(save_calendar_visibility_at(&path, &settings).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not [ toml");
         let _ = fs::remove_dir_all(&dir);
     }
 }

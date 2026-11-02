@@ -59,12 +59,7 @@ pub(super) fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> V
     crate::travel::day_hops(state, day)
         .into_iter()
         .filter_map(|hop| {
-            let (event, below) = match (&hop.before, &hop.after) {
-                (Some(id), _) => (id, false),
-                (None, Some(id)) => (id, true),
-                (None, None) => return None,
-            };
-            let block = blocks.iter().find(|block| &block.id == event)?;
+            let block = blocks.iter().find(|block| block.id == hop.before)?;
             let minutes = match crate::travel::summary(state, hop.leg) {
                 crate::travel::Summary::Ready(route) => route.seconds.div_ceil(60),
                 _ => 0,
@@ -74,12 +69,8 @@ pub(super) fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> V
                 leg: hop.leg,
                 label: crate::travel::short_label(state, hop.leg),
                 between: (hop.from_title, hop.to_title),
-                anchor_min: if below {
-                    block.end_min
-                } else {
-                    block.start_min
-                },
-                below,
+                anchor_min: block.start_min,
+                below: false,
                 minutes,
                 column: block.column,
                 columns: block.columns,
@@ -112,9 +103,9 @@ pub(super) struct DayCanvas {
     /// Whether empty grid space draws out a new event. False while a card is
     /// open, so a click there still dismisses it.
     pub(super) can_create: bool,
-    /// The color the new-event preview is drawn in, taken from the calendar the
-    /// event will land on.
-    pub(super) create_color: Color,
+    /// The span, in minutes into this day, selected by the open new-event
+    /// draft. It stays highlighted after the pointer is released.
+    pub(super) selection: Option<(i32, i32)>,
     pub(super) external_drag: bool,
     /// The task currently being dragged by an external row, so its own row on
     /// the grid can be left out while it is in the air.
@@ -644,7 +635,10 @@ impl canvas::Program<Message> for DayCanvas {
                 self.draw_alarm_cursor(&mut overlay, point);
             }
         } else if let Some(create) = state.create() {
-            self.draw_create(&mut overlay, &create);
+            let (start, end) = self.create_range(&create);
+            self.draw_create(&mut overlay, theme, start, end);
+        } else if let Some((start, end)) = self.selection {
+            self.draw_create(&mut overlay, theme, start, end);
         } else if let Some(drag) = drag {
             self.draw_drag(&mut overlay, &drag);
         } else if cursor
@@ -1281,8 +1275,7 @@ impl DayCanvas {
 
     /// Draws the new-event preview: a translucent block in the target
     /// calendar's color, labelled with the span being drawn.
-    pub(super) fn draw_create(&self, frame: &mut Frame, create: &CreateDrag) {
-        let (start, end) = self.create_range(create);
+    pub(super) fn draw_create(&self, frame: &mut Frame, theme: &Theme, start: i32, end: i32) {
         let minute_height = self.hour_height / 60.0;
         let grid_width = (frame.width() - self.gutter).max(40.0);
         let bounds = Rectangle {
@@ -1297,18 +1290,29 @@ impl DayCanvas {
             EVENT_RADIUS.into(),
         );
 
-        let fill = self.create_color.scale_alpha(0.75);
+        let palette = theme.extended_palette();
+        let (fill, outline) = if palette.is_dark {
+            (
+                Color::WHITE.scale_alpha(0.14),
+                Color::WHITE.scale_alpha(0.35),
+            )
+        } else {
+            (
+                Color::from_rgb8(0xEE, 0xEE, 0xF0),
+                Color::BLACK.scale_alpha(0.22),
+            )
+        };
         frame.fill(&shape, fill);
         frame.stroke(
             &shape,
             Stroke {
-                style: Style::Solid(Color::BLACK.scale_alpha(0.55)),
+                style: Style::Solid(outline),
                 width: 1.0,
                 ..Stroke::default()
             },
         );
 
-        let ink = on_color(fill);
+        let ink = palette.background.base.text;
         let title_size = if self.compact { 11.0 } else { 12.0 };
         let text_width = (bounds.width - BLOCK_PADDING - BLOCK_PADDING_RIGHT).max(8.0);
         let label = format!("{} – {}", self.clock_label(start), self.clock_label(end));

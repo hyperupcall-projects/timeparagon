@@ -145,6 +145,8 @@ fn App() -> Element {
     let mut settings_id = use_signal(String::new);
     let mut settings_secret = use_signal(String::new);
     let mut settings_error = use_signal(|| None::<String>);
+    let mut show_calendars = use_signal(|| false);
+    let mut calendars_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
         let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
@@ -351,6 +353,16 @@ fn App() -> Element {
                     onclick: cycle_theme,
                     span { class: "theme-icon", "{theme().icon()}" }
                     span { class: "theme-label", "{theme().label()}" }
+                }
+                button {
+                    class: "btn icon",
+                    title: "Calendars",
+                    aria_label: "Calendars",
+                    onclick: move |_| {
+                        calendars_error.set(None);
+                        show_calendars.set(true);
+                    },
+                    "☰"
                 }
                 button {
                     class: "btn icon",
@@ -659,6 +671,96 @@ fn App() -> Element {
         }
     });
 
+    let calendars_modal = show_calendars().then(|| {
+        let store = cached_days.read();
+        let sections = day::source_sections(&store.display_sources(&settings), &settings);
+        let no_calendars = store.calendars.is_empty();
+        drop(store);
+        let error = calendars_error().map(|message| {
+            rsx! { p { class: "error-text", "{message}" } }
+        });
+        let sections = sections
+            .into_iter()
+            .filter(|(_, rows)| !rows.is_empty())
+            .map(|(heading, rows)| {
+                let rows = rows.into_iter().map(|row| {
+                    let swatch = format!("background:{};", css_color(row.color));
+                    let enabled = row.enabled;
+                    let id = row.id.clone();
+                    rsx! {
+                        button {
+                            key: "{row.id}",
+                            class: "source-row",
+                            role: "switch",
+                            aria_checked: enabled.to_string(),
+                            onclick: move |_| {
+                                let calendars = cached_days.peek().calendars.clone();
+                                match day::set_source_enabled(&calendars, &id, !enabled) {
+                                    Ok(saved) => {
+                                        config.set(saved);
+                                        calendars_error.set(None);
+                                    }
+                                    Err(error) => calendars_error.set(Some(error)),
+                                }
+                            },
+                            span { class: "source-swatch", style: "{swatch}" }
+                            span { class: "source-name", "{row.name}" }
+                            span { class: "source-switch", span { class: "source-knob" } }
+                        }
+                    }
+                });
+                rsx! {
+                    section { key: "{heading}", class: "source-section",
+                        h3 { class: "source-heading", "{heading}" }
+                        {rows}
+                    }
+                }
+            });
+        rsx! {
+            div {
+                class: "modal-backdrop",
+                onclick: move |_| show_calendars.set(false),
+                div {
+                    class: "modal",
+                    role: "dialog",
+                    aria_label: "Calendars",
+                    onclick: move |event| event.stop_propagation(),
+                    div { class: "modal-head",
+                        h2 { class: "modal-title", "Calendars" }
+                        div { class: "spacer" }
+                        button {
+                            class: "modal-close",
+                            title: "Close",
+                            onclick: move |_| show_calendars.set(false),
+                            "×"
+                        }
+                    }
+                    div { class: "modal-body",
+                        {error}
+                        {sections}
+                        if no_calendars {
+                            p { class: "empty-note",
+                                if signed_in() {
+                                    "No calendars yet. Sync to load them."
+                                } else {
+                                    "Connect Google to load your calendars."
+                                }
+                            }
+                        }
+                    }
+                    div { class: "source-actions",
+                        button {
+                            class: "btn primary source-sync",
+                            disabled: pending || !signed_in(),
+                            onclick: move |_| revision.set(revision() + 1),
+                            if pending { "Syncing…" } else { "Sync now" }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     rsx! {
         document::Title { "TimeSlay · Day" }
         document::Style { {CSS} }
@@ -669,6 +771,7 @@ fn App() -> Element {
             {body}
             {modal}
             {settings_modal}
+            {calendars_modal}
         }
     }
 }
@@ -764,7 +867,7 @@ fn sidebar(model: &DayModel, open_block: Signal<Option<String>>) -> Element {
                     }
                     if model.tasks_hidden {
                         p { class: "empty-note",
-                            "Google Tasks are hidden in the calendar settings. Tasks inside time blocks still appear when you open a block."
+                            "Google Tasks are hidden in Calendars. Tasks inside time blocks still appear when you open a block."
                         }
                     } else if groups_empty {
                         p { class: "empty-note", "No Google Tasks for this day." }

@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
 use timeslay_core::calendar::layout::{self, Span};
+use timeslay_core::calendar::sources::TimeSlaySource;
 use timeslay_core::calendar::{self, Event, Snapshot};
 use timeslay_core::config::{CalendarSettings, Config};
 use timeslay_core::timeblocking as tb;
@@ -127,6 +128,20 @@ pub fn save_google_client(client_id: &str, client_secret: &str) -> Result<Config
     Ok(load_config())
 }
 
+/// Switches one source on or off and returns the config as it now reads. This
+/// starts from the file, so it cannot undo a change that just arrived from Drive.
+pub fn set_source_enabled(
+    calendars: &[calendar::Calendar],
+    id: &str,
+    enabled: bool,
+) -> Result<Config, String> {
+    let mut config = load_config();
+    calendar::set_source_enabled(&mut config.calendar, calendars, id, enabled);
+    timeslay_core::config::save_calendar_visibility(&config.calendar)
+        .map_err(|error| format!("Could not save the calendar settings: {error}"))?;
+    Ok(config)
+}
+
 /// Opens the browser sign-in flow and stores the returned token.
 ///
 /// Blocking: this waits for Google's localhost redirect.
@@ -216,6 +231,53 @@ pub struct BlockRef {
     pub title: String,
     pub time: String,
     pub start_min: i32,
+}
+
+/// One switch in the calendars sheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceRow {
+    pub id: String,
+    pub name: String,
+    pub color: timeslay_core::Color,
+    pub enabled: bool,
+}
+
+/// The calendars sheet, grouped like the iced app's calendars menu. `sources`
+/// comes from `Store::display_sources`.
+pub fn source_sections(
+    sources: &[calendar::Calendar],
+    settings: &CalendarSettings,
+) -> Vec<(&'static str, Vec<SourceRow>)> {
+    let google = |is_tasks: bool| {
+        sources
+            .iter()
+            .filter(|source| {
+                source.id != calendar::sleep::SOURCE_ID
+                    && source.is_task_list() == is_tasks
+                    && !source.is_app_calendar(settings)
+            })
+            .map(|source| SourceRow {
+                id: source.id.clone(),
+                name: source.name.clone(),
+                color: source.color,
+                enabled: calendar::calendar_enabled(&source.id, settings),
+            })
+            .collect()
+    };
+    let time_slay = TimeSlaySource::ALL
+        .into_iter()
+        .map(|source| SourceRow {
+            id: source.id().to_owned(),
+            name: source.label().to_owned(),
+            color: source.color(settings),
+            enabled: calendar::calendar_enabled(source.id(), settings),
+        })
+        .collect();
+    vec![
+        ("Google Calendars", google(false)),
+        ("Google Task Lists", google(true)),
+        ("TimeSlay", time_slay),
+    ]
 }
 
 pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel {
@@ -529,10 +591,10 @@ fn task_groups(
     let mut groups: Vec<TaskGroup> = Vec::new();
 
     for event in events.iter().filter(|event| event.is_task()) {
-        // The task rail is the complete view of Google Tasks for the day, so
-        // it follows the single Tasks toggle rather than the visibility of the
+        // The task rail is the complete view of the day's shown task lists, so
+        // it follows each list's toggle rather than the visibility of the
         // calendars a task happens to be scheduled on.
-        if !settings.show_tasks {
+        if !calendar::calendar_enabled(&event.calendar_id, settings) {
             continue;
         }
         let group_index = match groups
@@ -883,6 +945,71 @@ mod tests {
         assert!(model.task_groups.is_empty());
         assert_eq!(model.blocks[0].tasks.len(), 1);
         assert_eq!(model.blocks[0].tasks[0].event.title, "Write");
+    }
+
+    #[test]
+    fn hiding_a_task_list_removes_only_that_list_from_the_rail() {
+        let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        let assigned = task("a", "Write", Some("blocks/b1"), 1, 45, false);
+        let list = assigned.calendar_id.clone();
+        let mut other = task("b", "Call", None, 2, 10, false);
+        other.calendar_id = "tasks:home".into();
+        let snapshot = snapshot(vec![block, assigned, other]);
+        let mut settings = settings();
+        settings.disabled.push(list);
+        let model = build_model(&snapshot, &settings);
+
+        assert!(!model.tasks_hidden);
+        assert_eq!(model.task_groups.len(), 1);
+        assert_eq!(model.task_groups[0].list_id, "tasks:home");
+        assert_eq!(model.blocks[0].tasks.len(), 1);
+    }
+
+    #[test]
+    fn hiding_a_time_slay_kind_leaves_the_calendar_alone() {
+        let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        let meeting = event("m1", "work", "Standup", at(12, 0), at(12, 30));
+        let snapshot = snapshot(vec![block, meeting]);
+        let mut settings = settings();
+        settings
+            .disabled
+            .push(TimeSlaySource::TimeBlocks.id().into());
+        let model = build_model(&snapshot, &settings);
+
+        assert!(model.blocks.is_empty());
+        assert_eq!(model.timed.len(), 1);
+        assert_eq!(model.timed[0].event.title, "Standup");
+    }
+
+    #[test]
+    fn source_sections_match_the_calendars_menu() {
+        let sources = vec![
+            calendar("work", "Work"),
+            calendar("blocks", "Focus"),
+            calendar("tasks:home", "Home"),
+            calendar(calendar::sleep::SOURCE_ID, "Sleep"),
+        ];
+        let mut settings = settings();
+        settings.disabled.push("work".into());
+        settings.disabled.push(TimeSlaySource::Habits.id().into());
+        let sections = source_sections(&sources, &settings);
+
+        let names = |rows: &[SourceRow]| -> Vec<String> {
+            rows.iter().map(|row| row.name.clone()).collect()
+        };
+        assert_eq!(sections[0].0, "Google Calendars");
+        assert_eq!(names(&sections[0].1), ["Work"]);
+        assert!(!sections[0].1[0].enabled);
+        assert_eq!(sections[1].0, "Google Task Lists");
+        assert_eq!(names(&sections[1].1), ["Home"]);
+        assert!(sections[1].1[0].enabled);
+        assert_eq!(sections[2].0, "TimeSlay");
+        assert_eq!(
+            names(&sections[2].1),
+            ["Events", "Tasks", "Time Blocks", "Habits", "Sleep"]
+        );
+        assert!(!sections[2].1[3].enabled);
+        assert!(sections[2].1[4].enabled);
     }
 
     #[test]

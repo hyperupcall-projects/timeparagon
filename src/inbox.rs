@@ -856,6 +856,33 @@ pub fn today() -> NaiveDate {
     crate::clock::now().date_naive()
 }
 
+/// Opens the new-task popup already planned for `start` to `end`, as when a
+/// range is chosen on the calendar.
+pub(crate) fn new_task_at(
+    state: &mut State,
+    title: String,
+    start: chrono::DateTime<Local>,
+    end: chrono::DateTime<Local>,
+) -> Task<Message> {
+    let focus = update(state, Action::NewTask);
+    let Some(draft) = state.inbox.draft.as_mut() else {
+        return focus;
+    };
+    let day = start.date_naive().to_string();
+    draft.set_title(title);
+    draft.due = day.clone();
+    state.timeblocking.date = day;
+    state.timeblocking.start_time = start.format("%H:%M").to_string();
+    state.timeblocking.end_time = end.format("%H:%M").to_string();
+    state.timeblocking.editing_due_time = false;
+    if let Some(event) = draft.event.as_mut() {
+        event.start = start;
+        event.end = end;
+        event.all_day = false;
+    }
+    focus
+}
+
 /// Apply a fully validated voice patch as a new quick-add baseline.
 pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
     let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {

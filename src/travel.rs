@@ -5,12 +5,10 @@
 //! address whatever they are renamed to. A task points at a place by id; a
 //! calendar event is matched to a place by its location text.
 //!
-//! Travel is only worked out between events that follow one another: with
-//! events A, B and C in a day, that is A to B and B to C, never A to C. The
-//! day's first event is reached from Home, and the day's
-//! last event is left for Home. How long a trip takes comes
-//! from the Mapbox Directions API, and is kept on disk so that it is only asked
-//! for once.
+//! Every event with a place is a trip's destination. The trip starts at the
+//! place of the nearest earlier event that has one, or at Home when there is
+//! none. How long a trip takes comes from the Mapbox Directions API, and is
+//! kept on disk so that it is only asked for once.
 
 pub mod map;
 
@@ -34,9 +32,8 @@ const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
 /// The most places a search offers.
 const MAX_RESULTS: u32 = 8;
 
-/// What the Travel tab calls the start and end of the day.
+/// What the Travel tab calls the trip's start when it is Home.
 pub const START_OF_DAY: &str = "Start of day";
-pub const END_OF_DAY: &str = "End of day";
 
 /// A place Mapbox found, before it is saved.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,11 +109,8 @@ pub struct Open {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hop {
     pub leg: Leg,
-    /// The event the trip comes before, which is where its box is drawn.
-    /// `None` for the trip home, which follows the last event.
-    pub before: Option<String>,
-    /// The event the trip follows, for the trip home.
-    pub after: Option<String>,
+    /// The event the trip leads to, which is where its box is drawn.
+    pub before: String,
     pub from_title: String,
     pub to_title: String,
 }
@@ -644,62 +638,28 @@ fn normalize(text: &str) -> String {
 
 /// The trips a day needs, in order, given its events in the order they happen.
 ///
-/// Only events that follow one another are joined, and only when both have a
-/// place and the places differ. The first event is reached from Home
-/// and the last one is left for Home.
+/// Every event with a place is a destination. Its trip starts at the place of
+/// the nearest earlier event that has one, or at Home when there is none. No
+/// trip is needed when the two places are the same.
 pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
+    let home = travel.home.filter(|id| travel.place(*id).is_some());
     let mut found = Vec::new();
-    let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
-        return found;
-    };
+    let mut previous: Option<(u64, &str)> = None;
 
-    if let (Some(start), Some(place)) = (
-        travel.home.filter(|id| travel.place(*id).is_some()),
-        first.place,
-    ) && start != place
-    {
-        found.push(Hop {
-            leg: Leg {
-                from: start,
-                to: place,
-            },
-            before: Some(first.id.clone()),
-            after: None,
-            from_title: START_OF_DAY.to_owned(),
-            to_title: first.title.clone(),
-        });
-    }
-
-    for pair in stops.windows(2) {
-        let [from, to] = pair else { continue };
-        if let (Some(a), Some(b)) = (from.place, to.place)
-            && a != b
+    for stop in stops {
+        let Some(place) = stop.place else { continue };
+        let source = previous.or(home.map(|id| (id, START_OF_DAY)));
+        if let Some((from, from_title)) = source
+            && from != place
         {
             found.push(Hop {
-                leg: Leg { from: a, to: b },
-                before: Some(to.id.clone()),
-                after: None,
-                from_title: from.title.clone(),
-                to_title: to.title.clone(),
+                leg: Leg { from, to: place },
+                before: stop.id.clone(),
+                from_title: from_title.to_owned(),
+                to_title: stop.title.clone(),
             });
         }
-    }
-
-    if let (Some(place), Some(end)) = (
-        last.place,
-        travel.home.filter(|id| travel.place(*id).is_some()),
-    ) && place != end
-    {
-        found.push(Hop {
-            leg: Leg {
-                from: place,
-                to: end,
-            },
-            before: None,
-            after: Some(last.id.clone()),
-            from_title: last.title.clone(),
-            to_title: END_OF_DAY.to_owned(),
-        });
+        previous = Some((place, &stop.title));
     }
 
     found
@@ -1078,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn only_events_that_follow_each_other_are_joined() {
+    fn each_event_is_reached_from_the_one_before_it() {
         let mut travel = TravelSettings::default();
         let a = place(&mut travel, "A", "g-a");
         let b = place(&mut travel, "B", "g-b");
@@ -1095,12 +1055,12 @@ mod tests {
             [Leg { from: a, to: b }, Leg { from: b, to: c }],
             "A to B and B to C, never A to C"
         );
-        assert_eq!(found[0].before.as_deref(), Some("b"));
-        assert_eq!(found[1].before.as_deref(), Some("c"));
+        assert_eq!(found[0].before, "b");
+        assert_eq!(found[1].before, "c");
     }
 
     #[test]
-    fn staying_put_and_not_knowing_where_make_no_trip() {
+    fn staying_put_and_not_knowing_where_make_no_trip_to_that_event() {
         let mut travel = TravelSettings::default();
         let a = place(&mut travel, "A", "g-a");
         let b = place(&mut travel, "B", "g-b");
@@ -1108,17 +1068,20 @@ mod tests {
         let same = hops(&travel, &[stop("1", Some(a)), stop("2", Some(a))]);
         assert!(same.is_empty());
 
-        // The event in the middle has no place, so neither side of it is a trip,
-        // and the two either side are not joined across it.
+        // The event in the middle has no place, so it has no trip, and the
+        // last is reached from the nearest earlier event that has one.
         let gap = hops(
             &travel,
             &[stop("1", Some(a)), stop("2", None), stop("3", Some(b))],
         );
-        assert!(gap.is_empty());
+        assert_eq!(gap.len(), 1);
+        assert_eq!(gap[0].leg, Leg { from: a, to: b });
+        assert_eq!(gap[0].before, "3");
+        assert_eq!(gap[0].from_title, "1");
     }
 
     #[test]
-    fn the_day_starts_and_ends_at_the_default_places() {
+    fn the_first_event_is_reached_from_home() {
         let mut travel = TravelSettings::default();
         let home = place(&mut travel, "Home", "g-home");
         let work = place(&mut travel, "Work", "g-work");
@@ -1127,7 +1090,7 @@ mod tests {
 
         let found = hops(&travel, &[stop("w", Some(work)), stop("g", Some(gym))]);
 
-        assert_eq!(found.len(), 3);
+        assert_eq!(found.len(), 2);
         assert_eq!(
             found[0].leg,
             Leg {
@@ -1135,7 +1098,7 @@ mod tests {
                 to: work
             }
         );
-        assert_eq!(found[0].before.as_deref(), Some("w"));
+        assert_eq!(found[0].before, "w");
         assert_eq!(found[0].from_title, START_OF_DAY);
         assert_eq!(
             found[1].leg,
@@ -1144,18 +1107,13 @@ mod tests {
                 to: gym
             }
         );
-        assert_eq!(
-            found[2].leg,
-            Leg {
-                from: gym,
-                to: home
-            }
-        );
-        assert_eq!(found[2].before, None);
-        assert_eq!(found[2].after.as_deref(), Some("g"));
-        assert_eq!(found[2].to_title, END_OF_DAY);
 
-        // An event at home needs no trip to or from it.
+        // Home is the source for an event with a place when nothing earlier has one.
+        let later = hops(&travel, &[stop("x", None), stop("w", Some(work))]);
+        assert_eq!(later.len(), 1);
+        assert_eq!(later[0].leg.from, home);
+
+        // An event at home needs no trip, and no events need none.
         assert!(hops(&travel, &[stop("h", Some(home))]).is_empty());
         assert!(hops(&travel, &[]).is_empty());
     }
