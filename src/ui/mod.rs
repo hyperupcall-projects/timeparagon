@@ -61,7 +61,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
                     .align_y(Alignment::Center);
             if state.weekly() && !state.monthly() {
                 view_header = view_header.push(
-                    iced::widget::toggler(state.config.calendar.weekly_task_list)
+                    crate::ui::controls::toggler(state.config.calendar.weekly_task_list)
                         .label("Show task list")
                         .text_size(metrics.label())
                         .on_toggle(|v0| {
@@ -643,6 +643,23 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 controls::secondary
             })
     };
+    // The whole navigation is one card pinned to the top of the window.
+    let bar_card = |content: Element<'a, Message>| -> Element<'a, Message> {
+        container(content)
+            .padding(Padding {
+                bottom: TAB_TOP_MARGIN,
+                ..Padding::ZERO
+            })
+            .width(Fill)
+            .style(|theme: &iced::Theme| container::Style {
+                border: iced::Border {
+                    radius: 0.0.into(),
+                    ..controls::card_surface(theme).border
+                },
+                ..controls::card_surface(theme)
+            })
+            .into()
+    };
     let week_active = state.range_view_active() && state.weekly();
     let month_active = state.range_view_active() && state.monthly();
     let overviews = container(
@@ -681,7 +698,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     .width(Fill);
     let navigation = column![overviews, bar].width(Fill);
     if !tasks_open {
-        return navigation.into();
+        return bar_card(navigation.into());
     }
 
     let subtabs = row(TASKS_LABELS
@@ -698,17 +715,19 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         }))
     .spacing(fit.gap);
 
-    column![
-        navigation,
-        container(subtabs).padding(Padding {
-            left: metrics.padding,
-            right: metrics.padding,
-            top: TASKS_ROW_GAP,
-            bottom: 0.0,
-        }),
-    ]
-    .width(Fill)
-    .into()
+    bar_card(
+        column![
+            navigation,
+            container(subtabs).padding(Padding {
+                left: metrics.padding,
+                right: metrics.padding,
+                top: TASKS_ROW_GAP,
+                bottom: 0.0,
+            }),
+        ]
+        .width(Fill)
+        .into(),
+    )
 }
 
 /// The height `tabs` takes: the menu, plus the Tasks row when it is showing.
@@ -721,7 +740,12 @@ fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
     } else {
         0.0
     };
-    TAB_TOP_MARGIN + PANEL_ACTION_HEIGHT + TAB_TOP_MARGIN + tab_height(metrics) + tasks_row
+    TAB_TOP_MARGIN
+        + PANEL_ACTION_HEIGHT
+        + TAB_TOP_MARGIN
+        + tab_height(metrics)
+        + tasks_row
+        + TAB_TOP_MARGIN
 }
 
 fn tab_height(metrics: &Metrics) -> f32 {
@@ -749,11 +773,7 @@ fn tab<'a>(
     .height(tab_height(metrics))
     .padding(Padding::from([0.0, fit.pad]))
     .on_press(message)
-    .style(if active {
-        crate::ui::controls::primary
-    } else {
-        crate::ui::controls::secondary
-    })
+    .style(controls::nav(active))
     .into()
 }
 
@@ -764,7 +784,7 @@ fn view_button_style(active: bool) -> impl Fn(&iced::Theme) -> container::Style 
         let base = if active {
             palette.primary.base
         } else {
-            palette.secondary.base
+            palette.background.weakest
         };
 
         container::Style {
@@ -773,13 +793,9 @@ fn view_button_style(active: bool) -> impl Fn(&iced::Theme) -> container::Style 
             border: iced::Border {
                 color: palette.background.strong.color.scale_alpha(0.65),
                 width: 1.0,
-                radius: 2.0.into(),
+                radius: controls::RADIUS_CONTROL.into(),
             },
-            shadow: iced::Shadow {
-                color: iced::Color::BLACK.scale_alpha(0.17),
-                offset: iced::Vector::new(0.0, 2.5),
-                blur_radius: 4.5,
-            },
+            shadow: controls::shadow(theme, 0.1, 1.0, 3.0),
             ..Default::default()
         }
     }
@@ -793,10 +809,11 @@ fn view_half_style(active: bool) -> impl Fn(&iced::Theme, button::Status) -> but
         let base = if active {
             palette.primary.base
         } else {
-            palette.secondary.base
+            palette.background.weakest
         };
         let background = match status {
-            button::Status::Hovered => Some(iced::Color::WHITE.scale_alpha(0.08).into()),
+            button::Status::Hovered if active => Some(iced::Color::WHITE.scale_alpha(0.08).into()),
+            button::Status::Hovered => Some(iced::Color::BLACK.scale_alpha(0.05).into()),
             button::Status::Pressed => Some(iced::Color::BLACK.scale_alpha(0.10).into()),
             _ => None,
         };
@@ -815,7 +832,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
         .on_press(Message::Navigation(NavigationMessage::ViewMenuToggled));
 
-    let mut panel = column![].spacing(4.0).width(Fill);
+    let mut panel = column![].spacing(2.0).width(Fill);
     for (label, selected, message) in [
         (
             "Schedule",
@@ -837,11 +854,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             button(text(label).size(metrics.label()).center().width(Fill))
                 .width(Fill)
                 .on_press(message)
-                .style(if selected {
-                    crate::ui::controls::primary
-                } else {
-                    crate::ui::controls::secondary
-                }),
+                .style(crate::ui::controls::nav(selected)),
         );
     }
 
@@ -872,7 +885,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
         .on_press(Message::Navigation(NavigationMessage::MoreMenuToggled));
 
-    let mut panel = column![].spacing(4.0).width(Fill);
+    let mut panel = column![].spacing(2.0).width(Fill);
     for (label, screen) in MORE_LABELS.iter().zip([
         Screen::Travel,
         Screen::Habits,
@@ -885,11 +898,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .on_press(Message::Navigation(NavigationMessage::ScreenSelected(
                     screen,
                 )))
-                .style(if state.screen == screen {
-                    crate::ui::controls::primary
-                } else {
-                    crate::ui::controls::secondary
-                }),
+                .style(crate::ui::controls::nav(state.screen == screen)),
         );
     }
 

@@ -670,7 +670,7 @@ impl DayCanvas {
             frame.stroke(
                 &Path::line(Point::new(grid_left, y), Point::new(frame.width(), y)),
                 Stroke {
-                    style: Style::Solid(colors::GRID_LINE),
+                    style: Style::Solid(Color::from_rgba8(0x8A, 0x85, 0x7C, 0.28)),
                     width: 1.0,
                     ..Stroke::default()
                 },
@@ -716,6 +716,18 @@ impl DayCanvas {
             } else {
                 block.color
             };
+            // Canvas fills have no shadow of their own, so two faint offset
+            // copies of the block stand in for one.
+            for (drop, alpha) in [(1.0, 0.10), (2.5, 0.05)] {
+                frame.fill(
+                    &Path::rounded_rectangle(
+                        Point::new(block_bounds.x, block_bounds.y + drop),
+                        Size::new(block_bounds.width, block_bounds.height),
+                        EVENT_RADIUS.into(),
+                    ),
+                    Color::BLACK.scale_alpha(alpha),
+                );
+            }
             frame.fill(&shape, fill);
             if block.time_block {
                 let total: u32 = block.tasks.iter().map(|t| t.2).sum();
@@ -768,7 +780,7 @@ impl DayCanvas {
             frame.stroke(
                 &shape,
                 Stroke {
-                    style: Style::Solid(Color::BLACK.scale_alpha(0.55)),
+                    style: Style::Solid(Color::BLACK.scale_alpha(0.28)),
                     width: 1.0,
                     ..Stroke::default()
                 },

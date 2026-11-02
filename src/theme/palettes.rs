@@ -14,6 +14,34 @@ const fn rgb(hex: u32) -> Color {
     )
 }
 
+/// Warm paper, white cards and a muted sage accent.
+pub const LIGHT: Palette = Palette {
+    background: rgb(0xF7F5F0),
+    text: rgb(0x2E2C29),
+    primary: rgb(0x6F9373),
+    success: rgb(0x6F9373),
+    warning: rgb(0xC89A6B),
+    danger: rgb(0xB85C50),
+};
+
+/// The same warm neutrals and sage accent, for dark surroundings.
+pub const DARK: Palette = Palette {
+    background: rgb(0x1F1E1C),
+    text: rgb(0xECE8E1),
+    primary: rgb(0x8FB893),
+    success: rgb(0x8FB893),
+    warning: rgb(0xD4A878),
+    danger: rgb(0xE08A7E),
+};
+
+/// Card, hover, pressed, hairline, border, strong border, muted.
+pub const LIGHT_SURFACES: [u32; 7] = [
+    0xFFFFFF, 0xF2EFE9, 0xECE8E0, 0xE2DED6, 0xCFC9BE, 0xA9A398, 0x8A857C,
+];
+pub const DARK_SURFACES: [u32; 7] = [
+    0x2A2826, 0x33312E, 0x3B3936, 0x45423E, 0x55524D, 0x6E6A64, 0x9A958C,
+];
+
 pub const LIGHT_HIGH_CONTRAST: Palette = Palette {
     background: Color::WHITE,
     text: Color::BLACK,
@@ -95,6 +123,67 @@ pub fn high_contrast_extended(palette: Palette, surfaces: [u32; 7]) -> Extended 
     ] {
         *pair = readable_pair(*pair);
     }
+    extended
+}
+
+/// Explicit surfaces plus soft accent tints for the two everyday themes.
+pub fn calm_extended(palette: Palette, surfaces: [u32; 7], muted: Color) -> Extended {
+    let mut extended = Extended::generate(palette);
+    let [weakest, weaker, weak, neutral, strong, stronger, strongest] =
+        surfaces.map(|hex| readable_pair(Pair::new(rgb(hex), palette.text)));
+    extended.background = Background {
+        base: Pair::new(palette.background, palette.text),
+        weakest,
+        weaker,
+        weak,
+        neutral,
+        strong,
+        stronger,
+        strongest,
+    };
+    // Secondary colors carry labels and placeholders.
+    extended.secondary.base = Pair::new(muted, palette.background);
+
+    let tint = |accent: Color| {
+        let (soft, ink) = if extended.is_dark {
+            (0.22, 0.25)
+        } else {
+            (0.13, 0.28)
+        };
+        let shade = if extended.is_dark {
+            Color::WHITE
+        } else {
+            Color::BLACK
+        };
+        (
+            iced::theme::palette::mix(rgb(surfaces[0]), accent, soft),
+            iced::theme::palette::mix(accent, shade, ink),
+        )
+    };
+    let on_accent = if extended.is_dark {
+        palette.background
+    } else {
+        Color::WHITE
+    };
+    // Built by hand because `Pair::new` would swap the label for a darker one.
+    let accent = |color: Color| Pair {
+        color,
+        text: on_accent,
+    };
+    let (soft, ink) = tint(palette.primary);
+    extended.primary.base = accent(palette.primary);
+    extended.primary.weak = Pair {
+        color: soft,
+        text: ink,
+    };
+    extended.primary.strong = accent(ink);
+    let (soft, ink) = tint(palette.danger);
+    extended.danger.base = accent(palette.danger);
+    extended.danger.weak = Pair {
+        color: soft,
+        text: ink,
+    };
+    extended.danger.strong = accent(ink);
     extended
 }
 

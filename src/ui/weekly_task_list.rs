@@ -5,8 +5,8 @@ use iced::widget::{
     Space, button, column, container, mouse_area, progress_bar, responsive, row, scrollable, text,
 };
 use iced::{
-    Alignment, Color, Element, Event, Fill, Font, Length, Rectangle, Renderer, Shadow, Size, Theme,
-    Vector, mouse,
+    Alignment, Color, Element, Event, Fill, Font, Length, Rectangle, Renderer, Size, Theme, Vector,
+    mouse,
 };
 
 use super::layout::Metrics;
@@ -28,43 +28,17 @@ struct Palette {
 }
 fn palette(theme: &Theme) -> Palette {
     let p = theme.extended_palette();
-    if p.is_dark {
-        Palette {
-            board: p.background.weak.color,
-            paper: p.background.base.color,
-            ink: p.background.base.text,
-            muted: p.background.strong.text,
-            edge: p.background.strong.color,
-            badge: p.background.weak.color,
-        }
-    } else {
-        Palette {
-            board: Color::from_rgb8(248, 246, 245),
-            paper: Color::WHITE,
-            ink: Color::from_rgb8(67, 66, 63),
-            muted: Color::from_rgb8(125, 125, 125),
-            edge: Color::from_rgb8(235, 234, 233),
-            badge: Color::from_rgb8(240, 240, 240),
-        }
+    Palette {
+        board: p.background.base.color,
+        paper: p.background.weakest.color,
+        ink: p.background.base.text,
+        muted: p.secondary.base.color,
+        edge: p.background.strong.color,
+        badge: p.background.weak.color,
     }
 }
 fn card_style(theme: &Theme) -> container::Style {
-    let p = palette(theme);
-    container::Style {
-        background: Some(p.paper.into()),
-        text_color: Some(p.ink),
-        border: iced::Border {
-            color: p.edge,
-            width: 1.0,
-            radius: 3.0.into(),
-        },
-        shadow: Shadow {
-            color: Color::BLACK.scale_alpha(0.12),
-            offset: Vector::new(0.0, 1.0),
-            blur_radius: 1.0,
-        },
-        ..Default::default()
-    }
+    crate::ui::controls::row_surface(theme)
 }
 fn duration(minutes: i64) -> String {
     format!("{}:{:02}", minutes.max(0) / 60, minutes.max(0) % 60)
@@ -78,7 +52,7 @@ fn duration_badge<'a>(minutes: i64) -> Element<'a, Message> {
                 background: Some(p.badge.into()),
                 text_color: Some(p.muted),
                 border: iced::Border {
-                    radius: 2.0.into(),
+                    radius: crate::ui::controls::RADIUS_SMALL.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -109,7 +83,7 @@ pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                     border: iced::Border {
                         color: p.edge,
                         width: 1.0,
-                        radius: 3.0.into(),
+                        radius: crate::ui::controls::RADIUS_SMALL.into(),
                     },
                     ..Default::default()
                 }
@@ -174,7 +148,7 @@ pub(super) fn view<'a>(
     let days = days.to_vec();
     responsive(move |size| {
         container(
-            scrollable(row(days
+            crate::ui::controls::scrollable(row(days
                 .iter()
                 .map(|&day| day_column(state, day, width, size.height))))
             .direction(scrollable::Direction::Both {
@@ -314,13 +288,9 @@ fn day_column<'a>(
             border: iced::Border {
                 color: p.edge,
                 width: 1.0,
-                radius: 3.0.into(),
+                radius: crate::ui::controls::RADIUS_SMALL.into(),
             },
-            shadow: Shadow {
-                color: Color::BLACK.scale_alpha(0.1),
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 1.0,
-            },
+            shadow: crate::ui::controls::shadow(theme, 0.1, 1.0, 3.0),
             ..Default::default()
         }
     });
@@ -391,7 +361,7 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
             .style(move |_| container::Style {
                 background: Some(color.into()),
                 border: iced::Border {
-                    radius: 3.0.into(),
+                    radius: crate::ui::controls::RADIUS_SMALL.into(),
                     ..Default::default()
                 },
                 ..Default::default()

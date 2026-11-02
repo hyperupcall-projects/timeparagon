@@ -95,9 +95,9 @@ impl Metrics {
             // edge, so hours get folded into the minutes instead.
             allow_hours: size.width >= 240.0,
             labels: !breakpoint.is_compact(),
-            spacing: if breakpoint.is_compact() { 6.0 } else { 10.0 },
+            spacing: if breakpoint.is_compact() { 4.0 } else { 8.0 },
             padding,
-            button: if breakpoint.is_compact() { 34.0 } else { 40.0 },
+            button: if breakpoint.is_compact() { 30.0 } else { 34.0 },
             preset_columns: match breakpoint {
                 Breakpoint::Compact => 2,
                 Breakpoint::Normal => 3,
@@ -119,9 +119,9 @@ impl Metrics {
     /// Size of a square icon-only button.
     pub fn icon_button(&self) -> f32 {
         if self.breakpoint.is_compact() {
-            30.0
+            26.0
         } else {
-            34.0
+            30.0
         }
     }
 }

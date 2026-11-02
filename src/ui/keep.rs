@@ -3,16 +3,13 @@ use super::layout::Metrics;
 use crate::app::KeepMessage;
 use crate::app::{Message, State};
 use crate::keep::{Note, Scope};
-use iced::widget::{
-    button, column, container, pick_list, responsive, rich_text, row, scrollable, span, text,
-    text_input,
-};
+use iced::widget::{button, column, container, responsive, rich_text, row, span, text};
 use iced::{Element, Fill};
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let keep = &state.keep;
-    let mut refresh = button(text("Refresh").size(metrics.label()));
-    let mut connect = button(text("Reconnect").size(metrics.label()));
+    let mut refresh = crate::ui::controls::quiet_button(text("Refresh").size(metrics.label()));
+    let mut connect = crate::ui::controls::quiet_button(text("Reconnect").size(metrics.label()));
     if !keep.loading {
         refresh = refresh.on_press(Message::Keep(KeepMessage::KeepRefresh));
         connect = connect.on_press(Message::Keep(KeepMessage::KeepSignin));
@@ -25,7 +22,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics
         ),
         row![refresh, connect].spacing(metrics.spacing),
-        text_input("Search title or description…", &keep.query)
+        crate::ui::controls::text_input("Search title or description…", &keep.query)
             .on_input(|v0| Message::Keep(KeepMessage::KeepQueryChanged(v0)))
             .size(metrics.label()),
         row![
@@ -39,7 +36,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut labels = vec![LabelOption(None)];
     labels.extend(keep.labels().into_iter().map(|l| LabelOption(Some(l))));
     body = body.push(text("Labels").size(metrics.label())).push(
-        pick_list(labels, Some(LabelOption(keep.label.clone())), |label| {
+        crate::ui::controls::pick_list(labels, Some(LabelOption(keep.label.clone())), |label| {
             Message::Keep(KeepMessage::KeepLabelChanged(label.0))
         })
         .width(Fill),
@@ -58,7 +55,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     body.push(
         responsive(move |size| {
             if notes.is_empty() && !keep.loading {
-                return scrollable(
+                return crate::ui::controls::scrollable(
                     text(if keep.snapshot.notes.is_empty() {
                         "No Keep notes loaded."
                     } else {
@@ -84,7 +81,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .spacing(metrics.spacing)
                 .padding(iced::Padding::default().right(12))
                 .width(Fill);
-            scrollable(cards).height(Fill).into()
+            crate::ui::controls::scrollable(cards).height(Fill).into()
         })
         .height(Fill),
     )
@@ -230,8 +227,7 @@ fn card<'a>(note: &'a Note, metrics: &Metrics) -> Element<'a, Message> {
         .padding(metrics.padding)
         .width(Fill)
         .style(move |theme| {
-            let mut style = crate::ui::controls::surface(theme);
-            style.border.radius = 10.0.into();
+            let mut style = crate::ui::controls::card_surface(theme);
             style.border.color = iced::Color { a: 0.18, ..ink };
             style.text_color = Some(ink);
             style.background = Some(color.unwrap_or(iced::Color::WHITE).into());

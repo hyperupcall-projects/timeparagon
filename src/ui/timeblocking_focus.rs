@@ -11,7 +11,7 @@ use crate::{
 use chrono::{DateTime, Local, Utc};
 use iced::widget::canvas::{Frame, Geometry, Path, Stroke, Text};
 use iced::widget::{
-    Space, button, canvas, column, container, mouse_area, responsive, row, scrollable, stack, text,
+    Space, button, canvas, column, container, mouse_area, responsive, row, stack, text,
 };
 use iced::{Color, Element, Fill, Length, Point, Rectangle, Size, Theme, mouse};
 
@@ -55,7 +55,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                     .width(Fill),
                 button("Close")
                     .on_press(msg(Action::CloseView))
-                    .style(button::text)
+                    .style(crate::ui::controls::ghost)
             ],
             text(block.title.clone()).size(if width < 360.0 { 19 } else { 25 }),
             text(format!(
@@ -81,10 +81,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                     .on_press(Message::BrainDump(crate::brain_dump::Action::Open(
                         dump_day,
                     )))
-                    .style(button::text),
+                    .style(crate::ui::controls::ghost),
                 button("Work history")
                     .on_press(msg(Action::ToggleHistory))
-                    .style(button::text)
+                    .style(crate::ui::controls::ghost)
             ],
         ]
         .spacing(5);
@@ -122,7 +122,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 } else {
                     timeline(state, block, size)
                 };
-                scrollable(content)
+                crate::ui::controls::scrollable(content)
                     .id(iced::widget::Id::new("focused-block-timeline"))
                     .width(Fill)
                     .height(Fill)
@@ -137,7 +137,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     } else {
         column![
             text("This time block is no longer available"),
-            button("Close").on_press(msg(Action::CloseView))
+            crate::ui::controls::quiet_button("Close").on_press(msg(Action::CloseView))
         ]
         .into()
     };
@@ -148,10 +148,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .style(|theme: &Theme| {
             let p = theme.extended_palette();
             container::Style {
-                background: Some(p.background.base.color.into()),
+                background: Some(p.background.weakest.color.into()),
                 text_color: Some(p.background.base.text),
                 border: iced::Border {
-                    radius: 12.0.into(),
+                    radius: crate::ui::controls::RADIUS_CARD.into(),
                     color: p.background.strong.color,
                     width: 1.0,
                 },
@@ -169,7 +169,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )
@@ -208,7 +208,7 @@ fn pomodoro(state: &State) -> Element<'_, Message> {
         .on_press(msg(Action::PomodoroToggle)),
         button("Reset")
             .on_press(msg(Action::PomodoroReset))
-            .style(button::text),
+            .style(crate::ui::controls::ghost),
     ]
     .spacing(8)
     .align_y(iced::Center);
@@ -216,8 +216,8 @@ fn pomodoro(state: &State) -> Element<'_, Message> {
         (true, timer.work_minutes, "Work"),
         (false, timer.break_minutes, "Break"),
     ] {
-        let mut minus = button("−").style(button::text);
-        let mut plus = button("+").style(button::text);
+        let mut minus = button("−").style(crate::ui::controls::ghost);
+        let mut plus = button("+").style(crate::ui::controls::ghost);
         if timer.fresh() {
             minus = minus.on_press(msg(Action::PomodoroMinutes(work, -1)));
             plus = plus.on_press(msg(Action::PomodoroMinutes(work, 1)));
@@ -274,7 +274,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 .width(Fill),
             button("Close")
                 .on_press(msg(Action::CloseSession))
-                .style(button::text),
+                .style(crate::ui::controls::ghost),
         ],
         text(session.task_title.clone()).size(if width < 360.0 { 18 } else { 23 }),
         text(date).size(13).style(text::secondary),
@@ -306,7 +306,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         ]
         .spacing(8),
         button(text("Still working — clear end time").size(11))
-            .style(button::text)
+            .style(crate::ui::controls::ghost)
             .on_press(msg(Action::SessionEnd(String::new()))),
     ]
     .spacing(10);
@@ -321,7 +321,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 .width(Fill),
             button("Delete")
                 .on_press(msg(Action::DeleteSession))
-                .style(button::danger)
+                .style(crate::ui::controls::danger)
                 .width(Fill),
         ]
         .spacing(8),
@@ -333,10 +333,10 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(palette.background.base.color.into()),
+                background: Some(palette.background.weakest.color.into()),
                 text_color: Some(palette.background.base.text),
                 border: iced::Border {
-                    radius: 12.0.into(),
+                    radius: crate::ui::controls::RADIUS_CARD.into(),
                     color: palette.background.strong.color,
                     width: 1.0,
                 },
@@ -354,7 +354,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.45).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )
@@ -508,7 +508,11 @@ fn history<'a>(state: &'a State, block: &Event) -> Option<Element<'a, Message>> 
             .size(12),
         );
     }
-    Some(container(scrollable(history)).max_height(135).into())
+    Some(
+        container(crate::ui::controls::scrollable(history))
+            .max_height(135)
+            .into(),
+    )
 }
 /// How wide the lane of worked-time boxes is, and the gap between it and the
 /// task cards. The lane is only reserved while the block has work sessions.
@@ -710,7 +714,7 @@ fn task_card<'a>(
         })
         .size(12),
     )
-    .style(button::text);
+    .style(crate::ui::controls::ghost);
     if state.timeblocking.busy.is_empty() {
         completion = completion.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
@@ -722,7 +726,7 @@ fn task_card<'a>(
         })
         .size(12),
     )
-    .style(button::text);
+    .style(crate::ui::controls::ghost);
     if state.timeblocking.busy.is_empty() {
         ignore = ignore.on_press(Message::Task(TaskMessage::TaskIgnoreToggled(
             task.id.clone(),
@@ -811,7 +815,7 @@ fn task_card<'a>(
             .align_y(iced::Center),
         );
     }
-    container(scrollable(details))
+    container(crate::ui::controls::scrollable(details))
         .padding(if compact { 8 } else { 12 })
         .width(Fill)
         .height(Fill)
@@ -822,7 +826,7 @@ fn task_card<'a>(
                     if task.completed {
                         p.background.weak.color
                     } else {
-                        p.background.base.color
+                        p.background.weakest.color
                     }
                     .into(),
                 ),

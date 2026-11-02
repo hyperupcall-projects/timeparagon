@@ -85,11 +85,11 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 })
             })
             .collect();
-        let time_grid = scrollable(row(grids))
+        let time_grid = crate::ui::controls::scrollable(row(grids))
             .id(iced::widget::Id::new(WEEK_DAY_SCROLL))
             .width(Fill)
             .height(Fill);
-        scrollable(
+        crate::ui::controls::scrollable(
             column![row(headings), time_grid]
                 .width(Length::Fixed(width * days.len() as f32))
                 .height(Fill),
@@ -131,7 +131,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                     .width(Length::Fixed(w))
                     .height(Fill)
                     .style(|_| container::Style {
-                        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.35).into()),
+                        background: Some(crate::ui::controls::SCRIM.into()),
                         ..container::Style::default()
                     }),
             )
@@ -170,7 +170,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             if draft_open || state.calendar.open_event.is_some() {
                 let height = size.height.max(480.0);
                 let panel_metrics = Metrics::of(Size::new(panel_width, height));
-                scrollable(
+                crate::ui::controls::scrollable(
                     container(details_pane(state, &panel_metrics)).height(Length::Fixed(height)),
                 )
                 .height(Fill)
@@ -187,12 +187,13 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                     .width(Length::Fixed(panel_width))
                     .height(Fill)
                     .style(|theme: &Theme| container::Style {
-                        background: Some(theme.extended_palette().background.base.color.into()),
+                        background: Some(theme.extended_palette().background.weakest.color.into()),
                         border: iced::Border {
                             color: theme.extended_palette().background.strong.color,
                             width: 1.0,
-                            ..iced::Border::default()
+                            radius: crate::ui::controls::RADIUS_CARD.into(),
                         },
+                        shadow: crate::ui::controls::shadow(theme, 0.2, 8.0, 26.0),
                         ..container::Style::default()
                     }),
             ]

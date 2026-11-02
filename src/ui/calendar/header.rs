@@ -230,7 +230,7 @@ pub(super) fn dismiss_bar<'a>(state: &'a State, metrics: &Metrics) -> Option<Ele
             .width(Fill)
             .height(metrics.icon_button())
             .on_press(Message::System(SystemMessage::Dismiss))
-            .style(button::danger)
+            .style(crate::ui::controls::danger)
             .into()
     })
 }
@@ -319,7 +319,7 @@ pub(super) fn all_day_row_on<'a>(
     let dragging = state.timeblocking.dragging.is_some();
     Some(
         mouse_area(
-            container(scrollable(content))
+            container(crate::ui::controls::scrollable(content))
                 .max_height(180)
                 .style(move |theme: &Theme| drop_zone_style(theme, dragging)),
         )
@@ -348,7 +348,7 @@ pub(super) fn drop_zone_style(theme: &Theme, active: bool) -> container::Style {
                 Color::TRANSPARENT
             },
             width: if active { 1.0 } else { 0.0 },
-            radius: 5.0.into(),
+            radius: crate::ui::controls::RADIUS_ROW.into(),
         },
         ..container::Style::default()
     }
@@ -361,7 +361,7 @@ pub(crate) fn weekly_task_chip<'a>(
 ) -> Element<'a, Message> {
     let mut check = button(text(if task.completed { "●" } else { "○" }).size(metrics.label()))
         .padding(2)
-        .style(button::text);
+        .style(crate::ui::controls::ghost);
     if state.timeblocking.busy.is_empty() {
         check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
@@ -369,16 +369,16 @@ pub(crate) fn weekly_task_chip<'a>(
         .padding([3, 2])
         .width(Fill)
         .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
-        .style(button::text);
+        .style(crate::ui::controls::ghost);
     super::super::task_drag::task_drag(
         container(row![check, title].spacing(2).align_y(Alignment::Center))
             .width(Fill)
             .style(|theme: &Theme| container::Style {
-                background: Some(theme.extended_palette().background.base.color.into()),
+                background: Some(theme.extended_palette().background.weakest.color.into()),
                 border: iced::Border {
                     color: theme.extended_palette().background.strong.color,
                     width: 1.0,
-                    radius: 5.0.into(),
+                    radius: crate::ui::controls::RADIUS_ROW.into(),
                 },
                 ..container::Style::default()
             }),
@@ -416,9 +416,14 @@ pub(super) fn event_chip_style(color: Color, ink: Color, status: button::Status)
         background: Some(if hovered { lift(color) } else { color }.into()),
         text_color: ink,
         border: iced::Border {
-            color: Color::BLACK.scale_alpha(if hovered { 0.9 } else { 0.55 }),
+            color: Color::BLACK.scale_alpha(if hovered { 0.55 } else { 0.28 }),
             width: if hovered { 2.0 } else { 1.0 },
             radius: EVENT_RADIUS.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color::BLACK.scale_alpha(if hovered { 0.2 } else { 0.12 }),
+            offset: iced::Vector::new(0.0, if hovered { 3.0 } else { 1.0 }),
+            blur_radius: if hovered { 8.0 } else { 3.0 },
         },
         ..button::Style::default()
     }
@@ -462,7 +467,7 @@ pub(super) fn swatch_style(color: Color, selected: bool, status: button::Status)
                 Color::BLACK.scale_alpha(0.45)
             },
             width: if selected { 2.0 } else { 1.0 },
-            radius: 3.0.into(),
+            radius: crate::ui::controls::RADIUS_SMALL.into(),
         },
         ..button::Style::default()
     }

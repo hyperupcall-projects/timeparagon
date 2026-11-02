@@ -34,7 +34,7 @@ pub fn event_editor<'a>(
         let mut loading = column![text("Loading habit…").size(metrics.label())].spacing(6);
         if let Some(error) = &state.calendar.error {
             loading = loading.push(text(error).style(text::danger)).push(
-                button("Retry")
+                crate::ui::controls::quiet_button("Retry")
                     .on_press(Message::Event(EventMessage::EventOpened(event.id.clone()))),
             );
         }
@@ -44,7 +44,7 @@ pub fn event_editor<'a>(
 
     let title: Element<'a, Message> = if draft.editing_title {
         column![
-            text_input("Title", &draft.title)
+            crate::ui::controls::text_input("Title", &draft.title)
                 .id(iced::widget::Id::new("event-title"))
                 .on_input(|v0| Message::EventEdit(EventEditMessage::EventEditTitleChanged(v0)))
                 .on_submit(Message::EventEdit(EventEditMessage::EventEditSaveRequested))
@@ -63,7 +63,7 @@ pub fn event_editor<'a>(
         }))
         .padding(0)
         .width(Fill)
-        .style(button::text)
+        .style(crate::ui::controls::ghost)
         .on_press(Message::Event(EventMessage::EventTitleEdit))
         .into()
     };
@@ -148,18 +148,19 @@ pub fn event_editor<'a>(
                         .on_press(Message::Event(EventMessage::EventLabelRemove(
                             value.clone()
                         )))
-                        .style(button::text)
+                        .style(crate::ui::controls::ghost)
                 ]
                 .spacing(6),
             );
         }
         labels = labels.push(
             row![
-                text_input("Add a label…", &draft.label_draft)
+                crate::ui::controls::text_input("Add a label…", &draft.label_draft)
                     .on_input(|v0| Message::Event(EventMessage::EventLabelDraft(v0)))
                     .on_submit(Message::Event(EventMessage::EventLabelAdd))
                     .size(metrics.label()),
-                button("Add").on_press(Message::Event(EventMessage::EventLabelAdd)),
+                crate::ui::controls::action_button("Add")
+                    .on_press(Message::Event(EventMessage::EventLabelAdd)),
             ]
             .spacing(8),
         );
@@ -191,7 +192,7 @@ pub(super) fn event_options<'a>(
     let size = metrics.label();
     let mut notifications = column![
         text("Notifications").size(size).style(text::secondary),
-        checkbox(options.reminders.use_default)
+        crate::ui::controls::checkbox(options.reminders.use_default)
             .label("Use calendar default notifications")
             .on_toggle(move |v| message(Action::Defaults(v)))
             .text_size(size),
@@ -219,7 +220,7 @@ pub(super) fn event_options<'a>(
             notifications = notifications.push(
                 column![
                     row![
-                        pick_list(
+                        crate::ui::controls::pick_list(
                             [Method::Notification, Method::Email],
                             Some(reminder.method),
                             move |v| message(Action::Method(i, v))
@@ -228,12 +229,12 @@ pub(super) fn event_options<'a>(
                         .width(Fill),
                         button(text("×").size(size))
                             .on_press(message(Action::Remove(i)))
-                            .style(button::text),
+                            .style(crate::ui::controls::ghost),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
                     row![
-                        text_input(
+                        crate::ui::controls::text_input(
                             "10",
                             &reminder.input.clone().unwrap_or_else(|| (reminder.minutes
                                 / reminder.unit.factor())
@@ -242,7 +243,7 @@ pub(super) fn event_options<'a>(
                         .on_input(move |v| message(Action::Minutes(i, v)))
                         .size(size)
                         .width(80),
-                        pick_list(
+                        crate::ui::controls::pick_list(
                             [Unit::Minutes, Unit::Hours, Unit::Days, Unit::Weeks],
                             Some(reminder.unit),
                             move |v| message(Action::Unit(i, v))
@@ -260,12 +261,12 @@ pub(super) fn event_options<'a>(
     notifications = notifications.push(
         button(text("Add notification").size(size))
             .on_press_maybe((options.reminders.overrides.len() < 5).then_some(message(Action::Add)))
-            .style(button::text),
+            .style(crate::ui::controls::ghost),
     );
     column![
         notifications,
         text("Availability").size(size).style(text::secondary),
-        pick_list(
+        crate::ui::controls::pick_list(
             [Availability::Busy, Availability::Free],
             Some(options.transparency),
             move |v| message(Action::Availability(v))
@@ -273,7 +274,7 @@ pub(super) fn event_options<'a>(
         .text_size(size)
         .width(Fill),
         text("Visibility").size(size).style(text::secondary),
-        pick_list(
+        crate::ui::controls::pick_list(
             [Visibility::Default, Visibility::Public, Visibility::Private],
             Some(options.visibility),
             move |v| message(Action::Visibility(v))
@@ -373,15 +374,7 @@ pub(super) fn event_scope_control<'a>(
     let divider = container(Space::new().height(24.0))
         .width(1.0)
         .style(|theme: &Theme| container::Style {
-            background: Some(
-                theme
-                    .extended_palette()
-                    .primary
-                    .base
-                    .text
-                    .scale_alpha(0.35)
-                    .into(),
-            ),
+            background: Some(theme.extended_palette().background.stronger.color.into()),
             ..Default::default()
         });
     let split = container(
@@ -470,7 +463,7 @@ pub(super) fn event_projects<'a>(
                 text(name).size(metrics.label()).width(Fill),
                 button(text("×").size(metrics.label()))
                     .on_press(message(Action::Remove(*id)))
-                    .style(button::text),
+                    .style(crate::ui::controls::ghost),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
@@ -493,7 +486,7 @@ pub(super) fn event_projects<'a>(
     );
     if selection.open {
         content = content.push(
-            text_input("Search projects…", &selection.query)
+            crate::ui::controls::text_input("Search projects…", &selection.query)
                 .on_input(move |query| message(Action::Query(query)))
                 .size(metrics.label())
                 .width(Fill),
@@ -532,14 +525,16 @@ pub(super) fn event_projects<'a>(
                     button(text(&project.name).size(metrics.label()).width(Fill))
                         .width(Fill)
                         .on_press(message(Action::Add(project.id)))
-                        .style(button::text),
+                        .style(crate::ui::controls::ghost),
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center),
             );
         }
-        content =
-            content.push(container(scrollable(choices).height(Length::Shrink)).max_height(160));
+        content = content.push(
+            container(crate::ui::controls::scrollable(choices).height(Length::Shrink))
+                .max_height(160),
+        );
     }
     content.into()
 }
@@ -571,13 +566,13 @@ pub(super) fn sleep_editor<'a>(
         event_source(state, event, metrics),
         text(format!("{} · {}", calendar::sleep::duration(&preview), calendar::sleep::time_label(&preview, state.config.appearance.time_format))).size(metrics.label()),
         field("Sleep start",
-            text_input("YYYY-MM-DD", &draft.date_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))).into(),
-            text_input("HH:MM", &draft.start_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))).into()),
-        checkbox(record.estimated_start).label("Estimated Sleep Start").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedStart(v0))),
+            crate::ui::controls::text_input("YYYY-MM-DD", &draft.date_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))).into(),
+            crate::ui::controls::text_input("HH:MM", &draft.start_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))).into()),
+        crate::ui::controls::checkbox(record.estimated_start).label("Estimated Sleep Start").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedStart(v0))),
         field("Wake-up time",
-            text_input("YYYY-MM-DD", &draft.end_date_text).on_input(|v0| Message::Event(EventMessage::EventEndDateChanged(v0))).into(),
-            text_input("HH:MM", &draft.end_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))).into()),
-        checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
+            crate::ui::controls::text_input("YYYY-MM-DD", &draft.end_date_text).on_input(|v0| Message::Event(EventMessage::EventEndDateChanged(v0))).into(),
+            crate::ui::controls::text_input("HH:MM", &draft.end_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))).into()),
+        crate::ui::controls::checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
         text(if record.automatic {
             "Calculated from the first timed event. Saving records your times and preserves them when your schedule changes."
         } else { "Recorded sleep. These times are preserved when your schedule changes." }).size(metrics.label() - 1.0).style(text::secondary),
@@ -585,7 +580,7 @@ pub(super) fn sleep_editor<'a>(
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).style(text::danger));
     }
-    let mut save = button(
+    let mut save = crate::ui::controls::action_button(
         text(if draft.saving {
             "Saving…"
         } else {
@@ -600,7 +595,11 @@ pub(super) fn sleep_editor<'a>(
     }
     container(
         column![
-            scrollable(body).height(Fill),
+            crate::ui::controls::scrollable(container(body).padding(iced::Padding {
+                right: 14.0,
+                ..iced::Padding::ZERO
+            }))
+            .height(Fill),
             save,
             button(text("Close").center().width(Fill))
                 .width(Fill)

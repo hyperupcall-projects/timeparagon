@@ -5,7 +5,7 @@
 //! exactly the same in the others.
 
 use chrono::NaiveDate;
-use iced::widget::{button, column, row, text, text_input};
+use iced::widget::{button, column, row, text};
 use iced::{Alignment, Element, Length, Theme};
 
 use crate::app::Message;
@@ -97,7 +97,7 @@ where
         RepeatMode::Never => {}
         mode => {
             if mode != RepeatMode::Weekdays {
-                let mut interval = text_input("1", &rule.interval)
+                let mut interval = crate::ui::controls::text_input("1", &rule.interval)
                     .size(metrics.label())
                     .width(52);
                 if !busy {
@@ -134,7 +134,7 @@ where
             if mode == RepeatMode::Monthly {
                 let monthly: Element<'a, Message> = match rule.monthly {
                     MonthlyMode::Day => {
-                        let mut day = text_input("28", &rule.monthly_day)
+                        let mut day = crate::ui::controls::text_input("28", &rule.monthly_day)
                             .size(metrics.label())
                             .width(52);
                         if !busy {
@@ -268,7 +268,7 @@ where
                     );
                 }
                 EndKind::After => {
-                    let mut count = text_input("10", &rule.count)
+                    let mut count = crate::ui::controls::text_input("10", &rule.count)
                         .size(metrics.label())
                         .width(52);
                     if !busy {
@@ -303,7 +303,7 @@ where
                             text(day.format("%B %-d").to_string()).size(metrics.label() - 1.0),
                             button(text("×").size(metrics.label()).center())
                                 .padding([0, 5])
-                                .style(button::text)
+                                .style(crate::ui::controls::ghost)
                                 .on_press(send(recurrence::Action::SkipRemove(*day))),
                         ]
                         .spacing(2)

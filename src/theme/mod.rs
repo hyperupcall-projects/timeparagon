@@ -44,9 +44,13 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn built_in(theme: Theme) -> Self {
+    fn calm(name: &str, palette: Palette, surfaces: [u32; 7], muted: Color) -> Self {
+        let theme = Theme::custom_with_fn(name.to_owned(), palette, |palette| {
+            palettes::calm_extended(palette, surfaces, muted)
+        });
+
         Self {
-            name: theme.to_string(),
+            name: name.to_owned(),
             accents: Accents::derive(&theme),
             theme,
         }
@@ -80,13 +84,23 @@ impl Catalog {
     pub fn built_in() -> Self {
         Self {
             entries: vec![
-                Entry::built_in(Theme::Light),
+                Entry::calm(
+                    "Light",
+                    palettes::LIGHT,
+                    palettes::LIGHT_SURFACES,
+                    Color::from_rgb8(0x76, 0x71, 0x6A),
+                ),
                 Entry::high_contrast(
                     "Light high contrast",
                     palettes::LIGHT_HIGH_CONTRAST,
                     palettes::LIGHT_HIGH_CONTRAST_SURFACES,
                 ),
-                Entry::built_in(Theme::Dark),
+                Entry::calm(
+                    "Dark",
+                    palettes::DARK,
+                    palettes::DARK_SURFACES,
+                    Color::from_rgb8(0xA3, 0x9E, 0x95),
+                ),
                 Entry::high_contrast(
                     "Dark high contrast",
                     palettes::DARK_HIGH_CONTRAST,

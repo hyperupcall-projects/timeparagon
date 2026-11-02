@@ -1,9 +1,7 @@
 //! The Inbox tab: tasks waiting to be triaged, and the popup that adds one.
 
 use crate::calendar::time_format::TimeFormat;
-use iced::widget::{
-    Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
-};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Center, Color, Element, Fill};
 
 use super::layout::Metrics;
@@ -73,7 +71,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         body = body.push(
             row![
                 text("Sort by").size(metrics.label()),
-                pick_list(
+                crate::ui::controls::pick_list(
                     inbox::InboxSort::ALL,
                     Some(if list == List::Overdue {
                         state.config.calendar.overdue_sort
@@ -114,7 +112,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         body = body.push(task_card(state, task, metrics, list));
     }
 
-    container(scrollable(body.width(Fill)))
+    container(crate::ui::controls::scrollable(body.width(Fill)))
         .padding(metrics.padding)
         .width(Fill)
         .height(Fill)
@@ -152,7 +150,7 @@ fn task_card<'a>(
         )
         .width(Fill)
         .padding(0)
-        .style(button::text)
+        .style(crate::ui::controls::ghost)
         .on_press(Message::Event(EventMessage::EventOpened(task.id.clone()))),
     );
 
@@ -197,7 +195,7 @@ fn task_card<'a>(
         .style(move |theme: &iced::Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(palette.background.base.color.into()),
+                background: Some(palette.background.weakest.color.into()),
                 border: iced::Border {
                     color: if shown {
                         palette.primary.base.color
@@ -205,9 +203,9 @@ fn task_card<'a>(
                         palette.background.strong.color
                     },
                     width: 1.0,
-                    radius: 5.0.into(),
+                    radius: crate::ui::controls::RADIUS_ROW.into(),
                 },
-                ..super::controls::card_surface(theme)
+                ..super::controls::row_surface(theme)
             }
         });
     super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref())
@@ -465,7 +463,7 @@ fn location_pin(size: f32) -> Element<'static, Message> {
             frame.fill(&tip, color);
             frame.fill(
                 &canvas::Path::circle(center, radius * 0.42),
-                theme.extended_palette().background.base.color,
+                theme.extended_palette().background.weakest.color,
             );
             vec![frame.into_geometry()]
         }
@@ -570,7 +568,7 @@ pub fn day_picker<'a>(
     let arrow = |label: &'static str, months: i32| {
         button(text(label).size(metrics.label()).center())
             .padding([2, 8])
-            .style(button::text)
+            .style(crate::ui::controls::ghost)
             .on_press(msg(Action::PickerShift(months)))
     };
     let title = row![
@@ -641,12 +639,12 @@ fn picker_day<'a>(
         if is_planned {
             crate::ui::controls::primary(theme, status)
         } else {
-            let mut style = button::text(theme, status);
+            let mut style = crate::ui::controls::ghost(theme, status);
             if is_today {
                 style.border = iced::Border {
                     color: theme.palette().primary,
                     width: 1.0,
-                    radius: 2.0.into(),
+                    radius: crate::ui::controls::RADIUS_SMALL.into(),
                 };
             }
             if !in_month {
@@ -663,20 +661,25 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     let Some(draft) = &state.inbox.draft else {
         return Space::new().into();
     };
-    let card = container(scrollable(form(state, draft, metrics)))
-        .padding(16)
-        .width(Fill)
-        .max_width(if state.task_creation_window { 440 } else { 420 })
-        .max_height(
-            (metrics.size.height
-                - if state.task_creation_window {
-                    0.0
-                } else {
-                    32.0
-                })
-            .max(80.0),
-        )
-        .style(crate::ui::controls::surface);
+    let card = container(crate::ui::controls::scrollable(
+        container(form(state, draft, metrics)).padding(iced::Padding {
+            right: 14.0,
+            ..iced::Padding::ZERO
+        }),
+    ))
+    .padding(16)
+    .width(Fill)
+    .max_width(if state.task_creation_window { 440 } else { 420 })
+    .max_height(
+        (metrics.size.height
+            - if state.task_creation_window {
+                0.0
+            } else {
+                32.0
+            })
+        .max(80.0),
+    )
+    .style(crate::ui::controls::surface);
     if state.task_creation_window {
         let viewport_height = metrics.size.height;
         let bounds = move |size: iced::Size| {
@@ -704,7 +707,7 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )
@@ -744,7 +747,7 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
             chip = chip.push(
                 button(text("×").size(metrics.label()))
                     .padding([0, 6])
-                    .style(button::text)
+                    .style(crate::ui::controls::ghost)
                     .on_press(msg(Action::ClearSource)),
             );
         }
@@ -754,7 +757,7 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
 
-    let mut add = button(
+    let mut add = crate::ui::controls::action_button(
         text(if draft.saving {
             "Adding…"
         } else if draft.fetching {
@@ -767,7 +770,7 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
     if !draft.saving && !draft.fetching && !state.inbox.voice.active() {
         add = add.on_press(msg(Action::Create));
     }
-    let mut cancel = button(text("Cancel").size(metrics.label())).style(button::text);
+    let mut cancel = button(text("Cancel").size(metrics.label())).style(crate::ui::controls::ghost);
     if !draft.saving {
         cancel = cancel.on_press(msg(Action::Cancel));
     }

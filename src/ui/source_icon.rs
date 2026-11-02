@@ -24,7 +24,7 @@ pub fn logo<'a>(kind: Kind, height: f32) -> Element<'a, Message> {
 pub fn link<'a>(source: &Source, height: f32) -> Element<'a, Message> {
     let open = button(logo(source.kind, height))
         .padding(0)
-        .style(button::text)
+        .style(crate::ui::controls::ghost)
         .on_press(Message::OpenEventLink(source.url.clone()));
     tooltip(
         open,
