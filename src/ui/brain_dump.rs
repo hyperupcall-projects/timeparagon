@@ -3,10 +3,7 @@
 //! A page is written in a full-window editor, the same way the notepad is,
 //! and is saved into the config as it is typed.
 
-use iced::widget::{
-    Space, button, column, container, mouse_area, row, scrollable, stack, text, text_editor,
-    text_input,
-};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Element, Fill, Length, Theme};
 
 use super::layout::Metrics;
@@ -34,7 +31,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         Some(entries.len()),
         metrics,
     );
-    let search = text_input("Search every page…", &state.brain_dump.query)
+    let search = crate::ui::controls::text_input("Search every page…", &state.brain_dump.query)
         .on_input(|query| msg(Action::Query(query)))
         .size(metrics.label())
         .width(Fill);
@@ -60,7 +57,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         body = body.push(entry_card(entry.date, &entry.text, metrics));
     }
 
-    container(scrollable(body.width(Fill)))
+    container(crate::ui::controls::scrollable(body.width(Fill)))
         .padding(metrics.padding)
         .width(Fill)
         .height(Fill)
@@ -81,7 +78,7 @@ fn entry_card<'a>(
     )
     .width(Fill)
     .padding(0)
-    .style(button::text)
+    .style(crate::ui::controls::ghost)
     .on_press(msg(Action::Open(date)));
     let preview = body
         .lines()
@@ -120,7 +117,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     };
     let width = metrics.size.width * 0.95;
     let height = metrics.size.height * 0.90;
-    let editor = text_editor(&state.brain_dump.editor)
+    let editor = crate::ui::controls::text_editor(&state.brain_dump.editor)
         .id(editor_id())
         .placeholder("What is on your mind today?")
         .on_action(|action| msg(Action::Edited(action)))
@@ -139,10 +136,10 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         .width(Fill),
         button("Delete")
             .on_press(msg(Action::Delete(date)))
-            .style(button::danger),
+            .style(crate::ui::controls::danger),
         button("Close")
             .on_press(msg(Action::Close))
-            .style(button::text),
+            .style(crate::ui::controls::ghost),
     ]
     .spacing(8)
     .align_y(iced::Center);
@@ -161,14 +158,14 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(palette.background.base.color.into()),
+                background: Some(palette.background.weakest.color.into()),
                 text_color: Some(palette.background.base.text),
                 border: iced::Border {
-                    radius: 12.0.into(),
+                    radius: crate::ui::controls::RADIUS_CARD.into(),
                     color: palette.background.strong.color,
                     width: 1.0,
                 },
-                ..Default::default()
+                ..crate::ui::controls::surface(theme)
             }
         });
     let backdrop =
@@ -177,7 +174,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(iced::Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )

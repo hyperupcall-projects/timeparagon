@@ -508,10 +508,8 @@ pub fn debug_overlay<'a>(
     state: &'a State,
     metrics: &crate::ui::layout::Metrics,
 ) -> iced::Element<'a, Message> {
-    use iced::widget::{
-        Space, button, column, container, mouse_area, row, scrollable, stack, text,
-    };
-    use iced::{Color, Fill};
+    use iced::Fill;
+    use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
     let voice = &state.inbox.voice;
     let log = if voice.debug_log.is_empty() {
         "Waiting for model output..."
@@ -526,7 +524,10 @@ pub fn debug_overlay<'a>(
             ]
             .spacing(8),
             text(&voice.phase).size(12),
-            scrollable(text(log).font(iced::Font::MONOSPACE).size(12).width(Fill)).height(Fill),
+            crate::ui::controls::scrollable(
+                text(log).font(iced::Font::MONOSPACE).size(12).width(Fill)
+            )
+            .height(Fill),
             button("Copy debug log").on_press(msg(Action::CopyDebug))
         ]
         .spacing(10),
@@ -542,7 +543,7 @@ pub fn debug_overlay<'a>(
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )
@@ -698,7 +699,7 @@ pub fn input<'a>(
             if recording && level > 0.0 {
                 let base = match style.background {
                     Some(iced::Background::Color(color)) => color,
-                    _ => theme.extended_palette().background.base.color,
+                    _ => theme.extended_palette().background.weakest.color,
                 };
                 style.background = Some(
                     iced::Color::from_rgb(
@@ -755,20 +756,21 @@ pub fn input<'a>(
     content.into()
 }
 pub fn settings<'a>(state: &'a State) -> iced::Element<'a, Message> {
-    use iced::widget::{column, text, text_input};
+    use iced::widget::{column, text};
     let settings = &state.config.voice;
     let voice = &state.inbox.voice;
     let mut content = column![
         text("whisper.cpp binary (name on PATH or full path)"),
-        text_input("whisper-cli", &settings.binary).on_input(|s| msg(Action::Binary(s))),
+        crate::ui::controls::text_input("whisper-cli", &settings.binary)
+            .on_input(|s| msg(Action::Binary(s))),
         text("Whisper model file (ggml .bin)"),
-        text_input("/path/to/ggml-base.bin", &settings.whisper_model)
+        crate::ui::controls::text_input("/path/to/ggml-base.bin", &settings.whisper_model)
             .on_input(|s| msg(Action::WhisperModel(s))),
         text("Ollama server"),
-        text_input("http://localhost:11434", &settings.ollama_url)
+        crate::ui::controls::text_input("http://localhost:11434", &settings.ollama_url)
             .on_input(|s| msg(Action::Url(s))),
         text("Ollama extraction model"),
-        text_input("", &settings.model).on_input(|s| msg(Action::Model(s))),
+        crate::ui::controls::text_input("", &settings.model).on_input(|s| msg(Action::Model(s))),
     ]
     .spacing(6);
     if let Some(error) = &voice.error {

@@ -1,9 +1,7 @@
 //! The popup that edits an alarm set on the calendar.
 
 use iced::font::Weight;
-use iced::widget::{
-    Space, button, column, container, mouse_area, row, scrollable, slider, stack, text, text_input,
-};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Alignment, Element, Fill, Font, Length, Theme};
 
 use crate::alarms::{self, Action, Edit};
@@ -88,7 +86,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 
     let label = field(
         "Label",
-        text_input("Alarm", &alarm.label)
+        crate::ui::controls::text_input("Alarm", &alarm.label)
             .on_input(|label| edit(Edit::Label(label)))
             .size(metrics.label())
             .width(Fill)
@@ -115,7 +113,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     let actions = row![
         button(text("Delete").size(metrics.label()).center())
             .on_press(Message::Alarms(Action::Delete(alarm.id)))
-            .style(button::danger),
+            .style(crate::ui::controls::danger),
         Space::new().width(Fill),
         button(text("Done").size(metrics.label()).center())
             .on_press(Message::Alarms(Action::CloseEditor))
@@ -133,7 +131,7 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 
     let panel = column![
         header,
-        container(scrollable(body).width(Fill)).max_height(room),
+        container(crate::ui::controls::scrollable(body).width(Fill)).max_height(room),
         actions,
     ]
     .spacing(metrics.spacing)
@@ -145,13 +143,13 @@ pub fn editor_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(palette.background.base.color.into()),
+                background: Some(palette.background.weakest.color.into()),
                 border: iced::Border {
                     color: colors::ALARM,
                     width: 1.0,
-                    radius: 8.0.into(),
+                    radius: crate::ui::controls::RADIUS_CARD.into(),
                 },
-                ..container::Style::default()
+                ..crate::ui::controls::surface(theme)
             }
         });
 
@@ -274,7 +272,7 @@ fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
         section = section.push(field(
             format!("Volume {}%", settings.volume),
-            slider(0..=100_u8, settings.volume, |volume| {
+            crate::ui::controls::slider(0..=100_u8, settings.volume, |volume| {
                 edit(Edit::Volume(volume))
             })
             .into(),
@@ -283,7 +281,7 @@ fn sound<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
         section = section.push(field(
             repeat_label(settings.repeats),
-            slider(0..=9_u8, settings.repeats, |repeats| {
+            crate::ui::controls::slider(0..=9_u8, settings.repeats, |repeats| {
                 edit(Edit::Repeats(repeats))
             })
             .into(),
@@ -311,7 +309,7 @@ fn flash<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     if settings.enabled {
         section = section.push(field(
             format!("Strength {}%", (settings.peak() * 100.0).round()),
-            slider(0.05..=0.8_f32, settings.peak(), |strength| {
+            crate::ui::controls::slider(0.05..=0.8_f32, settings.peak(), |strength| {
                 edit(Edit::Strength(strength))
             })
             .step(0.05_f32)
@@ -321,7 +319,7 @@ fn flash<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
         section = section.push(field(
             format!("Pulses {}", settings.pulses.max(1)),
-            slider(1..=5_u8, settings.pulses.max(1), |pulses| {
+            crate::ui::controls::slider(1..=5_u8, settings.pulses.max(1), |pulses| {
                 edit(Edit::Pulses(pulses))
             })
             .into(),

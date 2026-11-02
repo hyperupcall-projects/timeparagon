@@ -141,7 +141,7 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
                         Message::Settings(SettingsMessage::SourceColorEditorToggled(id.clone())),
                     ),
                     text(source.name.clone()).size(metrics.label()).width(Fill),
-                    toggler(enabled).on_toggle(move |value| {
+                    crate::ui::controls::toggler(enabled).on_toggle(move |value| {
                         Message::Calendar(CalendarMessage::CalendarToggled(
                             toggle_id.clone(),
                             value,
@@ -190,7 +190,7 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
                     Message::Settings(SettingsMessage::SourceColorEditorToggled(id.clone())),
                 ),
                 text(source.label()).size(metrics.label()).width(Fill),
-                toggler(
+                crate::ui::controls::toggler(
                     state
                         .calendar
                         .calendar_enabled(source.id(), &state.config.calendar)
@@ -239,13 +239,19 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 
     panel = panel.push(sync);
 
-    let card = container(scrollable(panel).height(Length::Shrink))
-        .max_height(
-            (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0).max(120.0),
-        )
-        .padding(metrics.padding)
-        .width(Length::Fill)
-        .style(crate::ui::controls::surface);
+    let card = container(
+        crate::ui::controls::scrollable(container(panel).padding(iced::Padding {
+            right: 14.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Length::Shrink),
+    )
+    .max_height(
+        (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0).max(120.0),
+    )
+    .padding(metrics.padding)
+    .width(Length::Fill)
+    .style(crate::ui::controls::surface);
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.

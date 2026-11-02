@@ -7,11 +7,17 @@ pub(super) fn day_grid<'a>(
     metrics: &Metrics,
     now: DateTime<Local>,
 ) -> Element<'a, Message> {
-    scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
-        .id(iced::widget::Id::new(DAY_SCROLL))
-        .height(Fill)
-        .width(Fill)
-        .into()
+    container(
+        crate::ui::controls::scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
+            .id(iced::widget::Id::new(DAY_SCROLL))
+            .height(Fill)
+            .width(Fill),
+    )
+    .height(Fill)
+    .width(Fill)
+    .padding(1)
+    .style(crate::ui::controls::card_surface)
+    .into()
 }
 
 pub(super) fn day_canvas<'a>(

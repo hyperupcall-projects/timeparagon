@@ -5,11 +5,8 @@
 //! there is. The search and the trip card are shared with the task editor,
 //! the settings and the day view.
 
-use iced::widget::{
-    Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
-    text_input,
-};
-use iced::{Alignment, Color, Element, Fill, Theme};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
+use iced::{Alignment, Element, Fill, Theme};
 
 use crate::app::{Message, State};
 use crate::config::{MapApp, Place, TravelMode};
@@ -65,7 +62,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     ));
 
     container(
-        scrollable(container(body).padding(iced::Padding {
+        crate::ui::controls::scrollable(container(body).padding(iced::Padding {
             right: SCROLLBAR_GUTTER,
             ..iced::Padding::ZERO
         }))
@@ -79,16 +76,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn card_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        border: iced::Border {
-            color: palette.background.strong.color,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    }
+    crate::ui::controls::row_surface(theme)
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +118,7 @@ fn place_row<'a>(state: &'a State, place: &'a Place, metrics: &Metrics) -> Eleme
         button(text("Rename").size(metrics.label()))
             .on_press(msg(Action::Rename(place.id)))
             .padding([2, 6])
-            .style(button::text),
+            .style(crate::ui::controls::ghost),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -163,7 +151,7 @@ fn rename_row<'a>(name: &'a str, metrics: &Metrics) -> Element<'a, Message> {
         text("Title")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
-        text_input("Title", name)
+        crate::ui::controls::text_input("Title", name)
             .id(iced::widget::Id::new("travel-rename"))
             .on_input(|name| msg(Action::RenameText(name)))
             .on_submit(msg(Action::SaveRename))
@@ -242,7 +230,7 @@ fn connection_row<'a>(
     let open = button(names)
         .width(Fill)
         .padding([4, 6])
-        .style(button::text)
+        .style(crate::ui::controls::ghost)
         .on_press(msg(Action::OpenLeg(leg, None)));
 
     Some(
@@ -269,7 +257,7 @@ fn mode_control<'a>(state: &State, leg: Leg, metrics: &Metrics) -> Element<'a, M
             .style(crate::ui::controls::secondary)
             .into()
     } else {
-        pick_list(TravelMode::ALL, Some(mode), move |mode| {
+        crate::ui::controls::pick_list(TravelMode::ALL, Some(mode), move |mode| {
             msg(Action::SetMode(leg, mode))
         })
         .text_size(metrics.label())
@@ -320,7 +308,7 @@ pub(super) fn location_control<'a>(
                             .style(crate::ui::controls::secondary),
                         button(text("Clear").size(metrics.label()).center())
                             .on_press(msg(Action::Clear(target)))
-                            .style(button::text),
+                            .style(crate::ui::controls::ghost),
                     ]
                     .spacing(6),
                 )
@@ -351,7 +339,7 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
         search.on_press(msg(Action::Search))
     };
 
-    let mut input = text_input("Search for a place", &picker.query)
+    let mut input = crate::ui::controls::text_input("Search for a place", &picker.query)
         .id(iced::widget::Id::new(PICKER_INPUT))
         .on_input(|query| msg(Action::Query(query)))
         .size(metrics.label())
@@ -414,7 +402,7 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
         .push(
             button(text("Cancel").size(metrics.label()))
                 .on_press(msg(Action::ClosePicker))
-                .style(button::text),
+                .style(crate::ui::controls::ghost),
         )
         .into()
 }
@@ -432,7 +420,7 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
     column![
         super::settings::field(
             "Mapbox access token",
-            text_input("Access token", &settings.api_key)
+            crate::ui::controls::text_input("Access token", &settings.api_key)
                 .on_input(|key| msg(Action::ApiKey(key)))
                 .secure(true)
                 .size(metrics.label())
@@ -505,7 +493,7 @@ pub fn leg_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .style(crate::ui::controls::secondary),
     );
 
-    let card = container(scrollable(body))
+    let card = container(crate::ui::controls::scrollable(body))
         .padding(16)
         .width(Fill)
         .max_width(420)
@@ -518,7 +506,7 @@ pub fn leg_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )

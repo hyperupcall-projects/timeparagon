@@ -87,7 +87,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                         style.border = iced::Border {
                             color,
                             width: 1.0,
-                            radius: 3.0.into(),
+                            radius: crate::ui::controls::RADIUS_SMALL.into(),
                         };
                         style
                     }),
@@ -110,39 +110,44 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                     .style(text::secondary),
                 );
             }
-            let cell: Element<'a, Message> =
-                container(column![heading, scrollable(events).height(Fill),].spacing(3))
-                    .padding(5)
-                    .width(Length::Fixed(cell_width))
-                    .height(Length::Fixed(cell_height))
-                    .style(move |theme: &Theme| {
-                        let palette = theme.extended_palette();
-                        container::Style {
-                            background: Some(
-                                if in_month {
-                                    palette.background.base.color
-                                } else {
-                                    palette.background.weak.color
-                                }
-                                .into(),
-                            ),
-                            border: iced::Border {
-                                color: if state.timeblocking.dragging.is_some() {
-                                    palette.primary.strong.color
-                                } else {
-                                    palette.background.strong.color
-                                },
-                                width: if state.timeblocking.dragging.is_some() {
-                                    1.5
-                                } else {
-                                    0.5
-                                },
-                                ..Default::default()
-                            },
-                            ..Default::default()
+            let cell: Element<'a, Message> = container(
+                column![
+                    heading,
+                    crate::ui::controls::scrollable(events).height(Fill),
+                ]
+                .spacing(3),
+            )
+            .padding(5)
+            .width(Length::Fixed(cell_width))
+            .height(Length::Fixed(cell_height))
+            .style(move |theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(
+                        if in_month {
+                            palette.background.weakest.color
+                        } else {
+                            palette.background.weak.color
                         }
-                    })
-                    .into();
+                        .into(),
+                    ),
+                    border: iced::Border {
+                        color: if state.timeblocking.dragging.is_some() {
+                            palette.primary.strong.color
+                        } else {
+                            palette.background.strong.color
+                        },
+                        width: if state.timeblocking.dragging.is_some() {
+                            1.5
+                        } else {
+                            0.5
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            })
+            .into();
             Element::from(
                 mouse_area(cell)
                     .on_release(Message::TimeBlocking(crate::timeblocking::Action::DropDay)),
@@ -153,13 +158,15 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         }))
         .into()
     });
-    let grid = scrollable(column![weekdays, column(weeks)].width(Length::Fixed(grid_width)))
-        .direction(scrollable::Direction::Both {
-            vertical: scrollable::Scrollbar::new(),
-            horizontal: scrollable::Scrollbar::new(),
-        })
-        .width(Fill)
-        .height(Fill);
+    let grid = crate::ui::controls::scrollable(
+        column![weekdays, column(weeks)].width(Length::Fixed(grid_width)),
+    )
+    .direction(scrollable::Direction::Both {
+        vertical: scrollable::Scrollbar::new(),
+        horizontal: scrollable::Scrollbar::new(),
+    })
+    .width(Fill)
+    .height(Fill);
     let title = button(text(state.week_anchor.format("%B %Y ▾").to_string()).size(metrics.label()))
         .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled))
         .style(crate::ui::controls::secondary);
@@ -217,8 +224,10 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         content = content.push(
             row![
                 text(&habit.title).size(metrics.label()),
-                button(text("Close habit calendar").size(metrics.label()))
-                    .on_press(Message::Habits(crate::habits::Action::CloseCalendar)),
+                crate::ui::controls::quiet_button(
+                    text("Close habit calendar").size(metrics.label())
+                )
+                .on_press(Message::Habits(crate::habits::Action::CloseCalendar)),
             ]
             .spacing(metrics.spacing),
         );
@@ -240,7 +249,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         layers.push(
             mouse_area(container(Space::new()).width(Fill).height(Fill).style(|_| {
                 container::Style {
-                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.35).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }
             }))
@@ -255,7 +264,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         .min(metrics.size.width);
         let pane_metrics = Metrics::of(Size::new(width, metrics.size.height));
         let pane = if details {
-            scrollable(details_pane(state, &pane_metrics))
+            crate::ui::controls::scrollable(details_pane(state, &pane_metrics))
                 .height(Fill)
                 .into()
         } else {
@@ -267,10 +276,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 container(pane)
                     .width(Length::Fixed(width))
                     .height(Fill)
-                    .style(|theme: &Theme| container::Style {
-                        background: Some(theme.extended_palette().background.base.color.into()),
-                        ..Default::default()
-                    })
+                    .style(crate::ui::controls::surface)
             ]
             .height(Fill)
             .into(),
@@ -423,12 +429,12 @@ pub(super) fn day_cell<'a>(
         } else if in_preview {
             crate::ui::controls::secondary(theme, status)
         } else {
-            let mut style = button::text(theme, status);
+            let mut style = crate::ui::controls::ghost(theme, status);
             if is_today {
                 style.border = iced::Border {
                     color: theme.palette().primary,
                     width: 1.0,
-                    radius: 2.0.into(),
+                    radius: crate::ui::controls::RADIUS_SMALL.into(),
                 };
             }
             if !in_month {

@@ -5,8 +5,8 @@
 //! use — daily, every weekday, weekly on Monday and Wednesday, monthly on the
 //! fourth Wednesday, and so on — rather than asking for RFC 5545 parts.
 
-use iced::widget::{Space, button, column, container, mouse_area, row, scrollable, stack, text};
-use iced::{Alignment, Color, Element, Fill};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
+use iced::{Alignment, Element, Fill};
 
 use crate::app::{Message, State};
 use crate::habits::{Action, Habit};
@@ -21,7 +21,7 @@ fn msg(action: Action) -> Message {
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let mut new = button(text("New habit").size(metrics.label()));
+    let mut new = crate::ui::controls::action_button(text("New habit").size(metrics.label()));
     if !state.habits.busy {
         new = new.on_press(msg(Action::New));
     }
@@ -59,7 +59,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     }
 
     container(
-        scrollable(container(body).padding(iced::Padding {
+        crate::ui::controls::scrollable(container(body).padding(iced::Padding {
             right: SCROLLBAR_GUTTER,
             ..iced::Padding::ZERO
         }))
@@ -75,7 +75,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 /// One habit: its color, name, repeat summary and time, with its actions.
 fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a, Message> {
     let color = habit.color(&state.config.calendar);
-    let mut edit = button(text("Edit").size(metrics.label())).padding([2, 6]);
+    let mut edit =
+        crate::ui::controls::quiet_button(text("Edit").size(metrics.label())).padding([2, 6]);
     let mut delete = button(text("Delete").size(metrics.label()))
         .padding([2, 6])
         .style(crate::ui::controls::secondary);
@@ -84,7 +85,7 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
         delete = delete.on_press(msg(Action::DeleteRequested(habit.id.clone())));
     }
 
-    let show = button(text("Show on calendar").size(metrics.label()))
+    let show = crate::ui::controls::quiet_button(text("Show on calendar").size(metrics.label()))
         .padding([2, 6])
         .on_press(msg(Action::ShowOnCalendar(habit.id.clone())));
     let actions: Element<'a, Message> = if metrics.size.width < 360.0 {
@@ -211,7 +212,7 @@ fn overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Mess
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )

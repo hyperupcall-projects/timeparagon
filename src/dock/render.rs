@@ -74,7 +74,7 @@ impl Palette {
 
         Self {
             background: palette.background.base.color,
-            card: palette.background.weak.color,
+            card: palette.background.weakest.color,
             border: palette.background.strong.color,
             text,
             muted: Color { a: 0.7, ..text },

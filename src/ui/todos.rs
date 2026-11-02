@@ -52,7 +52,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // its own, so leaving either view is always the same gesture.
     column![
         text("Todos").size(metrics.label() + 3.0),
-        scrollable(body).height(Fill).width(Fill),
+        crate::ui::controls::scrollable(body).height(Fill).width(Fill),
         go_back_button(metrics),
     ]
     .spacing(metrics.spacing)
@@ -95,7 +95,7 @@ fn item<'a>(
         crate::ui::controls::secondary
     });
 
-    let input = text_input("todo", &todo.text)
+    let input = crate::ui::controls::text_input("todo", &todo.text)
         .id(input_id(index))
         .on_input(move |text| Message::TodoTextChanged(index, text))
         .size(metrics.label())

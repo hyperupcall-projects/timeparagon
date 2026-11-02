@@ -3,9 +3,7 @@ use super::layout::Metrics;
 use crate::app::{Message, State};
 use crate::calendar::time_format::TimeFormat;
 use chrono::{Datelike, Months, NaiveDate, NaiveTime, Timelike};
-use iced::widget::{
-    Space, button, column, container, mouse_area, pick_list, row, scrollable, stack, text,
-};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Border, Color, Element, Fill, Shadow, Theme, Vector};
 use std::sync::Arc;
 
@@ -352,7 +350,7 @@ pub fn overlay<'a>(
                         } else {
                             button::text(theme, status)
                         };
-                        s.border.radius = 2.0.into();
+                        s.border.radius = RADIUS_SMALL.into();
                         if day == today || day == p.focus {
                             s.border.width = 1.0;
                             s.border.color = theme.palette().primary;
@@ -462,47 +460,24 @@ pub fn section_heading<'a>(
     count: Option<usize>,
     size: f32,
 ) -> iced::widget::Row<'a, Message> {
-    let accent = container(Space::new())
-        .width(3)
-        .height(size + 2.0)
-        .style(|theme: &Theme| container::Style {
-            background: Some(theme.palette().primary.into()),
-            ..Default::default()
-        });
     let mut heading = row![
-        accent,
         text(label.into())
             .wrapping(text::Wrapping::WordOrGlyph)
             .size(size)
             .font(iced::Font {
-                weight: iced::font::Weight::Semibold,
+                weight: iced::font::Weight::Bold,
                 ..iced::Font::DEFAULT
             })
             .width(Fill)
     ]
-    .spacing(8)
+    .spacing(6)
     .align_y(iced::Center)
     .width(Fill);
     if let Some(count) = count {
         heading = heading.push(
-            container(
-                text(count.to_string())
-                    .font(iced::Font::MONOSPACE)
-                    .size((size - 4.0).max(11.0)),
-            )
-            .padding([2, 6])
-            .style(|theme: &Theme| {
-                let p = theme.extended_palette().primary.weak;
-                container::Style {
-                    background: Some(p.color.into()),
-                    text_color: Some(p.text),
-                    border: Border {
-                        radius: 2.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            }),
+            container(text(count.to_string()).size((size - 4.0).max(11.0)))
+                .padding([0, 7])
+                .style(tag),
         );
     }
     heading
@@ -519,16 +494,16 @@ pub fn page_heading<'a>(
             title,
             count,
             if metrics.breakpoint.is_compact() {
-                18.0
+                16.0
             } else {
-                23.0
+                21.0
             }
         ),
         text(subtitle.into())
             .size(metrics.label())
             .style(text::secondary)
     ]
-    .spacing(5)
+    .spacing(1)
     .width(Fill)
 }
 
@@ -548,99 +523,575 @@ pub fn page_toolbar<'a>(
     }
 }
 
-/// Quiet elevation for list cards, kept below the stronger dialog shadow.
-pub fn card_surface(theme: &Theme) -> container::Style {
-    let mut style = surface(theme);
-    style.shadow = Shadow {
-        color: Color::BLACK.scale_alpha(0.09),
-        offset: Vector::new(0.0, 2.0),
-        blur_radius: 6.0,
+/// Corner radii shared by every surface.
+pub const RADIUS_CARD: f32 = 10.0;
+pub const RADIUS_ROW: f32 = 8.0;
+pub const RADIUS_CONTROL: f32 = 7.0;
+pub const RADIUS_SMALL: f32 = 5.0;
+
+/// A soft black shadow, deepened on dark themes where it would otherwise vanish.
+pub fn shadow(theme: &Theme, alpha: f32, y: f32, blur_radius: f32) -> Shadow {
+    let depth = if theme.extended_palette().is_dark {
+        3.0
+    } else {
+        1.0
     };
-    style
+    Shadow {
+        color: Color::BLACK.scale_alpha((alpha * depth).min(0.6)),
+        offset: Vector::new(0.0, y),
+        blur_radius,
+    }
 }
 
-pub fn summary_surface(theme: &Theme) -> container::Style {
-    let mut style = card_surface(theme);
-    style.background = Some(
-        theme
-            .extended_palette()
-            .primary
-            .weak
-            .color
-            .scale_alpha(0.18)
-            .into(),
-    );
-    style
+/// The white surface everything sits on.
+pub fn card_color(theme: &Theme) -> iced::theme::palette::Pair {
+    theme.extended_palette().background.weakest
 }
 
-pub fn surface(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
+/// The defined edge of cards and controls.
+pub fn edge_color(theme: &Theme) -> Color {
+    theme.extended_palette().background.strong.color
+}
+
+/// A section or list card.
+pub fn card_surface(theme: &Theme) -> container::Style {
+    let card = card_color(theme);
     container::Style {
-        background: Some(p.background.base.color.into()),
-        text_color: Some(p.background.base.text),
+        background: Some(card.color.into()),
+        text_color: Some(card.text),
         border: Border {
-            color: p.background.strong.color,
+            color: edge_color(theme),
             width: 1.0,
-            radius: 3.0.into(),
+            radius: RADIUS_CARD.into(),
         },
-        shadow: Shadow {
-            color: Color::BLACK.scale_alpha(0.22),
-            offset: Vector::new(0.0, 5.0),
-            blur_radius: 16.0,
+        shadow: shadow(theme, 0.16, 3.0, 12.0),
+        ..Default::default()
+    }
+}
+
+/// One item inside a card or list.
+pub fn row_surface(theme: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: RADIUS_ROW.into(),
+            ..card_surface(theme).border
+        },
+        shadow: shadow(theme, 0.14, 2.0, 8.0),
+        ..card_surface(theme)
+    }
+}
+
+/// A count, duration or label pill.
+pub fn tag(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        text_color: Some(palette.secondary.base.color),
+        border: Border {
+            color: palette.background.neutral.color,
+            width: 1.0,
+            radius: 999.0.into(),
         },
         ..Default::default()
     }
 }
+
+/// A card tinted with the accent, for totals and summaries.
+pub fn summary_surface(theme: &Theme) -> container::Style {
+    let accent = theme.extended_palette().primary.weak;
+    container::Style {
+        background: Some(accent.color.into()),
+        text_color: Some(accent.text),
+        ..card_surface(theme)
+    }
+}
+
+/// Floating dialogs and menus: the same card, lifted well off the page.
+pub fn surface(theme: &Theme) -> container::Style {
+    container::Style {
+        shadow: shadow(theme, 0.26, 10.0, 30.0),
+        ..card_surface(theme)
+    }
+}
+
+/// The dim sheet behind a dialog.
+pub const SCRIM: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.3,
+};
+
 fn raised(mut s: button::Style, theme: &Theme, status: button::Status) -> button::Style {
-    s.border = Border {
-        color: theme
-            .extended_palette()
-            .background
-            .strong
-            .color
-            .scale_alpha(0.65),
-        width: 1.0,
-        radius: 2.0.into(),
+    let (alpha, y, blur) = match status {
+        button::Status::Disabled => (0.0, 0.0, 0.0),
+        button::Status::Pressed => (0.08, 0.0, 2.0),
+        button::Status::Hovered => (0.2, 3.0, 9.0),
+        button::Status::Active => (0.14, 1.0, 4.0),
     };
-    s.shadow = Shadow {
-        color: Color::BLACK.scale_alpha(match status {
-            button::Status::Disabled => 0.0,
-            button::Status::Pressed => 0.10,
-            button::Status::Hovered => 0.21,
-            _ => 0.17,
-        }),
-        offset: Vector::new(
-            0.0,
-            if matches!(status, button::Status::Pressed) {
-                0.0
-            } else {
-                2.5
-            },
-        ),
-        blur_radius: if matches!(status, button::Status::Pressed) {
-            1.0
-        } else {
-            4.5
-        },
-    };
+    s.border.radius = RADIUS_CONTROL.into();
+    s.border.width = 1.0;
+    s.shadow = shadow(theme, alpha, y, blur);
     s
 }
-pub fn primary(t: &Theme, s: button::Status) -> button::Style {
-    raised(button::primary(t, s), t, s)
+
+fn filled(
+    theme: &Theme,
+    status: button::Status,
+    accent: iced::theme::palette::Pair,
+) -> button::Style {
+    let shade = |by: f32| iced::theme::palette::mix(accent.color, Color::BLACK, by);
+    let background = match status {
+        button::Status::Hovered => shade(0.08),
+        button::Status::Pressed => shade(0.16),
+        _ => accent.color,
+    };
+    let disabled = status == button::Status::Disabled;
+    raised(
+        button::Style {
+            background: Some(
+                background
+                    .scale_alpha(if disabled { 0.45 } else { 1.0 })
+                    .into(),
+            ),
+            text_color: accent.text.scale_alpha(if disabled { 0.8 } else { 1.0 }),
+            border: Border {
+                color: shade(0.14).scale_alpha(if disabled { 0.45 } else { 1.0 }),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        theme,
+        status,
+    )
 }
+
+pub fn primary(t: &Theme, s: button::Status) -> button::Style {
+    filled(t, s, t.extended_palette().primary.base)
+}
+
+pub fn danger(t: &Theme, s: button::Status) -> button::Style {
+    filled(t, s, t.extended_palette().danger.base)
+}
+
 pub fn secondary(t: &Theme, s: button::Status) -> button::Style {
-    let mut style = button::secondary(t, s);
     let palette = t.extended_palette();
-    if palette.is_dark && s != button::Status::Disabled {
-        let surface = if s == button::Status::Hovered {
-            palette.background.weak
-        } else {
-            palette.background.weaker
-        };
-        style.background = Some(surface.color.into());
-        style.text_color = surface.text;
+    let card = card_color(t);
+    let (background, text_color, edge) = match s {
+        button::Status::Hovered => (
+            palette.background.weaker.color,
+            palette.background.weaker.text,
+            palette.background.stronger.color,
+        ),
+        button::Status::Pressed => (
+            palette.background.weak.color,
+            palette.background.weak.text,
+            palette.background.stronger.color,
+        ),
+        button::Status::Disabled => (
+            palette.background.base.color,
+            palette.secondary.base.color,
+            palette.background.neutral.color,
+        ),
+        button::Status::Active => (card.color, card.text, edge_color(t)),
+    };
+    raised(
+        button::Style {
+            background: Some(background.into()),
+            text_color,
+            border: Border {
+                color: edge,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        t,
+        s,
+    )
+}
+
+/// A borderless button that fills in when the pointer reaches it.
+pub fn ghost(t: &Theme, s: button::Status) -> button::Style {
+    let palette = t.extended_palette();
+    let (background, edge, text_color) = match s {
+        button::Status::Hovered => (
+            palette.background.weaker.color,
+            palette.background.neutral.color,
+            palette.background.weaker.text,
+        ),
+        button::Status::Pressed => (
+            palette.background.weak.color,
+            palette.background.neutral.color,
+            palette.background.weak.text,
+        ),
+        button::Status::Disabled => (
+            Color::TRANSPARENT,
+            Color::TRANSPARENT,
+            palette.secondary.base.color,
+        ),
+        button::Status::Active => (
+            Color::TRANSPARENT,
+            Color::TRANSPARENT,
+            palette.background.base.text,
+        ),
+    };
+    button::Style {
+        background: Some(background.into()),
+        text_color,
+        border: Border {
+            color: edge,
+            width: 1.0,
+            radius: RADIUS_CONTROL.into(),
+        },
+        ..Default::default()
     }
-    raised(style, t, s)
+}
+
+/// A navigation entry: outlined in the accent while its page is on show.
+pub fn nav(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |t, s| {
+        if !active {
+            return ghost(t, s);
+        }
+        let palette = t.extended_palette();
+        let tint = match s {
+            button::Status::Active | button::Status::Disabled => palette.primary.weak.color,
+            _ => iced::theme::palette::mix(
+                palette.primary.weak.color,
+                palette.primary.base.color,
+                0.2,
+            ),
+        };
+        button::Style {
+            background: Some(tint.into()),
+            text_color: palette.primary.weak.text,
+            border: Border {
+                color: palette.primary.base.color,
+                width: 1.0,
+                radius: RADIUS_CONTROL.into(),
+            },
+            shadow: shadow(t, 0.08, 1.0, 3.0),
+            ..Default::default()
+        }
+    }
+}
+
+fn field_border(theme: &Theme, emphasis: bool) -> Border {
+    Border {
+        color: if emphasis {
+            theme.extended_palette().primary.base.color
+        } else {
+            edge_color(theme)
+        },
+        width: 1.0,
+        radius: RADIUS_CONTROL.into(),
+    }
+}
+
+pub fn input_style(
+    theme: &Theme,
+    status: iced::widget::text_input::Status,
+) -> iced::widget::text_input::Style {
+    let palette = theme.extended_palette();
+    let emphasis = matches!(
+        status,
+        iced::widget::text_input::Status::Hovered
+            | iced::widget::text_input::Status::Focused { .. }
+    );
+    iced::widget::text_input::Style {
+        background: if status == iced::widget::text_input::Status::Disabled {
+            palette.background.base.color
+        } else {
+            card_color(theme).color
+        }
+        .into(),
+        border: field_border(theme, emphasis),
+        icon: palette.secondary.base.color,
+        placeholder: palette.secondary.base.color,
+        value: card_color(theme).text,
+        selection: palette.primary.weak.color,
+    }
+}
+
+pub fn editor_style(
+    theme: &Theme,
+    status: iced::widget::text_editor::Status,
+) -> iced::widget::text_editor::Style {
+    let palette = theme.extended_palette();
+    let emphasis = matches!(
+        status,
+        iced::widget::text_editor::Status::Hovered
+            | iced::widget::text_editor::Status::Focused { .. }
+    );
+    iced::widget::text_editor::Style {
+        background: if status == iced::widget::text_editor::Status::Disabled {
+            palette.background.base.color
+        } else {
+            card_color(theme).color
+        }
+        .into(),
+        border: field_border(theme, emphasis),
+        placeholder: palette.secondary.base.color,
+        value: card_color(theme).text,
+        selection: palette.primary.weak.color,
+    }
+}
+
+pub fn pick_list_style(
+    theme: &Theme,
+    status: iced::widget::pick_list::Status,
+) -> iced::widget::pick_list::Style {
+    let palette = theme.extended_palette();
+    iced::widget::pick_list::Style {
+        text_color: card_color(theme).text,
+        placeholder_color: palette.secondary.base.color,
+        handle_color: palette.secondary.base.color,
+        background: card_color(theme).color.into(),
+        border: field_border(theme, status != iced::widget::pick_list::Status::Active),
+    }
+}
+
+pub fn menu_style(theme: &Theme) -> iced::widget::overlay::menu::Style {
+    let accent = theme.extended_palette().primary.weak;
+    iced::widget::overlay::menu::Style {
+        background: card_color(theme).color.into(),
+        border: Border {
+            color: edge_color(theme),
+            width: 1.0,
+            radius: RADIUS_CONTROL.into(),
+        },
+        text_color: card_color(theme).text,
+        selected_text_color: accent.text,
+        selected_background: accent.color.into(),
+        shadow: shadow(theme, 0.2, 6.0, 18.0),
+    }
+}
+
+pub fn scrollable_style(
+    theme: &Theme,
+    status: iced::widget::scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    let palette = theme.extended_palette();
+    let base = iced::widget::scrollable::default(theme, status);
+    let rail = |hovered: bool| iced::widget::scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: iced::widget::scrollable::Scroller {
+            background: if hovered {
+                palette.background.stronger.color
+            } else {
+                palette.background.strong.color
+            }
+            .into(),
+            border: Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
+        },
+    };
+    let (vertical, horizontal) = match status {
+        iced::widget::scrollable::Status::Active { .. } => (false, false),
+        iced::widget::scrollable::Status::Hovered {
+            is_vertical_scrollbar_hovered,
+            is_horizontal_scrollbar_hovered,
+            ..
+        } => (
+            is_vertical_scrollbar_hovered,
+            is_horizontal_scrollbar_hovered,
+        ),
+        iced::widget::scrollable::Status::Dragged {
+            is_vertical_scrollbar_dragged,
+            is_horizontal_scrollbar_dragged,
+            ..
+        } => (
+            is_vertical_scrollbar_dragged,
+            is_horizontal_scrollbar_dragged,
+        ),
+    };
+    iced::widget::scrollable::Style {
+        vertical_rail: rail(vertical),
+        horizontal_rail: rail(horizontal),
+        gap: None,
+        ..base
+    }
+}
+
+pub fn checkbox_style(
+    theme: &Theme,
+    status: iced::widget::checkbox::Status,
+) -> iced::widget::checkbox::Style {
+    let palette = theme.extended_palette();
+    let (is_checked, hovered, disabled) = match status {
+        iced::widget::checkbox::Status::Active { is_checked } => (is_checked, false, false),
+        iced::widget::checkbox::Status::Hovered { is_checked } => (is_checked, true, false),
+        iced::widget::checkbox::Status::Disabled { is_checked } => (is_checked, false, true),
+    };
+    let accent = palette.primary.base;
+    iced::widget::checkbox::Style {
+        background: if is_checked {
+            accent.color.scale_alpha(if disabled { 0.5 } else { 1.0 })
+        } else {
+            card_color(theme).color
+        }
+        .into(),
+        icon_color: accent.text,
+        border: Border {
+            color: if is_checked || hovered {
+                accent.color
+            } else {
+                palette.background.stronger.color
+            },
+            width: 1.5,
+            radius: RADIUS_SMALL.into(),
+        },
+        text_color: None,
+    }
+}
+
+pub fn toggler_style(
+    theme: &Theme,
+    status: iced::widget::toggler::Status,
+) -> iced::widget::toggler::Style {
+    let palette = theme.extended_palette();
+    let on = matches!(
+        status,
+        iced::widget::toggler::Status::Active { is_toggled: true }
+            | iced::widget::toggler::Status::Hovered { is_toggled: true }
+            | iced::widget::toggler::Status::Disabled { is_toggled: true }
+    );
+    let edge = if on {
+        palette.primary.strong.color
+    } else {
+        palette.background.stronger.color
+    };
+    iced::widget::toggler::Style {
+        background: if on {
+            palette.primary.base.color
+        } else {
+            palette.background.weak.color
+        }
+        .into(),
+        background_border_width: 1.0,
+        background_border_color: edge,
+        foreground: card_color(theme).color.into(),
+        foreground_border_width: 1.0,
+        foreground_border_color: edge,
+        text_color: None,
+        border_radius: None,
+        padding_ratio: 0.1,
+    }
+}
+
+pub fn slider_style(
+    theme: &Theme,
+    status: iced::widget::slider::Status,
+) -> iced::widget::slider::Style {
+    let palette = theme.extended_palette();
+    iced::widget::slider::Style {
+        rail: iced::widget::slider::Rail {
+            backgrounds: (
+                palette.primary.base.color.into(),
+                palette.background.neutral.color.into(),
+            ),
+            width: 4.0,
+            border: Border {
+                radius: 2.0.into(),
+                ..Default::default()
+            },
+        },
+        handle: iced::widget::slider::Handle {
+            shape: iced::widget::slider::HandleShape::Circle { radius: 7.0 },
+            background: card_color(theme).color.into(),
+            border_width: if status == iced::widget::slider::Status::Active {
+                1.0
+            } else {
+                2.0
+            },
+            border_color: palette.primary.base.color,
+        },
+    }
+}
+
+// The themed constructors. A style set here applies everywhere the widget is
+// used, and a call site can still override it with its own `.style`.
+
+/// The main action of a form or page.
+pub fn action_button<'a, M: 'a>(
+    content: impl Into<Element<'a, M>>,
+) -> button::Button<'a, M, Theme, iced::Renderer> {
+    button(content).style(primary)
+}
+
+/// A supporting action.
+pub fn quiet_button<'a, M: 'a>(
+    content: impl Into<Element<'a, M>>,
+) -> button::Button<'a, M, Theme, iced::Renderer> {
+    button(content).style(secondary)
+}
+
+pub fn text_input<'a, M: Clone + 'a>(
+    placeholder: &str,
+    value: &str,
+) -> iced::widget::text_input::TextInput<'a, M, Theme, iced::Renderer> {
+    iced::widget::text_input(placeholder, value).style(input_style)
+}
+
+pub fn text_editor<'a, M: Clone + 'a>(
+    content: &'a iced::widget::text_editor::Content<iced::Renderer>,
+) -> iced::widget::text_editor::TextEditor<
+    'a,
+    iced::advanced::text::highlighter::PlainText,
+    M,
+    Theme,
+    iced::Renderer,
+> {
+    iced::widget::text_editor(content).style(editor_style)
+}
+
+pub fn pick_list<'a, T, L, V, M>(
+    options: L,
+    selected: Option<V>,
+    on_selected: impl Fn(T) -> M + 'a,
+) -> iced::widget::pick_list::PickList<'a, T, L, V, M, Theme, iced::Renderer>
+where
+    T: ToString + PartialEq + Clone + 'a,
+    L: std::borrow::Borrow<[T]> + 'a,
+    V: std::borrow::Borrow<T> + 'a,
+    M: Clone + 'a,
+{
+    iced::widget::pick_list(options, selected, on_selected)
+        .style(pick_list_style)
+        .menu_style(menu_style)
+}
+
+pub fn scrollable<'a, M: 'a>(
+    content: impl Into<Element<'a, M>>,
+) -> iced::widget::scrollable::Scrollable<'a, M, Theme, iced::Renderer> {
+    iced::widget::scrollable(content).style(scrollable_style)
+}
+
+pub fn checkbox<'a, M: 'a>(
+    is_checked: bool,
+) -> iced::widget::checkbox::Checkbox<'a, M, Theme, iced::Renderer> {
+    iced::widget::checkbox(is_checked).style(checkbox_style)
+}
+
+pub fn toggler<'a, M: 'a>(
+    is_checked: bool,
+) -> iced::widget::toggler::Toggler<'a, M, Theme, iced::Renderer> {
+    iced::widget::toggler(is_checked).style(toggler_style)
+}
+
+pub fn slider<'a, T, M>(
+    range: std::ops::RangeInclusive<T>,
+    value: T,
+    on_change: impl Fn(T) -> M + 'a,
+) -> iced::widget::slider::Slider<'a, T, M, Theme>
+where
+    T: Copy + From<u8> + PartialOrd,
+    M: Clone + 'a,
+{
+    iced::widget::slider(range, value, on_change).style(slider_style)
 }
 
 #[cfg(test)]

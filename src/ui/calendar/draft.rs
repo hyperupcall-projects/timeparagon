@@ -20,7 +20,7 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     ]
     .align_y(Alignment::Center);
 
-    let title = text_input("Add title", &draft.title)
+    let title = crate::ui::controls::text_input("Add title", &draft.title)
         .on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)))
         .size(metrics.label() + 2.0)
         .width(Fill);
@@ -69,7 +69,7 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         text("Description")
             .size(metrics.label() - 1.0)
             .style(text::secondary),
-        iced::widget::text_editor(&state.form_editors.event_draft)
+        crate::ui::controls::text_editor(&state.form_editors.event_draft)
             .placeholder("Add description…")
             .on_action(|a| Message::Event(EventMessage::FormEdited(
                 crate::app::FormField::EventDraft,
@@ -126,10 +126,14 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     .width(Fill);
 
     container(
-        column![header, scrollable(fields).height(Fill), actions]
-            .spacing(metrics.spacing)
-            .height(Fill)
-            .width(Fill),
+        column![
+            header,
+            crate::ui::controls::scrollable(fields).height(Fill),
+            actions
+        ]
+        .spacing(metrics.spacing)
+        .height(Fill)
+        .width(Fill),
     )
     .padding(metrics.padding)
     .width(Fill)
@@ -146,7 +150,7 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
     let weekly = state.weekly();
     let metrics = *metrics;
     let overlay = responsive(move |size| {
-        let title = text_input("Add title", &draft.title)
+        let title = crate::ui::controls::text_input("Add title", &draft.title)
             .on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)))
             .size(metrics.label() + 2.0)
             .width(Fill);
@@ -241,7 +245,7 @@ pub(crate) fn color_circle<'a>(color: Color) -> Element<'a, Message> {
         .style(move |_theme| container::Style {
             background: Some(color.into()),
             border: iced::Border {
-                radius: 5.0.into(),
+                radius: crate::ui::controls::RADIUS_ROW.into(),
                 ..iced::Border::default()
             },
             ..container::Style::default()
@@ -404,7 +408,7 @@ pub(super) fn calendar_dropdown_overlay<'a>(
             if is_selected {
                 crate::ui::controls::primary(theme, status)
             } else {
-                button::text(theme, status)
+                crate::ui::controls::ghost(theme, status)
             }
         });
 
@@ -412,7 +416,9 @@ pub(super) fn calendar_dropdown_overlay<'a>(
         list = list.push(Space::new().height(4.0));
     }
 
-    let scrollable = scrollable(list).width(Fill).height(Length::Fixed(320.0));
+    let scrollable = crate::ui::controls::scrollable(list)
+        .width(Fill)
+        .height(Length::Fixed(320.0));
 
     let card = container(scrollable)
         .padding(4.0)
@@ -421,13 +427,13 @@ pub(super) fn calendar_dropdown_overlay<'a>(
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(palette.background.base.color.into()),
+                background: Some(palette.background.weakest.color.into()),
                 border: iced::Border {
                     color: palette.background.strong.color,
                     width: 1.0,
-                    radius: 6.0.into(),
+                    radius: crate::ui::controls::RADIUS_CARD.into(),
                 },
-                ..container::Style::default()
+                ..crate::ui::controls::surface(theme)
             }
         });
 

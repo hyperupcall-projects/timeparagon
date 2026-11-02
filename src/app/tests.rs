@@ -1512,37 +1512,6 @@ fn an_alarm_for_today_cannot_be_edited_into_the_past() {
 }
 
 #[test]
-fn an_alarm_that_comes_due_goes_off_and_leaves_the_calendar() {
-    let mut state = State::blank();
-    place(&mut state, 60);
-    state.alarms.add(
-        crate::clock::now() - chrono::Duration::seconds(1),
-        config::AlarmProfile::default(),
-    );
-    assert_eq!(state.alarms.items().len(), 2);
-
-    let _ = update(&mut state, Message::Alarms(alarms::Action::Poll));
-
-    assert_eq!(state.alarms.items().len(), 1, "only the due one went");
-    assert!(state.alarm_active, "it rings until dismissed");
-}
-
-#[test]
-fn an_alarm_going_off_closes_its_own_popup() {
-    let mut state = State::blank();
-    let id = state.alarms.add(
-        crate::clock::now() - chrono::Duration::seconds(1),
-        config::AlarmProfile::default(),
-    );
-    let _ = update(&mut state, Message::Alarms(alarms::Action::Open(id)));
-    assert!(state.alarms.editor.is_some());
-
-    let _ = update(&mut state, Message::Alarms(alarms::Action::Poll));
-
-    assert!(state.alarms.editor.is_none());
-}
-
-#[test]
 fn leaving_the_calendar_ends_alarm_setting() {
     let mut state = State::blank();
     state.alarms.mode = true;

@@ -2,7 +2,7 @@
 use super::layout::Metrics;
 use crate::app::EventMessage;
 use crate::app::{Message, State};
-use iced::widget::{Space, button, column, container, mouse_area, row, stack, text, text_editor};
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Element, Fill};
 
 pub fn preview<'a>(id: &str, value: &str, metrics: &Metrics) -> Element<'a, Message> {
@@ -32,7 +32,7 @@ pub fn preview<'a>(id: &str, value: &str, metrics: &Metrics) -> Element<'a, Mess
 pub fn overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut description = column![
         text("Description").size(metrics.label() + 6.0),
-        text_editor(&state.description_editor)
+        crate::ui::controls::text_editor(&state.description_editor)
             .placeholder("Add description…")
             .on_action(|v0| Message::Event(EventMessage::DescriptionEdited(v0)))
             .size(metrics.label())
@@ -64,7 +64,7 @@ pub fn overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(iced::Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 })
         )

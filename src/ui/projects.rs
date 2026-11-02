@@ -1,6 +1,6 @@
 //! The Projects tab: a selectable list with an editable overview beside it.
 
-use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
+use iced::widget::{Space, button, column, container, row, text};
 use iced::{Alignment, Color, Element, Fill, Length};
 
 use crate::app::{Message, State};
@@ -38,7 +38,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         );
     }
 
-    let list = scrollable(container(items).padding(iced::Padding {
+    let list = crate::ui::controls::scrollable(container(items).padding(iced::Padding {
         right: SCROLLBAR_GUTTER,
         ..iced::Padding::ZERO
     }))
@@ -47,12 +47,12 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let body: Element<'a, Message> = if let Some(draft) = &state.projects.editing {
         let overview = container(
-            scrollable(
-                container(overview(state, draft, metrics)).padding(iced::Padding {
+            crate::ui::controls::scrollable(container(overview(state, draft, metrics)).padding(
+                iced::Padding {
                     right: SCROLLBAR_GUTTER,
                     ..iced::Padding::ZERO
-                }),
-            )
+                },
+            ))
             .height(Fill),
         )
         .padding(metrics.padding)
@@ -95,11 +95,14 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn add_box<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let input = text_input("New project, e.g. School/Physics", &state.projects.new_name)
-        .on_input(|name| msg(Action::NewName(name)))
-        .on_submit(msg(Action::Add))
-        .size(metrics.label())
-        .width(Fill);
+    let input = crate::ui::controls::text_input(
+        "New project, e.g. School/Physics",
+        &state.projects.new_name,
+    )
+    .on_input(|name| msg(Action::NewName(name)))
+    .on_submit(msg(Action::Add))
+    .size(metrics.label())
+    .width(Fill);
 
     let add = button(text("Add").size(metrics.label()).center())
         .on_press(msg(Action::Add))
@@ -170,7 +173,7 @@ fn overview<'a>(state: &State, draft: &'a Draft, metrics: &Metrics) -> Element<'
                 .width(Fill),
             button(text("Close").size(metrics.label()))
                 .on_press(msg(Action::CancelEdit))
-                .style(button::text),
+                .style(crate::ui::controls::ghost),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -189,7 +192,7 @@ fn overview<'a>(state: &State, draft: &'a Draft, metrics: &Metrics) -> Element<'
                 row![
                     button(text("Remove").size(metrics.label()))
                         .on_press(msg(Action::ConfirmRemove(draft.id)))
-                        .style(button::danger),
+                        .style(crate::ui::controls::danger),
                     button(text("Keep").size(metrics.label()))
                         .on_press(msg(Action::CancelRemove))
                         .style(super::controls::secondary),
@@ -202,7 +205,7 @@ fn overview<'a>(state: &State, draft: &'a Draft, metrics: &Metrics) -> Element<'
         content = content.push(
             button(text("Remove project").size(metrics.label()))
                 .on_press(msg(Action::Remove(draft.id)))
-                .style(button::danger),
+                .style(crate::ui::controls::danger),
         );
     }
     content.into()
@@ -216,7 +219,7 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
             .style(text::secondary)
     };
 
-    let name = text_input("Project name", &draft.name)
+    let name = crate::ui::controls::text_input("Project name", &draft.name)
         .on_input(|name| msg(Action::Name(name)))
         .on_submit(msg(Action::Save))
         .size(metrics.label())
@@ -248,7 +251,7 @@ fn editor<'a>(draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
         crate::ui::controls::secondary
     });
 
-    let path = text_input("/path/to/project/files", &draft.directory)
+    let path = crate::ui::controls::text_input("/path/to/project/files", &draft.directory)
         .on_input(|directory| msg(Action::Directory(directory)))
         .on_submit(msg(Action::Save))
         .size(metrics.label())

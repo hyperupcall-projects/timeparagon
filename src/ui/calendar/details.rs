@@ -153,9 +153,16 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     let scroll_max =
         (metrics.size.height - metrics.padding * 2.0 - metrics.spacing - reserved).max(0.0);
 
-    let scrolling = container(scrollable(body).width(Fill).height(Length::Shrink))
-        .max_height(scroll_max)
-        .width(Fill);
+    let scrolling = container(
+        crate::ui::controls::scrollable(container(body).padding(iced::Padding {
+            right: 14.0,
+            ..iced::Padding::ZERO
+        }))
+        .width(Fill)
+        .height(Length::Shrink),
+    )
+    .max_height(scroll_max)
+    .width(Fill);
 
     let pane = container(
         column![

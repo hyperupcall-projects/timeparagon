@@ -4,7 +4,7 @@
 //! typed. The size of it is the size of the text on this page and nothing
 //! else: the rest of the interface is left as it is drawn.
 
-use iced::widget::{button, column, container, row, scrollable, text, text_editor};
+use iced::widget::{button, column, container, row, text};
 use iced::{Element, Fill, Length};
 
 use crate::app::NotepadMessage;
@@ -28,7 +28,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     // The editor keeps the text while it is being typed, so what is drawn is
     // what the user has already written rather than what was last saved.
-    let editor = text_editor(&state.notepad)
+    let editor = crate::ui::controls::text_editor(&state.notepad)
         .id(input_id())
         .placeholder("Write anything. It is kept between sessions.")
         .on_action(|v0| Message::Notepad(NotepadMessage::NotepadEdited(v0)))
@@ -52,7 +52,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let mut body = column![controls, editor];
     if let Some(links) = super::links::for_editor(&state.config.notepad.text, metrics.label()) {
-        body = body.push(container(scrollable(links).height(Length::Shrink)).max_height(100.0));
+        body = body.push(
+            container(crate::ui::controls::scrollable(links).height(Length::Shrink))
+                .max_height(100.0),
+        );
     }
 
     body.spacing(metrics.spacing)

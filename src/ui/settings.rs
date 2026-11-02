@@ -1,9 +1,7 @@
 //! The settings tab and the timer-hits-zero menu.
 
 use crate::calendar::time_format::TimeFormat;
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
-};
+use iced::widget::{button, column, container, row, text};
 use iced::{Center, Element, Fill, Length};
 
 use crate::app::{BorderLayer, LayoutField, Message, State};
@@ -58,7 +56,7 @@ fn week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         field(
             format!("Weekly day width: {} px", settings.weekly_day_width()),
-            slider(100..=400, settings.weekly_day_width(), |v0| {
+            crate::ui::controls::slider(100..=400, settings.weekly_day_width(), |v0| {
                 Message::Settings(SettingsMessage::CalendarWeeklyWidthChanged(v0))
             },)
             .into(),
@@ -74,49 +72,57 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // There is one settings page rather than one per tab: everything is set
     // from the same place.
     let content = column![
-        heading("Preferences", metrics),
-        preferences(state, metrics),
-        heading("Appearance", metrics),
-        appearance(state, metrics),
-        heading("Dock", metrics),
-        dock(state, metrics),
-        heading("Side panel", metrics),
-        panel(state, metrics),
-        heading("Event/Habit/Task overlay", metrics),
-        layout_number(
-            "Event/Habit/Task details width (px)",
-            LayoutField::DetailWidth,
-            state,
+        section("Preferences", preferences(state, metrics), metrics),
+        section("Appearance", appearance(state, metrics), metrics),
+        section("Dock", dock(state, metrics), metrics),
+        section("Side panel", panel(state, metrics), metrics),
+        section(
+            "Event/Habit/Task overlay",
+            layout_number(
+                "Event/Habit/Task details width (px)",
+                LayoutField::DetailWidth,
+                state,
+                metrics
+            ),
             metrics
         ),
-        heading("Time block overlay", metrics),
-        layout_number(
-            "Time block panel width (px)",
-            LayoutField::TimeBlockWidth,
-            state,
+        section(
+            "Time block overlay",
+            layout_number(
+                "Time block panel width (px)",
+                LayoutField::TimeBlockWidth,
+                state,
+                metrics
+            ),
             metrics
         ),
-        heading("Windowing", metrics),
-        windowing(state, metrics),
-        heading("Application", metrics),
-        restart(metrics),
-        heading("Keyboard shortcuts", metrics),
-        shortcuts(state, metrics),
-        heading("Calendar view order", metrics),
-        calendar_order(state, metrics),
-        heading("Google Calendar", metrics),
-        calendar(state, metrics),
-        heading("Travel", metrics),
-        super::travel::settings_section(state, metrics),
-        heading("Voice input", metrics),
-        crate::voice::settings(state),
-        heading("Account integrations", metrics),
-        integrations(state, metrics),
+        section("Windowing", windowing(state, metrics), metrics),
+        section("Application", restart(metrics), metrics),
+        section("Keyboard shortcuts", shortcuts(state, metrics), metrics),
+        section(
+            "Calendar view order",
+            calendar_order(state, metrics),
+            metrics
+        ),
+        section("Google Calendar", calendar(state, metrics), metrics),
+        section(
+            "Travel",
+            super::travel::settings_section(state, metrics),
+            metrics
+        ),
+        section("Voice input", crate::voice::settings(state), metrics),
+        section(
+            "Account integrations",
+            integrations(state, metrics),
+            metrics
+        ),
     ]
-    .spacing(metrics.spacing * 1.5)
+    .spacing(metrics.spacing)
     .padding(iced::Padding {
+        top: 2.0,
+        left: 3.0,
         right: SCROLLBAR_GUTTER,
-        ..iced::Padding::ZERO
+        bottom: 8.0,
     })
     .width(Fill);
 
@@ -125,12 +131,14 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             "Settings",
             None,
             if metrics.breakpoint.is_compact() {
-                18.0
+                16.0
             } else {
-                23.0
+                21.0
             }
         ),
-        scrollable(content).height(Fill).width(Fill),
+        crate::ui::controls::scrollable(content)
+            .height(Fill)
+            .width(Fill),
     ]
     .spacing(metrics.spacing)
     .padding(metrics.padding)
@@ -140,7 +148,19 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn heading<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
-    super::controls::section_heading(label, None, metrics.label() + 3.0).into()
+    super::controls::section_heading(label, None, metrics.label() + 1.0).into()
+}
+
+fn section<'a>(
+    label: &'a str,
+    body: Element<'a, Message>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    container(column![heading(label, metrics), body].spacing(metrics.spacing))
+        .padding(metrics.padding)
+        .width(Fill)
+        .style(super::controls::card_surface)
+        .into()
 }
 
 /// A labelled row that stacks vertically once there is no room for two
@@ -202,7 +222,7 @@ where
     } else {
         field(
             label,
-            pick_list(options, selected, on_select)
+            crate::ui::controls::pick_list(options, selected, on_select)
                 .text_size(metrics.label())
                 .width(Fill)
                 .into(),
@@ -443,7 +463,7 @@ fn border_color_input<'a>(
         .filter(|(edited, _)| *edited == layer)
         .map_or_else(|| current.to_string(), |(_, input)| input.clone());
     let submitted = on_submit(layer);
-    let input = text_input("#RRGGBB", &shown)
+    let input = crate::ui::controls::text_input("#RRGGBB", &shown)
         .id(format!(
             "{id_prefix}-{}",
             match layer {
@@ -461,7 +481,7 @@ fn border_color_input<'a>(
 
 fn restart<'a>(metrics: &Metrics) -> Element<'a, Message> {
     column![
-        button(
+        crate::ui::controls::action_button(
             text("Restart and load the latest version")
                 .size(metrics.label())
                 .center()
@@ -539,7 +559,7 @@ fn layout_number<'a>(
         .as_ref()
         .filter(|(field, _)| *field == kind)
         .map_or_else(|| format!("{value:.0}"), |(_, input)| input.clone());
-    let decrement = button(
+    let decrement = crate::ui::controls::quiet_button(
         text(format!("-{step:.0}"))
             .size(metrics.label())
             .center()
@@ -548,7 +568,7 @@ fn layout_number<'a>(
     .padding([4, 4])
     .width(38)
     .on_press_maybe((value > min).then(|| kind.changed((value - step).max(min))));
-    let increment = button(
+    let increment = crate::ui::controls::quiet_button(
         text(format!("+{step:.0}"))
             .size(metrics.label())
             .center()
@@ -557,7 +577,7 @@ fn layout_number<'a>(
     .padding([4, 4])
     .width(38)
     .on_press_maybe((value < max).then(|| kind.changed((value + step).min(max))));
-    let input = text_input("", &shown)
+    let input = crate::ui::controls::text_input("", &shown)
         .id(format!("layout-{kind:?}"))
         .size(metrics.label())
         .width(Fill)
@@ -629,8 +649,9 @@ fn shortcut_action<'a>(
         );
     }
 
-    let mut input = text_input("e.g. Meta+U", &editor.input).size(metrics.label());
-    let mut add = button(
+    let mut input =
+        crate::ui::controls::text_input("e.g. Meta+U", &editor.input).size(metrics.label());
+    let mut add = crate::ui::controls::action_button(
         text(if editor.busy {
             "Applying…"
         } else {
@@ -716,7 +737,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .style(text::secondary),
         field(
             "OAuth client ID",
-            text_input("Desktop client ID", &settings.client_id)
+            crate::ui::controls::text_input("Desktop client ID", &settings.client_id)
                 .on_input(|v0| Message::Settings(SettingsMessage::GoogleClientIdChanged(v0)))
                 .size(metrics.label())
                 .into(),
@@ -724,7 +745,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         field(
             "Client secret",
-            text_input("optional", &settings.client_secret)
+            crate::ui::controls::text_input("optional", &settings.client_secret)
                 .on_input(|v0| Message::Settings(SettingsMessage::GoogleClientSecretChanged(v0)))
                 .secure(true)
                 .size(metrics.label())
@@ -813,7 +834,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             settings.day_start_hour(),
             state.config.appearance.time_format,
         ),
-        slider(
+        crate::ui::controls::slider(
             0..=config::CalendarSettings::MAX_DAY_END_HOUR,
             settings.day_start_hour(),
             |v0| Message::Settings(SettingsMessage::CalendarDayEndChanged(v0)),
@@ -824,7 +845,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     section = section.push(field(
         format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
-        slider(6..=12, settings.sleep_goal_hours(), |v0| {
+        crate::ui::controls::slider(6..=12, settings.sleep_goal_hours(), |v0| {
             Message::Settings(SettingsMessage::SleepGoalChanged(v0))
         })
         .into(),
@@ -839,7 +860,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 state.config.appearance.time_format
             )
         ),
-        slider(0..=6, settings.sleep_day_start_hour(), |v0| {
+        crate::ui::controls::slider(0..=6, settings.sleep_day_start_hour(), |v0| {
             Message::Settings(SettingsMessage::SleepDayStartChanged(v0))
         })
         .into(),
@@ -854,7 +875,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 state.config.appearance.time_format
             )
         ),
-        slider(4..=14, settings.latest_wakeup_hour(), |v0| {
+        crate::ui::controls::slider(4..=14, settings.latest_wakeup_hour(), |v0| {
             Message::Settings(SettingsMessage::LatestWakeupChanged(v0))
         })
         .into(),
@@ -891,7 +912,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     section = section.push(field(
         "Default calendar for new events",
-        pick_list(option_map, selected_option, |option: CalendarOption| {
+        crate::ui::controls::pick_list(option_map, selected_option, |option: CalendarOption| {
             Message::Settings(SettingsMessage::DefaultCalendarSelected(option.id))
         })
         .text_size(metrics.label())
@@ -926,7 +947,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             .cloned();
         section = section.push(field(
             "Google Tasks list for time-blocked and scheduled tasks",
-            pick_list(options, selected, |o: CalendarOption| {
+            crate::ui::controls::pick_list(options, selected, |o: CalendarOption| {
                 Message::TimeBlocking(crate::timeblocking::Action::List(o.id))
             })
             .text_size(metrics.label())
@@ -959,7 +980,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .cloned();
     section = section.push(field(
         "Google Tasks list for backlog tasks",
-        pick_list(backlog_options, selected, |option: CalendarOption| {
+        crate::ui::controls::pick_list(backlog_options, selected, |option: CalendarOption| {
             Message::TimeBlocking(crate::timeblocking::Action::BacklogDestination(
                 (!option.id.is_empty()).then_some(option.id),
             ))
@@ -993,7 +1014,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .cloned();
     section = section.push(field(
         "Google Tasks list for triaged tasks",
-        pick_list(triaged_options, selected, |option: CalendarOption| {
+        crate::ui::controls::pick_list(triaged_options, selected, |option: CalendarOption| {
             Message::TimeBlocking(crate::timeblocking::Action::TriagedDestination(
                 (!option.id.is_empty()).then_some(option.id),
             ))
@@ -1024,7 +1045,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .cloned();
     section = section.push(field(
         "Google Tasks list for new tasks (the Inbox)",
-        pick_list(inbox_options, selected, |option: CalendarOption| {
+        crate::ui::controls::pick_list(inbox_options, selected, |option: CalendarOption| {
             Message::Inbox(crate::inbox::Action::List(
                 (!option.id.is_empty()).then_some(option.id),
             ))
@@ -1175,7 +1196,7 @@ pub(super) fn switch<'a>(
     on_toggle: impl Fn(bool) -> Message + 'a,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    toggler(value)
+    crate::ui::controls::toggler(value)
         .label(label)
         .text_size(metrics.label())
         .on_toggle(on_toggle)

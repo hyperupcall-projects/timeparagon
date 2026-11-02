@@ -33,8 +33,8 @@ use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::font::Weight;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
-    Space, button, canvas as canvas_widget, checkbox, column, container, mouse_area, pick_list,
-    responsive, row, scrollable, stack, text, text_input, toggler,
+    Space, button, canvas as canvas_widget, column, container, mouse_area, responsive, row,
+    scrollable, stack, text,
 };
 use iced::{
     Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -56,7 +56,7 @@ use super::layout::Metrics;
 const GUTTER: f32 = 52.0;
 const COMPACT_GUTTER: f32 = 40.0;
 const EVENT_GAP: f32 = 2.0;
-const EVENT_RADIUS: f32 = 4.0;
+const EVENT_RADIUS: f32 = 6.0;
 const NEEDLE_RADIUS: f32 = 5.5;
 
 /// The gap between a block's left edge and the text inside it.

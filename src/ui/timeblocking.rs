@@ -6,10 +6,7 @@ use crate::{
     calendar::Event,
     timeblocking::{self as tb, Action},
 };
-use iced::widget::{
-    button, column, container, mouse_area, rich_text, row, scrollable, span, text, text_input,
-    toggler,
-};
+use iced::widget::{button, column, container, mouse_area, rich_text, row, span, text};
 use iced::{Color, Element, Fill, Length};
 fn msg(a: Action) -> Message {
     Message::TimeBlocking(a)
@@ -46,7 +43,8 @@ pub fn task_row<'a>(
     let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
-    let mut check = button(text(if task.completed { "●" } else { "○" })).style(button::text);
+    let mut check =
+        button(text(if task.completed { "●" } else { "○" })).style(crate::ui::controls::ghost);
     if state.timeblocking.busy.is_empty() {
         check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
@@ -69,7 +67,7 @@ pub fn task_row<'a>(
     }
     let title = button(title_content)
         .width(Fill)
-        .style(button::text)
+        .style(crate::ui::controls::ghost)
         .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())));
     let handle = text("⠿").size(17);
     let mut line = row![handle, check].spacing(4).align_y(iced::Center);
@@ -84,7 +82,7 @@ pub fn task_row<'a>(
         line = line.push(
             button(text("Reschedule").size(metrics.label()))
                 .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
-                .style(button::text),
+                .style(crate::ui::controls::ghost),
         );
     }
     let mut content = column![line].spacing(3);
@@ -140,7 +138,7 @@ pub fn task_row<'a>(
                     if over_capacity {
                         palette.danger.weak.color
                     } else {
-                        palette.background.base.color
+                        palette.background.weakest.color
                     }
                     .into(),
                 ),
@@ -151,9 +149,9 @@ pub fn task_row<'a>(
                         palette.background.strong.color
                     },
                     width: 1.0,
-                    radius: 5.0.into(),
+                    radius: crate::ui::controls::RADIUS_ROW.into(),
                 },
-                ..Default::default()
+                ..crate::ui::controls::row_surface(theme)
             }
         });
     super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref())
@@ -196,18 +194,14 @@ pub(super) fn drag_ghost<'a>(
         .style(|theme: &iced::Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(palette.background.base.color.into()),
+                background: Some(palette.background.weakest.color.into()),
                 text_color: Some(palette.background.base.text),
                 border: iced::Border {
                     color: palette.primary.base.color,
                     width: 2.0,
-                    radius: 6.0.into(),
+                    radius: crate::ui::controls::RADIUS_ROW.into(),
                 },
-                shadow: iced::Shadow {
-                    color: Color::BLACK.scale_alpha(0.32),
-                    offset: iced::Vector::new(0.0, 4.0),
-                    blur_radius: 12.0,
-                },
+                shadow: crate::ui::controls::shadow(theme, 0.26, 8.0, 22.0),
                 ..container::Style::default()
             }
         })
@@ -266,7 +260,7 @@ pub(super) fn editable_title<'a>(
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
     let size = metrics.label() + 6.0;
     let title: Element<'a, Message> = if state.timeblocking.editing_title {
-        let mut input = text_input("Task name", &state.timeblocking.title)
+        let mut input = crate::ui::controls::text_input("Task name", &state.timeblocking.title)
             .id(iced::widget::Id::new("task-title"))
             .size(size);
         if !busy {
@@ -282,7 +276,7 @@ pub(super) fn editable_title<'a>(
         }))
         .padding(0)
         .width(Fill)
-        .style(button::text);
+        .style(crate::ui::controls::ghost);
         if !busy {
             title = title.on_press(msg(Action::EditTitle));
         }
@@ -361,7 +355,7 @@ fn quick_add_help(metrics: &Metrics) -> Element<'static, Message> {
     .spacing(10)
     .padding(iced::Padding::from([0, 6]))
     .width(Fill);
-    container(scrollable(body).height(Length::Shrink))
+    container(crate::ui::controls::scrollable(body).height(Length::Shrink))
         .max_height(460)
         .padding(14)
         .width(Fill)
@@ -377,7 +371,7 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         .as_ref()
         .filter(|_| task.id == crate::inbox::DRAFT_ID);
     let title: Element<'a, Message> = if let Some(draft) = draft {
-        let mut input = text_input("Task, or paste a link", &draft.title)
+        let mut input = crate::ui::controls::text_input("Task, or paste a link", &draft.title)
             .id(iced::widget::Id::new(crate::inbox::TITLE_FIELD))
             .size(metrics.label() + 6.0);
         if !draft.saving {
@@ -396,9 +390,9 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
             row![
                 field_label("Title", metrics),
                 iced::widget::Space::new().width(Fill),
-                button("?").on_press(Message::Inbox(crate::inbox::Action::SyntaxHelp(
-                    !draft.syntax_help
-                )))
+                crate::ui::controls::quiet_button("?").on_press(Message::Inbox(
+                    crate::inbox::Action::SyntaxHelp(!draft.syntax_help)
+                ))
             ]
             .align_y(iced::Center),
             quick_add_help(metrics),
@@ -412,7 +406,7 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         editable_title(state, task, metrics)
     };
     let description: Element<'a, Message> = if let Some(draft) = draft {
-        let mut input = iced::widget::text_editor(&state.task_description)
+        let mut input = crate::ui::controls::text_editor(&state.task_description)
             .placeholder("Add description…")
             .size(metrics.label())
             .height(140);
@@ -484,14 +478,14 @@ fn date_field<'a>(
     } else {
         &state.timeblocking.date
     };
-    let mut day = button(
+    let mut day = crate::ui::controls::action_button(
         text("Schedule Day")
             .size(metrics.label())
             .center()
             .width(Fill),
     )
     .width(Fill);
-    let mut time = button(
+    let mut time = crate::ui::controls::action_button(
         text("Schedule Time")
             .size(metrics.label())
             .center()
@@ -575,7 +569,8 @@ fn date_field<'a>(
             .spacing(6)
             .into()
         };
-        let mut save = button(text("Save time").size(metrics.label())).width(Fill);
+        let mut save =
+            crate::ui::controls::action_button(text("Save time").size(metrics.label())).width(Fill);
         if !busy {
             save = save.on_press(msg(if deadline {
                 Action::DeadlineWithTime(task.id.clone())
@@ -617,7 +612,7 @@ fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Eleme
     {
         let mut remove = button(text("×").size(metrics.label()))
             .padding([0, 4])
-            .style(button::text);
+            .style(crate::ui::controls::ghost);
         if !busy {
             remove = remove.on_press(msg(Action::ProjectRemove(task.id.clone(), project.id)));
         }
@@ -660,7 +655,7 @@ fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Eleme
 
     if open {
         content = content.push(
-            text_input("Search projects…", &state.timeblocking.project_query)
+            crate::ui::controls::text_input("Search projects…", &state.timeblocking.project_query)
                 .on_input(|query| msg(Action::ProjectQuery(query)))
                 .size(metrics.label())
                 .width(Fill),
@@ -691,7 +686,7 @@ fn project_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Eleme
         for project in available {
             let mut add = button(text(&project.name).size(metrics.label()).width(Fill))
                 .width(Fill)
-                .style(button::text);
+                .style(crate::ui::controls::ghost);
             if !busy {
                 add = add.on_press(msg(Action::ProjectAdd(task.id.clone(), project.id)));
             }
@@ -728,7 +723,7 @@ fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elemen
     for label in &labels {
         let mut remove = button(text("×").size(metrics.label()))
             .padding([0, 4])
-            .style(button::text);
+            .style(crate::ui::controls::ghost);
         if !busy {
             remove = remove.on_press(msg(Action::RemoveLabel(task.id.clone(), label.clone())));
         }
@@ -742,9 +737,10 @@ fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elemen
         );
     }
 
-    let mut input = text_input("Add a label…", &state.timeblocking.label_draft)
-        .size(metrics.label())
-        .width(Fill);
+    let mut input =
+        crate::ui::controls::text_input("Add a label…", &state.timeblocking.label_draft)
+            .size(metrics.label())
+            .width(Fill);
     let mut add = button(text("Add").size(metrics.label())).style(crate::ui::controls::primary);
     if !busy {
         let typed = state.timeblocking.label_draft.clone();
@@ -783,7 +779,7 @@ fn labels_field<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Elemen
             content = content.push(
                 button(text(format!("+ {label}")).size(metrics.label() - 1.0))
                     .width(Fill)
-                    .style(button::text)
+                    .style(crate::ui::controls::ghost)
                     .on_press(msg(Action::AddLabel(task.id.clone(), label))),
             );
         }
@@ -926,7 +922,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     else {
         return column![
             text("Time block unavailable"),
-            button("Close").on_press(msg(Action::Close))
+            crate::ui::controls::quiet_button("Close").on_press(msg(Action::Close))
         ]
         .padding(16)
         .into();
@@ -971,7 +967,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut elapsed = 0;
     for task in tasks {
         elapsed += tb::metadata(task).minutes;
-        let mut remove = button("−");
+        let mut remove = crate::ui::controls::quiet_button("−");
         if state.timeblocking.busy.is_empty() {
             remove = remove.on_press(msg(Action::Unassign(task.id.clone())));
         }
@@ -1003,7 +999,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     body = body.push(
         row![
             text("All tasks").size(metrics.label()).width(Fill),
-            toggler(state.timeblocking.available_all)
+            crate::ui::controls::toggler(state.timeblocking.available_all)
                 .on_toggle(|all| msg(Action::AvailableAll(all))),
         ]
         .spacing(8)
@@ -1012,14 +1008,14 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     body = body.push(
         row![
             text("Show planned tasks").size(metrics.label()).width(Fill),
-            toggler(state.timeblocking.available_planned)
+            crate::ui::controls::toggler(state.timeblocking.available_planned)
                 .on_toggle(|show| msg(Action::AvailablePlanned(show))),
         ]
         .spacing(8)
         .align_y(iced::Center),
     );
     body = body.push(
-        text_input(
+        crate::ui::controls::text_input(
             "Search available tasks…",
             &state.timeblocking.available_query,
         )
@@ -1046,7 +1042,8 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         body = body.push(text("No tasks for today").style(text::secondary));
     }
     for task in available {
-        let add = button("+").on_press(msg(Action::Assign(task.id.clone(), block_id.clone())));
+        let add = crate::ui::controls::quiet_button("+")
+            .on_press(msg(Action::Assign(task.id.clone(), block_id.clone())));
         if compact_weekly {
             body = body.push(column![
                 super::calendar::weekly_task_chip(state, task, metrics),
@@ -1066,7 +1063,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // A release anywhere on the panel assigns the dragged task, including on the
     // plus box. A release on a task row is captured first and reorders instead.
     mouse_area(
-        container(scrollable(body))
+        container(crate::ui::controls::scrollable(body))
             .padding(16)
             .width(Fill)
             .height(Fill),
@@ -1103,12 +1100,14 @@ fn todo_editor<'a>(state: &'a State, block_id: &str, metrics: &Metrics) -> Eleme
     let adding = state.timeblocking.busy.adding_todo();
     let ready =
         state.timeblocking.busy.is_empty() && !state.timeblocking.todo_draft.trim().is_empty();
-    let mut input = text_input("Write a task", &state.timeblocking.todo_draft)
+    let mut input = crate::ui::controls::text_input("Write a task", &state.timeblocking.todo_draft)
         .id(iced::widget::Id::new("time-block-todo"))
         .size(metrics.label())
         .width(Fill);
-    let mut add = button(text(if adding { "Adding…" } else { "Add task" }).size(metrics.label()));
-    let mut cancel = button(text("Cancel").size(metrics.label())).style(button::text);
+    let mut add = crate::ui::controls::action_button(
+        text(if adding { "Adding…" } else { "Add task" }).size(metrics.label()),
+    );
+    let mut cancel = button(text("Cancel").size(metrics.label())).style(crate::ui::controls::ghost);
     if !adding {
         input = input.on_input(|value| msg(Action::TodoDraft(value)));
         cancel = cancel.on_press(msg(Action::CloseTodo));
@@ -1133,7 +1132,7 @@ fn add_slot_style(theme: &iced::Theme, status: button::Status, dragging: bool) -
             if hot {
                 palette.primary.weak.color
             } else {
-                palette.background.base.color
+                palette.background.weakest.color
             }
             .into(),
         ),
@@ -1145,8 +1144,9 @@ fn add_slot_style(theme: &iced::Theme, status: button::Status, dragging: bool) -
                 palette.background.strong.color
             },
             width: if dragging { 2.0 } else { 1.0 },
-            radius: 6.0.into(),
+            radius: crate::ui::controls::RADIUS_ROW.into(),
         },
+        shadow: crate::ui::controls::shadow(theme, 0.1, 1.0, 3.0),
         ..Default::default()
     }
 }
@@ -1158,7 +1158,7 @@ fn add_slot_container(theme: &iced::Theme, dragging: bool) -> container::Style {
             if dragging {
                 palette.primary.weak.color
             } else {
-                palette.background.base.color
+                palette.background.weakest.color
             }
             .into(),
         ),
@@ -1169,7 +1169,7 @@ fn add_slot_container(theme: &iced::Theme, dragging: bool) -> container::Style {
                 palette.background.strong.color
             },
             width: if dragging { 2.0 } else { 1.0 },
-            radius: 6.0.into(),
+            radius: crate::ui::controls::RADIUS_ROW.into(),
         },
         ..Default::default()
     }
@@ -1219,7 +1219,7 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
             metrics
         ),
         text("Search").size(metrics.label()).style(text::secondary),
-        text_input("Search tasks…", &state.timeblocking.backlog_query)
+        crate::ui::controls::text_input("Search tasks…", &state.timeblocking.backlog_query)
             .on_input(|value| msg(Action::BacklogQuery(value)))
             .size(metrics.label())
             .width(Fill),
@@ -1257,15 +1257,15 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                                 palette.background.strong.color
                             },
                             width: 1.0,
-                            radius: 5.0.into(),
+                            radius: crate::ui::controls::RADIUS_CARD.into(),
                         },
-                        ..Default::default()
+                        ..crate::ui::controls::card_surface(theme)
                     }
                 });
         body = body
             .push(mouse_area(section_card).on_release(msg(Action::DropBacklogSection(section))));
     }
-    let content: Element<'a, Message> = container(scrollable(body))
+    let content: Element<'a, Message> = container(crate::ui::controls::scrollable(body))
         .padding(metrics.padding)
         .width(Fill)
         .height(Fill)
@@ -1283,8 +1283,8 @@ pub(super) fn estimate_button<'a>(
     label_size: f32,
 ) -> Element<'a, Message> {
     let minutes = tb::metadata(task).minutes;
-    let mut control =
-        button(text(format!("Estimate: {minutes}m")).size(label_size)).style(button::text);
+    let mut control = button(text(format!("Estimate: {minutes}m")).size(label_size))
+        .style(crate::ui::controls::ghost);
     if !state.timeblocking.busy.contains_task(&task.id) {
         control = control.on_press(msg(Action::EditEstimate(task.id.clone())));
     }
@@ -1303,10 +1303,11 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         let busy = state.timeblocking.busy.contains_task(&task.id)
             || (task.id == crate::inbox::DRAFT_ID
                 && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
-        let mut input = text_input("Minutes", &state.timeblocking.estimate)
+        let mut input = crate::ui::controls::text_input("Minutes", &state.timeblocking.estimate)
             .id(iced::widget::Id::new("task-estimate"))
             .size(metrics.label());
-        let mut save = button(text(if busy { "Saving…" } else { "Save" }));
+        let mut save =
+            crate::ui::controls::action_button(text(if busy { "Saving…" } else { "Save" }));
         if !busy {
             input = input
                 .on_input(|value| msg(Action::Estimate(value)))
@@ -1329,16 +1330,16 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
                 save,
                 button("Cancel")
                     .on_press(msg(Action::CloseEstimate))
-                    .style(button::text)
+                    .style(crate::ui::controls::ghost)
             ]
             .spacing(8),
         );
     } else {
         body = body
             .push(text("This task is no longer available"))
-            .push(button("Close").on_press(msg(Action::CloseEstimate)));
+            .push(crate::ui::controls::quiet_button("Close").on_press(msg(Action::CloseEstimate)));
     }
-    let card = container(scrollable(body))
+    let card = container(crate::ui::controls::scrollable(body))
         .padding(16)
         .width(Fill)
         .max_width(420)
@@ -1350,7 +1351,7 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
                 .width(Fill)
                 .height(Fill)
                 .style(|_| container::Style {
-                    background: Some(Color::BLACK.scale_alpha(0.58).into()),
+                    background: Some(crate::ui::controls::SCRIM.into()),
                     ..Default::default()
                 }),
         )
