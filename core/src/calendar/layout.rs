@@ -2,7 +2,8 @@
 //!
 //! Overlapping events are packed into columns left to right. Each cluster of
 //! events that touch each other shares the same column count, so a pair of
-//! overlapping meetings each take half the width, matching the web UI.
+//! overlapping meetings each take half the width, matching the web UI. An event
+//! then widens into any columns to its right that are free for its whole time.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
@@ -14,7 +15,11 @@ pub struct Span {
 pub struct Packed {
     pub column: usize,
     pub columns: usize,
+    /// How many columns wide the event is drawn, starting at `column`.
+    pub column_span: usize,
 }
+
+const WIDEN_MIN_MINUTES: i32 = 30;
 
 /// Assigns columns to timed events.
 ///
@@ -67,12 +72,16 @@ pub fn pack(spans: &[Span]) -> Vec<Packed> {
     }
     apply_cluster(&cluster, &column, &mut columns);
 
-    (0..n)
+    let mut packed: Vec<_> = (0..n)
         .map(|index| Packed {
             column: column[index],
             columns: columns[index].max(1),
+            column_span: 1,
         })
-        .collect()
+        .collect();
+    let normalized_spans: Vec<_> = spans.iter().copied().map(normalized).collect();
+    widen_into_free_columns(&normalized_spans, &mut packed);
+    packed
 }
 
 /// Packs overlaps with lower priorities always to the left of higher ones.
@@ -90,7 +99,8 @@ pub fn pack_prioritized(spans: &[Span], priorities: &[usize]) -> Vec<Packed> {
     let mut result = vec![
         Packed {
             column: 0,
-            columns: 1
+            columns: 1,
+            column_span: 1
         };
         spans.len()
     ];
@@ -142,7 +152,31 @@ pub fn pack_prioritized(spans: &[Span], priorities: &[usize]) -> Vec<Packed> {
         }
         begin = end;
     }
+    widen_into_free_columns(&spans, &mut result);
     result
+}
+
+/// Stretches each event right, up to the nearest column holding an event it
+/// overlaps. Left edges stay put, so source order is unaffected. Short events
+/// are drawn taller than they last, so they count as lasting at least
+/// `WIDEN_MIN_MINUTES` here, which stops a neighbour widening over them.
+fn widen_into_free_columns(spans: &[Span], packed: &mut [Packed]) {
+    let placed = packed.to_vec();
+    let drawn_end = |span: &Span| span.end_min.max(span.start_min + WIDEN_MIN_MINUTES);
+    for (index, slot) in packed.iter_mut().enumerate() {
+        let limit = spans
+            .iter()
+            .zip(&placed)
+            .filter(|(other, other_slot)| {
+                other_slot.column > slot.column
+                    && other.start_min < drawn_end(&spans[index])
+                    && spans[index].start_min < drawn_end(other)
+            })
+            .map(|(_, other_slot)| other_slot.column)
+            .min()
+            .unwrap_or(slot.columns);
+        slot.column_span = limit - slot.column;
+    }
 }
 
 fn apply_cluster(cluster: &[usize], column: &[usize], columns: &mut [usize]) {
@@ -202,11 +236,13 @@ mod tests {
             vec![
                 Packed {
                     column: 0,
-                    columns: 1
+                    columns: 1,
+                    column_span: 1
                 },
                 Packed {
                     column: 0,
-                    columns: 1
+                    columns: 1,
+                    column_span: 1
                 },
             ]
         );
@@ -284,21 +320,24 @@ mod tests {
             packed[1],
             Packed {
                 column: 0,
-                columns: 2
+                columns: 2,
+                column_span: 1
             }
         );
         assert_eq!(
             packed[0],
             Packed {
                 column: 1,
-                columns: 2
+                columns: 2,
+                column_span: 1
             }
         );
         assert_eq!(
             packed[2],
             Packed {
                 column: 0,
-                columns: 1
+                columns: 1,
+                column_span: 1
             }
         );
         let reversed = pack_prioritized(&spans, &[0, 2, 1]);
@@ -350,11 +389,67 @@ mod tests {
                 }
                 assert_ne!(packed[i].column, packed[j].column);
                 assert_eq!(packed[i].columns, packed[j].columns);
+                // Widened events must never be drawn over an overlapping one.
+                let (left, right) = if packed[i].column < packed[j].column {
+                    (packed[i], packed[j])
+                } else {
+                    (packed[j], packed[i])
+                };
+                assert!(left.column + left.column_span <= right.column);
                 if priorities[i] < priorities[j] {
                     assert!(packed[i].column < packed[j].column);
                 }
             }
         }
+    }
+
+    fn span(start_min: i32, end_min: i32) -> Span {
+        Span { start_min, end_min }
+    }
+
+    #[test]
+    fn a_long_event_widens_up_to_the_first_overlapping_column() {
+        let spans = [
+            span(0, 105),   // Long event, clear of the short trio below it.
+            span(118, 120), // The trio fills columns zero to two.
+            span(118, 120),
+            span(118, 120),
+            span(90, 120),  // Overlaps the long event and the trio: column three.
+            span(90, 400),  // Overlaps everything from a later source: column four.
+            span(120, 150), // Back in column zero once the trio has ended.
+        ];
+        let packed = pack_prioritized(&spans, &[0, 0, 0, 0, 1, 2, 1]);
+        assert!(packed.iter().all(|slot| slot.columns == 5));
+        let placed: Vec<_> = packed
+            .iter()
+            .map(|slot| (slot.column, slot.column_span))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                (0, 3),
+                (0, 1),
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (4, 1),
+                // Column one looks free, but the short event there is drawn
+                // taller than it lasts.
+                (0, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn same_source_events_widen_too() {
+        let packed = pack(&[
+            span(0, 30),
+            span(0, 30),
+            span(0, 100),
+            span(40, 60), // Back in column zero, with column one free beside it.
+        ]);
+        assert_eq!((packed[3].column, packed[3].column_span), (0, 2));
+        assert_eq!((packed[2].column, packed[2].column_span), (2, 1));
     }
 
     #[test]

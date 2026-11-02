@@ -2405,6 +2405,14 @@ pub fn month_grid(month: NaiveDate) -> Vec<NaiveDate> {
         .collect()
 }
 
+/// Two whole weeks, Monday first, starting with the week that holds `anchor`.
+pub fn two_week_dates(anchor: NaiveDate) -> Vec<NaiveDate> {
+    let start = anchor - chrono::Duration::days(anchor.weekday().num_days_from_monday() as i64);
+    (0..14)
+        .map(|offset| start + chrono::Duration::days(offset))
+        .collect()
+}
+
 /// How many days the month containing `month` has.
 fn days_in_month(month: NaiveDate) -> u32 {
     let first = first_of_month(month);

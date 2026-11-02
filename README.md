@@ -28,10 +28,10 @@ There's week and month views, just like any other calendar app:
 	- Configure dock or panel to either show above exisitng windows or take up space like other apps.
 - Intuitive to use (WIP).
 - View your time:
-	- By day, week, 2 weeks (TODO), month
-	- Work/plan modes (TODO)?
-	- Including a custom sort (TODO).
-		- Based on search or query; omit private event details (TODO).
+	- By day, week, 2 weeks, month
+	- Custom search (TODO)
+		- Show only events or tasks that satisfy a search
+		- Omit private event details where applicable
 - Manage your time:
 	- Events
 		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.

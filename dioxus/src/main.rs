@@ -5,6 +5,8 @@
 //! block opens a popup with all of the tasks assigned to it.
 
 mod day;
+#[cfg(any(target_os = "android", test))]
+mod widget;
 
 use chrono::Datelike;
 use dioxus::prelude::*;
@@ -203,6 +205,9 @@ fn App() -> Element {
         let next = theme().next();
         theme.set(next);
         next.save();
+        // The widget reads the same preference.
+        #[cfg(target_os = "android")]
+        widget::notify();
     };
 
     // Keep the last good day on screen through a transient sync failure.
@@ -302,6 +307,10 @@ fn App() -> Element {
         .map(|snapshot| day::build_model(snapshot, &settings));
     let selected_day = current_day();
     let today = day::today(&settings);
+    #[cfg(target_os = "android")]
+    if let (Some(model), Some(snapshot)) = (&model, &snapshot) {
+        widget::publish(model, today, &settings, snapshot.fetched_at);
+    }
 
     let heading = calendar::day_heading(selected_day, today);
     let stats = model.as_ref().map(header_stats).unwrap_or_default();
@@ -1264,8 +1273,9 @@ fn status_icon(status: tb::TaskStatus) -> &'static str {
 fn event_style(timed: &TimedEvent) -> String {
     let top = timed.start_min as f32 * HOUR_HEIGHT / 60.0;
     let height = ((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0).max(22.0);
-    let width = 100.0 / timed.columns.max(1) as f32;
-    let left = timed.column as f32 * width;
+    let column_width = 100.0 / timed.columns.max(1) as f32;
+    let left = timed.column as f32 * column_width;
+    let width = timed.column_span.max(1) as f32 * column_width;
     let background = css_color(timed.event.color);
     let ink = css_color(calendar::colors::on_color(timed.event.color));
 

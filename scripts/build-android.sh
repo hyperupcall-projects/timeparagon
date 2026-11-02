@@ -273,6 +273,19 @@ EOF
     echo "Signing: release keystore $keystore (alias $key_alias)"
 fi
 
+# --- Widget sources --------------------------------------------------------
+# The manifest names the widget's classes and resources, and `dx` has no option
+# for extra Android sources, so they must be in its project before it runs
+# Gradle. It writes its own files into this directory without clearing it.
+android_main=$repo_root/target/dx/TimeSlay/$profile/android/app/app/src/main
+mkdir -p "$android_main/kotlin" "$android_main/res"
+rm -rf "$android_main/kotlin/dev/timeslay"
+cp -R "$repo_root/dioxus/android/kotlin/." "$android_main/kotlin/"
+cp -R "$repo_root/dioxus/android/res/." "$android_main/res/"
+# `dx` puts its default icons back, which would clash with the PNGs the launcher
+# icon step below left here last time.
+rm -f "$android_main"/res/mipmap-*/ic_launcher.png
+
 # --- Build -----------------------------------------------------------------
 cd "$repo_root"
 if [ "$profile" = release ]; then
