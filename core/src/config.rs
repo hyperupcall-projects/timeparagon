@@ -541,6 +541,19 @@ fn save_calendar_visibility_at(
     })
 }
 
+/// Saves whether travel is shown on the calendar.
+pub fn save_travel_show(show: bool) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_travel_show_at(&path, show)
+}
+
+fn save_travel_show_at(path: &std::path::Path, show: bool) -> io::Result<()> {
+    edit_table(path, "travel", |travel| {
+        travel.insert("show".into(), show.into());
+        Ok(())
+    })
+}
+
 /// Saves a place Mapbox found and returns its id, reusing one already saved.
 pub fn save_found_place(found: &crate::places::Found) -> io::Result<u64> {
     let path = config_path().ok_or_else(no_config_directory)?;
@@ -719,6 +732,24 @@ mod tests {
             assert_eq!(mode, 0o600);
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_travel_switch_keeps_the_rest_of_travel() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[travel]\napi_key = \"pk\"\n\n[[travel.routes]]\nfrom = 1\nto = 2\nmode = \"car\"\nseconds = 600\nmeters = 5000\n",
+        )
+        .unwrap();
+
+        save_travel_show_at(&path, true).unwrap();
+
+        let saved: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.travel.show);
+        assert_eq!(saved.travel.api_key, "pk");
+        assert_eq!(saved.travel.routes.len(), 1);
     }
 
     #[test]

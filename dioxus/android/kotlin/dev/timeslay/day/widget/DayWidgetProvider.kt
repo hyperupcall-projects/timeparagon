@@ -14,7 +14,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.View
 import android.widget.RemoteViews
 import dev.timeslay.day.R
 import java.util.Calendar
@@ -103,7 +102,6 @@ class DayWidgetProvider : AppWidgetProvider() {
         private const val PREFS = "day_widget"
         private const val TICK_MILLIS = 5 * 60 * 1000L
         private const val HEADER_AND_FOOTER_DP = 96
-        private const val MIN_SUMMARY_WIDTH_DP = 230
         private const val SCROLLS_PER_HOUR = 2
         private const val SCROLL_DELAY_MILLIS = 1500L
         private const val SCROLL_RETRY_MILLIS = 6000L
@@ -161,19 +159,12 @@ class DayWidgetProvider : AppWidgetProvider() {
             views.setInt(R.id.day_widget_add_background, "setColorFilter", colors.accent)
             views.setInt(R.id.day_widget_add_icon, "setColorFilter", colors.onAccent)
             views.setTextColor(R.id.day_widget_title, colors.text)
-            views.setTextColor(R.id.day_widget_summary, colors.muted)
             views.setTextColor(R.id.day_widget_updated, colors.muted)
             views.setTextColor(R.id.day_widget_empty, colors.muted)
 
             views.setTextViewText(
                 R.id.day_widget_title,
                 data?.heading() ?: WidgetDay.heading(Date()),
-            )
-            views.setTextViewText(R.id.day_widget_summary, data?.let(::summary).orEmpty())
-            // The date matters more when there is only room for one of them.
-            views.setViewVisibility(
-                R.id.day_widget_summary,
-                if (widthDp(context, id) < MIN_SUMMARY_WIDTH_DP) View.GONE else View.VISIBLE,
             )
             views.setTextViewText(
                 R.id.day_widget_updated,
@@ -259,16 +250,6 @@ class DayWidgetProvider : AppWidgetProvider() {
                 },
             )
             return ((height - HEADER_AND_FOOTER_DP) / HOUR_HEIGHT_DP).toInt().coerceAtLeast(1)
-        }
-
-        private fun summary(data: WidgetDay): String {
-            val parts = mutableListOf<String>()
-            if (data.allDay.isNotEmpty()) parts += "${data.allDay.size} all-day"
-            val tasks = data.looseTasks.size +
-                data.items.count { it.kind == "task" && !it.done } +
-                data.items.sumOf { item -> item.tasks.count { !it.done } }
-            if (tasks > 0) parts += if (tasks == 1) "1 task" else "$tasks tasks"
-            return parts.joinToString(" · ")
         }
 
         private fun openAppIntent(context: Context, request: Int, flags: Int): PendingIntent {

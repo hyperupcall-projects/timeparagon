@@ -23,7 +23,7 @@ class DayWidgetService : RemoteViewsService() {
         private val widgetId: Int,
     ) : RemoteViewsFactory {
         private var renderer: DayRenderer? = null
-        private var allDayRows: List<List<AllDayChip>> = emptyList()
+        private var allDayRows: List<List<AllDayEvent>> = emptyList()
 
         override fun onCreate() = Unit
 

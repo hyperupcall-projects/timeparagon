@@ -23,17 +23,17 @@ use serde_json::Value;
 use crate::app::{Message, State, queue_save};
 use crate::blocking;
 use crate::calendar::Event;
-use crate::config::{MapApp, Place, TravelMode, TravelSettings};
+use crate::config::{MapApp, Place, SavedRoute, TravelMode, TravelSettings};
 use crate::timeblocking as tb;
 use timeslay_core::places::get;
 #[cfg(test)]
 use timeslay_core::places::search_url;
-pub use timeslay_core::places::{Found, location_text, parse_places, search_places};
+pub use timeslay_core::places::{
+    Found, Hop, Leg, Route, START_OF_DAY, Stop, distance_label, duration_label, location_text,
+    parse_places, route_label, search_places,
+};
 
 const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
-
-/// What the Travel tab calls the trip's start when it is Home.
-pub const START_OF_DAY: &str = "Start of day";
 
 /// What a chosen place is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,13 +58,6 @@ pub struct Picker {
     pub error: Option<String>,
 }
 
-/// How far, and for how long, a trip goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Route {
-    pub seconds: u32,
-    pub meters: u32,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum RouteState {
     Loading,
@@ -80,29 +73,12 @@ pub struct RouteKey {
     pub mode: TravelMode,
 }
 
-/// A trip between two places, whichever events it falls between.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Leg {
-    pub from: u64,
-    pub to: u64,
-}
-
 /// The details card that is open, for the trip it is about.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {
     pub leg: Leg,
     /// What the trip leaves and what it arrives at, when it is one of a day's.
     pub between: Option<(String, String)>,
-}
-
-/// A trip a day needs, and where it sits among the day's events.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Hop {
-    pub leg: Leg,
-    /// The event the trip leads to, which is where its box is drawn.
-    pub before: String,
-    pub from_title: String,
-    pub to_title: String,
 }
 
 /// What the Travel tab is in the middle of.
@@ -509,7 +485,51 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
         legs.push(open.leg);
     }
 
+    publish_routes(state);
     fetch_missing(state, legs)
+}
+
+/// Copies the trips worked out so far into the config, which is how they reach
+/// the phone: it draws them without asking Mapbox. Runs from `reconcile`, so
+/// the trips already cached at boot go out as well as new ones.
+fn publish_routes(state: &mut State) {
+    let mut changed = false;
+    for (key, route) in &state.travel.routes {
+        let RouteState::Ready(route) = route else {
+            continue;
+        };
+        let saved = SavedRoute {
+            from: key.from,
+            to: key.to,
+            mode: key.mode,
+            seconds: route.seconds,
+            meters: route.meters,
+        };
+        let routes = &mut state.config.travel.routes;
+        match routes
+            .iter_mut()
+            .find(|old| old.from == key.from && old.to == key.to && old.mode == key.mode)
+        {
+            Some(old) if *old == saved => {}
+            Some(old) => {
+                *old = saved;
+                changed = true;
+            }
+            None => {
+                routes.push(saved);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        // The routes map has no order, and the file should not churn with it.
+        state
+            .config
+            .travel
+            .routes
+            .sort_by_key(|route| (route.from, route.to, route.mode.profile()));
+        let _ = queue_save(state);
+    }
 }
 
 /// Asks Mapbox for each trip that has not been asked for.
@@ -573,14 +593,6 @@ fn save_cache(state: &State) -> Task<Message> {
 // Which trips a day needs
 // ---------------------------------------------------------------------------
 
-/// An event, as far as travel is concerned: when it is, and where.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Stop {
-    pub id: String,
-    pub title: String,
-    pub place: Option<u64>,
-}
-
 /// The place an event happens at, if it has one that is saved.
 ///
 /// A task has the place it was given. A calendar event has only the text
@@ -591,32 +603,8 @@ pub fn place_of(travel: &TravelSettings, event: &Event) -> Option<u64> {
 }
 
 /// The trips a day needs, in order, given its events in the order they happen.
-///
-/// Every event with a place is a destination. Its trip starts at the place of
-/// the nearest earlier event that has one, or at Home when there is none. No
-/// trip is needed when the two places are the same.
 pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
-    let home = travel.home.filter(|id| travel.place(*id).is_some());
-    let mut found = Vec::new();
-    let mut previous: Option<(u64, &str)> = None;
-
-    for stop in stops {
-        let Some(place) = stop.place else { continue };
-        let source = previous.or(home.map(|id| (id, START_OF_DAY)));
-        if let Some((from, from_title)) = source
-            && from != place
-        {
-            found.push(Hop {
-                leg: Leg { from, to: place },
-                before: stop.id.clone(),
-                from_title: from_title.to_owned(),
-                to_title: stop.title.clone(),
-            });
-        }
-        previous = Some((place, &stop.title));
-    }
-
-    found
+    timeslay_core::places::hops(&travel.places, travel.home, stops)
 }
 
 /// The trips of one day, from the events the grid draws for it.
@@ -690,33 +678,6 @@ pub fn summary(state: &State, leg: Leg) -> Summary {
         None if state.config.travel.key().is_none() => Summary::NoKey,
         None => Summary::Unknown,
     }
-}
-
-/// "12 min", or "1 h 05 min".
-pub fn duration_label(seconds: u32) -> String {
-    let minutes = seconds.div_ceil(60).max(1);
-    if minutes < 60 {
-        format!("{minutes} min")
-    } else {
-        format!("{} h {:02} min", minutes / 60, minutes % 60)
-    }
-}
-
-/// "850 m", or "1.2 km".
-pub fn distance_label(meters: u32) -> String {
-    if meters < 1000 {
-        format!("{meters} m")
-    } else {
-        format!("{:.1} km", f64::from(meters) / 1000.0)
-    }
-}
-
-pub fn route_label(route: Route) -> String {
-    format!(
-        "{} · {}",
-        duration_label(route.seconds),
-        distance_label(route.meters)
-    )
 }
 
 /// The one line a trip is given on the day view and in lists.
@@ -1473,6 +1434,42 @@ mod tests {
         // Another method is another trip.
         state.config.travel.set_mode(1, 2, TravelMode::Car);
         assert_ne!(summary(&state, leg), Summary::Ready(route));
+    }
+
+    #[test]
+    fn worked_out_trips_are_published_to_the_config_once() {
+        let mut state = state();
+        let key = RouteKey {
+            from: 1,
+            to: 2,
+            mode: TravelMode::Car,
+        };
+        state.travel.routes.insert(
+            key,
+            RouteState::Ready(Route {
+                seconds: 600,
+                meters: 5000,
+            }),
+        );
+        state
+            .travel
+            .routes
+            .insert(RouteKey { to: 3, ..key }, RouteState::Failed("no".into()));
+
+        let _ = reconcile(&mut state);
+        assert_eq!(
+            state.config.travel.routes,
+            [SavedRoute {
+                from: 1,
+                to: 2,
+                mode: TravelMode::Car,
+                seconds: 600,
+                meters: 5000,
+            }]
+        );
+
+        let _ = reconcile(&mut state);
+        assert_eq!(state.config.travel.routes.len(), 1);
     }
 
     #[test]

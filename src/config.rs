@@ -22,7 +22,7 @@ pub use timeslay_core::config::{
     CalendarSettings, Project, ProjectsSettings, TriageRequirements, cache_days_dir, config_path,
     project_dirs,
 };
-pub use timeslay_core::places::Place;
+pub use timeslay_core::places::{Place, RouteMode, SavedRoute, TravelMode};
 
 /// How long to wait after the last change before writing to disk.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -471,70 +471,6 @@ impl ViewSettings {
     }
 }
 
-/// How a trip between two places is made.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TravelMode {
-    #[default]
-    Walk,
-    Bike,
-    /// Configs written when public transport was offered read as `Car`:
-    /// Mapbox has no transit routing.
-    #[serde(alias = "multimodal")]
-    Car,
-}
-
-impl TravelMode {
-    pub const ALL: [TravelMode; 3] = [Self::Walk, Self::Bike, Self::Car];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Walk => "Walk",
-            Self::Bike => "Bike",
-            Self::Car => "Car",
-        }
-    }
-
-    /// The profile the Mapbox Directions API expects.
-    pub fn profile(self) -> &'static str {
-        match self {
-            Self::Walk => "walking",
-            Self::Bike => "cycling",
-            Self::Car => "driving",
-        }
-    }
-
-    /// The `travelmode` of a Google Maps directions link.
-    pub fn google_travelmode(self) -> &'static str {
-        match self {
-            Self::Walk => "walking",
-            Self::Bike => "bicycling",
-            Self::Car => "driving",
-        }
-    }
-
-    /// The routing engine of an OpenStreetMap directions link.
-    pub fn osm_engine(self) -> &'static str {
-        match self {
-            Self::Walk => "fossgis_osrm_foot",
-            Self::Bike => "fossgis_osrm_bike",
-            Self::Car => "fossgis_osrm_car",
-        }
-    }
-
-    /// The mode after this one, wrapping around.
-    pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
-}
-
-impl std::fmt::Display for TravelMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
 /// The map that "Open in Maps" shows a trip on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MapApp {
@@ -560,14 +496,6 @@ impl std::fmt::Display for MapApp {
     }
 }
 
-/// How the trip from one place to another is made, when that is not the default.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RouteMode {
-    pub from: u64,
-    pub to: u64,
-    pub mode: TravelMode,
-}
-
 /// Places, the Mapbox access token, and how trips between places are made.
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct TravelSettings {
@@ -591,6 +519,9 @@ pub struct TravelSettings {
     /// The place each calendar event, by id, was given.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub event_places: std::collections::BTreeMap<String, u64>,
+    /// The trips worked out so far, for the devices that do not work them out.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<SavedRoute>,
 }
 
 // Read the old start/end settings once, then save only Home. Keep all saved
@@ -610,6 +541,7 @@ impl<'de> Deserialize<'de> for TravelSettings {
             places: Vec<Place>,
             modes: Vec<RouteMode>,
             event_places: std::collections::BTreeMap<String, u64>,
+            routes: Vec<SavedRoute>,
         }
         let stored = Stored::deserialize(deserializer)?;
         Ok(Self {
@@ -621,6 +553,7 @@ impl<'de> Deserialize<'de> for TravelSettings {
             places: stored.places,
             modes: stored.modes,
             event_places: stored.event_places,
+            routes: stored.routes,
         })
     }
 }
