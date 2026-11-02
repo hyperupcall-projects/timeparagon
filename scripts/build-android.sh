@@ -285,6 +285,28 @@ else
     dx build --android --package timeslay-dioxus --target "$triple"
 fi
 
+# --- Launcher icon ---------------------------------------------------------
+# `dx` always generates its default launcher icon and ignores bundle.icon on
+# Android, so swap in the TimeSlay logo and reassemble with Gradle.
+icon_source=$repo_root/assets/noto-hourglass-done.png
+for app_dir in "$repo_root"/target/dx/*/"$profile"/android/app; do
+    [ -f "$app_dir/gradlew" ] || continue
+    [ -f "$icon_source" ] || fail "launcher icon not found: $icon_source"
+    command -v magick >/dev/null 2>&1 && resize=magick || resize=convert
+    command -v "$resize" >/dev/null 2>&1 || fail "ImageMagick is needed to resize the launcher icon"
+    res=$app_dir/app/src/main/res
+    for entry in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+        dir=$res/mipmap-${entry%%:*}
+        mkdir -p "$dir"
+        rm -f "$dir/ic_launcher.webp"
+        "$resize" "$icon_source" -resize "${entry##*:}x${entry##*:}" "$dir/ic_launcher.png"
+    done
+    # The adaptive icon would take precedence over the PNGs on Android 8+.
+    rm -rf "$res/mipmap-anydpi-v26"
+    if [ "$profile" = release ]; then gradle_task=assembleRelease; else gradle_task=assembleDebug; fi
+    (cd "$app_dir" && sh ./gradlew "$gradle_task")
+done
+
 # --- Locate and copy the APK ----------------------------------------------
 # `dx` names its output directory after the binary target (TimeSlay), not
 # after the package, so search every app directory for this profile. Gradle
