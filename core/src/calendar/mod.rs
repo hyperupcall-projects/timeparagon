@@ -208,6 +208,9 @@ pub enum DraftKind {
     TimeBlock,
     Habit,
     Sleep,
+    /// A Google Task planned for the selected range; choosing it hands the
+    /// popup's title and times to the new-task popup.
+    Task,
 }
 
 /// A new event being filled in before it is written to Google.
@@ -455,6 +458,23 @@ pub fn calendar_enabled(id: &str, settings: &CalendarSettings) -> bool {
     } else {
         !settings.disabled.iter().any(|hidden| hidden == id)
     }
+}
+
+/// Switches one source on or off.
+pub fn set_source_enabled(
+    settings: &mut CalendarSettings,
+    calendars: &[Calendar],
+    id: &str,
+    enabled: bool,
+) {
+    // Preserve a previous global hide when switching to per-list controls.
+    if enabled && id.starts_with("tasks:") && !settings.show_tasks {
+        for calendar in calendars.iter().filter(|calendar| calendar.is_task_list()) {
+            settings.set_calendar_enabled(&calendar.id, false);
+        }
+        settings.show_tasks = true;
+    }
+    settings.set_calendar_enabled(id, enabled);
 }
 
 /// Source and per-kind visibility apply to every calendar view, including

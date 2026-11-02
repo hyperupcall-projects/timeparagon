@@ -178,19 +178,12 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             Task::none()
         }
         CalendarMessage::CalendarToggled(id, enabled) => {
-            // Preserve a previous global hide when switching to per-list controls.
-            if enabled && id.starts_with("tasks:") && !state.config.calendar.show_tasks {
-                for calendar in &state.calendar.calendars {
-                    if calendar.is_task_list() {
-                        state
-                            .config
-                            .calendar
-                            .set_calendar_enabled(&calendar.id, false);
-                    }
-                }
-                state.config.calendar.show_tasks = true;
-            }
-            state.config.calendar.set_calendar_enabled(&id, enabled);
+            calendar::set_source_enabled(
+                &mut state.config.calendar,
+                &state.calendar.calendars,
+                &id,
+                enabled,
+            );
             queue_save(state)
         }
         CalendarMessage::CalendarSourceMoved(id, up) => {

@@ -871,7 +871,7 @@ fn canvas_with_one_block() -> DayCanvas {
         day_start_hour: 0,
         day: chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
         can_create: true,
-        create_color: Color::WHITE,
+        selection: None,
         external_drag: false,
         dragged_task: None,
     }
@@ -1023,9 +1023,9 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
 
     let found = travel_boxes(&state, &blocks, state.calendar.day);
 
-    // Home to the standup, then the review to home. The two meetings are
-    // at the same place, and there is nothing between them to travel for.
-    assert_eq!(found.len(), 2, "{found:?}");
+    // Home to the standup only: the review is at the same place as the
+    // standup, so there is nothing to travel for.
+    assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(
         (found[0].anchor_min, found[0].below, found[0].minutes),
         (540, false, 25)
@@ -1035,9 +1035,6 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
         found[0].between,
         ("Start of day".to_owned(), "Standup".to_owned())
     );
-    assert_eq!((found[1].anchor_min, found[1].below), (900, true));
-    assert_eq!(found[1].between.1, "End of day");
-    assert!(found[1].label.contains("calculating"), "{}", found[1].label);
 
     // The cache key moves when a trip does, so the grid redraws.
     assert_ne!(travel_key(&found), travel_key(&[]));

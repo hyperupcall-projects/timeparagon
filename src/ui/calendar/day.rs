@@ -159,12 +159,13 @@ pub(super) fn day_canvas<'a>(
     // then a click there is how the card is dismissed.
     let can_create =
         state.calendar.open_event.is_none() && state.calendar.draft.is_none() && !state.alarms.mode;
-    let create_color = state
-        .calendar
-        .default_calendar_id(&state.config.calendar)
-        .map_or(colors::DEFAULT_EVENT, |id| {
-            state.calendar.calendar_color(&id)
-        });
+    let selection = state.calendar.draft.as_ref().and_then(|draft| {
+        let start = minutes_into_day(draft.start, day, offset);
+        let end = minutes_into_day(draft.end, day, offset).min(DAY_MINUTES);
+        (0..DAY_MINUTES)
+            .contains(&start)
+            .then_some((start, end.max(start + 1)))
+    });
 
     canvas_widget(DayCanvas {
         time_format: state.config.appearance.time_format,
@@ -179,7 +180,7 @@ pub(super) fn day_canvas<'a>(
         day_start_hour,
         day,
         can_create,
-        create_color,
+        selection,
         external_drag: state.timeblocking.dragging.is_some(),
         dragged_task: state.timeblocking.dragging.clone(),
     })

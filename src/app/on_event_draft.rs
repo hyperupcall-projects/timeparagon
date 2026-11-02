@@ -109,6 +109,12 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 Message::Event(EventMessage::EventOpened(calendar::sleep::NEW_ID.into())),
             )
         }
+        EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::Task) => {
+            let Some(draft) = state.calendar.draft.take() else {
+                return Task::none();
+            };
+            crate::inbox::new_task_at(state, draft.title, draft.start, draft.end)
+        }
         EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::Habit) => {
             // Creation and editing share the habit details pane.
             let Some(draft) = state.calendar.draft.take() else {
@@ -140,7 +146,9 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 // switching back to an event returns to the normal default.
                 if let Some(calendar_id) = match kind {
                     calendar::DraftKind::TimeBlock | calendar::DraftKind::Sleep => app_calendar,
-                    calendar::DraftKind::Event | calendar::DraftKind::Habit => default_calendar,
+                    calendar::DraftKind::Event
+                    | calendar::DraftKind::Habit
+                    | calendar::DraftKind::Task => default_calendar,
                 } {
                     draft.calendar_id = calendar_id;
                 }
