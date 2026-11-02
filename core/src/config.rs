@@ -45,10 +45,16 @@ pub struct CalendarSettings {
     pub habit_color: Option<HexColor>,
     /// The hour the day ends, 0-5. 0 is midnight.
     pub day_end_hour: u32,
+    /// Nightly sleep target in hours, clamped to 6–12.
+    pub sleep_goal_hours: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_colors: BTreeMap<String, HexColor>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub calendar_colors: BTreeMap<String, HexColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_color: Option<HexColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep_color: Option<HexColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_block_color: Option<HexColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,8 +81,11 @@ impl Default for CalendarSettings {
             triaged_list: None,
             habit_color: None,
             day_end_hour: 0,
+            sleep_goal_hours: 8,
             task_colors: BTreeMap::new(),
             calendar_colors: BTreeMap::new(),
+            event_color: None,
+            sleep_color: None,
             time_block_color: None,
             task_event_color: None,
             default_calendar: None,
@@ -85,6 +94,10 @@ impl Default for CalendarSettings {
 }
 
 impl CalendarSettings {
+    pub fn sleep_goal_hours(&self) -> u32 {
+        self.sleep_goal_hours.clamp(6, 12)
+    }
+
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
 
@@ -167,6 +180,18 @@ impl CalendarSettings {
         }
     }
 
+    /// The color all-day events are drawn in, or the built-in event color.
+    pub fn event_color(&self) -> crate::Color {
+        self.event_color
+            .map_or(crate::calendar::colors::DEFAULT_EVENT, |color| color.0)
+    }
+
+    /// The color sleep events are drawn in, or the built-in sleep gray.
+    pub fn sleep_color(&self) -> crate::Color {
+        self.sleep_color
+            .map_or(crate::calendar::sleep::COLOR, |color| color.0)
+    }
+
     /// The color time-block events are drawn in, or the built-in block color.
     pub fn time_block_color(&self) -> crate::Color {
         self.time_block_color
@@ -185,6 +210,16 @@ impl CalendarSettings {
             .map_or(crate::calendar::colors::TASK, |color| color.0)
     }
 
+    /// Sets the all-day event color, or clears it back to the built-in default.
+    pub fn set_event_color(&mut self, color: Option<crate::Color>) {
+        self.event_color = color.map(HexColor);
+    }
+
+    /// Sets the sleep color, or clears it back to the built-in gray.
+    pub fn set_sleep_color(&mut self, color: Option<crate::Color>) {
+        self.sleep_color = color.map(HexColor);
+    }
+
     /// Sets the time-block color, or clears it back to the built-in default.
     pub fn set_time_block_color(&mut self, color: Option<crate::Color>) {
         self.time_block_color = color.map(HexColor);
@@ -193,6 +228,11 @@ impl CalendarSettings {
     /// Sets the scheduled task color, or clears it back to Google's blue.
     pub fn set_task_event_color(&mut self, color: Option<crate::Color>) {
         self.task_event_color = color.map(HexColor);
+    }
+
+    /// Sets the habit color, or clears it back to the built-in grape.
+    pub fn set_habit_color(&mut self, color: Option<crate::Color>) {
+        self.habit_color = color.map(HexColor);
     }
 }
 

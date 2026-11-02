@@ -61,11 +61,14 @@ use crate::config::{Config, DockSide};
 use crate::ipc;
 use crate::theme::Catalog;
 
-use render::{Layout, Palette, PixelRect, Renderer, Scene};
+use render::{Layout, Menu, MenuItem, Palette, PixelRect, Renderer, Scene};
 use tiny_skia::Pixmap;
 
 /// Linux evdev code of the left mouse button, which is what Wayland reports.
 const BTN_LEFT: u32 = 0x110;
+
+/// Linux evdev code of the right mouse button, which opens the stack menu.
+const BTN_RIGHT: u32 = 0x111;
 
 /// How often the fade-in is redrawn, about 60 frames a second.
 const FADE_STEP: Duration = Duration::from_millis(16);
@@ -207,6 +210,8 @@ pub fn run() -> Result<()> {
         day: today,
         hovered: None,
         pinned: None,
+        promoted: None,
+        menu: None,
         opening,
         fading: false,
         button_hovered: false,
@@ -460,6 +465,10 @@ struct Dock {
     hovered: Option<usize>,
     /// The segment whose full card a click left open.
     pinned: Option<usize>,
+    /// The event the user promoted to the top of the stack, if any.
+    promoted: Option<String>,
+    /// The right-click menu, open while it is showing.
+    menu: Option<Menu>,
     opening: animation::Opening,
     /// Whether the fade-in is still running, so the loop keeps drawing.
     fading: bool,
@@ -474,8 +483,8 @@ struct Dock {
     /// Shared-memory buffers the pixmap is copied into. The compositor holds
     /// one while the next is filled, so there are normally two.
     frames: Vec<Frame>,
-    /// The layout the input and opaque regions were last set for.
-    regions_for: Option<Layout>,
+    /// The layout and open-menu rectangle the input region was last set for.
+    regions_for: Option<(Layout, Option<(i32, i32, i32, i32)>)>,
     wake: Option<mpsc::Sender<()>>,
     exit: bool,
 }
@@ -491,24 +500,18 @@ impl Dock {
         let pinned = self
             .pinned
             .and_then(|index| self.segments.get(index))
-            .map(|segment| {
-                (
-                    segment.start_min,
-                    segment.end_min,
-                    segment.card.title.clone(),
-                )
-            });
+            .map(|segment| segment.id.clone());
+        // A rebuilt stack invalidates the menu's row order.
+        self.menu = None;
         self.segments = model::segments(
             &self.store,
             &self.app_config.calendar,
             self.day,
             self.app_config.appearance.time_format,
+            self.promoted.as_deref(),
         );
-        self.pinned = pinned.and_then(|(start, end, title)| {
-            self.segments.iter().position(|segment| {
-                segment.start_min == start && segment.end_min == end && segment.card.title == title
-            })
-        });
+        self.pinned =
+            pinned.and_then(|id| self.segments.iter().position(|segment| segment.id == id));
         self.hovered = match (self.layout(), self.pointer_position) {
             (Some(layout), Some((x, y))) => layout.hit(&self.segments, x, y),
             _ => None,
@@ -538,6 +541,7 @@ impl Dock {
         if today != self.day {
             self.store.set_day(today, today);
             self.day = today;
+            self.promoted = None;
             if let Some(wake) = &self.wake {
                 let _ = wake.send(());
             }
@@ -575,11 +579,18 @@ impl Dock {
         };
 
         let now = model::now_minute(Local::now(), self.day, &self.app_config.calendar);
+        let promoted = self
+            .promoted
+            .as_deref()
+            .and_then(|id| self.segments.iter().position(|segment| segment.id == id));
+        let menu = self.menu.as_ref();
         let scene = Scene {
             segments: &self.segments,
             now_minute: now,
             hovered: self.hovered,
             pinned: self.pinned,
+            promoted,
+            menu,
             day_offset_min: self.app_config.calendar.day_end_minutes(),
             hour_lines: self.config.hour_lines,
             button_hovered: self.button_hovered,
@@ -660,11 +671,29 @@ impl Dock {
             }
         }
 
-        // The task card accepts input only while it is open.
-        if self.regions_for != Some(layout) {
+        let menu_key = self.menu.as_ref().map(|menu| {
+            let (mx, my, mw, mh) = layout.menu_rect(menu.anchor, menu.items.len());
+            (mx as i32, my as i32, mw as i32, mh as i32)
+        });
+        // The strip, and the menu while it is open, accept input.
+        if self.regions_for != Some((layout, menu_key)) {
             let (x, y, w, h) = layout.strip_rect();
             if let Ok(region) = Region::new(&self.compositor) {
                 region.add(x as i32, y as i32, w as i32, h as i32);
+                if let Some((mx, my, mw, mh)) = menu_key {
+                    // Bridge the gap so moving from the strip into the menu
+                    // never leaves the surface.
+                    let bridge = if layout.side.is_vertical() {
+                        let left = (layout.strip_x as i32).min(mx);
+                        let right = ((layout.strip_x + layout.strip_width) as i32).max(mx + mw);
+                        (left, my, (right - left).max(0), mh)
+                    } else {
+                        let top = (layout.strip_y as i32).min(my);
+                        let bottom = ((layout.strip_y + layout.strip_height) as i32).max(my + mh);
+                        (mx, top, mw, (bottom - top).max(0))
+                    };
+                    region.add(bridge.0, bridge.1, bridge.2, bridge.3);
+                }
                 self.layer.set_input_region(Some(region.wl_region()));
                 if let Ok(opaque) = Region::new(&self.compositor) {
                     opaque.add(x as i32, y as i32, w as i32, h as i32);
@@ -674,7 +703,7 @@ impl Dock {
                         Some(opaque.wl_region())
                     });
                 }
-                self.regions_for = Some(layout);
+                self.regions_for = Some((layout, menu_key));
             }
         }
 
@@ -691,7 +720,8 @@ impl Dock {
     /// Follows the pointer, and says whether that changed what is drawn.
     fn pointer_moved(&mut self, position: Option<(f64, f64)>) -> bool {
         self.pointer_position = position;
-        let (hovered, button_hovered, add_hovered) = match (self.layout(), position) {
+        let layout = self.layout();
+        let (hovered, button_hovered, add_hovered) = match (layout, position) {
             (Some(layout), Some((x, y))) => (
                 layout.hit(&self.segments, x, y),
                 layout.hit_button(x, y),
@@ -699,13 +729,81 @@ impl Dock {
             ),
             _ => (None, false, false),
         };
-        let changed = hovered != self.hovered
+        let mut changed = hovered != self.hovered
             || button_hovered != self.button_hovered
             || add_hovered != self.add_hovered;
         self.hovered = hovered;
         self.button_hovered = button_hovered;
         self.add_hovered = add_hovered;
+
+        if let Some(menu) = self.menu.as_mut() {
+            let hovered_row = match (layout, position) {
+                (Some(layout), Some((x, y))) => {
+                    layout.hit_menu(menu.anchor, menu.items.len(), x, y)
+                }
+                _ => None,
+            };
+            if hovered_row != menu.hovered {
+                menu.hovered = hovered_row;
+                changed = true;
+            }
+        }
         changed
+    }
+
+    /// Opens the right-click menu for every event that includes `position`.
+    fn open_menu(&mut self, position: (f64, f64)) -> bool {
+        let Some(layout) = self.layout() else {
+            self.menu = None;
+            return true;
+        };
+        let Some(minute) = layout.minute_at(position.0, position.1) else {
+            self.menu = None;
+            return true;
+        };
+
+        let mut items: Vec<MenuItem> = self
+            .segments
+            .iter()
+            .filter(|segment| segment.start_min as f32 <= minute && minute < segment.end_min as f32)
+            .map(|segment| MenuItem {
+                id: segment.id.clone(),
+                title: segment.card.title.clone(),
+                color: segment.color,
+                on_top: false,
+            })
+            .collect();
+        // Segments are painted back to front, so the topmost event is last.
+        items.reverse();
+        if let Some(top) = items.first_mut() {
+            top.on_top = true;
+        }
+
+        self.menu = if items.is_empty() {
+            None
+        } else {
+            Some(Menu {
+                anchor: layout.along_of(minute),
+                items,
+                hovered: None,
+            })
+        };
+        true
+    }
+
+    /// Chooses the menu row under `position`, promoting that event to the top.
+    fn choose_menu(&mut self, position: (f64, f64)) -> bool {
+        let chosen = self.menu.as_ref().and_then(|menu| {
+            let layout = self.layout()?;
+            let row = layout.hit_menu(menu.anchor, menu.items.len(), position.0, position.1)?;
+            menu.items.get(row).map(|item| item.id.clone())
+        });
+        if let Some(id) = chosen {
+            self.promoted = Some(id);
+        }
+        self.menu = None;
+        self.refresh_segments();
+        true
     }
 }
 
@@ -878,7 +976,22 @@ impl PointerHandler for Dock {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     changed |= self.pointer_moved(Some(event.position));
                 }
-                PointerEventKind::Leave { .. } => changed |= self.pointer_moved(None),
+                PointerEventKind::Leave { .. } => {
+                    changed |= self.pointer_moved(None);
+                    if self.menu.take().is_some() {
+                        self.regions_for = None;
+                        changed = true;
+                    }
+                }
+                PointerEventKind::Press { button, .. } if button == BTN_RIGHT => {
+                    self.open_menu(event.position);
+                    changed = true;
+                }
+                PointerEventKind::Press { button, .. }
+                    if button == BTN_LEFT && self.menu.is_some() =>
+                {
+                    changed |= self.choose_menu(event.position);
+                }
                 PointerEventKind::Press { button, .. }
                     if button == BTN_LEFT && self.button_hovered =>
                 {

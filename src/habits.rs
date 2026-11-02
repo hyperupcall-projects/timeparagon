@@ -2,9 +2,9 @@
 //!
 //! A habit is an ordinary Google Calendar event tagged with `ttKind=habit`,
 //! so Google expands it and every other client sees a normal recurring event.
-//! The Habits tab edits the master rather than an instance. Its repeat
-//! controls are the shared [`crate::recurrence`] editor, the same one events
-//! and time blocks use, so every recurring item is described in the same
+//! The Habits tab opens an occurrence with the same save scopes as other
+//! calendar events. Its repeat controls use the shared [`crate::recurrence`]
+//! editor for events and time blocks, so every recurring item uses the same
 //! words and written with the same `RRULE`/`RDATE`/`EXDATE` logic.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, Timelike, Weekday};
@@ -233,6 +233,9 @@ pub struct ParsedHabit {
 #[derive(Debug, Default)]
 pub struct Store {
     pub habits: Vec<Habit>,
+    /// Representative of the habit group shown in the month view.
+    pub calendar_habit: Option<Habit>,
+    pub completing: std::collections::HashSet<String>,
     /// The habit editor, when it is open.
     pub draft: Option<Draft>,
     /// A Calendar write is in flight.
@@ -244,9 +247,42 @@ pub struct Store {
     pub loaded: bool,
 }
 
+/// Group separate series and one-off records with the same habit name.
+fn same_habit(left: &Habit, right: &Habit) -> bool {
+    left.calendar_id == right.calendar_id
+        && left.title.trim().to_lowercase() == right.title.trim().to_lowercase()
+}
+
+impl Store {
+    pub fn unique_habits(&self) -> Vec<&Habit> {
+        let mut unique: Vec<&Habit> = Vec::new();
+        for habit in &self.habits {
+            if !unique.iter().any(|other| same_habit(habit, other)) {
+                unique.push(habit);
+            }
+        }
+        unique
+    }
+
+    pub fn matches_calendar_habit(&self, event: &calendar::Event) -> bool {
+        let Some(habit) = &self.calendar_habit else {
+            return true;
+        };
+        event.details.habit
+            && event.calendar_id == habit.calendar_id
+            && (event.id == habit.id
+                || event.details.recurring_event_id.as_deref() == Some(habit.id.as_str())
+                || event.title.trim().to_lowercase() == habit.title.trim().to_lowercase())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Action {
     Refresh,
+    ShowOnCalendar(String),
+    CloseCalendar,
+    ToggleCompleted(String),
+    CompletionSaved(String, Result<calendar::Event, String>),
     Loaded(Result<Vec<HabitEvent>, String>),
     New,
     Edit(String),
@@ -284,6 +320,56 @@ pub enum Action {
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
         Action::Refresh => refresh(state),
+        Action::ShowOnCalendar(id) => {
+            let Some(habit) = state
+                .habits
+                .habits
+                .iter()
+                .find(|habit| habit.id == id)
+                .cloned()
+            else {
+                return Task::none();
+            };
+            state.habits.calendar_habit = Some(habit);
+            state.calendar.open_event = None;
+            state.calendar.detail_event = None;
+            state.calendar.edit_draft = None;
+            crate::app::update(state, Message::CalendarMonthViewSelected)
+        }
+        Action::CloseCalendar => {
+            state.habits.calendar_habit = None;
+            crate::app::update(state, Message::CalendarModeSelected(false))
+        }
+        Action::ToggleCompleted(id) => {
+            if state.habits.completing.contains(&id) {
+                return Task::none();
+            }
+            let Some(mut event) = state.calendar.event(&id).cloned() else {
+                return Task::none();
+            };
+            if !event.details.habit {
+                return Task::none();
+            }
+            event.completed = !event.completed;
+            event.details.habit_completed_at = event.completed.then(Local::now);
+            state.habits.completing.insert(id.clone());
+            state.habits.error = None;
+            let client_id = state.config.calendar.client_id.clone();
+            let client_secret = state.config.calendar.client_secret.clone();
+            blocking::run(move || {
+                calendar::set_habit_completed(&client_id, &client_secret, &event)?;
+                Ok(event)
+            })
+            .map(move |result| Message::Habits(Action::CompletionSaved(id.clone(), result)))
+        }
+        Action::CompletionSaved(id, result) => {
+            state.habits.completing.remove(&id);
+            match result {
+                Ok(event) => state.calendar.replace_habit_occurrence(&event),
+                Err(error) => state.habits.error = Some(error),
+            }
+            Task::none()
+        }
 
         Action::Loaded(result) => {
             state.habits.busy = false;

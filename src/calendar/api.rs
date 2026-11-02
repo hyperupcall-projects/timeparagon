@@ -601,8 +601,8 @@ pub struct HabitEvent {
 ///
 /// Habits are ordinary Calendar events tagged with `ttKind=habit`, so they
 /// keep Google's own recurrence model. `singleEvents=false` returns the master
-/// event rather than one expanded instance per occurrence, which is what the
-/// Habits tab edits.
+/// event rather than one expanded instance per occurrence. The Habits tab
+/// groups these series and opens them in the shared calendar editor.
 pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<HabitEvent>, String> {
     let Some(calendar_id) = app_calendar_id(access_token, calendar)? else {
         return Ok(Vec::new());
@@ -623,6 +623,7 @@ pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<Ha
             entry.options.default_reminders = page.default_reminders.clone();
             migrate_calendar_metadata(access_token, &calendar_id, &mut entry)?;
             if entry.status.as_deref() != Some("cancelled")
+                && entry.recurring_event_id.is_none()
                 && let Some(habit) = parse_habit(entry, &calendar_id)
             {
                 habits.push(habit);
@@ -1216,6 +1217,35 @@ fn created_task(response: &str, title: &str) -> Result<CreatedTask, String> {
 /// exactly as they were. The times are written as UTC instants, which is what
 /// the API expects for a timed event. Blocking: call it from
 /// [`crate::blocking::run`].
+/// Patch only this occurrence; preserve all existing extended properties.
+pub fn patch_habit_completed(access_token: &str, event: &Event) -> Result<(), String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(&event.calendar_id),
+        urlencoding::encode(&event.id)
+    );
+    let current: serde_json::Value = get(&url, access_token)?;
+    let mut properties = current["extendedProperties"].clone();
+    if !properties.is_object() {
+        properties = serde_json::json!({});
+    }
+    if !properties["private"].is_object() {
+        properties["private"] = serde_json::json!({});
+    }
+    properties["private"]["ttCompleted"] = event.completed.to_string().into();
+    properties["private"]["ttCompletedAt"] = event
+        .details
+        .habit_completed_at
+        .map(|when| serde_json::Value::String(when.to_rfc3339()))
+        .unwrap_or(serde_json::Value::Null);
+    patch(
+        &url,
+        access_token,
+        &serde_json::json!({"extendedProperties": properties}).to_string(),
+        "Google Calendar",
+    )
+}
+
 pub fn patch_event_time(
     access_token: &str,
     calendar_id: &str,
@@ -1255,7 +1285,7 @@ pub fn patch_event_location(
     patch(&url, access_token, &body, "Google Calendar")
 }
 
-/// Updates an existing event on Google: title, description, start and end.
+/// Load an event for the editor, retaining its calendar's default reminders.
 /// Blocking: call it from [`crate::blocking::run`].
 pub fn fetch_event(access_token: &str, original: &Event, id: &str) -> Result<Event, String> {
     let url = format!(
@@ -1263,7 +1293,28 @@ pub fn fetch_event(access_token: &str, original: &Event, id: &str) -> Result<Eve
         urlencoding::encode(&original.calendar_id),
         urlencoding::encode(id)
     );
-    let mut entry: EventEntry = get(&url, access_token)?;
+    let entry: EventEntry = get(&url, access_token)?;
+    editor_event(entry, original)
+}
+
+/// Resolve a master opened from Habits to an instance so saving "current"
+/// cannot accidentally patch every occurrence in the series.
+pub fn fetch_first_occurrence(access_token: &str, master: &Event) -> Result<Event, String> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}/instances?maxResults=1",
+        urlencoding::encode(&master.calendar_id),
+        urlencoding::encode(&master.id),
+    );
+    let page: EventList = get(&url, access_token)?;
+    let entry = page
+        .items
+        .into_iter()
+        .next()
+        .ok_or("This habit has no occurrences to edit")?;
+    editor_event(entry, master)
+}
+
+fn editor_event(mut entry: EventEntry, original: &Event) -> Result<Event, String> {
     entry.options.default_reminders = original.details.options.default_reminders.clone();
     let calendar = Calendar {
         id: original.calendar_id.clone(),
@@ -1888,6 +1939,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
     };
 
     crate::calendar::Details {
+        sleep: super::sleep::Record::from_properties(&entry.extended_properties),
         options: entry.options.clone(),
         task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
@@ -1915,6 +1967,9 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .as_str()
             .and_then(|value| serde_json::from_str(value).ok())
             .unwrap_or_default(),
+        habit_completed_at: entry.extended_properties["private"]["ttCompletedAt"]
+            .as_str()
+            .and_then(parse_date_time),
         habit: entry.extended_properties["private"]["ttKind"].as_str() == Some("habit"),
         recurring_event_id: entry.recurring_event_id.clone(),
         recurrence: entry.recurrence.clone(),
@@ -2682,4 +2737,25 @@ mod tests {
         assert_eq!(cleared["recurrence"], serde_json::json!([]));
         assert!(cleared["colorId"].is_null());
     }
+}
+
+/// Parse a newly written sleep event using the ordinary Google event parser.
+pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result<Event, String> {
+    let entry: EventEntry = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let calendar = Calendar {
+        id: calendar_id.to_owned(),
+        name: "TimeSlay".into(),
+        color: super::sleep::COLOR,
+        primary: false,
+        selected_by_google: true,
+    };
+    // Use the event's own interval: a sleep write need not overlap today's window.
+    let day = entry
+        .start
+        .as_ref()
+        .and_then(|start| start.date_time.as_deref())
+        .and_then(parse_date_time)
+        .map(|dt| dt.date_naive())
+        .ok_or("Sleep event has no start time")?;
+    parse_event(entry, &calendar, day).ok_or_else(|| "Invalid sleep event".into())
 }

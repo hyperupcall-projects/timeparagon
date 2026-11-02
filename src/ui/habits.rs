@@ -29,7 +29,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let title = super::controls::page_heading(
         "Habits",
         "Build a rhythm for recurring work",
-        Some(state.habits.habits.len()),
+        Some(state.habits.unique_habits().len()),
         metrics,
     );
     let mut body = column![super::controls::page_toolbar(title, new.into(), metrics)]
@@ -54,7 +54,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         );
     }
 
-    for habit in &state.habits.habits {
+    for habit in state.habits.unique_habits() {
         body = body.push(card(state, habit, metrics));
     }
 
@@ -84,7 +84,19 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
         delete = delete.on_press(msg(Action::DeleteRequested(habit.id.clone())));
     }
 
-    let actions = row![edit, delete].spacing(6).align_y(Alignment::Center);
+    let show = button(text("Show on calendar").size(metrics.label()))
+        .padding([2, 6])
+        .on_press(msg(Action::ShowOnCalendar(habit.id.clone())));
+    let actions: Element<'a, Message> = if metrics.size.width < 360.0 {
+        column![show, row![edit, delete].spacing(6)]
+            .spacing(6)
+            .into()
+    } else {
+        row![show, edit, delete]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+    };
 
     let title = row![
         super::calendar::color_circle(color),
@@ -100,7 +112,7 @@ fn card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Element<'a
     .spacing(6)
     .align_y(Alignment::Center)
     .width(Fill);
-    let header: Element<'a, Message> = if metrics.size.width < 360.0 {
+    let header: Element<'a, Message> = if metrics.size.width < 600.0 {
         column![title, actions].spacing(6).into()
     } else {
         row![title, actions]
@@ -282,6 +294,32 @@ mod tests {
         assert!(ui.find("Weekly on Monday").is_ok());
         assert!(ui.find("RRULE").is_err());
         assert!(ui.find("Edit").is_ok());
+    }
+
+    #[test]
+    fn repeated_records_share_one_card_and_open_a_filtered_month() {
+        let mut state = state();
+        let one = habit("one", "RRULE:FREQ=DAILY");
+        let mut two = habit("two", "RRULE:FREQ=WEEKLY;BYDAY=MO");
+        two.title = " stretch ".into();
+        state.habits.habits = vec![one, two];
+        assert_eq!(state.habits.unique_habits().len(), 1);
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            iced::Size::new(500.0, 600.0),
+            crate::ui::view(&state),
+        );
+        ui.click("Show on calendar").unwrap();
+        let action = ui
+            .into_messages()
+            .find(|message| matches!(message, Message::Habits(Action::ShowOnCalendar(_))))
+            .unwrap();
+        let _ = crate::app::update(&mut state, action);
+        assert!(state.monthly && !state.weekly);
+        assert_eq!(state.habits.calendar_habit.as_ref().unwrap().id, "one");
+        let _ = crate::app::update(&mut state, Message::Habits(Action::CloseCalendar));
+        assert!(!state.monthly);
+        assert!(state.habits.calendar_habit.is_none());
     }
 
     #[test]

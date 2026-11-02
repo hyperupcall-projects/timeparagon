@@ -108,14 +108,7 @@ pub fn today(settings: &CalendarSettings) -> NaiveDate {
 /// Blocking: callers run this on a worker thread. It uses the same OAuth token
 /// file as the iced app, so signing in there is enough for the Dioxus view.
 pub fn load_day(day: NaiveDate, settings: &CalendarSettings) -> Result<Snapshot, String> {
-    calendar::sync_day(
-        &settings.client_id,
-        &settings.client_secret,
-        &settings.disabled,
-        day,
-        settings.day_start_hour(),
-        settings.app_calendar.as_deref(),
-    )
+    calendar::sleep::sync(settings, day, &[day])
 }
 
 /// Whether a Google token is already on disk.
@@ -335,6 +328,7 @@ fn is_time_block(
     !event.is_task()
         && !event.all_day
         && event.details.scheduled.is_none()
+        && event.details.sleep.is_none()
         && (settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
             || assigned_keys.contains(&tb::block_key(event)))
 }
@@ -469,7 +463,9 @@ fn timed_events(
             let block = blocks_by_key.get(&key).copied();
             TimedEvent {
                 event: (*event).clone(),
-                title: if event.is_task() {
+                title: if event.details.sleep.is_some() {
+                    calendar::sleep::title(event)
+                } else if event.is_task() {
                     tb::task_label(event)
                 } else {
                     event.title.clone()

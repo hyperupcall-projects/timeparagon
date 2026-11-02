@@ -326,7 +326,10 @@ pub enum Message {
     DescriptionClose,
     DescriptionSave,
     EventTitleEdit,
-    HabitDetailsLoaded(String, Result<calendar::EditDraft, String>),
+    HabitDetailsLoaded(
+        String,
+        Result<(calendar::Event, calendar::EditDraft), String>,
+    ),
     EventEndDateChanged(String),
     EventLabelDraft(String),
     EventLabelAdd,
@@ -499,12 +502,8 @@ pub enum Message {
     TaskColorPicked(String, Option<iced::Color>),
     /// Give a regular calendar a local color override, or reset to Google's color.
     CalendarColorPicked(String, Option<iced::Color>),
-    /// Color time-block events on the TimeSlay calendar; `None` resets it.
-    TimeBlockColorPicked(Option<iced::Color>),
-    /// Color scheduled task events on the TimeSlay calendar; `None` resets it.
-    TaskEventColorPicked(Option<iced::Color>),
-    /// Color habit events on the TimeSlay calendar; `None` resets it.
-    HabitColorPicked(Option<iced::Color>),
+    /// Color one of the TimeSlay calendar's event kinds; `None` resets it.
+    TimeSlayColorPicked(String, Option<iced::Color>),
     /// Delete a single Google Task instance (one occurrence of a recurring task).
     TaskDeleteRequested(String),
     /// The user confirmed the task deletion prompt.
@@ -520,6 +519,13 @@ pub enum Message {
     /// The hour the calendar day ends, so late-night events stay with the
     /// evening they belong to.
     CalendarDayEndChanged(u32),
+    SleepGoalChanged(u32),
+    SleepDayStartChanged(u32),
+    LatestWakeupChanged(u32),
+    SleepEstimatedStart(bool),
+    SleepEstimatedEnd(bool),
+    SleepSaveRequested,
+    SleepSaved(Result<calendar::Event, String>),
     CalendarWeeklyDaysChanged(u32),
     CalendarWeeklyWidthChanged(u32),
     /// Multiplies the calendar hour height. Above 1 spreads the hours apart.
@@ -1189,6 +1195,9 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 state.calendar.open_event = None;
                 state.habits.confirm_delete = None;
             }
+            if screen != Screen::Habits {
+                state.habits.calendar_habit = None;
+            }
             state.screen = screen;
             if screen != Screen::BrainDump {
                 state.brain_dump.open = None;
@@ -1225,6 +1234,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::CalendarModeSelected(weekly) => {
+            state.habits.calendar_habit = None;
             let was_weekly = state.range_view_active();
             let changed = state.monthly || state.weekly != weekly;
             // Overview controls must not navigate or reset the sidebar.
@@ -1338,6 +1348,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 Message::EventOpened(_)
                     | Message::EventTimeChanged { .. }
                     | Message::TaskToggled(_)
+                    | Message::Habits(crate::habits::Action::ToggleCompleted(_))
                     | Message::EventDraftStarted { .. }
                     | Message::TimeBlocking(
                         crate::timeblocking::Action::View(_)
@@ -1872,6 +1883,14 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             }
             if previous.calendar != state.config.calendar {
                 tasks.push(show_cached_calendar(state));
+                if previous.calendar.sleep_goal_hours() != state.config.calendar.sleep_goal_hours()
+                    || previous.calendar.sleep_day_start_hour()
+                        != state.config.calendar.sleep_day_start_hour()
+                    || previous.calendar.latest_wakeup_hour()
+                        != state.config.calendar.latest_wakeup_hour()
+                {
+                    tasks.push(refresh_week_after_write(state));
+                }
             }
             log::info!("reloaded config from disk");
             Task::batch(tasks)
@@ -2129,7 +2148,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             let value = state.description_editor.text();
             if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
                 draft.description = value;
-                update(state, Message::EventEditSaveRequested)
+                // Keep this with the other staged fields until the editor's
+                // Save button is used. Saving a new habit here would close
+                // its pane as soon as the creation request finishes.
+                Task::none()
             } else {
                 crate::timeblocking::update(
                     state,
@@ -2140,7 +2162,11 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::HabitDetailsLoaded(id, result) => {
             if state.calendar.open_event.as_deref() == Some(id.as_str()) {
                 match result {
-                    Ok(draft) => {
+                    Ok((event, draft)) => {
+                        state.calendar.open_event = Some(event.id.clone());
+                        if state.calendar.detail_event.is_some() || event.id != id {
+                            state.calendar.detail_event = Some(event);
+                        }
                         state.calendar.edit_draft = Some(draft);
                         state.calendar.error = None;
                     }
@@ -2219,6 +2245,39 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // Dismissing the menu also puts away any open color picker, so it
             // does not pop back up the next time the menu is opened.
             state.calendar.color_editor = None;
+            if state.calendar.menu_open {
+                // The old single TimeSlay toggle is replaced by per-kind
+                // toggles. Preserve its hidden state without leaving an
+                // invisible calendar-wide switch behind the new controls.
+                let hidden_app_ids: Vec<_> = state
+                    .config
+                    .calendar
+                    .disabled
+                    .iter()
+                    .filter(|id| {
+                        state.config.calendar.app_calendar.as_ref() == Some(id)
+                            || state.calendar.calendars.iter().any(|calendar| {
+                                &calendar.id == *id
+                                    && calendar.is_app_calendar(&state.config.calendar)
+                            })
+                    })
+                    .cloned()
+                    .collect();
+                if !hidden_app_ids.is_empty() {
+                    for source in calendar::sources::TimeSlaySource::ALL {
+                        if source != calendar::sources::TimeSlaySource::Sleep {
+                            state
+                                .config
+                                .calendar
+                                .set_calendar_enabled(source.id(), false);
+                        }
+                    }
+                    for id in hidden_app_ids {
+                        state.config.calendar.set_calendar_enabled(&id, true);
+                    }
+                    return queue_save(state);
+                }
+            }
             Task::none()
         }
 
@@ -2282,14 +2341,14 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::CalendarSyncedAt(revision, result) => {
             if revision != state.timeblocking.revision {
                 state.calendar.sync = SyncState::Idle;
-                return Task::none();
+                return Task::done(Message::CalendarSyncRequested);
             }
             Task::done(Message::CalendarSynced(result))
         }
         Message::CalendarRangeSynced(revision, dates, result) => {
             if revision != state.timeblocking.revision {
                 state.calendar.sync = SyncState::Idle;
-                return Task::none();
+                return Task::done(Message::CalendarSyncRequested);
             }
             match result {
                 Ok(mut snapshot) => {
@@ -2821,21 +2880,12 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             queue_save(state)
         }
 
-        Message::TimeBlockColorPicked(color) => {
-            state.config.calendar.set_time_block_color(color);
-            state.calendar.apply_task_colors(&state.config.calendar);
-            queue_save(state)
-        }
-
-        Message::TaskEventColorPicked(color) => {
-            state.config.calendar.set_task_event_color(color);
-            state.calendar.apply_task_colors(&state.config.calendar);
-            queue_save(state)
-        }
-
-        Message::HabitColorPicked(color) => {
-            state.config.calendar.set_habit_color(color);
-            state.calendar.apply_task_colors(&state.config.calendar);
+        Message::TimeSlayColorPicked(id, color) => {
+            if let Some(source) = calendar::sources::TimeSlaySource::from_id(&id) {
+                source.set_color(&mut state.config.calendar, color);
+                state.calendar.apply_task_colors(&state.config.calendar);
+                state.calendar.color_editor = None;
+            }
             queue_save(state)
         }
 
@@ -2897,6 +2947,95 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 config::CalendarSettings::MAX_SYNC_MINUTES,
             );
             queue_save(state)
+        }
+
+        Message::SleepGoalChanged(hours) => {
+            state.config.calendar.sleep_goal_hours = hours.clamp(6, 12);
+            Task::batch([queue_save(state), refresh_week_after_write(state)])
+        }
+        Message::SleepDayStartChanged(hour) => {
+            state.config.calendar.sleep_day_start_hour = hour.min(6);
+            Task::batch([queue_save(state), refresh_week_after_write(state)])
+        }
+        Message::LatestWakeupChanged(hour) => {
+            state.config.calendar.latest_wakeup_hour = hour.clamp(4, 14);
+            Task::batch([queue_save(state), refresh_week_after_write(state)])
+        }
+        Message::SleepEstimatedStart(value) => {
+            if let Some(record) = state
+                .calendar
+                .edit_draft
+                .as_mut()
+                .and_then(|d| d.sleep.as_mut())
+            {
+                record.estimated_start = value;
+            }
+            Task::none()
+        }
+        Message::SleepEstimatedEnd(value) => {
+            if let Some(record) = state
+                .calendar
+                .edit_draft
+                .as_mut()
+                .and_then(|d| d.sleep.as_mut())
+            {
+                record.estimated_end = value;
+            }
+            Task::none()
+        }
+        Message::SleepSaveRequested => {
+            let Some(draft) = state.calendar.edit_draft.as_ref() else {
+                return Task::none();
+            };
+            let Some(mut record) = draft.sleep.clone() else {
+                return Task::none();
+            };
+            if draft.saving {
+                return Task::none();
+            }
+            if calendar::parse_clock(&draft.start_text).is_none()
+                || calendar::parse_clock(&draft.end_text).is_none()
+                || calendar::deadline::parse_date(&draft.date_text).is_err()
+                || calendar::deadline::parse_date(&draft.end_date_text).is_err()
+                || draft.end <= draft.start
+            {
+                state.calendar.error =
+                    Some("Enter valid dates and times, with wake-up after sleep start".into());
+                return Task::none();
+            }
+            let Some(mut event) = state.calendar.event(&draft.id).cloned() else {
+                return Task::none();
+            };
+            let new = event.id == calendar::sleep::NEW_ID;
+            record.automatic = false;
+            if new {
+                record.wake_date = draft.end.date_naive();
+            }
+            event.start = draft.start;
+            event.end = draft.end;
+            event.details.sleep = Some(record);
+            state.calendar.edit_draft.as_mut().unwrap().saving = true;
+            state.timeblocking.revision += 1;
+            state.calendar.error = None;
+            let settings = state.config.calendar.clone();
+            blocking::run(move || calendar::sleep::save(&settings, event, new))
+                .map(Message::SleepSaved)
+        }
+        Message::SleepSaved(Ok(event)) => {
+            let id = event.id.clone();
+            state.calendar.forget_event_everywhere(&id);
+            state.calendar.detail_event = None;
+            state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
+            state.calendar.add_event(event);
+            state.calendar.open_event = Some(id);
+            refresh_week_after_write(state)
+        }
+        Message::SleepSaved(Err(error)) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.saving = false;
+            }
+            state.calendar.error = Some(error);
+            Task::none()
         }
 
         Message::CalendarDayEndChanged(hour) => {
@@ -3110,6 +3249,36 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EventDraftKindSelected(calendar::DraftKind::Sleep) => {
+            let Some(draft) = state.calendar.draft.take() else {
+                return Task::none();
+            };
+            let start = draft.start;
+            let end = start
+                + chrono::Duration::hours(i64::from(state.config.calendar.sleep_goal_hours()));
+            let event = calendar::Event {
+                id: calendar::sleep::NEW_ID.into(),
+                calendar_id: state
+                    .config
+                    .calendar
+                    .app_calendar
+                    .clone()
+                    .unwrap_or_default(),
+                title: "Sleep".into(),
+                start,
+                end,
+                all_day: false,
+                color: calendar::sleep::COLOR,
+                completed: false,
+                details: calendar::Details {
+                    sleep: Some(calendar::sleep::Record::planned(end.date_naive())),
+                    ..Default::default()
+                },
+            };
+            state.calendar.detail_event = Some(event);
+            update(state, Message::EventOpened(calendar::sleep::NEW_ID.into()))
+        }
+
         Message::EventDraftKindSelected(calendar::DraftKind::Habit) => {
             // Creation and editing share the habit details pane.
             let Some(draft) = state.calendar.draft.take() else {
@@ -3141,7 +3310,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
                 // A time block always lives on the app's TimeSlay calendar;
                 // switching back to an event returns to the normal default.
                 if let Some(calendar_id) = match kind {
-                    calendar::DraftKind::TimeBlock => app_calendar,
+                    calendar::DraftKind::TimeBlock | calendar::DraftKind::Sleep => app_calendar,
                     calendar::DraftKind::Event | calendar::DraftKind::Habit => default_calendar,
                 } {
                     draft.calendar_id = calendar_id;
@@ -3461,68 +3630,28 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            let recurrence = match draft.recurrence_lines() {
-                Ok(lines) => lines,
-                Err(error) => {
-                    state.calendar.error = Some(error);
-                    return Task::none();
-                }
+            let Some(original) = state.calendar.event(&draft.id).cloned() else {
+                return Task::none();
             };
-            if let Some(original) = state
-                .calendar
-                .event(&draft.id)
-                .filter(|event| !event.details.habit)
-                .cloned()
-            {
-                let settings = state.config.calendar.clone();
-                state.calendar.error = None;
-                if let Some(draft) = &mut state.calendar.edit_draft {
-                    draft.saving = true;
-                }
-                return blocking::run(move || {
-                    calendar::save_event_scope(
-                        &settings.client_id,
-                        &settings.client_secret,
-                        &original,
-                        &draft,
-                        scope,
-                        &description,
-                        color_id,
-                    )
-                })
-                .map(Message::EventEditSaved);
+            if let Err(error) = draft.recurrence_lines() {
+                state.calendar.error = Some(error);
+                return Task::none();
             }
-            // An expanded occurrence belongs to a series. Editing it must not
-            // rewrite the series' recurrence, so leave that field untouched.
-            let recurrence = state
-                .calendar
-                .event(&draft.id)
-                .is_some_and(|event| {
-                    draft.series_id.is_some() || event.details.recurring_event_id.is_none()
-                })
-                .then_some(recurrence);
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
+            let settings = state.config.calendar.clone();
             state.calendar.error = None;
-
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.saving = true;
+            }
             blocking::run(move || {
-                calendar::update_event(
-                    &client_id,
-                    &client_secret,
-                    &draft.calendar_id,
-                    draft.series_id.as_deref().unwrap_or(&draft.id),
-                    &draft.title,
+                calendar::save_event_scope(
+                    &settings.client_id,
+                    &settings.client_secret,
+                    &original,
+                    &draft,
+                    scope,
                     &description,
                     color_id,
-                    draft.start,
-                    draft.end,
-                    recurrence.as_deref(),
-                    &draft.projects.ids,
-                    draft.all_day,
-                    &draft.labels,
-                    Some(&draft.options),
-                )?;
-                Ok(())
+                )
             })
             .map(Message::EventEditSaved)
         }
@@ -3535,7 +3664,10 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             // Keep the inline draft as the user left it until the calendar
             // sync brings the saved event back, so fields do not flicker.
             if state.screen == Screen::Habits {
-                Task::done(Message::Habits(crate::habits::Action::Refresh))
+                Task::batch([
+                    Task::done(Message::Habits(crate::habits::Action::Refresh)),
+                    refresh_week_after_write(state),
+                ])
             } else {
                 refresh_week_after_write(state)
             }
@@ -4128,12 +4260,8 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
-    if state.range_view_active() {
-        state.timeblocking.revision += 1;
-        Task::done(Message::CalendarSyncRequested)
-    } else {
-        Task::none()
-    }
+    state.timeblocking.revision += 1;
+    Task::done(Message::CalendarSyncRequested)
 }
 
 fn reconcile_completed_task(state: &mut State) -> Task<Message> {
@@ -4203,7 +4331,21 @@ fn empty_calendar_days(state: &State) -> Vec<chrono::NaiveDate> {
         vec![state.calendar.day]
     };
     days.into_iter()
-        .filter(|&day| !state.calendar.has_calendar_events_on(day))
+        .filter(|&day| {
+            !state.calendar.has_calendar_events_on(day)
+                || (!state.monthly
+                    && [day, day.succ_opt().unwrap_or(day)].iter().any(|wake_day| {
+                        !state.calendar.loaded_days().iter().any(|&loaded| {
+                            state.calendar.events_on(loaded).iter().any(|event| {
+                                event
+                                    .details
+                                    .sleep
+                                    .as_ref()
+                                    .is_some_and(|sleep| sleep.wake_date == *wake_day)
+                            })
+                        })
+                    }))
+        })
         .collect()
 }
 
@@ -4248,6 +4390,11 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     if !state.calendar.is_signed_in()
         || state.calendar.is_busy()
         || !state.timeblocking.busy.is_empty()
+        || state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .is_some_and(|d| d.sleep.is_some() && d.saving)
     {
         return Task::none();
     }
@@ -4256,42 +4403,18 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     state.calendar.sync = SyncState::Syncing;
     state.calendar.error = None;
 
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
-    let disabled = state.config.calendar.disabled.clone();
+    let settings = state.config.calendar.clone();
     let day = state.calendar.day;
-    let day_end_hour = state.config.calendar.day_start_hour();
-
     let revision = state.timeblocking.revision;
-    let app_calendar = state.config.calendar.app_calendar.clone();
     if state.range_view_active() {
         let anchor = state.week_anchor;
         let dates = state.calendar_dates();
         let fetched_dates = dates.clone();
-        return blocking::run(move || {
-            calendar::sync_range(
-                &client_id,
-                &client_secret,
-                &disabled,
-                anchor,
-                &fetched_dates,
-                day_end_hour,
-                app_calendar.as_deref(),
-            )
-        })
-        .map(move |result| Message::CalendarRangeSynced(revision, dates.clone(), result));
+        return blocking::run(move || calendar::sleep::sync(&settings, anchor, &fetched_dates))
+            .map(move |result| Message::CalendarRangeSynced(revision, dates.clone(), result));
     }
-    blocking::run(move || {
-        calendar::sync_day(
-            &client_id,
-            &client_secret,
-            &disabled,
-            day,
-            day_end_hour,
-            app_calendar.as_deref(),
-        )
-    })
-    .map(move |result| Message::CalendarSyncedAt(revision, result))
+    blocking::run(move || calendar::sleep::sync(&settings, day, &[day]))
+        .map(move |result| Message::CalendarSyncedAt(revision, result))
 }
 
 fn level(always_on_top: bool) -> window::Level {
@@ -4842,19 +4965,19 @@ mod tests {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.config.calendar.weekly_days = 7;
         state.config.calendar.weekly_day_width = 100;
-        assert_eq!(state.weekly_window_width(), 728.0);
+        assert_eq!(state.weekly_window_width(), 716.0);
         state.config.calendar.weekly_days = 8;
         state.config.calendar.weekly_day_width = 220;
-        assert_eq!(state.weekly_window_width(), 1788.0);
+        assert_eq!(state.weekly_window_width(), 1776.0);
         state.sidebar = Some(Sidebar {
             width: 200.0,
             side: panel::Side::Left,
         });
-        assert_eq!(state.weekly_window_width(), 1804.0);
+        assert_eq!(state.weekly_window_width(), 1792.0);
         state.monitor_size = Some(Size::new(1200.0, 900.0));
         assert_eq!(state.weekly_window_width(), 984.0);
         state.monitor_size = Some(Size::new(f32::NAN, 900.0));
-        assert_eq!(state.weekly_window_width(), 1804.0);
+        assert_eq!(state.weekly_window_width(), 1792.0);
         state.sidebar = None;
         state.monitor_size = None;
         state.config.window.width = 3000.0;
@@ -5242,7 +5365,7 @@ mod tests {
     }
 
     #[test]
-    fn populated_day_navigation_uses_cache_even_when_stale() {
+    fn populated_day_navigation_retains_cached_events_while_filling_missing_sleep() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
         state.calendar.connection = Connection::SignedIn;
@@ -5250,7 +5373,7 @@ mod tests {
         let day = state.calendar.day;
         let count = state.calendar.events.len();
         let _ = update(&mut state, Message::CalendarDaySelected(day));
-        assert_eq!(state.calendar.sync, SyncState::Idle);
+        assert_eq!(state.calendar.sync, SyncState::Syncing);
         assert_eq!(state.calendar.events.len(), count);
         let _ = update(&mut state, Message::CalendarAutoSyncRequested);
         assert_eq!(state.calendar.sync, SyncState::Syncing);
@@ -5322,6 +5445,13 @@ mod tests {
     fn a_recent_sync_prevents_an_automatic_fetch_but_manual_sync_still_works() {
         let mut state = State::new(Config::default(), Catalog::built_in());
         state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let template = state.calendar.events[1].clone();
+        for wake_date in [state.calendar.day, state.calendar.day.succ_opt().unwrap()] {
+            let mut night = template.clone();
+            night.id = format!("sleep-{wake_date}");
+            night.details.sleep = Some(calendar::sleep::Record::planned(wake_date));
+            state.calendar.events.push(night);
+        }
         state.calendar.connection = Connection::SignedIn;
         state.calendar.last_sync = Some(Local::now());
         let _ = update(&mut state, Message::CalendarAutoSyncRequested);

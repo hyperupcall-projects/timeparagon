@@ -244,7 +244,13 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         choice(
             "Theme",
             state.catalog.names(),
-            Some(state.config.appearance.theme.clone()),
+            Some(
+                state
+                    .catalog
+                    .resolve(&state.config.appearance.theme)
+                    .name
+                    .clone()
+            ),
             Message::ThemeSelected,
             metrics,
         ),
@@ -795,6 +801,51 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
+    section = section.push(field(
+        format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
+        slider(
+            6..=12,
+            settings.sleep_goal_hours(),
+            Message::SleepGoalChanged,
+        )
+        .into(),
+        metrics,
+    ));
+
+    section = section.push(field(
+        format!(
+            "Sleep day starts at {}",
+            calendar::time_format::hour(
+                settings.sleep_day_start_hour(),
+                state.config.appearance.time_format
+            )
+        ),
+        slider(
+            0..=6,
+            settings.sleep_day_start_hour(),
+            Message::SleepDayStartChanged,
+        )
+        .into(),
+        metrics,
+    ));
+
+    section = section.push(field(
+        format!(
+            "Latest wake-up: {}",
+            calendar::time_format::hour(
+                settings.latest_wakeup_hour(),
+                state.config.appearance.time_format
+            )
+        ),
+        slider(
+            4..=14,
+            settings.latest_wakeup_hour(),
+            Message::LatestWakeupChanged,
+        )
+        .into(),
+        metrics,
+    ));
+
     // The calendar new events are created on. Task lists are excluded since
     // they hold Google Tasks rather than calendar events.
     let options: Vec<calendar::Calendar> = state
@@ -994,68 +1045,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         |required| Message::TimeBlocking(crate::timeblocking::Action::RequirePriority(required)),
         metrics,
     ));
-    section = section.push(heading("TimeSlay colors", metrics));
-    section = section.push(
-        text("Change the color of different types of events that is written to the calendar")
-            .size(metrics.label())
-            .style(text::secondary),
-    );
-    section = section.push(field(
-        "Time Blocks",
-        kind_color_picker(
-            settings.time_block_color,
-            Message::TimeBlockColorPicked,
-            metrics,
-        ),
-        metrics,
-    ));
-    section = section.push(field(
-        "Tasks",
-        kind_color_picker(
-            settings.task_event_color,
-            Message::TaskEventColorPicked,
-            metrics,
-        ),
-        metrics,
-    ));
-    section = section.push(field(
-        "Habits",
-        kind_color_picker(settings.habit_color, Message::HabitColorPicked, metrics),
-        metrics,
-    ));
-
     indent(section.into(), metrics)
-}
-
-/// A palette for one of the app calendar's event kinds, with a reset button
-/// that puts the color back to its built-in default.
-fn kind_color_picker<'a>(
-    current: Option<crate::hex::HexColor>,
-    pick: fn(Option<iced::Color>) -> Message,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
-    let selected = current.map(|color| color.0);
-    let mut swatches = column![].spacing(6);
-    for chunk in calendar::colors::palette().chunks(6) {
-        let mut line = row![].spacing(6);
-        for &color in chunk {
-            line = line.push(super::calendar::swatch_button(
-                color,
-                selected == Some(color),
-                pick(Some(color)),
-            ));
-        }
-        swatches = swatches.push(line);
-    }
-    let reset = button(text("Default").size(metrics.label() - 1.0))
-        .width(Fill)
-        .on_press(pick(None))
-        .style(if selected.is_none() {
-            crate::ui::controls::primary
-        } else {
-            crate::ui::controls::secondary
-        });
-    swatches.push(reset).into()
 }
 
 /// Services a pasted link can come from, and the accounts each one reads as.

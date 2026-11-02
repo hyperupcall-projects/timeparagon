@@ -174,8 +174,7 @@ impl Reply {
 }
 
 /// The colors of the theme the app is actually using, so the popup looks like
-/// the app. Read from the same config and catalog the app reads; a user theme
-/// the app can load works here too.
+/// the app. Read from the same config and four-theme catalog the app reads.
 pub fn theme_colors() -> ThemeColors {
     let config = Config::load();
     let catalog = Catalog::load();
@@ -183,7 +182,7 @@ pub fn theme_colors() -> ThemeColors {
 }
 
 /// The colors of one named theme in a catalog. Split out so it can be tested
-/// without reading the user's config or themes directory.
+/// without reading the user's config.
 fn theme_colors_for(catalog: &Catalog, name: &str) -> ThemeColors {
     let theme = &catalog.resolve(name).theme;
     let palette = theme.extended_palette();
@@ -822,7 +821,7 @@ mod tests {
 
     #[test]
     fn the_theme_reply_carries_every_color_as_hex() {
-        let colors = theme_colors_for(&Catalog::built_in(), "Sakura");
+        let colors = theme_colors_for(&Catalog::built_in(), "Light");
         for color in [
             &colors.background,
             &colors.surface,
@@ -838,7 +837,7 @@ mod tests {
         ] {
             assert!(color.starts_with('#') && color.len() == 7, "{color}");
         }
-        assert_eq!(colors.name, "Sakura");
+        assert_eq!(colors.name, "Light");
     }
 
     #[test]

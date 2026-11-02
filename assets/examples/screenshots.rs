@@ -15,21 +15,8 @@ use timeslay::theme::Catalog;
 /// The widths the layout is designed around.
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
 
-/// Our palettes, the curated dark themes, and representative built-ins.
-const THEMES: [&str; 12] = [
-    "Sakura",
-    "Peony",
-    "Matcha",
-    "Mint",
-    "Sage",
-    "Catppuccin Latte",
-    "Dark",
-    "Absolute Black",
-    "GitHub Dark",
-    "GitHub Dark High Contrast",
-    "Nord",
-    "Dracula",
-];
+/// Every selectable theme.
+const THEMES: [&str; 4] = ["Light", "Light high contrast", "Dark", "Dark high contrast"];
 
 fn main() {
     let directory = std::path::Path::new("screenshots");
@@ -231,7 +218,7 @@ fn main() {
     }
 
     // And the widest layout, where the settings sit beside the calendar.
-    for theme in ["Sakura", "Matcha"] {
+    for theme in THEMES {
         count += shoot(
             directory,
             theme,

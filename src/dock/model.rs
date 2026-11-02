@@ -1,8 +1,9 @@
-//! What the dock draws: the leftmost column of the day view, as bare spans.
+//! What the dock draws: every timed span of the day, stacked by importance.
 //!
 //! The day view packs overlapping events into columns, with the sources the
-//! user ranked highest on the left. The dock keeps only that first column, so
-//! at any moment it shows the most important thing going on.
+//! user ranked highest on the left. The dock keeps them all: each span is
+//! drawn full width, and the most important source is painted last so it sits
+//! on top. Spans behind it still show wherever the top span does not cover.
 
 use crate::calendar::time_format::TimeFormat;
 use chrono::{DateTime, Local, NaiveDate};
@@ -22,11 +23,15 @@ const DESCRIPTION_CHARS: usize = 360;
 /// One coloured stretch of the strip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Segment {
+    /// The event this span belongs to, so a promotion survives a refresh.
+    pub id: String,
     pub start_min: i32,
     pub end_min: i32,
     pub color: Color,
     /// A ticked-off task is drawn faded rather than hidden.
     pub completed: bool,
+    /// Rank of the source it came from; 0 is the highest priority.
+    pub priority: usize,
     /// The short card shown while hovering.
     pub card: Card,
     /// Everything about the segment, shown once it is clicked.
@@ -41,12 +46,24 @@ pub struct Card {
     pub lines: Vec<String>,
 }
 
-/// The first-column spans of `day`, in start order.
+/// How far to the front a segment is painted. Larger is painted later, so it
+/// covers the ones behind it. A promoted event outranks every source.
+fn frontness(segment: &Segment, promoted: Option<&str>) -> i64 {
+    if promoted == Some(segment.id.as_str()) {
+        i64::MAX
+    } else {
+        -(segment.priority.min(1_000_000) as i64)
+    }
+}
+
+/// Every timed span of `day`, ordered back to front: the last element is the
+/// highest-priority source and is drawn on top of the rest.
 pub fn segments(
     store: &Store,
     settings: &CalendarSettings,
     day: NaiveDate,
     time_format: TimeFormat,
+    promoted: Option<&str>,
 ) -> Vec<Segment> {
     let offset = settings.day_end_minutes();
     let timed = store.timed_events_on(day, settings);
@@ -66,34 +83,36 @@ pub fn segments(
 
     let all = store.events_on(day);
     let sources = store.display_sources(settings);
-    let priorities: Vec<usize> = timed
-        .iter()
-        .map(|event| {
-            sources
-                .iter()
-                .position(|source| source.id == event.source_id())
-                .unwrap_or(usize::MAX)
-        })
-        .collect();
-    let packed = layout::pack_prioritized(&spans, &priorities);
 
-    timed
+    let mut found: Vec<Segment> = timed
         .iter()
         .zip(&spans)
-        .zip(&packed)
-        .filter(|(_, slot)| slot.column == 0)
-        .map(|((event, span), _)| {
+        .map(|(event, span)| {
             let assigned = assigned_tasks(all, event, settings);
+            let priority = sources
+                .iter()
+                .position(|source| source.id == event.source_id())
+                .unwrap_or(usize::MAX);
             Segment {
+                id: event.id.clone(),
                 start_min: span.start_min,
                 end_min: span.end_min,
                 color: event.display_color(settings),
                 completed: event.is_task() && event.completed,
+                priority,
                 card: card(event, &assigned, false, time_format),
                 full: card(event, &assigned, true, time_format),
             }
         })
-        .collect()
+        .collect();
+
+    found.sort_by(|a, b| {
+        frontness(a, promoted)
+            .cmp(&frontness(b, promoted))
+            .then(a.start_min.cmp(&b.start_min))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    found
 }
 
 /// The tasks assigned to `event`, when it is a time block, in the order they
@@ -138,7 +157,13 @@ fn minutes_into_day(when: DateTime<Local>, day: NaiveDate, offset: i32) -> i32 {
 /// `full` keeps the whole description and lists a time block's tasks; the
 /// hover card only says how many there are.
 fn card(event: &Event, assigned: &[&Event], full: bool, time_format: TimeFormat) -> Card {
-    let title = if event.is_task() {
+    let title = if event.details.sleep.is_some() {
+        format!(
+            "{} · {}",
+            calendar::sleep::title(event),
+            calendar::sleep::time_label(event, time_format)
+        )
+    } else if event.is_task() {
         crate::timeblocking::task_label(event)
     } else {
         event.title.clone()
@@ -260,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_highest_priority_source_survives_an_overlap() {
+    fn every_overlapping_segment_is_kept_with_the_highest_priority_on_top() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap();
         let settings = CalendarSettings {
             source_order: vec!["home".into(), "work".into()],
@@ -275,12 +300,41 @@ mod tests {
             day,
         );
 
-        let titles: Vec<_> = segments(&store, &settings, day, TimeFormat::TwentyFourHour)
-            .into_iter()
-            .map(|segment| segment.card.title)
+        let found = segments(&store, &settings, day, TimeFormat::TwentyFourHour, None);
+        let titles: Vec<_> = found
+            .iter()
+            .map(|segment| segment.card.title.as_str())
             .collect();
 
-        assert_eq!(titles, ["dentist", "lunch"]);
+        // Back to front, so `dentist` (home ranks first) is painted last.
+        assert_eq!(titles, ["standup", "lunch", "dentist"]);
+        assert!(found[0].priority > found[2].priority);
+    }
+
+    #[test]
+    fn a_promoted_segment_is_painted_last_whatever_its_source() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap();
+        let settings = CalendarSettings {
+            source_order: vec!["home".into(), "work".into()],
+            ..CalendarSettings::default()
+        };
+        let store = store(
+            vec![
+                event("standup", "work", at(day, 9, 0), 60),
+                event("dentist", "home", at(day, 9, 30), 60),
+            ],
+            day,
+        );
+
+        let found = segments(
+            &store,
+            &settings,
+            day,
+            TimeFormat::TwentyFourHour,
+            Some("standup"),
+        );
+
+        assert_eq!(found.last().map(|s| s.id.as_str()), Some("standup"));
     }
 
     #[test]
@@ -289,7 +343,7 @@ mod tests {
         let settings = CalendarSettings::default();
         let store = store(vec![event("standup", "work", at(day, 9, 15), 45)], day);
 
-        let found = segments(&store, &settings, day, TimeFormat::TwentyFourHour);
+        let found = segments(&store, &settings, day, TimeFormat::TwentyFourHour, None);
 
         assert_eq!(found.len(), 1);
         assert_eq!((found[0].start_min, found[0].end_min), (555, 600));
@@ -356,7 +410,7 @@ mod tests {
             day,
         );
 
-        let found = segments(&store, &settings, day, TimeFormat::TwentyFourHour);
+        let found = segments(&store, &settings, day, TimeFormat::TwentyFourHour, None);
         let block = found.iter().find(|s| s.card.title == "b1").unwrap();
 
         let tasks: Vec<_> = block

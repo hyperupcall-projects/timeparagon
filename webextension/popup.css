@@ -1,20 +1,20 @@
 /*
  * The popup wears the colors of the app's chosen theme. popup.js asks the
  * native host for them on load and sets the variables below; the values here
- * are a fallback (the default Sakura palette) for the moment before that.
+ * are a fallback (the default Light palette) for the moment before that.
  */
 :root {
-  --ts-background: #fff3f7;
-  --ts-surface: #f7e9ef;
-  --ts-surface-strong: #e9d7df;
-  --ts-text: #4a2c39;
-  --ts-text-muted: #7c5b68;
-  --ts-primary: #d6558a;
-  --ts-primary-strong: #c44b7e;
+  --ts-background: #ffffff;
+  --ts-surface: #dedede;
+  --ts-surface-strong: #cecece;
+  --ts-text: #000000;
+  --ts-text-muted: #757575;
+  --ts-primary: #5865f2;
+  --ts-primary-strong: #3b41d6;
   --ts-on-primary: #ffffff;
-  --ts-success: #4f8a5c;
-  --ts-warning: #a9772a;
-  --ts-danger: #b8433f;
+  --ts-success: #12664f;
+  --ts-warning: #b77e33;
+  --ts-danger: #c3423f;
   --ts-radius: 10px;
   color-scheme: light;
 }

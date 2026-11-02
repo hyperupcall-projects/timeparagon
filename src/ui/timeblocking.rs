@@ -433,10 +433,15 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
             metrics,
         )
     };
-    column![title, description, editor(state, task, metrics)]
-        .spacing(metrics.spacing)
-        .width(Fill)
-        .into()
+    column![
+        title,
+        super::calendar::event_source(state, task, metrics),
+        description,
+        editor(state, task, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill)
+    .into()
 }
 
 pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
@@ -943,6 +948,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let editor = super::calendar::event_editor(state, block, metrics);
     let mut body = column![
         text(block.title.clone()).size(18),
+        super::calendar::event_source(state, block, metrics),
         text(format!(
             "{} · {}–{}",
             block.start.format("%a, %b %-d"),

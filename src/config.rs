@@ -93,7 +93,7 @@ pub struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            theme: "Sakura".to_owned(),
+            theme: "Light".to_owned(),
             follow_system: false,
             time_format: TimeFormat::TwentyFourHour,
         }
@@ -929,6 +929,13 @@ pub struct CalendarSettings {
     /// real date and time, it is just drawn at the foot of the day it belongs
     /// to.
     pub day_end_hour: u32,
+    /// Nightly sleep target in hours, clamped to 6–12.
+    pub sleep_goal_hours: u32,
+    /// Hour (0-6) at which a day starts for sleep calculations. Events before
+    /// it are ignored when looking for the first event after waking up.
+    pub sleep_day_start_hour: u32,
+    /// Latest wake-up hour (4-14). With no earlier event, sleep ends here.
+    pub latest_wakeup_hour: u32,
     /// Total visible days: 7 from the selected day, or 8 from the previous day.
     pub weekly_days: u32,
     /// Width of each day in the horizontally scrollable weekly view.
@@ -947,6 +954,14 @@ pub struct CalendarSettings {
     /// Local calendar color overrides, keyed by Google Calendar ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub calendar_colors: BTreeMap<String, HexColor>,
+    /// Color of all-day events on the TimeSlay calendar. None uses the
+    /// built-in event color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_color: Option<HexColor>,
+    /// Color of sleep events on the TimeSlay calendar. None uses the built-in
+    /// sleep gray.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep_color: Option<HexColor>,
     /// Color of time-block events on the TimeSlay calendar. None uses the
     /// built-in block color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -985,12 +1000,17 @@ impl Default for CalendarSettings {
             overdue_sort: Default::default(),
             triage: TriageRequirements::default(),
             day_end_hour: 0,
+            sleep_goal_hours: 8,
+            sleep_day_start_hour: 0,
+            latest_wakeup_hour: 8,
             weekly_days: 8,
             weekly_day_width: 150,
             weekly_task_list: false,
             weekly_task_order: BTreeMap::new(),
             task_colors: BTreeMap::new(),
             calendar_colors: BTreeMap::new(),
+            event_color: None,
+            sleep_color: None,
             time_block_color: None,
             task_event_color: None,
             habit_color: None,
@@ -1021,6 +1041,18 @@ impl Default for TriageRequirements {
 }
 
 impl CalendarSettings {
+    pub fn sleep_day_start_hour(&self) -> u32 {
+        self.sleep_day_start_hour.min(6)
+    }
+
+    pub fn latest_wakeup_hour(&self) -> u32 {
+        self.latest_wakeup_hour.clamp(4, 14)
+    }
+
+    pub fn sleep_goal_hours(&self) -> u32 {
+        self.sleep_goal_hours.clamp(6, 12)
+    }
+
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
 
@@ -1116,6 +1148,18 @@ impl CalendarSettings {
         }
     }
 
+    /// The color all-day events are drawn in, or the built-in event color.
+    pub fn event_color(&self) -> Color {
+        self.event_color
+            .map_or(colors::DEFAULT_EVENT, |color| color.0)
+    }
+
+    /// The color sleep events are drawn in, or the built-in sleep gray.
+    pub fn sleep_color(&self) -> Color {
+        self.sleep_color
+            .map_or(crate::calendar::sleep::COLOR, |color| color.0)
+    }
+
     /// The color time-block events are drawn in, or the built-in block color.
     pub fn time_block_color(&self) -> Color {
         self.time_block_color
@@ -1131,6 +1175,16 @@ impl CalendarSettings {
     /// color of its own.
     pub fn habit_color(&self) -> Color {
         self.habit_color.map_or(colors::HABIT, |color| color.0)
+    }
+
+    /// Sets the all-day event color, or clears it back to the built-in default.
+    pub fn set_event_color(&mut self, color: Option<Color>) {
+        self.event_color = color.map(HexColor);
+    }
+
+    /// Sets the sleep color, or clears it back to the built-in gray.
+    pub fn set_sleep_color(&mut self, color: Option<Color>) {
+        self.sleep_color = color.map(HexColor);
     }
 
     /// Sets the time-block color, or clears it back to the built-in default.
@@ -1327,18 +1381,13 @@ impl Flash {
     }
 }
 
-/// Where the config and user themes live.
+/// Where the app stores its configuration.
 pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("dev", "TimeSlay", "timeslay")
 }
 
 pub fn config_path() -> Option<PathBuf> {
     Some(project_dirs()?.config_dir().join("config.toml"))
-}
-
-/// The directory scanned for user-written theme files.
-pub fn themes_dir() -> Option<PathBuf> {
-    Some(project_dirs()?.config_dir().join("themes"))
 }
 
 /// Where cached days live: `$XDG_CACHE_HOME/timeslay/days`, which is
