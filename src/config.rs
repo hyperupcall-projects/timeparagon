@@ -62,10 +62,13 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
-    /// The name of the selected theme, matching what the picker shows.
+    /// The name of the selected theme, matching what the picker shows. It may
+    /// be one of the catalog's names or one of the follow-the-system choices.
     pub theme: String,
-    /// When set, the theme follows the system light/dark preference and
-    /// `theme` is only remembered for when it is switched back off.
+    /// Legacy setting from when following the system was a toggle. Old configs
+    /// still carry it, so it is read and migrated to [`crate::theme::SYSTEM`]
+    /// when the config is parsed, then dropped on the next save.
+    #[serde(default, skip_serializing)]
     pub follow_system: bool,
     /// Display format for clock times throughout the application.
     #[serde(alias = "use_24_hour")]
@@ -1098,9 +1101,15 @@ impl Config {
         contents: &str,
         mut ignored: impl FnMut(String),
     ) -> Result<Self, toml::de::Error> {
-        serde_ignored::deserialize(toml::de::Deserializer::parse(contents)?, |path| {
-            ignored(path.to_string());
-        })
+        let mut config: Self =
+            serde_ignored::deserialize(toml::de::Deserializer::parse(contents)?, |path| {
+                ignored(path.to_string());
+            })?;
+        if config.appearance.follow_system {
+            config.appearance.theme = crate::theme::SYSTEM.to_owned();
+            config.appearance.follow_system = false;
+        }
+        Ok(config)
     }
 
     /// Unlike startup, a failed live read must keep the current settings.
@@ -1360,6 +1369,15 @@ mod tests {
                 priority: true
             }
         );
+    }
+
+    #[test]
+    fn the_legacy_follow_system_setting_becomes_the_system_theme() {
+        let config = Config::parse("[appearance]\ntheme = \"Dark\"\nfollow_system = true").unwrap();
+
+        assert_eq!(config.appearance.theme, crate::theme::SYSTEM);
+        assert!(!config.appearance.follow_system);
+        assert!(!toml::to_string(&config).unwrap().contains("follow_system"));
     }
 
     #[test]

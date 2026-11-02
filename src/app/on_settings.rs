@@ -315,10 +315,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             state.config.appearance.time_format = format;
             queue_save(state)
         }
-        SettingsMessage::FollowSystemToggled(follow) => {
-            state.config.appearance.follow_system = follow;
-            queue_save(state)
-        }
         SettingsMessage::AlwaysOnTopToggled(on_top) => {
             state.config.window.always_on_top = on_top;
 

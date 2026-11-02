@@ -43,6 +43,36 @@ pub struct Entry {
     pub accents: Accents,
 }
 
+/// The theme picker's follow-the-system light/dark choice.
+pub const SYSTEM: &str = "System";
+
+/// The theme picker's follow-the-system choice using the high contrast
+/// variants of whichever tone the system is using.
+pub const SYSTEM_HIGH_CONTRAST: &str = "System high contrast";
+
+/// Whether a stored theme name is one of the follow-the-system choices.
+pub fn is_system(name: &str) -> bool {
+    name == SYSTEM || name == SYSTEM_HIGH_CONTRAST
+}
+
+/// The names the theme picker offers, in display order.
+pub fn picker_names(catalog: &Catalog) -> Vec<String> {
+    let mut names = catalog.names();
+    names.push(SYSTEM.to_owned());
+    names.push(SYSTEM_HIGH_CONTRAST.to_owned());
+    names
+}
+
+/// The name to show as selected for a stored theme, falling back to Light when
+/// the stored name is no longer in the catalog.
+pub fn selected_name(catalog: &Catalog, name: &str) -> String {
+    if is_system(name) {
+        name.to_owned()
+    } else {
+        catalog.resolve(name).name.clone()
+    }
+}
+
 impl Entry {
     fn calm(name: &str, palette: Palette, surfaces: [u32; 7], muted: Color) -> Self {
         let theme = Theme::custom_with_fn(name.to_owned(), palette, |palette| {
@@ -121,8 +151,15 @@ impl Catalog {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
-    /// Falls back to Light when the configured theme has been removed.
+    /// Falls back to Light when the configured theme has been removed. The
+    /// follow-the-system names resolve to their light variants here; the app
+    /// itself picks the tone at runtime in `active_theme`.
     pub fn resolve(&self, name: &str) -> &Entry {
+        let name = match name {
+            SYSTEM => "Light",
+            SYSTEM_HIGH_CONTRAST => "Light high contrast",
+            name => name,
+        };
         self.get(name).unwrap_or_else(|| {
             self.entries
                 .first()
@@ -167,6 +204,37 @@ mod tests {
         let expected = ["Light", "Light high contrast", "Dark", "Dark high contrast"];
         assert_eq!(Catalog::built_in().names(), expected);
         assert_eq!(Catalog::load().names(), expected);
+    }
+
+    #[test]
+    fn the_theme_picker_adds_the_two_system_choices() {
+        let catalog = Catalog::built_in();
+
+        assert_eq!(
+            picker_names(&catalog),
+            [
+                "Light",
+                "Light high contrast",
+                "Dark",
+                "Dark high contrast",
+                "System",
+                "System high contrast",
+            ]
+        );
+        assert_eq!(selected_name(&catalog, "System"), "System");
+        assert_eq!(
+            selected_name(&catalog, "System high contrast"),
+            "System high contrast"
+        );
+        assert_eq!(selected_name(&catalog, "Sakura"), "Light");
+        assert_eq!(catalog.resolve("System").name, "Light");
+        assert_eq!(
+            catalog.resolve("System high contrast").name,
+            "Light high contrast"
+        );
+        assert!(is_system("System"));
+        assert!(is_system("System high contrast"));
+        assert!(!is_system("Dark"));
     }
 
     #[test]
