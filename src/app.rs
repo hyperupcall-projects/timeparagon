@@ -308,6 +308,9 @@ pub struct State {
     pub form_editors: FormEditors,
     pub config: Config,
     pub catalog: Catalog,
+    /// The tone the system is using, for the high contrast follow-the-system
+    /// theme. It is kept up to date by [`SystemMessage::SystemThemeMode`].
+    pub system_theme: iced::theme::Mode,
 
     /// The clock reading used for this frame, so every widget agrees.
     pub now: Instant,
@@ -455,7 +458,6 @@ pub enum NotepadMessage {
 #[derive(Debug, Clone)]
 pub enum SettingsMessage {
     ThemeSelected(String),
-    FollowSystemToggled(bool),
     TimeFormatSelected(TimeFormat),
     AlwaysOnTopToggled(bool),
     CalendarWidthChanged(f32),
@@ -542,6 +544,9 @@ pub enum SystemMessage {
     SaveRequested,
     ConfigReloaded(Config),
     AudioStatusPolled,
+
+    /// The system's light/dark tone, for the high contrast system theme.
+    SystemThemeMode(iced::theme::Mode),
 
     WindowOpened(window::Id),
     EditorWindowOpened(window::Id),
@@ -825,6 +830,7 @@ impl State {
             disk_config: config.clone(),
             config_error: None,
             catalog,
+            system_theme: iced::theme::Mode::None,
             config,
             notepad,
             keep: crate::keep::Store::default(),
@@ -959,6 +965,12 @@ fn apply_view_sizes(state: &mut State) -> Task<Message> {
     }
 }
 
+/// Asks iced for the system's current light/dark tone. The subscription only
+/// reports changes, so this seeds [`State::system_theme`] at startup.
+fn system_theme_task() -> Task<Message> {
+    iced::system::theme().map(|mode| Message::System(SystemMessage::SystemThemeMode(mode)))
+}
+
 /// Opens the task editor as a layer-shell popover.
 pub fn boot_new_task() -> (State, Task<Message>) {
     let mut state = boot_state();
@@ -977,6 +989,7 @@ pub fn boot_new_task() -> (State, Task<Message>) {
         Task::batch([
             open.map(|v0| Message::System(SystemMessage::WindowOpened(v0))),
             edit,
+            system_theme_task(),
         ]),
     )
 }
@@ -1029,7 +1042,10 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 
     (
         state,
-        open.map(|v0| Message::System(SystemMessage::WindowOpened(v0))),
+        Task::batch([
+            open.map(|v0| Message::System(SystemMessage::WindowOpened(v0))),
+            system_theme_task(),
+        ]),
     )
 }
 
@@ -1337,17 +1353,20 @@ pub fn active_theme(state: &State, window: window::Id) -> Option<Theme> {
         return Some(theme::FLASH.clone());
     }
 
-    if state.config.appearance.follow_system {
-        return None;
+    let name = state.config.appearance.theme.as_str();
+    match name {
+        // Returning `None` is how iced is told to follow the system color
+        // scheme, which is what the old follow-system toggle did.
+        theme::SYSTEM => None,
+        theme::SYSTEM_HIGH_CONTRAST => {
+            let name = match state.system_theme {
+                iced::theme::Mode::Dark => "Dark high contrast",
+                iced::theme::Mode::None | iced::theme::Mode::Light => "Light high contrast",
+            };
+            Some(state.catalog.resolve(name).theme.clone())
+        }
+        _ => Some(state.catalog.resolve(name).theme.clone()),
     }
-
-    Some(
-        state
-            .catalog
-            .resolve(&state.config.appearance.theme)
-            .theme
-            .clone(),
-    )
 }
 
 pub fn title(state: &State, window: window::Id) -> String {
@@ -1375,6 +1394,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     let mut subscriptions = vec![
         crate::travel::map::subscription(state),
         config::watch().map(|v0| Message::System(SystemMessage::ConfigReloaded(v0))),
+        iced::system::theme_changes()
+            .map(|mode| Message::System(SystemMessage::SystemThemeMode(mode))),
         window::close_events().map(|v0| Message::System(SystemMessage::WindowClosed(v0))),
         window::resize_events()
             .map(|(id, size)| Message::System(SystemMessage::WindowResized(id, size))),

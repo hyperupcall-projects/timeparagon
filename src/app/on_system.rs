@@ -5,6 +5,10 @@ use super::*;
 pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message> {
     match message {
         SystemMessage::TaskPopoverBounds(_) => Task::none(),
+        SystemMessage::SystemThemeMode(mode) => {
+            state.system_theme = mode;
+            Task::none()
+        }
         SystemMessage::EditorWindowOpened(id) => {
             if state.editor_window == Some(id) {
                 if state.weekly() && state.range_view_active() {
