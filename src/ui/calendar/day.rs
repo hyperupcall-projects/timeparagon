@@ -90,6 +90,7 @@ pub(super) fn day_canvas<'a>(
             end_min: span.end_min,
             column: slot.column,
             columns: slot.columns,
+            column_span: slot.column_span,
             color: event.display_color(&state.config.calendar),
             editable: event.details.sleep.is_none()
                 && (!event.is_task() || event.details.scheduled.is_some()),

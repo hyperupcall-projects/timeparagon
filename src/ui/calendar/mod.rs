@@ -14,6 +14,7 @@ mod pointer;
 mod sleep_tests;
 #[cfg(test)]
 mod tests;
+mod two_week;
 mod week;
 
 use block_text::*;
@@ -26,6 +27,7 @@ pub(crate) use header::*;
 use menu::*;
 pub use month::*;
 pub use pointer::*;
+pub use two_week::*;
 pub use week::*;
 
 use crate::calendar::time_format::TimeFormat;

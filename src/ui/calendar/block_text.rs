@@ -311,6 +311,7 @@ pub(super) fn cache_key(
         hash = hash.wrapping_mul(31).wrapping_add(block.end_min as u64);
         hash = hash.wrapping_mul(31).wrapping_add(block.column as u64);
         hash = hash.wrapping_mul(31).wrapping_add(block.columns as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(block.column_span as u64);
         hash = hash
             .wrapping_mul(31)
             .wrapping_add(block.color.r.to_bits() as u64);
@@ -355,6 +356,7 @@ pub(super) fn travel_key(travel: &[TravelBox]) -> u64 {
         hash = hash.wrapping_mul(31).wrapping_add(u64::from(trip.minutes));
         hash = hash.wrapping_mul(31).wrapping_add(trip.column as u64);
         hash = hash.wrapping_mul(31).wrapping_add(trip.columns as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(trip.column_span as u64);
         hash = hash
             .wrapping_mul(31)
             .wrapping_add(u64::from(trip.time_block));

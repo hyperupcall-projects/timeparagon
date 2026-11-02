@@ -7585,6 +7585,8 @@ dependencies = [
  "dioxus",
  "jni 0.21.1",
  "ndk-context",
+ "serde",
+ "serde_json",
  "timeslay-core",
  "tokio",
 ]

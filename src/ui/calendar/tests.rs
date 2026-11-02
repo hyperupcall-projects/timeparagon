@@ -855,6 +855,7 @@ fn canvas_with_one_block() -> DayCanvas {
             end_min: 9 * 60 + 30,
             column: 0,
             columns: 1,
+            column_span: 1,
             color: Color::WHITE,
             editable: true,
             pending: false,
@@ -916,6 +917,7 @@ fn trip_before_standup(minutes: u32) -> TravelBox {
         minutes,
         column: 0,
         columns: 1,
+        column_span: 1,
         time_block: false,
     }
 }
@@ -1013,6 +1015,7 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
         end_min: end,
         column: 0,
         columns: 1,
+        column_span: 1,
         color: Color::WHITE,
         editable: true,
         pending: false,
@@ -1194,6 +1197,7 @@ fn the_cache_key_holds_until_a_traced_detail_changes() {
         end_min: 9 * 60 + 30,
         column: 0,
         columns: 1,
+        column_span: 1,
         color: Color {
             a: alpha,
             ..Color::WHITE
