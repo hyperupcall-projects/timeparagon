@@ -107,6 +107,24 @@ pub(super) fn time_slay_color_picker<'a>(
     .into()
 }
 
+/// The swatch beside Travel: the gray its trips are drawn on the grid, with no
+/// picker of its own.
+fn travel_swatch<'a>() -> Element<'a, Message> {
+    container(Space::new())
+        .width(Length::Fixed(14.0))
+        .height(Length::Fixed(14.0))
+        .style(|_theme: &Theme| container::Style {
+            background: Some(colors::TRAVEL.into()),
+            border: iced::Border {
+                color: Color::BLACK.scale_alpha(0.45),
+                width: 1.0,
+                radius: crate::ui::controls::RADIUS_SMALL.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(
         container(iced::widget::Space::new())
@@ -210,6 +228,19 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
             ));
         }
     }
+    // Travel is not an event kind, so its row has no color picker: the swatch
+    // only shows the gray its trips are drawn in. It is toggled here with the
+    // other TimeSlay sources, and off means no route is ever worked out.
+    section = section.push(
+        row![
+            travel_swatch(),
+            text("Travel").size(metrics.label()).width(Fill),
+            crate::ui::controls::toggler(state.travel.show)
+                .on_toggle(|_| Message::Travel(crate::travel::Action::Toggle)),
+        ]
+        .spacing(8.0)
+        .align_y(Alignment::Center),
+    );
     panel = panel.push(section);
     if state.calendar.calendars.is_empty() {
         panel = panel.push(

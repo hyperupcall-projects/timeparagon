@@ -78,24 +78,6 @@ pub(super) fn header<'a>(
             crate::ui::controls::secondary
         });
 
-    // Travel shows how long the trip to each event takes, so the button is lit
-    // for as long as those are on the grid.
-    let toggle_travel = |wide: bool| {
-        button(
-            text("Toggle Travel")
-                .size(metrics.label())
-                .center()
-                .width(if wide { Fill } else { Length::Shrink }),
-        )
-        .width(if wide { Fill } else { Length::Shrink })
-        .on_press(Message::Travel(crate::travel::Action::Toggle))
-        .style(if state.travel.show {
-            crate::ui::controls::primary
-        } else {
-            crate::ui::controls::secondary
-        })
-    };
-
     let heading = text(heading)
         .size(metrics.label() + 3.0)
         .font(Font {
@@ -131,34 +113,18 @@ pub(super) fn header<'a>(
     };
 
     match header_lines(metrics) {
-        // Four buttons and a date do not fit side by side, so the date gets a
-        // line to itself and is never squeezed into a few letters per row.
-        // Below that there is not room for a fourth button either, so it
-        // takes a line of its own.
-        3 => column![
+        // The month picker, Set Alarm, Menu and the date do not fit side by
+        // side at a narrow width, so the date gets a line to itself and is
+        // never squeezed into a few letters per row.
+        2 => column![
             day,
             row![month, Space::new().width(Fill), set_alarm, menu]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
-            toggle_travel(true),
         ]
         .spacing(metrics.spacing)
         .into(),
-        2 => column![
-            day,
-            row![
-                month,
-                Space::new().width(Fill),
-                toggle_travel(false),
-                set_alarm,
-                menu
-            ]
-            .spacing(metrics.spacing)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(metrics.spacing)
-        .into(),
-        _ => row![month, day, toggle_travel(false), set_alarm, menu]
+        _ => row![month, day, set_alarm, menu]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into(),
@@ -166,21 +132,16 @@ pub(super) fn header<'a>(
 }
 
 /// The narrowest a calendar can be and still hold the month picker, the date,
-/// Toggle Travel, Set Alarm and Menu on one line with the date readable.
+/// Set Alarm and Menu on one line with the date readable.
 pub(super) const SINGLE_LINE_HEADER: f32 = 460.0;
 
-/// The narrowest a calendar can be and still hold the month picker and all
-/// three buttons on one line under the date.
-pub(super) const TWO_LINE_HEADER: f32 = 340.0;
-
-/// How many lines the header takes: one, two, or three.
+/// How many lines the header takes: the date on its own line below
+/// [`SINGLE_LINE_HEADER`], otherwise one.
 pub(super) fn header_lines(metrics: &Metrics) -> u8 {
     if metrics.size.width >= SINGLE_LINE_HEADER {
         1
-    } else if metrics.size.width >= TWO_LINE_HEADER {
-        2
     } else {
-        3
+        2
     }
 }
 

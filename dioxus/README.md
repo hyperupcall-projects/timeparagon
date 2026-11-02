@@ -38,9 +38,9 @@ Useful options:
 ./scripts/build-android.sh --abi x86_64
 
 # Release profile, signed with your own keystore (see below)
-TIMESLAY_KEYSTORE=~/keys/timeslay.jks \
+TIMESLAY_KEYSTORE_BASE64=$(base64 -w0 ~/keys/timeslay.jks) \
 TIMESLAY_KEYSTORE_PASSWORD=... \
-TIMESLAY_KEY_ALIAS=timeslay \
+TIMESLAY_KEYSTORE_KEYALIAS=timeslay \
 ./scripts/build-android.sh --release
 
 # Build, install and launch on a connected device
@@ -53,8 +53,8 @@ version in the root `Cargo.toml`, and its `versionCode` is
 
 The default (debug) APK is debuggable and debug-signed: use it for development
 only. `--release` builds Gradle's release variant, signs it with the keystore
-named by `TIMESLAY_KEYSTORE`, `TIMESLAY_KEYSTORE_PASSWORD`,
-`TIMESLAY_KEY_ALIAS` and (optionally) `TIMESLAY_KEY_PASSWORD`, and fails
+given by `TIMESLAY_KEYSTORE_BASE64` (base64-encoded), `TIMESLAY_KEYSTORE_PASSWORD`
+and `TIMESLAY_KEYSTORE_KEYALIAS` (the key uses the keystore password), and fails
 unless the result is non-debuggable and not signed with the Android debug key.
 Create a keystore once with `keytool -genkeypair -v -keystore
 ~/keys/timeslay.jks -alias timeslay -keyalg RSA -keysize 4096 -validity

@@ -841,7 +841,7 @@ impl State {
             panel_day_wanted: false,
             two_week_more: None,
             projects: Default::default(),
-            travel: Default::default(),
+            travel: crate::travel::Workspace::starting(config.travel.show),
             main_window: None,
             main_size: Size::new(
                 config.views.calendar_width(config.window.width),

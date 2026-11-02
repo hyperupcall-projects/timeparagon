@@ -1,5 +1,5 @@
-//! The Travel tab, the Toggle Travel button, the place search and the trip card,
-//! rendered headlessly at the widths the layout is designed around.
+//! The Travel tab, the calendar menu's Travel toggle, the place search and the
+//! trip card, rendered headlessly at the widths the layout is designed around.
 
 use iced::{Element, Size};
 use iced_test::core::Settings;
@@ -51,39 +51,60 @@ fn messages(ui: Simulator<'_>) -> Vec<Message> {
     ui.into_messages().collect()
 }
 
-/// Toggle Travel is on the calendar at every width, ahead of Set Alarm, and
-/// pressing it asks for travel to be shown.
+/// Travel is toggled from the calendar menu beside the TimeSlay sources, and
+/// pressing its switch asks for travel to be shown. The header no longer
+/// carries a Toggle Travel button, whatever the width.
 #[test]
-fn toggle_travel_is_left_of_set_alarm_at_every_width() -> Result<(), Error> {
+fn travel_is_toggled_from_the_calendar_menu() {
     for width in WIDTHS.into_iter().chain([340.0, 460.0, 640.0]) {
-        let (state, ..) = state();
-        let mut ui = render(&state, Size::new(width, 500.0));
+        let (mut state, ..) = state();
+        state.main_size = Size::new(width, 4000.0);
 
-        let toggle = ui.find("Toggle Travel").expect("Toggle Travel").bounds();
-        let alarm = ui.find("Set Alarm").expect("Set Alarm").bounds();
-        let menu = ui.find("Menu").expect("Menu").bounds();
-
-        assert!(
-            toggle.x >= 0.0 && toggle.x + toggle.width <= width,
-            "Toggle Travel is cut off at {width}px"
+        // The day view's header keeps Set Alarm and Menu and drops Toggle
+        // Travel.
+        let mut header = Sim::with_size(
+            Settings::default(),
+            Size::new(width, 500.0),
+            app::view(&state, iced::window::Id::unique()),
         );
-        // Where they share a line, the order is Toggle Travel, Set Alarm, Menu.
-        if (toggle.y - alarm.y).abs() < 1.0 {
-            assert!(toggle.x + toggle.width <= alarm.x, "order at {width}px");
-        } else {
-            assert!(toggle.y != alarm.y);
-        }
-        assert!(alarm.x + alarm.width <= menu.x || alarm.y != menu.y);
+        assert!(header.find("Set Alarm").is_ok(), "no Set Alarm at {width}px");
+        assert!(header.find("Menu").is_ok(), "no Menu at {width}px");
+        assert!(
+            header.find("Toggle Travel").is_err(),
+            "Toggle Travel is still in the header at {width}px"
+        );
+        drop(header);
 
-        let _ = ui.click("Toggle Travel")?;
+        // Travel sits in the menu under the TimeSlay heading, after Sleep.
+        state.calendar.menu_open = true;
+        let mut ui = Sim::with_size(
+            Settings::default(),
+            state.main_size,
+            timeslay::ui::calendar::view(
+                &state,
+                &timeslay::ui::layout::Metrics::of(state.main_size),
+            ),
+        );
+        let timeslay_y = ui.find("TimeSlay").unwrap().bounds().y;
+        let sleep_y = ui.find("Sleep").unwrap().bounds().y;
+        let travel = ui.find("Travel").expect("Travel row").bounds();
+        assert!(travel.y > timeslay_y, "Travel above TimeSlay at {width}px");
+        assert!(travel.y > sleep_y, "Travel above Sleep at {width}px");
+        assert!(travel.x >= 0.0 && travel.x + travel.width <= width);
+
+        // Click the switch just right of the label, as a person would.
+        ui.point_at(iced::Point::new(
+            travel.x + travel.width + 20.0,
+            travel.center_y(),
+        ));
+        ui.simulate(iced_test::simulator::click());
         assert!(
             messages(ui)
                 .iter()
                 .any(|m| matches!(m, Message::Travel(Action::Toggle))),
-            "pressing it did nothing at {width}px"
+            "pressing Travel did nothing at {width}px"
         );
     }
-    Ok(())
 }
 
 #[test]
