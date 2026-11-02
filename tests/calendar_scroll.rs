@@ -79,13 +79,12 @@ fn time_block_edit_and_view_preserve_calendar_scroll() {
                 Message::EventEdit(EventEditMessage::EventEditCancelled),
                 true,
             ),
+            (Message::Event(EventMessage::EventClosed), false),
+            (Message::TimeBlocking(Action::Plan("standup".into())), true),
             (Message::TimeBlocking(Action::Close), false),
             (Message::TimeBlocking(Action::View("standup".into())), false),
             (Message::TimeBlocking(Action::CloseView), false),
-            (
-                Message::Event(EventMessage::EventOpened("standup".into())),
-                true,
-            ),
+            (Message::TimeBlocking(Action::Plan("standup".into())), true),
             (Message::TimeBlocking(Action::View("standup".into())), false),
             (Message::TimeBlocking(Action::CloseView), false),
             (

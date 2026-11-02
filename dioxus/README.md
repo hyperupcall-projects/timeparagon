@@ -170,7 +170,8 @@ details pane. It writes through the same code in `timeslay-core`, so both apps
 behave alike.
 
 - **Tasks** save each field as it changes: title, description, projects, estimate,
-  due date and time, deadline, labels, priority and location. Complete, ignore,
+  due date and time, deadline, labels, priority and location. A task with an
+  estimate lasts that long, so its time asks only for a start. Complete, ignore,
   triage, move to inbox or backlog, and delete are at the foot of the sheet.
 - **Events and time blocks** stage their title, description, times, projects,
   labels, repeat rule, notifications, availability and visibility until **Save**.
@@ -182,8 +183,9 @@ behave alike.
   needs the Mapbox token from the iced app's settings, which arrives with the
   synced config. A newly chosen place is added to that config too.
 
-Sheets only reach what the day has loaded, so a habit is edited from a day it
-occurs on. Creating items, and managing the project list, stay in the iced app.
+The **↻** button lists every habit, whichever day it next falls on, and opens
+each in the same sheet. Creating items, and managing the project list, stay in
+the iced app.
 
 Time blocks are read from the app's single TimeSlay calendar
 (`calendar.app_calendar`, discovered from the calendar list). A block referenced

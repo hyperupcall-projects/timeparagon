@@ -195,7 +195,9 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
         &mut state,
         Message::Calendar(CalendarMessage::WeekDayAction(
             date(14),
-            Box::new(Message::Event(EventMessage::EventOpened("standup".into()))),
+            Box::new(Message::TimeBlocking(timeslay::timeblocking::Action::Plan(
+                "standup".into(),
+            ))),
         )),
     );
     assert_eq!(state.week_anchor, date(15));
@@ -263,7 +265,9 @@ fn weekly_navigation_uses_the_anchor_not_the_last_opened_day() {
         &mut state,
         Message::Calendar(CalendarMessage::WeekDayAction(
             date(14),
-            Box::new(Message::Event(EventMessage::EventOpened("standup".into()))),
+            Box::new(Message::TimeBlocking(timeslay::timeblocking::Action::Plan(
+                "standup".into(),
+            ))),
         )),
     );
     let _ = app::update(
@@ -411,7 +415,7 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
     });
     let _ = app::update(
         &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
+        Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
     );
     let mut ui = render(&state, Size::new(328.0, 900.0));
     let _ = ui.click("Thursday task")?;

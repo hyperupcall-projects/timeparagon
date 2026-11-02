@@ -21,7 +21,7 @@ use timeslay_core::task_edit::{self, Change};
 use timeslay_core::timeblocking as tb;
 
 use crate::css_color;
-use crate::day::{self, AssignedTask, EditContext, TaskFields, TimeBlock};
+use crate::day::{self, AssignedTask, EditContext, HabitRow, TaskFields, TimeBlock};
 
 const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -376,19 +376,27 @@ fn TaskEditor(
                             value: "{values.start}",
                             oninput: move |event| fields.write().start = event.value(),
                         }
-                        input {
-                            class: "client-input",
-                            r#type: "time",
-                            aria_label: "End time",
-                            disabled: is_busy,
-                            value: "{values.end}",
-                            oninput: move |event| fields.write().end = event.value(),
+                        if metadata.minutes == 0 {
+                            input {
+                                class: "client-input",
+                                r#type: "time",
+                                aria_label: "End time",
+                                disabled: is_busy,
+                                value: "{values.end}",
+                                oninput: move |event| fields.write().end = event.value(),
+                            }
                         }
+                    }
+                    if metadata.minutes > 0 {
+                        p { class: "hint", "Lasts {day::duration_label(metadata.minutes)}, its estimate." }
                     }
                     button {
                         class: "btn primary editor-wide",
                         disabled: is_busy,
-                        onclick: move |_| submit(fields.peek().time_change()),
+                        onclick: move |_| {
+                            let estimate = tb::metadata(&task.peek()).minutes;
+                            submit(fields.peek().time_change(estimate));
+                        },
                         "Save time"
                     }
                 }
@@ -1447,6 +1455,77 @@ fn AssignedRow(
     }
 }
 
+// ------------------------------------------------------------------ habits
+
+/// Every habit, so one can be edited whichever day it next falls on.
+#[component]
+pub fn HabitsSheet(
+    context: EditContext,
+    /// Bumped by every write, so a change shows here when its editor closes.
+    revision: Signal<u32>,
+    on_open: EventHandler<Event>,
+    on_close: EventHandler<()>,
+) -> Element {
+    let settings = context.settings.clone();
+    let habits = use_resource(move || {
+        let _ = revision();
+        let settings = settings.clone();
+        async move { worker(move || day::load_habits(&settings)).await }
+    });
+
+    let body = match &*habits.read() {
+        None => rsx! { p { class: "hint", role: "status", "Loading habits…" } },
+        Some(Err(message)) => rsx! { p { class: "editor-error", role: "alert", "{message}" } },
+        Some(Ok(rows)) => rsx! { HabitList { rows: rows.clone(), on_open } },
+    };
+
+    rsx! {
+        div { class: "modal-backdrop editor-backdrop",
+            div { class: "modal editor", role: "dialog", aria_label: "Habits",
+                div { class: "modal-head",
+                    div { class: "modal-titles",
+                        h2 { class: "modal-title", "Habits" }
+                    }
+                    button {
+                        class: "modal-close",
+                        title: "Close",
+                        onclick: move |_| on_close.call(()),
+                        "×"
+                    }
+                }
+                div { class: "modal-body editor-body", {body} }
+            }
+        }
+    }
+}
+
+#[component]
+fn HabitList(rows: Vec<HabitRow>, on_open: EventHandler<Event>) -> Element {
+    rsx! {
+        if rows.is_empty() {
+            p { class: "empty-note", "No habits yet." }
+        }
+        for row in rows {
+            {
+                let dot = css_color(row.color);
+                let event = row.event.clone();
+                rsx! {
+                    button {
+                        key: "{row.event.id}",
+                        class: "editor-item editor-pick",
+                        onclick: move |_| on_open.call(event.clone()),
+                        span { class: "day-dot", style: "background: {dot};" }
+                        span { class: "editor-item-name",
+                            "{row.title}"
+                            span { class: "hint editor-item-sub", "{row.schedule} · {row.time}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------- shared controls
 
 #[component]
@@ -2348,6 +2427,34 @@ mod tests {
         assert_offers(
             &html,
             &["Type: Time Block", "Deep work", "End Time", ">Save<"],
+        );
+    }
+
+    #[allow(non_snake_case)]
+    fn Habits() -> Element {
+        let mut row = event("h1", "blocks", "Stretch");
+        row.details.habit = true;
+        rsx! {
+            HabitList {
+                rows: vec![HabitRow {
+                    title: "Stretch".into(),
+                    schedule: "Daily".into(),
+                    time: "07:00 – 07:15".into(),
+                    color: colors::DEFAULT_EVENT,
+                    event: row,
+                }],
+                on_open: |_| {},
+            }
+        }
+    }
+
+    #[test]
+    fn the_habit_list_shows_each_schedule() {
+        let mut dom = VirtualDom::new(Habits);
+        dom.rebuild_in_place();
+        assert_offers(
+            &dioxus_ssr::render(&dom),
+            &["Stretch", "Daily", "07:00 – 07:15"],
         );
     }
 

@@ -789,8 +789,17 @@ impl TaskFields {
         calendar::deadline::parse_date(self.date.trim()).map(Change::Day)
     }
 
-    /// The change that saves the due date with a start and end time.
-    pub fn time_change(&self) -> Result<Change, String> {
+    /// The change that saves the due date with a time. A task with an estimate
+    /// lasts exactly that long, whatever the end field holds, because sync would
+    /// put it back to that length anyway.
+    pub fn time_change(&self, estimate: u32) -> Result<Change, String> {
+        if estimate > 0 {
+            let (start, _) = task_edit::schedule_range(&self.date, &self.start, &self.start)?;
+            return Ok(Change::Time(
+                start,
+                start + Duration::minutes(i64::from(estimate)),
+            ));
+        }
         let (start, end) = task_edit::schedule_range(&self.date, &self.start, &self.end)?;
         if end <= start {
             return Err("The task must end after it starts".to_owned());
@@ -877,6 +886,75 @@ pub fn with_label(task: &Event, label: &str) -> Result<Option<Vec<String>>, Stri
     }
     labels.push(label);
     Ok(Some(labels))
+}
+
+/// One line of the Habits sheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HabitRow {
+    pub title: String,
+    pub schedule: String,
+    pub time: String,
+    pub color: timeslay_core::Color,
+    /// What opens in the editor.
+    pub event: Event,
+}
+
+/// Blocking: callers run this on a worker thread.
+pub fn load_habits(settings: &CalendarSettings) -> Result<Vec<HabitRow>, String> {
+    let habits = calendar::sync_habits(
+        &settings.client_id,
+        &settings.client_secret,
+        settings.app_calendar.as_deref(),
+    )?;
+    Ok(habits
+        .into_iter()
+        .map(|habit| habit_row(habit, settings))
+        .collect())
+}
+
+/// A habit's master as the editor expects it. It names itself as its series, so
+/// opening it loads the full master through the same path as an occurrence.
+fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) -> HabitRow {
+    let anchor = habit.start.date_naive();
+    let recurrence = timeslay_core::recurrence::Recurrence::from_lines(&habit.recurrence);
+    let schedule = if recurrence.is_empty() {
+        "Does not repeat".to_owned()
+    } else {
+        timeslay_core::recurrence::Rule::from_recurrence(anchor, &recurrence).summary(anchor)
+    };
+    let color = habit
+        .color_id
+        .as_deref()
+        .and_then(calendar::colors::event)
+        .unwrap_or_else(|| settings.habit_color());
+    HabitRow {
+        title: habit.title.clone(),
+        schedule,
+        time: format!(
+            "{} – {}",
+            calendar::clock_label(habit.start),
+            calendar::clock_label(habit.end)
+        ),
+        color,
+        event: Event {
+            id: habit.id.clone(),
+            calendar_id: habit.calendar_id,
+            title: habit.title,
+            start: habit.start,
+            end: habit.end,
+            all_day: false,
+            color,
+            completed: false,
+            details: calendar::Details {
+                habit: true,
+                description: habit.notes,
+                recurrence: habit.recurrence,
+                recurring_event_id: Some(habit.id),
+                color_id: habit.color_id,
+                ..Default::default()
+            },
+        },
+    }
 }
 
 /// Whether a task is still waiting in the Inbox to be triaged.
@@ -1448,8 +1526,18 @@ mod tests {
 
         assert!(matches!(fields.day_change(), Ok(Change::Day(day)) if day == day_of(&timed)));
         assert!(matches!(
-            fields.time_change(),
+            fields.time_change(45),
             Ok(Change::Time(start, end)) if start == at(9, 0) && end == at(9, 45)
+        ));
+        // The estimate decides the length; the end field only counts without one.
+        fields.end = "11:00".into();
+        assert!(matches!(
+            fields.time_change(45),
+            Ok(Change::Time(_, end)) if end == at(9, 45)
+        ));
+        assert!(matches!(
+            fields.time_change(0),
+            Ok(Change::Time(_, end)) if end == at(11, 0)
         ));
         // A day-only save drops the time; a timed one keeps it.
         let Ok(Change::Deadline(Some(deadline))) = fields.deadline_change(false) else {
@@ -1570,6 +1658,28 @@ mod tests {
         assert_eq!(source_label(&habit, &context), "Type: Habit");
         let write = task("a", "Write", None, 1, 45, false);
         assert_eq!(source_label(&write, &context), "Type: Task");
+    }
+
+    #[test]
+    fn a_habit_opens_as_its_own_series_with_a_readable_schedule() {
+        let habit = calendar::api::HabitEvent {
+            id: "h1".into(),
+            calendar_id: "blocks".into(),
+            title: "Stretch".into(),
+            notes: "Ten minutes".into(),
+            start: at(7, 0),
+            end: at(7, 15),
+            recurrence: vec!["RRULE:FREQ=DAILY".into()],
+            color_id: None,
+        };
+        let row = habit_row(habit, &settings());
+        assert_eq!(row.title, "Stretch");
+        assert_eq!(row.time, "07:00 – 07:15");
+        assert_ne!(row.schedule, "Does not repeat");
+        assert!(row.event.details.habit);
+        assert_eq!(row.event.details.recurring_event_id.as_deref(), Some("h1"));
+        assert_eq!(row.event.details.description, "Ten minutes");
+        assert_eq!(row.color, settings().habit_color());
     }
 
     #[test]
