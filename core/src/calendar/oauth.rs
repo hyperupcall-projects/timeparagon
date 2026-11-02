@@ -44,6 +44,17 @@ pub const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 /// How long we wait for the browser to come back with a code.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(180);
 
+// The loopback redirect lands in the browser, which has no way to know about
+// the app. On Android the page therefore links back to it with an intent URL
+// (the app's package is `bundle.identifier` in dioxus/Dioxus.toml).
+#[cfg(target_os = "android")]
+const DONE_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
+    <!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>TimeSlay</title>\
+    <p style='font:20px sans-serif'>Signed in. <a href='intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=dev.timeslay.day;end'>Return to TimeSlay</a></p>";
+#[cfg(not(target_os = "android"))]
+const DONE_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
+    <!doctype html><title>TimeSlay</title><p>You can close this tab and return to TimeSlay.</p>";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tokens {
     pub access_token: String,
@@ -220,10 +231,7 @@ pub fn authorize_for(
                 );
             }
             Redirect::Done(result) => {
-                let _ = stream.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-                     <!doctype html><title>TimeSlay</title><p>You can close this tab and return to TimeSlay.</p>",
-                );
+                let _ = stream.write_all(DONE_RESPONSE.as_bytes());
                 break result?;
             }
         }

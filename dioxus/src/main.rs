@@ -141,6 +141,10 @@ fn App() -> Element {
     let mut client_id_input = use_signal(String::new);
     let mut client_secret_input = use_signal(String::new);
     let mut client_error = use_signal(|| None::<String>);
+    let mut show_settings = use_signal(|| false);
+    let mut settings_id = use_signal(String::new);
+    let mut settings_secret = use_signal(String::new);
+    let mut settings_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
         let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
@@ -347,6 +351,18 @@ fn App() -> Element {
                     onclick: cycle_theme,
                     span { class: "theme-icon", "{theme().icon()}" }
                     span { class: "theme-label", "{theme().label()}" }
+                }
+                button {
+                    class: "btn icon",
+                    title: "Google settings",
+                    aria_label: "Google settings",
+                    onclick: move |_| {
+                        settings_id.set(config.peek().calendar.client_id.clone());
+                        settings_secret.set(String::new());
+                        settings_error.set(None);
+                        show_settings.set(true);
+                    },
+                    "⚙"
                 }
                 button { class: "btn icon", title: "Previous day", onclick: prev_day, "‹" }
                 button { class: "btn", onclick: go_today, "Today" }
@@ -558,6 +574,91 @@ fn App() -> Element {
         Some(time_block_modal(block, selected_block))
     });
 
+    let settings_modal = show_settings().then(|| {
+        let error = settings_error().map(|message| {
+            rsx! { p { class: "error-text", "{message}" } }
+        });
+        rsx! {
+            div {
+                class: "modal-backdrop",
+                onclick: move |_| show_settings.set(false),
+                div {
+                    class: "modal",
+                    role: "dialog",
+                    aria_label: "Google settings",
+                    onclick: move |event| event.stop_propagation(),
+                    div { class: "modal-head",
+                        h2 { "Google settings" }
+                        div { class: "spacer" }
+                        button {
+                            class: "btn icon",
+                            title: "Close",
+                            onclick: move |_| show_settings.set(false),
+                            "✕"
+                        }
+                    }
+                    form {
+                        class: "client-form settings-form",
+                        onsubmit: move |event| {
+                            event.prevent_default();
+                            // An empty secret field keeps the stored secret.
+                            let secret = if settings_secret().trim().is_empty() {
+                                config.peek().calendar.client_secret.clone()
+                            } else {
+                                settings_secret()
+                            };
+                            match day::save_google_client(&settings_id(), &secret) {
+                                Ok(saved) => {
+                                    config.set(saved);
+                                    settings_error.set(None);
+                                    show_settings.set(false);
+                                    revision.set(revision() + 1);
+                                }
+                                Err(error) => settings_error.set(Some(error)),
+                            }
+                        },
+                        {error}
+                        label { r#for: "settings-client-id", "Client ID" }
+                        input {
+                            id: "settings-client-id",
+                            class: "client-input",
+                            r#type: "text",
+                            autocomplete: "off",
+                            autocapitalize: "off",
+                            spellcheck: "false",
+                            value: "{settings_id}",
+                            oninput: move |event| settings_id.set(event.value()),
+                        }
+                        label { r#for: "settings-client-secret", "Client secret" }
+                        input {
+                            id: "settings-client-secret",
+                            class: "client-input",
+                            r#type: "password",
+                            placeholder: "Leave blank to keep the current secret",
+                            autocomplete: "off",
+                            autocapitalize: "off",
+                            spellcheck: "false",
+                            value: "{settings_secret}",
+                            oninput: move |event| settings_secret.set(event.value()),
+                        }
+                        p { class: "hint",
+                            "After changing the client, use Connect Google to sign in again."
+                        }
+                        div { class: "state-actions",
+                            button { class: "btn primary", r#type: "submit", "Save" }
+                            button {
+                                class: "btn",
+                                r#type: "button",
+                                onclick: move |_| show_settings.set(false),
+                                "Cancel"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     rsx! {
         document::Title { "TimeSlay · Day" }
         document::Style { {CSS} }
@@ -567,6 +668,7 @@ fn App() -> Element {
             {notice}
             {body}
             {modal}
+            {settings_modal}
         }
     }
 }
