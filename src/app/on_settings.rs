@@ -391,7 +391,12 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             state.calendar.connection = Connection::SignedIn;
             state.calendar.sync = SyncState::Idle;
             state.calendar.error = None;
-            sync_calendar(state)
+            let people = if state.screen == Screen::People {
+                crate::people::refresh(state)
+            } else {
+                Task::none()
+            };
+            Task::batch([sync_calendar(state), people])
         }
         SettingsMessage::GoogleConnected(Err(error)) => {
             log::warn!("Google sign-in failed: {error}");

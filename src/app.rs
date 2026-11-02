@@ -132,6 +132,8 @@ pub enum Screen {
     /// One brain dump page per day, with search across all of them.
     BrainDump,
     KeepNotes,
+    /// Contacts from every signed-in Google account, and their directories.
+    People,
     Settings,
 }
 
@@ -419,6 +421,7 @@ pub struct State {
     /// The Habits tab: the habit masters and the rule editor.
     pub habits: crate::habits::Store,
     pub keep: crate::keep::Store,
+    pub people: crate::people::Store,
     pub inbox: crate::inbox::Inbox,
     /// Google accounts connected for the Gmail integration.
     pub accounts: crate::integrations::accounts::Accounts,
@@ -433,6 +436,7 @@ pub enum Message {
     BrainDump(crate::brain_dump::Action),
     Inbox(crate::inbox::Action),
     Accounts(crate::integrations::accounts::Action),
+    People(crate::people::Action),
     Alarms(alarms::Action),
     Projects(crate::projects::Action),
     Travel(crate::travel::Action),
@@ -867,6 +871,7 @@ impl State {
             config,
             notepad,
             keep: crate::keep::Store::default(),
+            people: crate::people::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
             calendar_fetch_pending: Vec::new(),
             timeblocking: crate::timeblocking::Workspace::default(),
@@ -909,7 +914,15 @@ impl State {
     }
 
     pub fn floating_editors(&self) -> bool {
-        !self.task_creation_window && shows_details(self.screen) && !self.range_view_active()
+        !self.task_creation_window
+            && (self.people_panel_open()
+                || (shows_details(self.screen) && !self.range_view_active()))
+    }
+
+    /// A contact is open beside the People list. Contacts have their own pane
+    /// rather than the shared details editor, which belongs to events and tasks.
+    pub fn people_panel_open(&self) -> bool {
+        self.screen == Screen::People && self.people.draft.is_some()
     }
 
     pub(crate) fn calendar_loading(&self) -> bool {
@@ -1144,6 +1157,7 @@ fn boot_state() -> State {
     state.calendar.apply_task_colors(&state.config.calendar);
     state.calendar.cache_days_in(config::cache_days_dir());
     state.keep.cache_in(config::cache_keep_path());
+    state.people.go_live();
     state.travel.cache_in(config::cache_travel_path());
 
     state.alarms.keep_in(alarms::path());
@@ -1234,7 +1248,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 fn reconcile_editor_window(state: &mut State) -> Task<Message> {
     let visible =
         state.floating_editors() && state.main_window.is_some() && !state.panel_expected_close;
-    let width = if state.range_view_active()
+    let width = if visible && state.people_panel_open() {
+        state.config.views.detail_width()
+    } else if state.range_view_active()
         && state.main_window.is_some()
         && !state.panel_expected_close
     {
@@ -1344,6 +1360,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
             task
         }
         Message::Accounts(action) => crate::integrations::accounts::update(state, action),
+        Message::People(action) => crate::people::update(state, action),
         Message::Alarms(action) => alarms::update(state, action),
         Message::Projects(action) => crate::projects::update(state, action),
         Message::Travel(action) => crate::travel::update(state, action),
@@ -1778,11 +1795,16 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         Screen::Notepad
             | Screen::BrainDump
             | Screen::KeepNotes
+            | Screen::People
             | Screen::Overdue
             | Screen::Inbox
             | Screen::Triaged
     ) {
         return match key.as_ref() {
+            // An open contact comes away first, the same as a task's details.
+            Key::Named(Named::Escape) if state.people_panel_open() => {
+                Some(Message::People(crate::people::Action::Close))
+            }
             // A task's details come away first; a second press leaves.
             Key::Named(Named::Escape)
                 if matches!(

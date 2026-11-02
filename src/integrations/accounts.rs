@@ -1,4 +1,4 @@
-//! Google accounts connected for the Gmail integration.
+//! Google accounts connected for the Gmail integration and the People screen.
 //!
 //! A link pasted into a new task can belong to any mailbox the person reads,
 //! so any number of Google accounts can be connected here. The Gmail
@@ -6,7 +6,7 @@
 //! knows it (see [`super::gmail`]).
 //!
 //! These accounts are separate from the Google sign-in that feeds the
-//! calendar: they are asked for read-only Gmail access and nothing else, and
+//! calendar: they are asked for read-only Gmail access and for contacts, and
 //! their tokens live in their own file next to the config. The calendar's own
 //! account is still tried as well, since it was already granted Gmail access.
 //! They share the OAuth client from Settings.
@@ -66,6 +66,12 @@ enum Which {
 }
 
 impl Login {
+    /// Whether this is the calendar's sign-in, which is renewed from a
+    /// different place than a connected account.
+    pub fn is_primary(&self) -> bool {
+        self.which == Which::Primary
+    }
+
     #[cfg(test)]
     pub fn extra(email: &str) -> Self {
         Self {
@@ -89,6 +95,29 @@ pub fn logins() -> Vec<Login> {
             which: Which::Extra(email),
         }))
         .collect()
+}
+
+/// Every signed-in account once, each called by its address. The calendar's
+/// account is looked up, and a connected account that turns out to be the same
+/// one is dropped. Blocking.
+pub fn identified(settings: &CalendarSettings) -> Vec<Login> {
+    let mut logins = logins();
+    if let Some(primary) = logins.iter_mut().find(|login| login.is_primary())
+        && let Ok(email) = token(settings, primary).and_then(|token| profile_email(&token))
+    {
+        primary.label = email;
+    }
+    let primary = logins
+        .iter()
+        .find(|login| login.is_primary())
+        .map(|login| login.label.clone());
+    logins.retain(|login| {
+        login.is_primary()
+            || !primary
+                .as_ref()
+                .is_some_and(|email| same(email, &login.label))
+    });
+    logins
 }
 
 /// A fresh access token for `login`, refreshed if the stored one has expired.
@@ -139,7 +168,7 @@ pub fn connect(client_id: &str, client_secret: &str) -> Result<String, String> {
     let tokens = oauth::authorize_for(
         client_id,
         client_secret,
-        oauth::GMAIL_SCOPE,
+        oauth::EXTRA_ACCOUNT_SCOPE,
         "select_account consent",
     )?;
     let email = profile_email(&tokens.access_token)?;
@@ -199,8 +228,8 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The address a token belongs to. Gmail's own profile call is used, so no
-/// scope beyond read-only Gmail is needed to learn it.
+/// The address a token belongs to, from Gmail's own profile call: every account
+/// here has been granted read-only Gmail.
 fn profile_email(access_token: &str) -> Result<String, String> {
     let result = api::agent()
         .get(PROFILE)
@@ -331,6 +360,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 Ok(_) => {
                     state.accounts.emails = emails();
                     state.accounts.error = None;
+                    if state.screen == crate::app::Screen::People {
+                        return crate::people::refresh(state);
+                    }
                 }
                 Err(error) => {
                     log::warn!("Gmail account sign-in failed: {error}");

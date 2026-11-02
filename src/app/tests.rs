@@ -1061,6 +1061,23 @@ fn editors_leave_the_main_window_geometry_unchanged_on_every_destination() {
 }
 
 #[test]
+fn escape_closes_an_open_contact_before_leaving_people() {
+    let mut state = State::blank();
+    state.screen = Screen::People;
+    let escape = key_message(
+        &mut state,
+        Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::default(),
+    );
+    assert!(matches!(
+        escape,
+        Some(Message::Navigation(NavigationMessage::ScreenSelected(
+            Screen::Calendar
+        )))
+    ));
+}
+
+#[test]
 fn escape_closes_the_event_details_pane() {
     let mut state = State::blank();
     state.calendar.open_event = Some("standup".into());

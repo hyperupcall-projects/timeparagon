@@ -50,6 +50,8 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             let close = crate::timeblocking::close(state);
             if screen == Screen::KeepNotes {
                 Task::batch([close, refresh_keep(state)])
+            } else if screen == Screen::People {
+                Task::batch([close, crate::people::refresh(state)])
             } else if screen == Screen::Habits {
                 Task::batch([
                     close,

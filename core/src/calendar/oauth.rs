@@ -34,12 +34,15 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // Gmail is read-only: a link pasted into a new task is read for its subject, and
 // the mail is never changed. Tokens minted before that scope was asked for get
 // a "Reconnect Google" message from the Gmail integration.
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.appdata";
+// Contacts is read/write so the People screen can edit them, and the directory
+// is read-only: a Workspace domain's people can be searched but not changed.
+// Tokens minted before these were asked for get a "Reconnect" button there.
+const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/contacts https://www.googleapis.com/auth/directory.readonly";
 
-/// The one scope an extra Gmail account is asked for. Calendar and Tasks stay
-/// with the main Google account; these accounts are only ever read for a
-/// message's subject.
-pub const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+/// What an extra Google account is asked for. Calendar and Tasks stay with the
+/// main Google account; these accounts are read for a message's subject, and
+/// for the contacts and directory on the People screen.
+pub const EXTRA_ACCOUNT_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/contacts https://www.googleapis.com/auth/directory.readonly";
 
 /// How long we wait for the browser to come back with a code.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(180);

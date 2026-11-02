@@ -30,6 +30,7 @@ pub mod ipc;
 pub mod keep;
 pub mod notify;
 pub mod panel;
+pub mod people;
 pub mod projects;
 pub mod theme;
 pub mod todos;

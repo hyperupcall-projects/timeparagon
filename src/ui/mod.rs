@@ -18,6 +18,7 @@ pub mod layout;
 pub mod links;
 mod meetings;
 pub mod notepad;
+pub mod people;
 pub mod projects;
 pub mod recurrence;
 pub mod settings;
@@ -47,6 +48,16 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
     let content = responsive(move |size| {
         if state.travel.map.active {
             return crate::travel::map::view(state);
+        }
+        // Checked before the range views: a contact opened while the week is
+        // on show takes this window over until it is closed.
+        if state.people_panel_open() {
+            let metrics = Metrics::of(size);
+            return container(people::panel(state, &metrics))
+                .width(Fill)
+                .height(Fill)
+                .style(controls::surface)
+                .into();
         }
         if state.range_view_active() {
             let metrics = Metrics::of(size);
@@ -217,6 +228,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
             (Screen::KeepNotes, _) => keep::view(state, &metrics),
+            (Screen::People, _) => people::view(state, &metrics),
             (Screen::Notepad, _) => notepad::view(state, &metrics),
             (Screen::BrainDump, _) => brain_dump::view(state, &metrics),
             (Screen::Overdue, _) => inbox::overdue(state, &main_metrics),
@@ -473,7 +485,7 @@ pub fn calendar_view_label(_state: &State) -> &'static str {
 pub const TASKS_LABELS: [&str; 3] = ["Overdue", "Inbox", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 4] = ["Travel", "Habits", "Keep", "Brain dump"];
+pub const MORE_LABELS: [&str; 5] = ["Travel", "Habits", "Keep", "People", "Brain dump"];
 
 /// A little breathing room between the menu and the top of the window.
 const TAB_TOP_MARGIN: f32 = 6.0;
@@ -560,7 +572,11 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let more_active = state.more_menu_open
         || matches!(
             state.screen,
-            Screen::Travel | Screen::Habits | Screen::KeepNotes | Screen::BrainDump
+            Screen::Travel
+                | Screen::Habits
+                | Screen::KeepNotes
+                | Screen::People
+                | Screen::BrainDump
         );
 
     let view = tab(
@@ -906,7 +922,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     iced::widget::stack(layers).into()
 }
 
-/// The More menu: Travel, Habits and Keep, in a card below the menu bar.
+/// The More menu: Travel, Habits, Keep and People, in a card below the menu bar.
 fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
         .on_press(Message::Navigation(NavigationMessage::MoreMenuToggled));
@@ -916,6 +932,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         Screen::Travel,
         Screen::Habits,
         Screen::KeepNotes,
+        Screen::People,
         Screen::BrainDump,
     ]) {
         panel = panel.push(
