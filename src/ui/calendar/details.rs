@@ -103,6 +103,19 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         body = body.push(detail_line("Guests", details.attendees.join("\n"), metrics));
     }
 
+    if !new_habit {
+        match crate::notes::target_of(state, event) {
+            Some(target) => body = body.push(super::super::notes::section(state, target, metrics)),
+            None => {
+                body = body.push(
+                    text("Choose a habit above to keep notes on it.")
+                        .size(metrics.label())
+                        .style(text::secondary),
+                );
+            }
+        }
+    }
+
     // The action buttons sit outside the scrollable, so they stay reachable
     // however long the description above them runs.
     let mut buttons: Vec<Element<'a, Message>> = Vec::new();

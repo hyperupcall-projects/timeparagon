@@ -67,7 +67,6 @@ DUE_TIME: 09:30              show the task at 09:30 on its due day
 Calendar instead. Moving a time block preserves the deadline. Completing a
 task retains its Calendar event and work history.
 
-Google Keep still uses the optional helper described below.
 To remove it again:
 
 ```sh
@@ -291,15 +290,6 @@ the dock opens.
 
 It shares the main app's config, theme, sign-in and day cache, and syncs today
 itself every `sync_minutes`.
-
-## Google Keep browser helper
-
-Build `tools/keep-bridge` with `deno task compile` before installing to include
-Google Keep support. The installer copies the compiled
-`keep-bridge` alongside the application; the uninstaller removes it. The app
-reuses the dedicated Google browser profile. See
-[the helper README](../tools/keep-bridge/README.md#google-keep) for sign-in,
-runtime permissions, and the read-only Keep integration.
 
 ### Multiple Slack workspaces
 

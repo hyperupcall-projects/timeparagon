@@ -327,14 +327,14 @@ struct Engine {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Failure {
+pub(crate) enum Failure {
     SignedOut,
     Reconnect,
     Other(String),
 }
 
 impl Failure {
-    fn other(error: impl std::fmt::Display) -> Self {
+    pub(crate) fn other(error: impl std::fmt::Display) -> Self {
         Self::Other(error.to_string())
     }
 }
@@ -549,7 +549,7 @@ impl ApiFile {
     }
 }
 
-fn agent() -> &'static ureq::Agent {
+pub(crate) fn agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::AgentBuilder::new()
@@ -642,7 +642,7 @@ impl Drive for GoogleDrive {
     }
 }
 
-fn send(result: Result<ureq::Response, ureq::Error>) -> Result<ureq::Response, Failure> {
+pub(crate) fn send(result: Result<ureq::Response, ureq::Error>) -> Result<ureq::Response, Failure> {
     match result {
         Ok(response) => Ok(response),
         Err(ureq::Error::Status(code, response)) => {

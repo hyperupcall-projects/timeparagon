@@ -244,7 +244,9 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
                 Task::none()
             };
 
-            Task::batch([measure, sync, scroll])
+            let notes = crate::notes::refresh(state);
+
+            Task::batch([measure, sync, scroll, notes])
         }
         SystemMessage::MonitorSized(id, size) => {
             if state.main_window != Some(id) {

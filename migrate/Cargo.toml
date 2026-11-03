@@ -17,6 +17,6 @@ urlencoding = "2.1.3"
 [[example]]
 name = "migrate_calendar"
 
-# Moves the Keep "Habits & Rituals" notes into Calendar habits.
+# Moves the Google Tasks "Habits & Recurring" list into Calendar habits.
 [[example]]
-name = "migrate_keep_habits"
+name = "migrate_task_habits"
