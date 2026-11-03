@@ -49,11 +49,9 @@ Of course, there's also week, 2-week, and month views:
 		- Brain dump.
 		- Pomodoro timer.
 		- Record distractions.
-	- Habits
-		- These are standard calendar events that are colored differently.
-		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
+	- Habits (described below)
 	- Sleep
-		- Automatically create events for sleep.
+		- Automatically create events for sleep based on sleep goal, next day's activities, and latest wakeup time.
 		- Automatic shutdown (TODO).
 - Capture and manage tasks:
 	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
@@ -75,6 +73,10 @@ Of course, there's also week, 2-week, and month views:
 		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
 		- But, also keep track of subtasks (TODO)?
 		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
+- Habits
+	- These are standard calendar events that are colored differently.
+	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
+	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
 - Notes (TODO)
 	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
