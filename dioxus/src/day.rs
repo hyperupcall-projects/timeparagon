@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
+use timeslay_core::calendar::first_day::FirstDayOfWeek;
 use timeslay_core::calendar::layout::{self, Span};
 use timeslay_core::calendar::sources::TimeSlaySource;
 use timeslay_core::calendar::{self, Event, Snapshot};
@@ -133,6 +134,13 @@ pub fn save_google_client(client_id: &str, client_secret: &str) -> Result<Config
     }
     timeslay_core::config::save_google_client(client_id, client_secret)
         .map_err(|error| format!("Could not save the Google client: {error}"))?;
+    Ok(load_config())
+}
+
+/// Saves which day weeks start on and returns the config as it now reads.
+pub fn set_first_day_of_week(first_day: FirstDayOfWeek) -> Result<Config, String> {
+    timeslay_core::config::save_first_day_of_week(first_day)
+        .map_err(|error| format!("Could not save the first day of the week: {error}"))?;
     Ok(load_config())
 }
 

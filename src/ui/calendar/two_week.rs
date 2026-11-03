@@ -30,7 +30,8 @@ pub(super) fn two_week_height(available: f32, zoom: f32) -> f32 {
 
 pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let metrics = *metrics;
-    let dates = calendar::two_week_dates(state.week_anchor);
+    let first_day = state.config.calendar.first_day_of_week;
+    let dates = calendar::two_week_dates(state.week_anchor, first_day);
     let zoom = state.calendar.zoom_ratio();
     let scroll_top = state.grid_scroll.0;
     let grid = responsive(move |size| {
@@ -55,7 +56,7 @@ pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
         zoom_wheel_layer(grid.into(), scroll_top)
     });
 
-    let days = calendar::two_week_dates(state.week_anchor);
+    let days = calendar::two_week_dates(state.week_anchor, first_day);
     let (first, last) = (days[0], days[13]);
     let label = if first.year() == last.year() {
         format!(
@@ -214,7 +215,11 @@ fn day_cell<'a>(
 fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Element<'a, Message>> {
     let now = crate::clock::now();
     let day_start_hour = state.config.calendar.day_start_hour();
-    let first_shown = calendar::two_week_dates(state.week_anchor)[0];
+    let first_shown = state
+        .config
+        .calendar
+        .first_day_of_week
+        .week_start(state.week_anchor);
     let mut items = Vec::new();
     for event in state
         .calendar

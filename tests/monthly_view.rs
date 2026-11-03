@@ -1,7 +1,8 @@
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
 use iced::{Element, Size};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{CalendarMessage, EventMessage};
+use timeslay::app::{CalendarMessage, EventMessage, SettingsMessage};
+use timeslay::calendar::first_day::FirstDayOfWeek;
 use timeslay::{
     app::{self, Message, State},
     calendar::{self, Store},
@@ -21,7 +22,7 @@ fn state() -> State {
         .find(|e| e.id == "standup")
         .unwrap()
         .clone();
-    snapshot.events = calendar::month_grid(snapshot.day)
+    snapshot.events = calendar::month_grid(snapshot.day, state.config.calendar.first_day_of_week)
         .into_iter()
         .map(|day| {
             let mut event = template.clone();
@@ -83,6 +84,31 @@ fn whole_month_survives_cache_pruning_and_day_interactions() {
 }
 
 #[test]
+fn the_grid_follows_the_first_day_of_the_week_and_keeps_the_month_in_view() {
+    let mut state = state();
+    let anchor = state.week_anchor;
+    for (first_day, first_date) in [
+        (FirstDayOfWeek::Sunday, date(2026, 7, 26)),
+        (FirstDayOfWeek::Monday, date(2026, 7, 27)),
+        // August 2026 starts on a Saturday, so nothing leads it.
+        (FirstDayOfWeek::Saturday, date(2026, 8, 1)),
+    ] {
+        let _ = app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::FirstDayOfWeekSelected(first_day)),
+        );
+        let dates = state.calendar_dates();
+        assert_eq!(dates[0], first_date, "{first_day}");
+        assert_eq!(state.week_anchor, anchor);
+        assert!(
+            render(&state, Size::new(1400.0, 1000.0))
+                .find("Mon")
+                .is_ok()
+        );
+    }
+}
+
+#[test]
 fn navigation_steps_calendar_months_across_years_and_leap_february() {
     let mut state = state();
     state.calendar.follow_today = false;
@@ -126,7 +152,7 @@ fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
     let mut state = state();
     let anchor = state.week_anchor;
     let dates = state.calendar_dates();
-    for (label, day) in [("16", date(2026, 8, 16)), ("Sep 6", date(2026, 9, 6))] {
+    for (label, day) in [("16", date(2026, 8, 16)), ("Sep 5", date(2026, 9, 5))] {
         let mut ui = render(&state, Size::new(1100.0, 1100.0));
         ui.click(label).unwrap();
         let action = ui

@@ -581,8 +581,9 @@ pub fn day_picker<'a>(
     ]
     .spacing(metrics.spacing)
     .align_y(Center);
-    let weekdays = row(calendar::WEEKDAY_INITIALS.iter().map(|label| {
-        text(*label)
+    let first_day = state.config.calendar.first_day_of_week;
+    let weekdays = row(first_day.initials().map(|label| {
+        text(label)
             .size(metrics.label() - 1.0)
             .width(Fill)
             .center()
@@ -592,7 +593,7 @@ pub fn day_picker<'a>(
     .spacing(2.0)
     .width(Fill);
     let weeks = column(
-        calendar::month_grid(month)
+        calendar::month_grid(month, first_day)
             .chunks(7)
             .map(|week| {
                 row(week

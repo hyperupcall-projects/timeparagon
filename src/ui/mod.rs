@@ -176,6 +176,7 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
             picker,
             metrics,
             state.config.appearance.time_format,
+            state.config.calendar.first_day_of_week,
         ));
     }
     if state.inbox.voice.debug_open {
@@ -214,6 +215,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     picker,
                     &metrics,
                     state.config.appearance.time_format,
+                    state.config.calendar.first_day_of_week,
                 ));
             }
             if state.inbox.voice.debug_open {

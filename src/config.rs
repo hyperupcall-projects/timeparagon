@@ -19,8 +19,8 @@ use crate::hex::HexColor;
 use crate::todos::TodoList;
 
 pub use timeslay_core::config::{
-    CalendarSettings, Project, ProjectsSettings, TriageRequirements, cache_days_dir, config_path,
-    project_dirs,
+    CalendarSettings, Project, ProjectsSettings, TriageRequirements, WeekRange, cache_days_dir,
+    config_path, project_dirs,
 };
 pub use timeslay_core::places::{Place, RouteMode, SavedRoute, TravelMode};
 

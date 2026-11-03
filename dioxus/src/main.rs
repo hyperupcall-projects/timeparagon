@@ -12,6 +12,7 @@ mod widget;
 
 use chrono::{Datelike, Months, NaiveDate};
 use dioxus::prelude::*;
+use timeslay_core::calendar::first_day::FirstDayOfWeek;
 use timeslay_core::calendar::time_format::{self, TimeFormat};
 use timeslay_core::calendar::{self, Event};
 use timeslay_core::config::CalendarSettings;
@@ -375,7 +376,7 @@ fn App() -> Element {
         div { class: "day-header",
             h1 { class: "day-title", "{heading}" }
             div { class: "day-controls",
-                {month_picker(selected_day, today, month_open, month_shown, day_nav)}
+                {month_picker(selected_day, today, settings.first_day_of_week, month_open, month_shown, day_nav)}
                 div { class: "spacer" }
                 button {
                     class: "btn icon",
@@ -642,6 +643,7 @@ fn App() -> Element {
         }
     });
 
+    let first_day = settings.first_day_of_week;
     let settings_modal = show_settings().then(|| {
         let error = settings_error().map(|message| {
             rsx! { p { class: "error-text", "{message}" } }
@@ -677,6 +679,31 @@ fn App() -> Element {
                                     value: "{choice.name()}",
                                     selected: choice == theme(),
                                     "{choice.label()}"
+                                }
+                            }
+                        }
+                        label { r#for: "settings-first-day", "First day of the week" }
+                        select {
+                            id: "settings-first-day",
+                            class: "client-input",
+                            onchange: move |event: FormEvent| {
+                                let Some(chosen) = FirstDayOfWeek::parse(&event.value()) else {
+                                    return;
+                                };
+                                match day::set_first_day_of_week(chosen) {
+                                    Ok(saved) => {
+                                        config.set(saved);
+                                        settings_error.set(None);
+                                    }
+                                    Err(error) => settings_error.set(Some(error)),
+                                }
+                            },
+                            for choice in FirstDayOfWeek::ALL {
+                                option {
+                                    key: "{choice.name()}",
+                                    value: "{choice.name()}",
+                                    selected: choice == first_day,
+                                    "{choice}"
                                 }
                             }
                         }
@@ -950,6 +977,7 @@ impl DayNav {
 fn month_picker(
     selected: NaiveDate,
     today: NaiveDate,
+    first_day: FirstDayOfWeek,
     mut open: Signal<bool>,
     mut shown: Signal<NaiveDate>,
     nav: DayNav,
@@ -957,7 +985,7 @@ fn month_picker(
     let label = format!("{} ▾", calendar::month_short(selected.month()));
     let month = shown();
     let days = if open() {
-        calendar::month_grid(month)
+        calendar::month_grid(month, first_day)
     } else {
         Vec::new()
     };
@@ -1016,7 +1044,7 @@ fn month_picker(
                     }
                 }
                 div { class: "month-grid",
-                    for weekday in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] {
+                    for weekday in first_day.short_labels() {
                         span { key: "{weekday}", class: "month-weekday", "{weekday}" }
                     }
                     {cells}

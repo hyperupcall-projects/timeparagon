@@ -1,10 +1,13 @@
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Datelike, Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
 use timeslay::app::{
-    CalendarMessage, EventMessage, MonthPicker, NavigationMessage, SystemMessage, TaskMessage,
+    CalendarMessage, EventMessage, MonthPicker, NavigationMessage, SettingsMessage, SystemMessage,
+    TaskMessage,
 };
+use timeslay::calendar::first_day::FirstDayOfWeek;
+use timeslay::config::WeekRange;
 use timeslay::{
     app::{self, Message, Screen, State},
     calendar::{self, Store},
@@ -97,6 +100,56 @@ fn week_range_shows_seven_from_today_or_eight_from_yesterday() {
         calendar::week_dates(new_year, 8)[0],
         new_year - Duration::days(1)
     );
+}
+
+#[test]
+fn a_whole_week_starts_on_the_first_day_of_the_week_and_steps_by_seven() {
+    let mut state = state();
+    let anchor = state.week_anchor;
+    for first_day in FirstDayOfWeek::ALL {
+        state.config.calendar.first_day_of_week = first_day;
+        let _ = app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::CalendarWeekRangeChanged(
+                WeekRange::WholeWeek,
+            )),
+        );
+        let dates = state.calendar_dates();
+        assert_eq!(dates.len(), 7);
+        assert_eq!(dates[0], first_day.week_start(anchor));
+        assert_eq!(dates[0].weekday(), first_day.weekdays()[0]);
+        assert!(dates.contains(&anchor), "{first_day}");
+        // Changing the range does not move the selected day.
+        assert_eq!(state.week_anchor, anchor);
+    }
+
+    state.config.calendar.first_day_of_week = FirstDayOfWeek::Sunday;
+    let first = state.calendar_dates()[0];
+    let step = i64::from(state.config.calendar.weekly_days());
+    let _ = app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarDayShift(step)),
+    );
+    assert_eq!(state.calendar_dates()[0], first + Duration::days(7));
+}
+
+#[test]
+fn switching_the_week_range_keeps_the_other_ranges_day_count() {
+    let mut settings = timeslay::config::CalendarSettings::default();
+    assert_eq!(settings.week_range(), WeekRange::EightFromYesterday);
+    for range in WeekRange::ALL {
+        settings.set_week_range(range);
+        assert_eq!(settings.week_range(), range);
+        let saved = toml::to_string(&settings).unwrap();
+        let loaded: timeslay::config::CalendarSettings = toml::from_str(&saved).unwrap();
+        assert_eq!(loaded.week_range(), range);
+    }
+    settings.set_week_range(WeekRange::WholeWeek);
+    assert_eq!(settings.weekly_days(), 7);
+    settings.set_week_range(WeekRange::EightFromYesterday);
+    assert_eq!(settings.weekly_days(), 8);
+    assert_eq!(settings.week_dates(date(15)).len(), 8);
+    assert_eq!(settings.week_dates(date(15))[0], date(14));
 }
 
 #[test]
