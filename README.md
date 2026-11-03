@@ -4,9 +4,7 @@ Slay the day with TimeSlay.
 
 ## Overview
 
-TimeSlay is designed to help you implement some of the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime). Rather than spending time switching between, searching through, and using multiple apps, focus on the work.
-
-There's a plethora of nifty features; I'll be listing some of my favorites (TODO).
+TimeSlay is designed to help you implement some of the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime). Rather than spending time switching between, searching through, and using multiple apps, just focus on the work.
 
 Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and edit events/tasks from this view:
 
@@ -14,9 +12,13 @@ Docked mode is the feature that I love the most. Your day is always at a glance.
 
 But you'll typically plan the day within the larger panel:
 
-![Day view](./assets/timeslay-day.png)
+![Day view](./assets/timeslay-schedule.png)
 
-There's week and month views, just like any other calendar app:
+Editing details for events, tasks, time blocks, and more is done within a popup overlay:
+
+![Day view](./assets/timeslay-overlay.png)
+
+Of course, there's also week, 2-week, and month views:
 
 ![Week view](./assets/timeslay-week.png)
 
@@ -35,10 +37,10 @@ There's week and month views, just like any other calendar app:
 		- Omit private event details where applicable
 - Manage your time:
 	- Events
-		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
-		- Show dedicated buttons for joining Zoom and Google Meet meetings.
-		- Integrate with Zoom and Google Meet to create meetings and invite attendees (TODO).
-		- Integrates with guest/event/RSVP going/not going feature (TODO)
+		- Tracks the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
+		- Shows dedicated buttons for joining Zoom and Google Meet meetings.
+		- Integrates with Zoom and Google Meet to create meetings and invite attendees (TODO).
+		- Allows for replying to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop) (TODO).
 		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP).
 	- Time blocks
 		- These are standard calendar events with a special interface to easily order tasks within them; great for deep work.
@@ -90,7 +92,7 @@ There's week and month views, just like any other calendar app:
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - People.
-	- Browse and edit contacts from Google accounts and workspace directories.
+	- Browse and edit contacts from Google accounts and Google workspace directories.
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
