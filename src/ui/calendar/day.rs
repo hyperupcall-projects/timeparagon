@@ -116,6 +116,10 @@ pub(super) fn day_canvas<'a>(
                 pending: state.calendar.pending_time(&event.id).is_some()
                     || state.timeblocking.busy.contains_task(&event.id),
                 time_block,
+                habit: (event.details.habit && !hidden)
+                    .then(|| state.habits.habit_of(event))
+                    .flatten()
+                    .map(|id| (id.to_owned(), event.start.date_naive())),
                 // A block owns its task rows independently of standalone task visibility.
                 tasks: if time_block {
                     let key = crate::timeblocking::block_key(event);

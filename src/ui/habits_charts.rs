@@ -8,8 +8,9 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text, path};
 use iced::{Color, Element, Length, Point, Radians, Rectangle, Renderer, Size, Theme, mouse};
 
 use crate::app::Message;
+use crate::calendar::colors::on_color;
 use crate::calendar::month_short;
-use crate::habits::{Action, Bucket, Computed, Kind, Status, Streak};
+use crate::habits::{Action, Bucket, Computed, Icons, Kind, Status, Streak};
 use timeslay_core::habits::{self, palette_color};
 
 const TEXT_SIZE: f32 = 11.0;
@@ -215,6 +216,7 @@ pub struct DayMark {
     pub color: u8,
     pub goal: u32,
     pub question_marks: bool,
+    pub icons: Icons,
     pub kind: Kind,
     /// How many times it was done, shown when more than once.
     pub times: u32,
@@ -292,6 +294,12 @@ impl canvas::Program<Message> for DayMark {
                 },
                 9.0,
             );
+        }
+        if self.icons == Icons::Faces
+            && let Some((face, tint)) = self.face(color, quiet, dark)
+        {
+            draw_face(&mut frame, center, face, tint);
+            return vec![frame.into_geometry()];
         }
         match self.status {
             // Measured days show the number, in color when the target was met.
@@ -379,6 +387,79 @@ impl canvas::Program<Message> for DayMark {
         }
         vec![frame.into_geometry()]
     }
+}
+
+impl DayMark {
+    /// The face a day shows, and its color. Days that say something a face
+    /// cannot, like an amount or a partial count, keep what they always show.
+    fn face(&self, color: Color, quiet: Color, dark: bool) -> Option<(Face, Color)> {
+        match self.status {
+            Status::Yes | Status::Clean => Some((Face::Happy, color)),
+            Status::Auto => Some((Face::Happy, quiet)),
+            Status::Slipped(_) => Some((Face::Disappointed, slip_color(dark))),
+            Status::Skip => Some((Face::Question, color)),
+            Status::No => Some((Face::Disappointed, quiet)),
+            Status::Unknown if self.kind == Kind::Measurable => None,
+            Status::Unknown if self.question_marks => Some((Face::Question, quiet)),
+            Status::Unknown if self.kind == Kind::No => None,
+            Status::Unknown => Some((Face::Disappointed, quiet)),
+            Status::Partial(_) | Status::Measured { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Face {
+    Happy,
+    Disappointed,
+    Question,
+}
+
+/// An emoji-style face, drawn so it does not depend on the fonts installed.
+fn draw_face(frame: &mut Frame, center: Point, face: Face, tint: Color) {
+    const RADIUS: f32 = 9.5;
+    let ink = on_color(tint);
+    frame.fill(&Path::circle(center, RADIUS), tint);
+    if face == Face::Question {
+        frame.fill_text(Text {
+            content: "?".to_owned(),
+            position: center,
+            color: ink,
+            size: iced::Pixels(14.0),
+            align_x: iced::alignment::Horizontal::Center.into(),
+            align_y: iced::alignment::Vertical::Center,
+            ..Text::default()
+        });
+        return;
+    }
+    for x in [-3.3, 3.3] {
+        frame.fill(
+            &Path::circle(Point::new(center.x + x, center.y - 2.4), 1.4),
+            ink,
+        );
+    }
+    // The mouth curves up for a smile and down for disappointment.
+    let (ends, bend) = if face == Face::Happy {
+        (1.8, 7.8)
+    } else {
+        (5.2, 1.0)
+    };
+    let mouth = Path::new(|builder| {
+        builder.move_to(Point::new(center.x - 4.2, center.y + ends));
+        builder.quadratic_curve_to(
+            Point::new(center.x, center.y + bend),
+            Point::new(center.x + 4.2, center.y + ends),
+        );
+    });
+    frame.stroke(
+        &mouth,
+        Stroke {
+            style: canvas::Style::Solid(ink),
+            width: 1.6,
+            line_cap: canvas::LineCap::Round,
+            ..Default::default()
+        },
+    );
 }
 
 fn slip_color(dark: bool) -> Color {

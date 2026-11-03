@@ -881,6 +881,7 @@ fn canvas_with_one_block() -> DayCanvas {
             pending: false,
             tasks: Vec::new(),
             time_block: false,
+            habit: None,
         }],
         travel: Vec::new(),
         needle: None,
@@ -1041,6 +1042,7 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
         pending: false,
         tasks: Vec::new(),
         time_block: false,
+        habit: None,
     };
     let blocks = [at("standup", 540, 570), at("review", 840, 900)];
 
@@ -1226,6 +1228,7 @@ fn the_cache_key_holds_until_a_traced_detail_changes() {
         pending: false,
         tasks: Vec::new(),
         time_block: false,
+        habit: None,
     };
 
     let key = cache_key(
@@ -2254,4 +2257,62 @@ fn the_event_pane_offers_a_calendar_dropdown_without_timeslay() {
         message,
         Message::EventEdit(EventEditMessage::EventEditCalendarSelected(id)) if id == other.id
     )));
+}
+
+#[test]
+fn a_habit_events_record_button_is_full_height_and_leaves_the_rest_clickable() {
+    let day = NaiveDate::from_ymd_opt(2026, 3, 4).unwrap();
+    // (x fraction, y fraction, whether it lands on the button)
+    for (x, y, record) in [
+        (0.99, 0.02, true),
+        (0.99, 0.5, true),
+        (0.99, 0.98, true),
+        (0.2, 0.5, false),
+    ] {
+        let mut canvas = canvas_with_one_block();
+        canvas.blocks[0].habit = Some(("h".into(), day));
+        let bounds = canvas.block_rect(&canvas.blocks[0], 600.0);
+        let (label, button) = habit_actions(bounds);
+        assert_eq!((button.y, button.height), (bounds.y, bounds.height));
+        assert_eq!(label.width + button.width, bounds.width);
+        let element: Element<'_, Message> = canvas_widget(canvas).width(600).height(1440).into();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            Size::new(600.0, 1440.0),
+            element,
+        );
+        ui.point_at(Point::new(
+            bounds.x + bounds.width * x,
+            bounds.y + bounds.height * y,
+        ));
+        ui.simulate([
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]);
+        let messages: Vec<_> = ui.into_messages().collect();
+        let recorded = messages.iter().any(|m| {
+            matches!(m, Message::Habits(crate::habits::Action::Record(id, on))
+                if id == "h" && *on == day)
+        });
+        assert_eq!(recorded, record, "at {x}, {y}");
+        if !record {
+            assert!(messages.iter().any(
+                |m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "standup")
+            ));
+        }
+    }
+}
+
+#[test]
+fn an_event_without_a_habit_has_no_record_button() {
+    let canvas = canvas_with_one_block();
+    let bounds = canvas.block_rect(&canvas.blocks[0], 600.0);
+    assert!(
+        canvas
+            .record_at(
+                Point::new(bounds.x + bounds.width - 2.0, bounds.y + 2.0),
+                600.0
+            )
+            .is_none()
+    );
 }

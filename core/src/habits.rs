@@ -42,6 +42,17 @@ pub enum TargetType {
     AtMost,
 }
 
+/// How a habit's days are drawn in the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Icons {
+    /// A check, a cross and a question mark.
+    #[default]
+    Symbols,
+    /// A happy face, a disappointed face and a questioning face.
+    Faces,
+}
+
 /// How often a habit is meant to happen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -281,6 +292,8 @@ pub struct Habit {
     #[serde(default)]
     pub question_marks: bool,
     #[serde(default)]
+    pub icons: Icons,
+    #[serde(default)]
     pub marks: BTreeMap<NaiveDate, Mark>,
 }
 
@@ -301,6 +314,7 @@ impl Habit {
             archived: false,
             skip_days: false,
             question_marks: false,
+            icons: Icons::Symbols,
             marks: BTreeMap::new(),
         }
     }
@@ -348,6 +362,26 @@ impl Habit {
     /// Whether a click needs a number, as it does for a measurable habit.
     pub fn asks_for_amount(&self) -> bool {
         self.kind == Kind::Measurable
+    }
+
+    /// Whether a day comes down to a plain yes or no. A measurable habit needs
+    /// an amount, and a times-per-day goal needs to know how many.
+    pub fn asks_yes_or_no(&self) -> bool {
+        self.kind != Kind::Measurable && self.frequency.per_day() == 1
+    }
+
+    /// Records a plain answer to whether it was done on a day. Saying yes to a
+    /// day already done keeps the number of times recorded for it.
+    pub fn answer(&mut self, day: NaiveDate, done: bool) {
+        if self.kind == Kind::Measurable || (done && self.times_on(day) > 0) {
+            return;
+        }
+        let mark = match (done, self.kind) {
+            (false, _) => Mark::No,
+            (true, Kind::No) => Mark::Reps(1),
+            (true, _) => Mark::Yes,
+        };
+        self.marks.insert(day, mark);
     }
 
     /// The goal, in words.
@@ -1975,5 +2009,47 @@ mod tests {
         );
         assert!(text.contains("2015-01-25,YES_MANUAL"));
         assert!(text.contains("2015-01-25,0.1478"));
+    }
+
+    #[test]
+    fn a_plain_answer_records_the_day_for_each_kind_of_habit() {
+        let day = NaiveDate::from_ymd_opt(2026, 3, 4).unwrap();
+
+        let mut yes = Habit::new("y", "Read");
+        assert!(yes.asks_yes_or_no());
+        yes.answer(day, true);
+        assert_eq!(yes.marks[&day], Mark::Yes);
+        yes.answer(day, false);
+        assert_eq!(yes.marks[&day], Mark::No);
+        // Saying yes again does not lose how many times it was done.
+        yes.marks.insert(day, Mark::Reps(3));
+        yes.answer(day, true);
+        assert_eq!(yes.marks[&day], Mark::Reps(3));
+
+        // On a "No" habit a yes is a slip, and a no is a clean day.
+        let mut no = Habit::new("n", "Smoke");
+        no.kind = Kind::No;
+        no.question_marks = true;
+        assert!(no.asks_yes_or_no());
+        no.answer(day, true);
+        assert_eq!(no.compute(day).status(day), Status::Slipped(1));
+        no.answer(day, false);
+        assert_eq!(no.compute(day).status(day), Status::Clean);
+
+        // Amounts and counts cannot be answered with a yes or a no.
+        let mut amount = Habit::new("m", "Run");
+        amount.kind = Kind::Measurable;
+        assert!(!amount.asks_yes_or_no());
+        amount.answer(day, true);
+        assert!(amount.marks.is_empty());
+        let mut twice = Habit::new("t", "Brush");
+        twice.frequency = Frequency::TimesPerDay { times: 2 };
+        assert!(!twice.asks_yes_or_no());
+    }
+
+    #[test]
+    fn a_habit_saved_before_icons_existed_keeps_symbols() {
+        let habit: Habit = serde_json::from_str(r#"{"id":"h","name":"Read"}"#).unwrap();
+        assert_eq!(habit.icons, Icons::Symbols);
     }
 }

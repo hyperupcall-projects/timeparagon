@@ -20,6 +20,9 @@ pub(super) struct Block {
     pub(super) pending: bool,
     pub(super) tasks: Vec<(String, String, u32)>,
     pub(super) time_block: bool,
+    /// The habit this event counts towards and the day it would be recorded
+    /// on, for its Record button.
+    pub(super) habit: Option<(String, NaiveDate)>,
 }
 
 /// An alarm's needle on the day in view.
@@ -402,6 +405,16 @@ impl canvas::Program<Message> for DayCanvas {
                     }
                 }
 
+                if let Some((id, day)) = self.record_at(point, bounds.width) {
+                    return Some(
+                        canvas::Action::publish(Message::Habits(crate::habits::Action::Record(
+                            id.to_owned(),
+                            day,
+                        )))
+                        .and_capture(),
+                    );
+                }
+
                 if let Some(id) = self.task_at(point, bounds.width) {
                     state.task_press = Some((id.to_owned(), cursor.position()?));
                     return Some(canvas::Action::request_redraw().and_capture());
@@ -557,6 +570,9 @@ impl canvas::Program<Message> for DayCanvas {
                 if focus.contains(point) || plan.contains(point) {
                     return mouse::Interaction::Pointer;
                 }
+            }
+            if self.record_at(point, bounds.width).is_some() {
+                return mouse::Interaction::Pointer;
             }
         }
 
@@ -806,6 +822,8 @@ impl DayCanvas {
             let mut label_bounds = block_bounds;
             if block.time_block {
                 label_bounds = block_actions(block_bounds).0;
+            } else if block.habit.is_some() {
+                label_bounds = habit_actions(block_bounds).0;
             }
             if label_bounds.height >= 14.0 {
                 draw_block_label(
@@ -819,29 +837,10 @@ impl DayCanvas {
             }
             if block.time_block {
                 let (_, focus, plan) = block_actions(block_bounds);
-                for (rect, name) in [(focus, "Focus"), (plan, "Plan")] {
-                    frame.fill(
-                        &Path::rounded_rectangle(rect.position(), rect.size(), EVENT_RADIUS.into()),
-                        BLOCK_ACTION,
-                    );
-                    // Keep the label inside its box even in overlapping columns.
-                    let size =
-                        10.0 * ((rect.width - 2.0).max(0.0) / text_width_of(name, 10.0)).min(1.0);
-                    if size > 0.0 {
-                        fill_glyphs(
-                            frame,
-                            Text {
-                                content: name.into(),
-                                position: Point::new(rect.center_x(), rect.center_y()),
-                                color: ink,
-                                size: Pixels(size),
-                                align_x: iced::alignment::Horizontal::Center.into(),
-                                align_y: iced::alignment::Vertical::Center,
-                                ..Text::default()
-                            },
-                        );
-                    }
-                }
+                draw_action(frame, focus, "Focus", ink);
+                draw_action(frame, plan, "Plan", ink);
+            } else if block.habit.is_some() {
+                draw_action(frame, habit_actions(block_bounds).1, "Record", ink);
             }
         }
     }
@@ -1199,6 +1198,17 @@ impl DayCanvas {
         Some((index, mode))
     }
 
+    /// The habit and day of the Record button under a grid point, if any.
+    pub(super) fn record_at(&self, point: Point, width: f32) -> Option<(&str, NaiveDate)> {
+        self.blocks.iter().rev().find_map(|block| {
+            let (id, day) = block.habit.as_ref()?;
+            habit_actions(self.block_rect(block, width))
+                .1
+                .contains(point)
+                .then_some((id.as_str(), *day))
+        })
+    }
+
     /// The task row beside a time block, including its title and estimate.
     pub(super) fn task_at(&self, point: Point, width: f32) -> Option<&str> {
         self.blocks
@@ -1480,6 +1490,50 @@ pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectang
         ..focus
     };
     (label, focus, plan)
+}
+
+/// The widest a habit event's Record button gets. Habit events span their whole
+/// column, where a share of the width would make it far larger than its label.
+const HABIT_RECORD_WIDTH: f32 = 56.0;
+
+/// A habit event is split into the label on the left and a full height Record
+/// button on the right. Returns (label, record).
+pub(super) fn habit_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
+    let width = (bounds.width * (1.0 - TIME_BLOCK_LABEL_SHARE)).min(HABIT_RECORD_WIDTH);
+    let label = Rectangle {
+        width: bounds.width - width,
+        ..bounds
+    };
+    let record = Rectangle {
+        x: bounds.x + label.width,
+        width,
+        ..bounds
+    };
+    (label, record)
+}
+
+/// One of the buttons drawn on a block.
+fn draw_action(frame: &mut Frame, rect: Rectangle, name: &str, ink: Color) {
+    frame.fill(
+        &Path::rounded_rectangle(rect.position(), rect.size(), EVENT_RADIUS.into()),
+        BLOCK_ACTION,
+    );
+    // Keep the label inside its box even in overlapping columns.
+    let size = 10.0 * ((rect.width - 2.0).max(0.0) / text_width_of(name, 10.0)).min(1.0);
+    if size > 0.0 {
+        fill_glyphs(
+            frame,
+            Text {
+                content: name.into(),
+                position: Point::new(rect.center_x(), rect.center_y()),
+                color: ink,
+                size: Pixels(size),
+                align_x: iced::alignment::Horizontal::Center.into(),
+                align_y: iced::alignment::Vertical::Center,
+                ..Text::default()
+            },
+        );
+    }
 }
 
 /// Blends a color toward white, for the lighter shade an unconfirmed time

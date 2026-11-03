@@ -24,7 +24,8 @@ use crate::recurrence::Rule;
 
 pub use crate::recurrence::{EndKind, MonthlyMode, Recurrence, RepeatMode, WEEKDAYS};
 pub use timeslay_core::habits::{
-    Bucket, Computed, Frequency, Habit, Kind, Library, Mark, SortKey, Status, Streak, TargetType,
+    Bucket, Computed, Frequency, Habit, Icons, Kind, Library, Mark, SortKey, Status, Streak,
+    TargetType,
 };
 
 /// The `ttKind` Google extended property that marks a habit event.
@@ -310,6 +311,7 @@ pub struct Form {
     pub weekdays: [bool; 7],
     pub skip_days: bool,
     pub question_marks: bool,
+    pub icons: Icons,
     pub error: Option<String>,
 }
 
@@ -336,6 +338,7 @@ impl Form {
             weekdays: [true, false, false, false, false, false, false],
             skip_days: false,
             question_marks: false,
+            icons: Icons::Symbols,
             error: None,
         }
     }
@@ -356,6 +359,7 @@ impl Form {
         form.color = habit.color;
         form.skip_days = habit.skip_days;
         form.question_marks = habit.question_marks;
+        form.icons = habit.icons;
         match habit.frequency {
             Frequency::Interval { times, days } if times >= days => {}
             Frequency::Interval { times: 1, days } => {
@@ -456,6 +460,7 @@ pub enum FormAction {
     Weekday(usize),
     SkipDays(bool),
     QuestionMarks(bool),
+    Icons(Icons),
 }
 
 /// A habit's row being pressed, which is a click until the pointer reaches
@@ -472,6 +477,8 @@ pub struct DayDialog {
     pub habit_id: String,
     pub day: NaiveDate,
     pub value: String,
+    /// Whether it asks for a yes or a no rather than a number.
+    pub yes_or_no: bool,
 }
 
 /// The input in the day dialog.
@@ -782,6 +789,10 @@ pub enum Action {
     Toggle(String, NaiveDate),
     /// A right click on a day: say how many times, or how much.
     OpenDay(String, NaiveDate),
+    /// The Record button on a habit event: ask whether it was done, or how much.
+    Record(String, NaiveDate),
+    /// Records the dialog's day as done or not.
+    AnswerDay(bool),
     DayValue(String),
     /// Records the dialog's number.
     SaveDay,
@@ -887,6 +898,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             toggle(state, &id, day)
         }
         Action::OpenDay(id, day) => open_day(state, id, day),
+        Action::Record(id, day) => record(state, id, day),
+        Action::AnswerDay(done) => change_day(state, |habit, day| habit.answer(day, done)),
         Action::DayValue(value) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
                 dialog.value = value;
@@ -1202,8 +1215,27 @@ fn open_day(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
         habit_id: id,
         day,
         value,
+        yes_or_no: false,
     });
     iced::widget::operation::focus(iced::widget::Id::new(DAY_FIELD))
+}
+
+/// Opens the day dialog for a habit event's Record button, asking for a yes or
+/// a no wherever a number is not needed.
+fn record(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
+    let yes_or_no = state
+        .habits
+        .library
+        .habit(&id)
+        .is_some_and(Habit::asks_yes_or_no);
+    let focus = open_day(state, id, day);
+    if !yes_or_no {
+        return focus;
+    }
+    if let Some(dialog) = &mut state.habits.day_dialog {
+        dialog.yes_or_no = true;
+    }
+    Task::none()
 }
 
 fn save_day(state: &mut State) -> Task<Message> {
@@ -1398,6 +1430,7 @@ fn edit_form(form: &mut Form, action: FormAction) {
         }
         FormAction::SkipDays(value) => form.skip_days = value,
         FormAction::QuestionMarks(value) => form.question_marks = value,
+        FormAction::Icons(value) => form.icons = value,
     }
 }
 
@@ -1442,6 +1475,12 @@ fn save_form(state: &mut State) -> Task<Message> {
         habit.frequency = frequency;
         habit.skip_days = form.skip_days;
         habit.question_marks = form.question_marks;
+        // A measurable habit's days show their amounts, so it has no icons to pick.
+        habit.icons = if habit.kind == Kind::Measurable {
+            Icons::Symbols
+        } else {
+            form.icons
+        };
     }
     state.habits.recompute_one(&id);
     state.habits.form = None;
