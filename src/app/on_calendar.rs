@@ -348,7 +348,8 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             state.calendar.apply_task_colors(&state.config.calendar);
             let reconcile = reconcile_completed_task(state);
             let fetch = fetch_pending_calendar_days(state, &[day]);
-            let reconcile = Task::batch([reconcile, fetch]);
+            let invitations = crate::inbox::refresh_invitations(state);
+            let reconcile = Task::batch([reconcile, fetch, invitations]);
             if remember {
                 Task::batch([queue_save(state), reconcile])
             } else {

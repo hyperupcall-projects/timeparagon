@@ -583,9 +583,10 @@ fn the_new_event_pane_shows_the_shared_repeat_controls() {
         start + chrono::Duration::minutes(45),
     ));
     let metrics = Metrics::of(Size::new(800.0, 600.0));
+    // Tall enough that the repeat controls are on screen below the Meeting section.
     let mut ui = iced_test::Simulator::with_size(
         iced_test::core::Settings::default(),
-        Size::new(800.0, 600.0),
+        Size::new(800.0, 1400.0),
         draft_editor(&state, &metrics),
     );
     assert!(ui.find("Repeat").is_ok());
@@ -2315,4 +2316,66 @@ fn an_event_without_a_habit_has_no_record_button() {
             )
             .is_none()
     );
+}
+
+#[test]
+fn the_new_event_pane_has_a_meeting_section() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let start = state.calendar.events[0].start;
+    state
+        .calendar
+        .begin_draft("primary".into(), start, start + chrono::Duration::hours(1));
+    state.calendar.draft.as_mut().unwrap().editor_open = true;
+    let metrics = Metrics::of(Size::new(800.0, 600.0));
+    let mut ui = iced_test::Simulator::with_size(
+        iced_test::core::Settings::default(),
+        Size::new(800.0, 1400.0),
+        draft_editor(&state, &metrics),
+    );
+    // The simulator can't read a toggler's own label, so the toggles themselves
+    // are covered by the form's tests in core.
+    for label in ["Meeting", "Video call", "Guests", "Guest permissions"] {
+        assert!(ui.find(label).is_ok(), "{label}");
+    }
+}
+
+#[test]
+fn an_invitation_can_be_answered_but_its_guests_cannot_be_managed() {
+    use calendar::meeting::{Attendance, Guest, Response};
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let event = state
+        .calendar
+        .events
+        .iter_mut()
+        .find(|e| !e.is_task())
+        .unwrap();
+    event.details.attendance = Attendance {
+        guests: vec![Guest {
+            email: "me@example.com".into(),
+            name: String::new(),
+            response: Response::NeedsAction,
+            optional: false,
+        }],
+        own_email: Some("me@example.com".into()),
+        ..Default::default()
+    };
+    let event = event.clone();
+    let form = calendar::meeting::Form::from_event(&event.details);
+    let metrics = Metrics::of(Size::new(800.0, 600.0));
+    let mut ui = iced_test::Simulator::with_size(
+        iced_test::core::Settings::default(),
+        Size::new(800.0, 1000.0),
+        meeting_section(&state, &form, Some(&event), &metrics, |action| {
+            Message::EventEdit(EventEditMessage::EventEditMeeting(action))
+        }),
+    );
+    assert!(ui.find("Video call").is_err());
+    assert!(ui.find("Guest permissions").is_err());
+    ui.click("Maybe").unwrap();
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::Event(EventMessage::EventReply(id, Response::Tentative)) if id == event.id
+    )));
 }

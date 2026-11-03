@@ -308,7 +308,12 @@ impl Book {
 
     /// Google's answer replaces what is shown, and adds to what is known.
     fn show_found(&mut self, found: Vec<Contact>) {
-        for person in &found {
+        self.remember(&found);
+        self.directory = found;
+    }
+
+    fn remember(&mut self, found: &[Contact]) {
+        for person in found {
             match self
                 .directory_seen
                 .iter_mut()
@@ -318,7 +323,6 @@ impl Book {
                 None => self.directory_seen.push(person.clone()),
             }
         }
-        self.directory = found;
     }
 
     /// The contact already saved under one of `emails`, so a directory entry
@@ -700,6 +704,9 @@ pub struct Store {
     pub draft: Option<Draft>,
     generation: u64,
     search_generation: u64,
+    guest_generation: u64,
+    /// The guest picker has asked for up-to-date contacts this session.
+    guests_refreshed: bool,
 }
 
 impl Store {
@@ -762,8 +769,70 @@ impl Store {
     }
 }
 
+/// How many people the guest picker suggests at a time.
+const GUEST_SUGGESTIONS: usize = 8;
+
+/// Someone who can be invited to an event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invitee {
+    pub name: String,
+    pub email: String,
+}
+
+impl Store {
+    /// Everyone matching `query` from every account's contacts and directory,
+    /// once per address, leaving out `taken`. Contacts come first.
+    pub fn invitees(&self, query: &str, taken: &[String]) -> Vec<Invitee> {
+        if query.trim().chars().count() < MIN_SEARCH {
+            return Vec::new();
+        }
+        let saved = self.books.iter().flat_map(|book| &book.contacts);
+        let directory = self.books.iter().flat_map(|book| &book.directory_seen);
+        let mut found: Vec<Invitee> = Vec::new();
+        for contact in saved.chain(directory).filter(|c| c.matches(query)) {
+            for email in &contact.emails {
+                let known = |other: &str| other.eq_ignore_ascii_case(email);
+                if !taken.iter().any(|t| known(t)) && !found.iter().any(|f| known(&f.email)) {
+                    found.push(Invitee {
+                        name: contact.name.clone(),
+                        email: email.clone(),
+                    });
+                }
+            }
+        }
+        found.truncate(GUEST_SUGGESTIONS);
+        found
+    }
+}
+
+/// What the guest picker's search needs from Google: contacts that may never
+/// have been loaded, as the People screen is what normally asks for them, and
+/// the directory, which is only ever searched.
+pub fn search_guests(state: &mut State, query: &str) -> Task<Message> {
+    let people = &mut state.people;
+    people.guest_generation += 1;
+    if !people.live || query.trim().chars().count() < MIN_SEARCH {
+        return Task::none();
+    }
+    let generation = people.guest_generation;
+    let query = query.trim().to_owned();
+    let refresh = if people.guests_refreshed || people.listing {
+        Task::none()
+    } else {
+        people.guests_refreshed = true;
+        refresh(state)
+    };
+    Task::batch([
+        refresh,
+        blocking::run(move || std::thread::sleep(SEARCH_DELAY))
+            .map(move |()| Message::People(Action::GuestSearchDue(generation, query.clone()))),
+    ])
+}
+
 #[derive(Debug, Clone)]
 pub enum Action {
+    GuestSearchDue(u64, String),
+    GuestsFound(u64, String, Result<api::Directory, Problem>),
     Refresh,
     Listed(u64, Result<Vec<Login>, String>),
     Loaded(u64, String, Result<(Vec<Value>, Vec<Group>), Problem>),
@@ -905,6 +974,47 @@ fn as_account<T: Send + 'static>(
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
+        Action::GuestSearchDue(generation, query) => {
+            if generation != state.people.guest_generation {
+                return Task::none();
+            }
+            let settings = state.config.calendar.clone();
+            let mut tasks = Vec::new();
+            for book in state.people.books.iter().filter(|b| b.may_search()) {
+                let (login, query, settings) =
+                    (book.login.clone(), query.clone(), settings.clone());
+                let account = login.label.clone();
+                tasks.push(
+                    blocking::run(move || {
+                        let token = accounts::token(&settings, &login).map_err(Problem::sign_in)?;
+                        api::search_directory(&token, &query)
+                    })
+                    .map(move |found| {
+                        Message::People(Action::GuestsFound(generation, account.clone(), found))
+                    }),
+                );
+            }
+            Task::batch(tasks)
+        }
+        // A late answer still teaches us who exists, so it isn't thrown away.
+        Action::GuestsFound(_, account, result) => {
+            let Some(book) = state.people.book_mut(&account) else {
+                return Task::none();
+            };
+            match result {
+                Ok(api::Directory::Found(people)) => book.remember(&parse_all(people, &[])),
+                Ok(api::Directory::None) => {
+                    book.no_directory = true;
+                    book.directory_seen.clear();
+                }
+                // The picker still has contacts, and takes any typed address.
+                Err(problem) => {
+                    log::warn!("could not search the directory for guests: {problem:?}");
+                    return Task::none();
+                }
+            }
+            persist(state)
+        }
         Action::Refresh => refresh(state),
         Action::Listed(generation, logins) => {
             if generation != state.people.generation {

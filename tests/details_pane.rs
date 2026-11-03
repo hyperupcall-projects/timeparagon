@@ -433,7 +433,10 @@ fn new_habit_with_the_overview_open_is_edited_inside_the_overview() {
             .library
             .habits
             .push(habits::Habit::new("h", "Stretch"));
-        let _ = app::update(&mut state, Message::Habits(habits::Action::AddEvent("h".into())));
+        let _ = app::update(
+            &mut state,
+            Message::Habits(habits::Action::AddEvent("h".into())),
+        );
 
         assert_eq!(
             state.calendar.open_event.as_deref(),
@@ -464,7 +467,10 @@ fn new_habit_uses_the_shared_right_pane_and_width_setting() {
         .library
         .habits
         .push(habits::Habit::new("h", "Stretch"));
-    let task = app::update(&mut state, Message::Habits(habits::Action::AddEvent("h".into())));
+    let task = app::update(
+        &mut state,
+        Message::Habits(habits::Action::AddEvent("h".into())),
+    );
     let _ = actions(task);
     assert!(state.editor_window.is_some());
     assert_eq!(state.main_size, original);
@@ -572,7 +578,10 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
         .library
         .habits
         .push(habits::Habit::new("h", "Stretch"));
-    let _ = app::update(&mut state, Message::Habits(habits::Action::AddEvent("h".into())));
+    let _ = app::update(
+        &mut state,
+        Message::Habits(habits::Action::AddEvent("h".into())),
+    );
     let _ = app::update(
         &mut state,
         Message::EventEdit(EventEditMessage::EventEditTitleChanged(String::new())),
@@ -652,7 +661,7 @@ fn saved_habit_edits_refresh_both_the_habits_list_and_calendar() {
     state.calendar.edit_draft = Some(draft);
     let task = app::update(
         &mut state,
-        Message::EventEdit(EventEditMessage::EventEditSaved(Ok(()))),
+        Message::EventEdit(EventEditMessage::EventEditSaved(Ok(Default::default()))),
     );
     let messages = iced::futures::executor::block_on(async {
         let mut messages = Vec::new();

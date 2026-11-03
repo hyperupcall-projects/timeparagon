@@ -2174,7 +2174,7 @@ fn a_saved_move_updates_the_event_only_for_the_draft_being_saved() {
         .unwrap()
         .id
         .clone();
-    let saved = Message::EventEdit(EventEditMessage::EventEditSaved(Ok(())));
+    let saved = Message::EventEdit(EventEditMessage::EventEditSaved(Ok(Default::default())));
 
     let draft = state.calendar.edit_draft.as_mut().unwrap();
     draft.calendar_id = other.clone();
@@ -2190,4 +2190,106 @@ fn a_saved_move_updates_the_event_only_for_the_draft_being_saved() {
     let event = state.calendar.event("standup").unwrap();
     assert_eq!(event.calendar_id, other);
     assert_eq!(event.color, state.calendar.calendar_color(&other));
+}
+
+#[test]
+fn a_failed_reply_puts_the_previous_answer_back() {
+    use calendar::meeting::{Attendance, Guest, Response};
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let event = state
+        .calendar
+        .events
+        .iter_mut()
+        .find(|e| !e.is_task())
+        .unwrap();
+    event.details.attendance = Attendance {
+        guests: vec![Guest {
+            email: "me@example.com".into(),
+            name: String::new(),
+            response: Response::NeedsAction,
+            optional: false,
+        }],
+        own_email: Some("me@example.com".into()),
+        ..Default::default()
+    };
+    let id = event.id.clone();
+    let answer = |state: &State| {
+        state
+            .calendar
+            .event(&id)
+            .unwrap()
+            .details
+            .attendance
+            .own_response()
+    };
+    let _ = update(
+        &mut state,
+        Message::Event(EventMessage::EventReply(id.clone(), Response::Accepted)),
+    );
+    assert_eq!(answer(&state), Some(Response::Accepted));
+    let _ = update(
+        &mut state,
+        Message::Event(EventMessage::EventReplied(
+            id.clone(),
+            Some(Response::NeedsAction),
+            Err("offline".into()),
+        )),
+    );
+    assert_eq!(answer(&state), Some(Response::NeedsAction));
+    assert_eq!(state.calendar.error.as_deref(), Some("offline"));
+}
+
+#[test]
+fn dragging_a_meeting_asks_about_emailing_and_cancelling_puts_it_back() {
+    use calendar::meeting::{Attendance, Guest};
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let event = state
+        .calendar
+        .events
+        .iter_mut()
+        .find(|e| !e.is_task())
+        .unwrap();
+    event.details.attendance = Attendance {
+        guests: vec![Guest {
+            email: "ada@example.com".into(),
+            ..Default::default()
+        }],
+        organizer: true,
+        ..Default::default()
+    };
+    let (id, start, end) = (event.id.clone(), event.start, event.end);
+    let hour = chrono::Duration::hours(1);
+    let _ = update(
+        &mut state,
+        Message::Event(EventMessage::EventTimeChanged {
+            id: id.clone(),
+            start: start + hour,
+            end: end + hour,
+        }),
+    );
+    assert!(state.calendar.pending_move.is_some());
+    assert_eq!(state.calendar.event(&id).unwrap().start, start + hour);
+    let _ = update(&mut state, Message::Event(EventMessage::EventMoveCancelled));
+    assert!(state.calendar.pending_move.is_none());
+    assert_eq!(state.calendar.event(&id).unwrap().start, start);
+}
+
+#[test]
+fn dragging_an_event_without_guests_does_not_ask() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let event = state.calendar.events.iter().find(|e| !e.is_task()).unwrap();
+    let (id, start, end) = (event.id.clone(), event.start, event.end);
+    let hour = chrono::Duration::hours(1);
+    let _ = update(
+        &mut state,
+        Message::Event(EventMessage::EventTimeChanged {
+            id,
+            start: start + hour,
+            end: end + hour,
+        }),
+    );
+    assert!(state.calendar.pending_move.is_none());
 }

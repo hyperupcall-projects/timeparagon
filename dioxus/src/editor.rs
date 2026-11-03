@@ -713,6 +713,7 @@ fn EventEditor(
                     &source.calendar_id,
                     &source.id,
                     scope,
+                    false,
                 )
             })
             .await;

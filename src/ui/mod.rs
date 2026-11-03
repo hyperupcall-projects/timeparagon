@@ -187,6 +187,9 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
     if state.calendar.pending_delete.is_some() {
         layers.push(calendar::delete_confirmation(state, metrics));
     }
+    if state.calendar.pending_move.is_some() {
+        layers.push(calendar::move_confirmation(state, metrics));
+    }
     if state.travel.open.is_some() {
         layers.push(travel::leg_overlay(state, metrics));
     }
