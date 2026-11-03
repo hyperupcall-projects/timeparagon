@@ -26,13 +26,15 @@ Of course, there's also week, 2-week, and month views:
 
 - Stays out of your way during work, but is easily accessible when needed.
 	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+J</kbd>).
-	- Toggle between hiding and showing the app (<kbd>Meta+Shift+J</kbd>).
-	- Configure dock or panel to either show above exisitng windows or take up space like other apps.
-- Intuitive to use (WIP).
+	- Toggle between fully hiding and showing the app (<kbd>Meta+Shift+J</kbd>).
+	- Takes up full screen when showing lots of data.
+	- Configure dock or panel to either show above existing apps or take up space.
+	- Configure widths of dock, panel, and side overlays.
+- Intuitive to use.
 - View your time:
 	- By day, week, 2 weeks, month
-	- Allow zoomin in/out within the day/week views
-	- Custom search
+	- Allow zoom in and zoom out on day/week views.
+	- Apply custom search/filter:
 		- Show only events or tasks that satisfy a search of their title or description
 		- Filter by time of day, project, label, availability, public visibility, location, and more.
 		- Toggle to only show details of events with only public visibility.
@@ -54,6 +56,7 @@ Of course, there's also week, 2-week, and month views:
 	- Habits (described below)
 	- Sleep
 		- Automatically create events for sleep based on sleep goal, next day's activities, and latest wakeup time.
+		- Sleep quality tracking (TODO).
 		- Automatic shutdown (TODO).
 - Capture and manage tasks:
 	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
@@ -103,6 +106,7 @@ Of course, there's also week, 2-week, and month views:
 	- Uses local database as cache to keep UI performant/responsive.
 - Habits
 	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
+	- Allow setting/connecting goals to Habits (TODO).
 - Activity monitoring
 	- Project allocation
 	- Distractions
