@@ -1847,6 +1847,7 @@ mod tests {
             end: at(7, 15),
             recurrence: vec!["RRULE:FREQ=DAILY".into()],
             color_id: None,
+            habit_id: None,
         };
         let row = habit_row(habit, &settings());
         assert_eq!(row.title, "Stretch");

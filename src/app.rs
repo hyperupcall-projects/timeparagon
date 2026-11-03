@@ -83,7 +83,6 @@ pub enum BorderLayer {
 pub enum FormField {
     EventDraft,
     EventEdit,
-    HabitNotes,
 }
 
 /// One editor per [`FormField`]. Each keeps its cursor and selection between
@@ -91,7 +90,6 @@ pub enum FormField {
 pub struct FormEditors {
     pub event_draft: text_editor::Content,
     pub event_edit: text_editor::Content,
-    pub habit_notes: text_editor::Content,
 }
 
 impl FormEditors {
@@ -99,7 +97,6 @@ impl FormEditors {
         Self {
             event_draft: text_editor::Content::new(),
             event_edit: text_editor::Content::new(),
-            habit_notes: text_editor::Content::new(),
         }
     }
 
@@ -107,7 +104,6 @@ impl FormEditors {
         match field {
             FormField::EventDraft => &mut self.event_draft,
             FormField::EventEdit => &mut self.event_edit,
-            FormField::HabitNotes => &mut self.habit_notes,
         }
     }
 }
@@ -926,9 +922,16 @@ impl State {
         self.screen_margin() * 2.0
     }
 
+    /// A habit is open beside the Habits list, or being added.
+    pub fn habit_panel_open(&self) -> bool {
+        self.screen == Screen::Habits
+            && (self.habits.selected.is_some() || self.habits.form.is_some())
+    }
+
     pub fn floating_editors(&self) -> bool {
         !self.task_creation_window
             && (self.people_panel_open()
+                || self.habit_panel_open()
                 || (shows_details(self.screen) && !self.range_view_active()))
     }
 
@@ -1169,6 +1172,7 @@ fn boot_state() -> State {
     state.travel.cache_in(config::cache_travel_path());
 
     state.alarms.keep_in(alarms::path());
+    state.habits.keep_in(crate::habits::path());
 
     state
 }
@@ -1211,10 +1215,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         message,
         Message::System(SystemMessage::FlashFrame(_)) | Message::Task(TaskMessage::WeekDragScroll)
     );
+    state.habits.roll_over();
     let task = dispatch(state, message);
     let draft = state.calendar.draft.as_ref();
     let edit = state.calendar.edit_draft.as_ref();
-    let habit = state.habits.draft.as_ref();
     for (editor, value) in [
         (
             &mut state.form_editors.event_draft,
@@ -1223,10 +1227,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         (
             &mut state.form_editors.event_edit,
             edit.map(|d| d.description.as_str()),
-        ),
-        (
-            &mut state.form_editors.habit_notes,
-            habit.map(|d| d.notes.as_str()),
         ),
     ] {
         let value = value.unwrap_or("");
@@ -1258,6 +1258,13 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
         state.floating_editors() && state.main_window.is_some() && !state.panel_expected_close;
     let width = if visible && state.people_panel_open() {
         state.config.views.detail_width()
+    } else if visible && state.habit_panel_open() {
+        ui::habits::PANEL_WIDTH
+            + if state.calendar.open_event.is_some() {
+                state.config.views.detail_width()
+            } else {
+                0.0
+            }
     } else if state.range_view_active()
         && state.main_window.is_some()
         && !state.panel_expected_close
@@ -1479,6 +1486,20 @@ pub fn subscription(state: &State) -> Subscription<Message> {
             }
         }),
     ];
+
+    // Letting go of a habit row anywhere, even outside the list, ends the drag.
+    if state.habits.dragging.is_some() {
+        subscriptions.push(iced::event::listen_with(|event, status, _window| {
+            (status == iced::event::Status::Ignored
+                && matches!(
+                    event,
+                    iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                        iced::mouse::Button::Left
+                    ))
+                ))
+            .then_some(Message::Habits(crate::habits::Action::DragEnded))
+        }));
+    }
 
     // While a task is in the air, every move of the pointer is fed back so the
     // floating card can follow it. It is only listened for during a drag, so
@@ -1709,10 +1730,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             _ => None,
         };
     }
-    if state.habits.draft.is_some() {
-        // Typing into the habit editor must not reach the clock shortcuts.
+    if state.habits.day_dialog.is_some() {
         return match key.as_ref() {
-            Key::Named(Named::Escape) => Some(Message::Habits(crate::habits::Action::CancelEdit)),
+            Key::Named(Named::Escape) => Some(Message::Habits(crate::habits::Action::CloseDay)),
             _ => None,
         };
     }
@@ -1721,6 +1741,13 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             Key::Named(Named::Escape) => {
                 Some(Message::Habits(crate::habits::Action::DeleteCancelled))
             }
+            _ => None,
+        };
+    }
+    if state.habits.form.is_some() {
+        // Typing into the habit form must not reach the clock shortcuts.
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Habits(crate::habits::Action::CancelEdit)),
             _ => None,
         };
     }

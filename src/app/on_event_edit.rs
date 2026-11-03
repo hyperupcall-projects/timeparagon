@@ -176,17 +176,20 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
                     .calendar
                     .event(&draft.id)
                     .and_then(|event| event.details.color_id.clone());
+                let (habit_id, created) = crate::habits::habit_for_new_event(state, &draft.title);
                 state.habits.busy = true;
                 state.calendar.error = None;
-                return blocking::run(move || {
+                let write = blocking::run(move || {
                     calendar::create_habit(
                         &settings.client_id,
                         &settings.client_secret,
                         &draft,
                         color_id.as_deref(),
+                        &habit_id,
                     )
                 })
                 .map(|result| Message::Habits(crate::habits::Action::Saved(result)));
+                return Task::batch([created, write]);
             }
 
             let is_block = state

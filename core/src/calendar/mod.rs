@@ -559,6 +559,9 @@ pub struct Details {
     pub attendees: Vec<String>,
     /// This is a habit event on the app's TimeSlay calendar.
     pub habit: bool,
+    /// The habit this event counts towards, from its `ttHabit` property.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub habit_id: Option<String>,
     /// Completion instant for this occurrence; older records may not have one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub habit_completed_at: Option<DateTime<Local>>,
@@ -1920,6 +1923,33 @@ pub fn week_dates(anchor: NaiveDate, days: u32) -> Vec<NaiveDate> {
         .collect()
 }
 
+/// Connects a habit event to a habit, or lets it go when `habit_id` is `None`.
+pub fn link_habit_event(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+    habit_id: Option<&str>,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::link_habit_event(&tokens.access_token, calendar_id, event_id, habit_id)
+        .map_err(describe_event_write_error)
+}
+
+/// Pulls every habit event series and past completion from the app's calendar.
+pub fn sync_habit_listing(
+    client_id: &str,
+    client_secret: &str,
+    app_calendar: Option<&str>,
+) -> Result<api::HabitListing, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::fetch_habit_listing(&tokens.access_token, app_calendar)
+}
+
 /// Pulls every habit master from the app's TimeSlay calendar.
 pub fn sync_habits(
     client_id: &str,
@@ -1962,63 +1992,14 @@ pub fn habit_edit_draft(
     Ok((occurrence, draft))
 }
 
-/// The fields a habit is written with. `id` is `None` for a new habit.
-pub struct HabitWrite<'a> {
-    pub id: Option<&'a str>,
-    pub calendar_id: Option<&'a str>,
-    pub title: &'a str,
-    pub notes: &'a str,
-    pub start: DateTime<Local>,
-    pub end: DateTime<Local>,
-    pub recurrence: &'a [String],
-    pub color_id: Option<&'a str>,
-}
-
-/// Creates or updates a habit master on the TimeSlay calendar. Returns the
-/// habit as it is now stored, including the calendar id when one was created.
-pub fn write_habit(
-    client_id: &str,
-    client_secret: &str,
-    write: HabitWrite<'_>,
-) -> Result<api::HabitEvent, String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let body = api::habit_body(
-        write.title,
-        write.notes,
-        write.start,
-        write.end,
-        write.recurrence,
-        write.color_id,
-    );
-    match write.id {
-        Some(id) => {
-            let calendar_id = write
-                .calendar_id
-                .ok_or_else(|| "The habit has no calendar".to_owned())?;
-            api::patch_habit(&tokens.access_token, calendar_id, id, &body)?;
-            Ok(api::HabitEvent {
-                id: id.to_owned(),
-                calendar_id: calendar_id.to_owned(),
-                title: write.title.to_owned(),
-                notes: write.notes.to_owned(),
-                start: write.start,
-                end: write.end,
-                recurrence: write.recurrence.to_vec(),
-                color_id: write.color_id.map(str::to_owned),
-            })
-        }
-        None => api::insert_habit(&tokens.access_token, write.calendar_id, &body),
-    }
-}
-
-/// Creates a habit using the shared details editor's fields.
+/// Creates a habit event using the shared details editor's fields, counting
+/// towards the habit `habit_id`.
 pub fn create_habit(
     client_id: &str,
     client_secret: &str,
     draft: &EditDraft,
     color_id: Option<&str>,
+    habit_id: &str,
 ) -> Result<api::HabitEvent, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
@@ -2033,6 +2014,7 @@ pub fn create_habit(
     );
     draft.options.write(&mut body)?;
     projects::write(&mut body, &draft.projects.ids)?;
+    body["extendedProperties"]["private"][crate::habits::LINK_PROPERTY] = habit_id.into();
     body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(&draft.labels)
         .map_err(|error| error.to_string())?
         .into();

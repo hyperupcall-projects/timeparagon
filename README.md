@@ -99,6 +99,8 @@ Of course, there's also week, 2-week, and month views:
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
 	- Uses local database as cache to keep UI performant/responsive.
+- Habits
+	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
 - Activity monitoring
 	- Project allocation
 	- Distractions

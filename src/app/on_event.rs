@@ -113,13 +113,6 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                         d.description = value;
                     }
                 }
-                FormField::HabitNotes => {
-                    if !state.habits.busy
-                        && let Some(d) = &mut state.habits.draft
-                    {
-                        d.notes = value;
-                    }
-                }
             }
             Task::none()
         }
@@ -368,7 +361,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 Task::none()
             };
             if state.screen == Screen::Habits {
-                state.habits.habits.retain(|habit| habit.id != id);
+                state.habits.series.retain(|series| series.id != id);
             }
             Task::batch([
                 close,
