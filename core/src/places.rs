@@ -335,10 +335,16 @@ pub fn location_text(place: &Place) -> String {
     }
 }
 
+/// How much of an address has to be there for it to say which place is meant.
+const MIN_ADDRESS_MATCH: usize = 6;
+
 /// Which saved place an event or task happens at.
 ///
 /// A task records it. An event may have been given one here; otherwise the
-/// location text Google keeps is matched against the saved titles and addresses.
+/// location text Google keeps is matched against the saved places, including
+/// the text [`location_text`] writes. That has to keep reading back as the
+/// place: it is all that is left when an event has no row in `event_places`,
+/// such as another occurrence of a series or a row a config reload replaced.
 pub fn place_of(
     places: &[Place],
     event_places: &BTreeMap<String, u64>,
@@ -362,14 +368,26 @@ pub fn place_of(
 
     places
         .iter()
-        .find(|place| normalize(&place.name) == text || normalize(&place.address) == text)
-        .or_else(|| {
-            // Mapbox's addresses run on into the country, which is rarely typed.
-            places
-                .iter()
-                .find(|place| text.len() >= 6 && normalize(&place.address).starts_with(&text))
+        .find(|place| {
+            normalize(&place.name) == text
+                || normalize(&place.address) == text
+                || normalize(&location_text(place)) == text
         })
+        .or_else(|| places.iter().find(|place| address_matches(place, &text)))
         .map(|place| place.id)
+}
+
+/// Whether a location is this place's address, give or take. Only tried once no
+/// place matches outright, as places in one building share an address.
+fn address_matches(place: &Place, text: &str) -> bool {
+    let address = normalize(&place.address);
+    if address.len() < MIN_ADDRESS_MATCH {
+        return false;
+    }
+    // Mapbox's addresses run on into the country, which is rarely typed.
+    (text.len() >= MIN_ADDRESS_MATCH && address.starts_with(text))
+        // What `location_text` wrote before the place was renamed.
+        || text.ends_with(&format!(", {address}"))
 }
 
 fn normalize(text: &str) -> String {
@@ -472,5 +490,89 @@ pub fn get(url: &str) -> Result<Value, String> {
         }
         // The URL carries the token, which must not end up in the settings page.
         Err(ureq::Error::Transport(error)) => Err(format!("Mapbox: {}", error.kind())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn place(id: u64, name: &str, address: &str) -> Place {
+        Place {
+            id,
+            name: name.to_owned(),
+            address: address.to_owned(),
+            place_id: format!("mapbox-{id}"),
+            lat: 1.0,
+            lng: 2.0,
+        }
+    }
+
+    fn at(places: &[Place], location: &str) -> Option<u64> {
+        let mut event = crate::calendar::sample_snapshot().events.remove(0);
+        event.id = "event".into();
+        event.details.location = location.to_owned();
+        place_of(places, &BTreeMap::new(), &event)
+    }
+
+    /// What is written to an event's location has to read back as that place,
+    /// or an event whose `event_places` row is missing silently has no place
+    /// and the trips around it never change.
+    #[test]
+    fn the_location_written_for_a_place_reads_back_as_that_place() {
+        let places = [
+            place(1, "Campus", "500 Market St, San Francisco, California"),
+            place(2, "Same Street Cafe", "66 Mint St, San Francisco"),
+            place(3, "No address", ""),
+            place(4, "Same", "Same"),
+        ];
+
+        for place in &places {
+            let written = location_text(place);
+            assert_eq!(at(&places, &written), Some(place.id), "{written:?}");
+            assert_eq!(
+                at(&places, &format!("  {}  ", written.to_uppercase())),
+                Some(place.id),
+                "{written:?}, as another client might respell it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_renamed_place_still_owns_what_was_written_under_its_old_title() {
+        let mut places = [place(1, "Starbucks", "1 Main St, Springfield")];
+        let written = location_text(&places[0]);
+        places[0].name = "Study spot".into();
+
+        assert_eq!(at(&places, &written), Some(1));
+    }
+
+    #[test]
+    fn places_sharing_an_address_are_told_apart_by_their_titles() {
+        let places = [
+            place(1, "Office", "1 Main St, Springfield"),
+            place(2, "Cafe", "1 Main St, Springfield"),
+        ];
+
+        assert_eq!(at(&places, &location_text(&places[1])), Some(2));
+        assert_eq!(at(&places, &location_text(&places[0])), Some(1));
+    }
+
+    #[test]
+    fn other_locations_are_still_no_place() {
+        let places = [
+            place(1, "Campus", "500 Market St"),
+            place(2, "Short", "1 A"),
+        ];
+
+        for text in [
+            "",
+            "Room 4",
+            "Not 500 Market St",
+            "Campus, elsewhere",
+            "Foo, 1 A",
+        ] {
+            assert_eq!(at(&places, text), None, "{text:?}");
+        }
     }
 }

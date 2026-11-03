@@ -371,6 +371,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             }
 
             state.calendar.menu_open = false;
+            state.calendar.search.open = false;
             let Some(id) = state.main_window else {
                 return Task::none();
             };

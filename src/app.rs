@@ -626,6 +626,7 @@ pub enum CalendarMessage {
     CalendarGridScrolled(f32, f32),
 
     CalendarMenuToggled,
+    CalendarSearch(calendar::search::Action),
     CalendarToggled(String, bool),
     /// Move a calendar-view source one position up (left) or down (right).
     CalendarSourceMoved(String, bool),
@@ -792,8 +793,10 @@ pub enum EventEditMessage {
     EventEditEndChanged(String),
     /// A change was made in the edited event's shared repeat controls.
     EventEditRecurrence(crate::recurrence::Action),
-    /// The edited event was moved to another calendar.
+    /// A calendar was chosen for the edited event, staged until Save.
     EventEditCalendarSelected(String),
+    /// The edited event's calendar dropdown was opened or dismissed.
+    EventEditCalendarDropdownToggled,
     /// The edit-event popup was dismissed without saving.
     EventEditCancelled,
     /// Write the edited event to Google.
@@ -1867,6 +1870,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
                 Some(Message::TimeBlocking(crate::timeblocking::Action::Close))
             } else if state.calendar.menu_open {
                 state.calendar.menu_open = false;
+                None
+            } else if state.calendar.search.open {
+                state.calendar.search.open = false;
                 None
             } else if state.alarm_active {
                 Some(Message::System(SystemMessage::Dismiss))

@@ -44,6 +44,11 @@ pub(super) fn day_canvas<'a>(
         .calendar
         .timed_events_on(day, &state.config.calendar)
         .into_iter()
+        .filter(|event| {
+            state
+                .calendar
+                .search_shows(event, day, &state.config.calendar)
+        })
         .collect();
     let spans: Vec<Span> = timed
         .iter()
@@ -73,58 +78,77 @@ pub(super) fn day_canvas<'a>(
         .iter()
         .zip(spans.iter())
         .zip(packed.iter())
-        .map(|((event, span), slot)| Block {
-            id: event.id.clone(),
-            title: if event.details.sleep.is_some() {
-                calendar::sleep::title(event)
-            } else if event.is_task() {
-                crate::timeblocking::task_label(event)
-            } else {
-                event.title.clone()
-            },
-            when: if event.details.sleep.is_some() {
-                calendar::sleep::time_label(event, state.config.appearance.time_format)
-            } else {
-                calendar::time_format::event(event, state.config.appearance.time_format)
-            },
-            start_min: span.start_min,
-            end_min: span.end_min,
-            column: slot.column,
-            columns: slot.columns,
-            column_span: slot.column_span,
-            color: event.display_color(&state.config.calendar),
-            editable: event.details.sleep.is_none()
-                && (!event.is_task() || event.details.scheduled.is_some()),
-            pending: state.calendar.pending_time(&event.id).is_some()
-                || state.timeblocking.busy.contains_task(&event.id),
-            time_block: crate::timeblocking::is_block(event, &state.config.calendar),
-            // A block owns its task rows independently of standalone task visibility.
-            tasks: if crate::timeblocking::is_block(event, &state.config.calendar) {
-                let key = crate::timeblocking::block_key(event);
-                let mut tasks: Vec<_> = state
-                    .calendar
-                    .events_on(day)
-                    .iter()
-                    .filter(|e| {
-                        e.is_task()
-                            && crate::timeblocking::metadata(e).block.as_deref()
-                                == Some(key.as_str())
-                    })
-                    .collect();
-                tasks.sort_by_key(|e| (crate::timeblocking::metadata(e).order, e.id.clone()));
-                tasks
-                    .into_iter()
-                    .map(|e| {
-                        (
-                            e.id.clone(),
-                            crate::timeblocking::task_label(e),
-                            crate::timeblocking::metadata(e).minutes,
-                        )
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            },
+        .map(|((event, span), slot)| {
+            let hidden = state.calendar.search.hides_details(event);
+            let time_block =
+                crate::timeblocking::is_block(event, &state.config.calendar) && !hidden;
+            Block {
+                id: event.id.clone(),
+                title: if hidden {
+                    PRIVATE_TITLE.to_owned()
+                } else if event.details.sleep.is_some() {
+                    calendar::sleep::title(event)
+                } else if event.is_task() {
+                    crate::timeblocking::task_label(event)
+                } else {
+                    event.title.clone()
+                },
+                when: if hidden {
+                    String::new()
+                } else if event.details.sleep.is_some() {
+                    calendar::sleep::time_label(event, state.config.appearance.time_format)
+                } else {
+                    calendar::time_format::event(event, state.config.appearance.time_format)
+                },
+                start_min: span.start_min,
+                end_min: span.end_min,
+                column: slot.column,
+                columns: slot.columns,
+                column_span: slot.column_span,
+                color: if hidden {
+                    PRIVATE_COLOR
+                } else {
+                    event.display_color(&state.config.calendar)
+                },
+                editable: !hidden
+                    && event.details.sleep.is_none()
+                    && (!event.is_task() || event.details.scheduled.is_some()),
+                pending: state.calendar.pending_time(&event.id).is_some()
+                    || state.timeblocking.busy.contains_task(&event.id),
+                time_block,
+                // A block owns its task rows independently of standalone task visibility.
+                tasks: if time_block {
+                    let key = crate::timeblocking::block_key(event);
+                    let mut tasks: Vec<_> = state
+                        .calendar
+                        .events_on(day)
+                        .iter()
+                        .filter(|e| {
+                            e.is_task()
+                                && crate::timeblocking::metadata(e).block.as_deref()
+                                    == Some(key.as_str())
+                                && state.calendar.search_shows_in_block(e, event)
+                        })
+                        .collect();
+                    tasks.sort_by_key(|e| (crate::timeblocking::metadata(e).order, e.id.clone()));
+                    tasks
+                        .into_iter()
+                        .map(|e| {
+                            if state.calendar.search.hides_details(e) {
+                                (e.id.clone(), PRIVATE_TITLE.to_owned(), 0)
+                            } else {
+                                (
+                                    e.id.clone(),
+                                    crate::timeblocking::task_label(e),
+                                    crate::timeblocking::metadata(e).minutes,
+                                )
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            }
         })
         .collect();
 
@@ -148,7 +172,10 @@ pub(super) fn day_canvas<'a>(
         })
         .collect();
 
-    let travel = if state.travel.show {
+    // Trips join up the whole day's events, so they stop making sense once a
+    // search has taken some of those events away, and they name the events
+    // and places that hidden details are meant to keep out of sight.
+    let travel = if state.travel.show && !state.calendar.search.is_modified() {
         travel_boxes(state, &blocks, day)
     } else {
         Vec::new()

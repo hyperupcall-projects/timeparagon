@@ -92,9 +92,34 @@ pub fn event_editor<'a>(
     ]
     .spacing(6)
     .width(Fill);
+    let targets = state.calendar.move_targets(event, &state.config.calendar);
+    let source: Element<'a, Message> = if targets.is_empty() {
+        event_source(state, event, metrics)
+    } else {
+        let options: Vec<CalendarChoice> = targets
+            .into_iter()
+            .map(|calendar| CalendarChoice {
+                id: calendar.id.clone(),
+                name: calendar.name.clone(),
+                color: calendar.color,
+            })
+            .collect();
+        let selected = options
+            .iter()
+            .find(|option| option.id == draft.calendar_id)
+            .cloned();
+        calendar_select(
+            options,
+            selected,
+            draft.calendar_dropdown_open,
+            metrics,
+            |id| Message::EventEdit(EventEditMessage::EventEditCalendarSelected(id)),
+            Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled),
+        )
+    };
     let mut body = column![
         title,
-        event_source(state, event, metrics),
+        source,
         super::super::description::preview(&event.id, &draft.description, metrics),
     ]
     .spacing(metrics.spacing)

@@ -339,6 +339,30 @@ pub(super) fn draft_calendar_picker<'a>(
         return column![caption, fixed].spacing(2.0).width(Fill).into();
     }
 
+    calendar_select(
+        options,
+        selected,
+        dropdown_open,
+        metrics,
+        |id| Message::EventDraft(EventDraftMessage::EventDraftCalendarSelected(id)),
+        Message::EventDraft(EventDraftMessage::EventDraftCalendarDropdownToggled),
+    )
+}
+
+/// A calendar choice under a "Calendar" caption: a dropdown when there is room,
+/// and a button that cycles the options when there is not.
+pub(super) fn calendar_select<'a>(
+    options: Vec<CalendarChoice>,
+    selected: Option<CalendarChoice>,
+    dropdown_open: bool,
+    metrics: &Metrics,
+    on_select: fn(String) -> Message,
+    on_toggle: Message,
+) -> Element<'a, Message> {
+    let caption = text("Calendar")
+        .size(metrics.label() - 1.0)
+        .style(text::secondary);
+
     if metrics.breakpoint.is_compact() {
         let shown = selected
             .as_ref()
@@ -348,9 +372,7 @@ pub(super) fn draft_calendar_picker<'a>(
 
         let control = button(text(shown).size(metrics.label()).center().width(Fill)).width(Fill);
         let control = match next {
-            Some(option) => control.on_press(Message::EventDraft(
-                EventDraftMessage::EventDraftCalendarSelected(option.id),
-            )),
+            Some(option) => control.on_press(on_select(option.id)),
             None => control,
         };
 
@@ -359,7 +381,7 @@ pub(super) fn draft_calendar_picker<'a>(
             .width(Fill)
             .into()
     } else if dropdown_open {
-        calendar_dropdown_overlay(options, selected, metrics)
+        calendar_dropdown_overlay(options, selected, metrics, on_select, on_toggle)
     } else {
         let shown = selected
             .as_ref()
@@ -379,9 +401,7 @@ pub(super) fn draft_calendar_picker<'a>(
             .padding([2.0, 8.0]),
         )
         .width(Fill)
-        .on_press(Message::EventDraft(
-            EventDraftMessage::EventDraftCalendarDropdownToggled,
-        ))
+        .on_press(on_toggle)
         .style(crate::ui::controls::secondary);
 
         column![caption, control].spacing(2.0).width(Fill).into()
@@ -394,15 +414,15 @@ pub(super) fn calendar_dropdown_overlay<'a>(
     options: Vec<CalendarChoice>,
     selected: Option<CalendarChoice>,
     metrics: &Metrics,
+    on_select: fn(String) -> Message,
+    on_toggle: Message,
 ) -> Element<'a, Message> {
     let dismiss = mouse_area(
         container(iced::widget::Space::new())
             .width(Fill)
             .height(Fill),
     )
-    .on_press(Message::EventDraft(
-        EventDraftMessage::EventDraftCalendarDropdownToggled,
-    ));
+    .on_press(on_toggle);
 
     let mut list = column![];
     for option in &options {
@@ -421,9 +441,7 @@ pub(super) fn calendar_dropdown_overlay<'a>(
             .padding([6.0, 10.0]),
         )
         .width(Fill)
-        .on_press(Message::EventDraft(
-            EventDraftMessage::EventDraftCalendarSelected(id.clone()),
-        ))
+        .on_press(on_select(id))
         .style(move |theme, status| {
             if is_selected {
                 crate::ui::controls::primary(theme, status)

@@ -78,6 +78,8 @@ pub(super) fn header<'a>(
             crate::ui::controls::secondary
         });
 
+    let search = search_button(state, metrics);
+
     let heading = text(heading)
         .size(metrics.label() + 3.0)
         .font(Font {
@@ -113,18 +115,30 @@ pub(super) fn header<'a>(
     };
 
     match header_lines(metrics) {
-        // The month picker, Set Alarm, Menu and the date do not fit side by
-        // side at a narrow width, so the date gets a line to itself and is
-        // never squeezed into a few letters per row.
-        2 => column![
+        // Narrower still, the four buttons do not fit on a line of their own.
+        3 => column![
             day,
-            row![month, Space::new().width(Fill), set_alarm, menu]
+            row![month, Space::new().width(Fill), set_alarm]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
+            row![Space::new().width(Fill), search, menu]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
         ]
         .spacing(metrics.spacing)
         .into(),
-        _ => row![month, day, set_alarm, menu]
+        // The month picker, Set Alarm, Search, Menu and the date do not fit side
+        // by side at a narrow width, so the date gets a line to itself and is
+        // never squeezed into a few letters per row.
+        2 => column![
+            day,
+            row![month, Space::new().width(Fill), set_alarm, search, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
+        ]
+        .spacing(metrics.spacing)
+        .into(),
+        _ => row![month, day, set_alarm, search, menu]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into(),
@@ -132,16 +146,21 @@ pub(super) fn header<'a>(
 }
 
 /// The narrowest a calendar can be and still hold the month picker, the date,
-/// Set Alarm and Menu on one line with the date readable.
-pub(super) const SINGLE_LINE_HEADER: f32 = 460.0;
+/// Set Alarm, Search and Menu on one line with the date readable.
+pub(super) const SINGLE_LINE_HEADER: f32 = 540.0;
+/// The narrowest a calendar can be and still hold all four buttons on one line.
+pub(super) const TWO_LINE_HEADER: f32 = 320.0;
 
-/// How many lines the header takes: the date on its own line below
-/// [`SINGLE_LINE_HEADER`], otherwise one.
+/// How many lines the header takes: one from [`SINGLE_LINE_HEADER`], the date on
+/// its own line above that of [`TWO_LINE_HEADER`], and the buttons split in two
+/// below it.
 pub(super) fn header_lines(metrics: &Metrics) -> u8 {
     if metrics.size.width >= SINGLE_LINE_HEADER {
         1
-    } else {
+    } else if metrics.size.width >= TWO_LINE_HEADER {
         2
+    } else {
+        3
     }
 }
 
@@ -242,7 +261,14 @@ pub(super) fn all_day_row_on<'a>(
             || task_needs_slot(state, event, day)
             || crate::timeblocking::overdue(event)
     });
+    // Counted before the search narrows the list: this is a tally of the day,
+    // and a search does not slot anything in.
     let unslotted = events.iter().filter(|event| event.is_task()).count();
+    events.retain(|event| {
+        state
+            .calendar
+            .search_shows(event, day, &state.config.calendar)
+    });
     let chips: Vec<Element<'a, Message>> = events
         .into_iter()
         .filter(|event| weekly || !event.is_task())
@@ -322,13 +348,26 @@ pub(crate) fn weekly_task_chip<'a>(
     task: &Event,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let mut check = button(text(if task.completed { "●" } else { "○" }).size(metrics.label()))
-        .padding(2)
-        .style(crate::ui::controls::ghost);
-    if state.timeblocking.busy.is_empty() {
+    let hidden = state.calendar.search.hides_details(task);
+    let mut check = button(
+        text(if task.completed && !hidden {
+            "●"
+        } else {
+            "○"
+        })
+        .size(metrics.label()),
+    )
+    .padding(2)
+    .style(crate::ui::controls::ghost);
+    if state.timeblocking.busy.is_empty() && !hidden {
         check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
-    let title = button(text(crate::timeblocking::task_label(task)).size(metrics.label()))
+    let label = if hidden {
+        PRIVATE_TITLE.to_owned()
+    } else {
+        crate::timeblocking::task_label(task)
+    };
+    let title = button(text(label).size(metrics.label()))
         .padding([3, 2])
         .width(Fill)
         .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
@@ -355,10 +394,17 @@ pub(super) fn all_day_chip<'a>(
     event: &Event,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let color = event.display_color(&state.config.calendar);
+    let hidden = state.calendar.search.hides_details(event);
+    let color = if hidden {
+        PRIVATE_COLOR
+    } else {
+        event.display_color(&state.config.calendar)
+    };
     let ink = on_color(color);
 
-    let title = if event.completed {
+    let title = if hidden {
+        PRIVATE_TITLE.to_owned()
+    } else if event.completed {
         format!("✓ {}", event.title)
     } else {
         event.title.clone()

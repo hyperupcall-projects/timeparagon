@@ -2111,3 +2111,85 @@ fn the_zoom_keys_need_the_modifier() {
         assert!(pressed.is_none(), "{character} alone must not zoom");
     }
 }
+
+/// The sample calendars plus the app's own, with the "standup" event open.
+fn event_open_with_app_calendar() -> State {
+    let mut state = State::blank();
+    let mut snapshot = calendar::sample_snapshot();
+    snapshot.calendars.push(calendar::Calendar {
+        id: "app".into(),
+        name: "TimeSlay".into(),
+        color: calendar::colors::DEFAULT_EVENT,
+        primary: false,
+        selected_by_google: true,
+    });
+    state.calendar = calendar::Store::with_snapshot(snapshot);
+    let _ = update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
+    state
+}
+
+#[test]
+fn an_event_can_be_staged_onto_another_calendar_but_not_timeslay() {
+    let mut state = event_open_with_app_calendar();
+    let original = state.calendar.event("standup").unwrap().calendar_id.clone();
+    let other = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id != original && calendar.id != "app")
+        .unwrap()
+        .id
+        .clone();
+
+    let select =
+        |id: &str| Message::EventEdit(EventEditMessage::EventEditCalendarSelected(id.to_owned()));
+    let _ = update(&mut state, select("app"));
+    assert_eq!(
+        state.calendar.edit_draft.as_ref().unwrap().calendar_id,
+        original
+    );
+
+    let _ = update(&mut state, select(&other));
+    assert_eq!(
+        state.calendar.edit_draft.as_ref().unwrap().calendar_id,
+        other
+    );
+    // Staged only: the event itself has not moved until Google says so.
+    assert_eq!(
+        state.calendar.event("standup").unwrap().calendar_id,
+        original
+    );
+}
+
+#[test]
+fn a_saved_move_updates_the_event_only_for_the_draft_being_saved() {
+    let mut state = event_open_with_app_calendar();
+    let original = state.calendar.event("standup").unwrap().calendar_id.clone();
+    let other = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id != original && calendar.id != "app")
+        .unwrap()
+        .id
+        .clone();
+    let saved = Message::EventEdit(EventEditMessage::EventEditSaved(Ok(())));
+
+    let draft = state.calendar.edit_draft.as_mut().unwrap();
+    draft.calendar_id = other.clone();
+    draft.saving = false;
+    let _ = update(&mut state, saved.clone());
+    assert_eq!(
+        state.calendar.event("standup").unwrap().calendar_id,
+        original
+    );
+
+    state.calendar.edit_draft.as_mut().unwrap().saving = true;
+    let _ = update(&mut state, saved);
+    let event = state.calendar.event("standup").unwrap();
+    assert_eq!(event.calendar_id, other);
+    assert_eq!(event.color, state.calendar.calendar_color(&other));
+}

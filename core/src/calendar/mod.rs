@@ -12,6 +12,7 @@ pub mod notes;
 pub mod oauth;
 pub mod projects;
 pub mod scheduled;
+pub mod search;
 pub mod sleep;
 pub mod sources;
 pub mod task_metadata;
@@ -342,8 +343,10 @@ pub struct EditDraft {
     pub id: String,
     pub title: String,
     pub description: String,
-    /// The calendar the event is on.
+    /// The calendar the event should be on once saved.
     pub calendar_id: String,
+    /// Whether the calendar picker's dropdown is showing.
+    pub calendar_dropdown_open: bool,
     pub start: DateTime<Local>,
     pub end: DateTime<Local>,
     /// The `YYYY-MM-DD` text shown in the date field.
@@ -381,6 +384,7 @@ impl EditDraft {
             title: event.title.clone(),
             description: description_notes(&event.details.description).to_owned(),
             calendar_id: event.calendar_id.clone(),
+            calendar_dropdown_open: false,
             start: event.start,
             end: event.end,
             date_text: event.start.date_naive().to_string(),
@@ -705,6 +709,7 @@ pub struct Store {
     pub connection: Connection,
     pub sync: SyncState,
     pub menu_open: bool,
+    pub search: search::Search,
     pub calendars: Vec<Calendar>,
     pub events: Vec<Event>,
     /// Events for the days already visited, so stepping back to one paints it
@@ -771,6 +776,7 @@ impl Store {
             connection,
             sync: SyncState::Idle,
             menu_open: false,
+            search: search::Search::default(),
             calendars: Vec::new(),
             events: Vec::new(),
             cache: HashMap::new(),
@@ -807,6 +813,7 @@ impl Store {
             connection: Connection::SignedIn,
             sync: SyncState::Idle,
             menu_open: false,
+            search: search::Search::default(),
             calendars: snapshot.calendars,
             events: snapshot.events,
             cache: HashMap::new(),
@@ -1338,11 +1345,24 @@ impl Store {
         self.events.iter_mut().find(|event| event.id == id)
     }
 
-    /// Sets the location text of an event wherever it is held, so the details
-    /// pane shows a place at once rather than after the next sync.
+    /// Sets the location text of every copy of an event, so the details pane
+    /// and the trips, which read different copies, both change at once rather
+    /// than after the next sync.
     pub fn set_location(&mut self, id: &str, location: &str) {
-        if let Some(event) = self.event_mut_anywhere(id) {
+        let set = |events: &mut Vec<Event>| {
+            for event in events.iter_mut().filter(|event| event.id == id) {
+                event.details.location = location.to_owned();
+            }
+        };
+        set(&mut self.events);
+        for events in self.cache.values_mut() {
+            set(events);
+        }
+        if let Some(event) = self.detail_event.as_mut().filter(|event| event.id == id) {
             event.details.location = location.to_owned();
+        }
+        if let Some(directory) = &self.day_cache {
+            day_cache::update_events(directory, set);
         }
     }
 
@@ -1436,6 +1456,61 @@ impl Store {
             .map(|calendar| calendar.id.clone())
     }
 
+    /// The calendars `event` can be on, including its current one.
+    ///
+    /// Empty when it has to stay where it is: tasks, habits, sleep and anything
+    /// else living on the TimeSlay calendar belong to the app, and the TimeSlay
+    /// calendar is never a destination. Also empty with nowhere else to go.
+    pub fn move_targets(&self, event: &Event, settings: &CalendarSettings) -> Vec<&Calendar> {
+        if event.is_task()
+            || event.details.habit
+            || event.details.sleep.is_some()
+            || event.details.scheduled.is_some()
+        {
+            return Vec::new();
+        }
+        let targets: Vec<&Calendar> = self
+            .calendars
+            .iter()
+            .filter(|calendar| !calendar.is_task_list() && !calendar.is_app_calendar(settings))
+            .collect();
+        if targets.len() < 2
+            || !targets
+                .iter()
+                .any(|calendar| calendar.id == event.calendar_id)
+        {
+            return Vec::new();
+        }
+        targets
+    }
+
+    /// Records that Google moved an event, so a further save reaches the right
+    /// calendar and its chip is right before the next sync.
+    pub fn event_moved(&mut self, id: &str, calendar_id: &str) {
+        let color = self.calendar_color(calendar_id);
+        let apply = |events: &mut Vec<Event>| {
+            for event in events.iter_mut().filter(|event| event.id == id) {
+                event.calendar_id = calendar_id.to_owned();
+                if event.details.color_id.is_none() {
+                    event.color = color;
+                }
+            }
+        };
+        apply(&mut self.events);
+        for events in self.cache.values_mut() {
+            apply(events);
+        }
+        if let Some(event) = self.detail_event.as_mut().filter(|event| event.id == id) {
+            event.calendar_id = calendar_id.to_owned();
+            if event.details.color_id.is_none() {
+                event.color = color;
+            }
+        }
+        if let Some(directory) = &self.day_cache {
+            day_cache::update_events(directory, apply);
+        }
+    }
+
     /// The color a calendar's events are drawn in, or the default event color
     /// when the calendar is unknown.
     pub fn calendar_color(&self, id: &str) -> Color {
@@ -1456,6 +1531,7 @@ impl Store {
         self.open_event = None;
         self.edit_draft = None;
         self.menu_open = false;
+        self.search.open = false;
         self.month_open = false;
     }
 
@@ -1469,6 +1545,7 @@ impl Store {
         self.open_event = None;
         self.draft = None;
         self.menu_open = false;
+        self.search.open = false;
         self.month_open = false;
     }
 
@@ -2588,6 +2665,49 @@ pub fn sample_snapshot() -> Snapshot {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_plain_events_can_move_and_never_onto_the_app_calendar() {
+        let mut snapshot = sample_snapshot();
+        snapshot.calendars.push(Calendar {
+            id: "app".into(),
+            name: "TimeSlay".into(),
+            color: colors::DEFAULT_EVENT,
+            primary: false,
+            selected_by_google: true,
+        });
+        snapshot.calendars.push(Calendar {
+            id: "tasks:list".into(),
+            name: "My Tasks".into(),
+            color: colors::DEFAULT_EVENT,
+            primary: false,
+            selected_by_google: true,
+        });
+        let plain = snapshot
+            .events
+            .iter()
+            .find(|event| !event.is_task() && !event.details.habit)
+            .unwrap()
+            .clone();
+        let store = Store::with_snapshot(snapshot);
+        let settings = CalendarSettings::default();
+
+        let targets = store.move_targets(&plain, &settings);
+        assert!(targets.iter().any(|c| c.id == plain.calendar_id));
+        assert!(targets.iter().all(|c| c.id != "app" && !c.is_task_list()));
+
+        let mut on_app = plain.clone();
+        on_app.calendar_id = "app".into();
+        assert!(store.move_targets(&on_app, &settings).is_empty());
+
+        let mut habit = plain.clone();
+        habit.details.habit = true;
+        assert!(store.move_targets(&habit, &settings).is_empty());
+
+        let mut unknown = plain;
+        unknown.calendar_id = "gone".into();
+        assert!(store.move_targets(&unknown, &settings).is_empty());
+    }
+
     /// Only says anything where these dates are clock changes, which CI makes
     /// sure of by running with `TZ=America/Los_Angeles`.
     #[test]
@@ -3722,5 +3842,49 @@ mod tests {
             draft.recurrence_lines().unwrap(),
             vec!["RRULE:FREQ=DAILY;INTERVAL=1".to_owned()]
         );
+    }
+
+    /// Every copy of an event has to agree on its location: trips are worked
+    /// out from the days, the details pane reads the open copy, and the disk is
+    /// what the next run paints first.
+    #[test]
+    fn a_location_reaches_every_copy_of_an_event() {
+        let directory =
+            std::env::temp_dir().join(format!("tt-set-location-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let snapshot = sample_snapshot();
+        let day = snapshot.day;
+        let other = day.succ_opt().unwrap();
+
+        let mut store = Store::with_snapshot(snapshot.clone());
+        store.cache_days_in(Some(directory.clone()));
+        store.apply_snapshot(snapshot);
+        let copy = store.event("standup").unwrap().clone();
+        store.cache.insert(other, vec![copy.clone()]);
+        store.detail_event = Some(copy);
+
+        store.set_location("standup", "Campus");
+
+        let location = |events: &[Event]| {
+            events
+                .iter()
+                .find(|event| event.id == "standup")
+                .map(|event| event.details.location.clone())
+        };
+        let campus = Some("Campus".to_owned());
+        assert_eq!(location(&store.events), campus, "the day in view");
+        assert_eq!(location(&store.cache[&other]), campus, "a parked day");
+        assert_eq!(
+            store.detail_event.as_ref().unwrap().details.location,
+            "Campus",
+            "the open copy"
+        );
+        assert_eq!(
+            location(&store.read_day(day).unwrap()),
+            campus,
+            "the day on disk"
+        );
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

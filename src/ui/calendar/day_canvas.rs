@@ -766,7 +766,12 @@ impl DayCanvas {
                             BLOCK_ROW_OVER,
                         );
                     }
-                    let label = format!("○ {} · {}m", title, minutes);
+                    // A hidden task reports no estimate, so it gets no suffix.
+                    let label = if *minutes == 0 {
+                        format!("○ {title}")
+                    } else {
+                        format!("○ {} · {}m", title, minutes)
+                    };
                     let label = fit_lines(&label, 11.0, block_bounds.width - 6.0, 1)
                         .into_iter()
                         .next()
