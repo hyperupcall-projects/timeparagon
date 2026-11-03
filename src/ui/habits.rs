@@ -11,8 +11,8 @@ use iced::{Alignment, Color, Element, Fill, Font, Theme, font, mouse};
 
 use crate::app::{Message, State};
 use crate::habits::{
-    Action, Bucket, FIRST_WEEKDAY, Form, FormAction, FrequencyKind, Habit, Kind, Menu, Series,
-    SortKey, Status, TargetType,
+    Action, Bucket, FIRST_WEEKDAY, Form, FormAction, FrequencyKind, Habit, Icons, Kind, Mark, Menu,
+    Series, SortKey, Status, TargetType,
 };
 use timeslay_core::habits::{self as model, PALETTE_SIZE, palette_color};
 
@@ -233,6 +233,7 @@ fn day_button<'a>(
             color: habit.color,
             goal: habit.frequency.per_day(),
             question_marks: habit.question_marks,
+            icons: habit.icons,
             kind: habit.kind,
             times: habit.times_on(day),
             unit: habit.unit.clone(),
@@ -995,6 +996,50 @@ fn goal_section<'a>(form: &'a Form, metrics: &Metrics) -> Element<'a, Message> {
     }
 }
 
+/// Which icons the list draws this habit's days with, with a sample of each. A
+/// measurable habit's days show their amounts instead, so it has no choice here.
+fn icons_section<'a>(form: &'a Form, metrics: &Metrics) -> Element<'a, Message> {
+    if form.habit_kind == Kind::Measurable {
+        return Space::new().into();
+    }
+    let mut buttons = row![].spacing(4);
+    for (icons, label) in [(Icons::Symbols, "Symbols"), (Icons::Faces, "Faces")] {
+        let on = form.icons == icons;
+        buttons = buttons.push(
+            button(text(label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(form_msg(FormAction::Icons(icons)))
+                .style(move |theme: &Theme, status| {
+                    if on {
+                        crate::ui::controls::primary(theme, status)
+                    } else {
+                        crate::ui::controls::secondary(theme, status)
+                    }
+                }),
+        );
+    }
+    let mut samples = row![].spacing(4);
+    for status in [Status::Yes, Status::No, Status::Skip] {
+        samples = samples.push(
+            canvas(DayMark {
+                status,
+                color: form.color,
+                goal: 1,
+                question_marks: false,
+                icons: form.icons,
+                kind: Kind::Yes,
+                times: 0,
+                unit: String::new(),
+            })
+            .width(32)
+            .height(32),
+        );
+    }
+    column![field_label("Icons", metrics), buttons, samples]
+        .spacing(4)
+        .into()
+}
+
 fn color_section<'a>(selected: u8) -> Element<'a, Message> {
     let mut swatches = row![].spacing(4);
     for index in 0..PALETTE_SIZE {
@@ -1056,6 +1101,7 @@ fn form_page<'a>(state: &'a State, form: &'a Form, metrics: &Metrics) -> Element
         ]
         .spacing(3),
         column![field_label("Color", metrics), color_section(form.color)].spacing(3),
+        icons_section(form, metrics),
         goal_section(form, metrics),
         toggle(
             form.skip_days,
@@ -1131,6 +1177,8 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
         return Space::new().into();
     };
     let label = match habit.kind {
+        _ if dialog.yes_or_no && !habit.question.is_empty() => habit.question.clone(),
+        _ if dialog.yes_or_no => "Did you do it?".to_owned(),
         Kind::Yes => "Times done".to_owned(),
         Kind::No => "Times done (0 is a success)".to_owned(),
         Kind::Measurable if habit.unit.is_empty() => "Amount".to_owned(),
@@ -1149,11 +1197,39 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
                 .style(crate::ui::controls::secondary),
         );
     }
-    actions = actions.push(Space::new().width(Fill)).push(
-        button(text("Save").size(metrics.label()).center())
-            .on_press(msg(Action::SaveDay))
-            .style(crate::ui::controls::primary),
-    );
+    if !dialog.yes_or_no {
+        actions = actions.push(Space::new().width(Fill)).push(
+            button(text("Save").size(metrics.label()).center())
+                .on_press(msg(Action::SaveDay))
+                .style(crate::ui::controls::primary),
+        );
+    }
+    let answer: Element<'a, Message> = if dialog.yes_or_no {
+        let done = habit.times_on(dialog.day) > 0;
+        let not_done = habit.marks.get(&dialog.day) == Some(&Mark::No);
+        let choice = |label: &'static str, value: bool, on: bool| {
+            button(text(label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(msg(Action::AnswerDay(value)))
+                .style(move |theme: &Theme, status| {
+                    if on {
+                        crate::ui::controls::primary(theme, status)
+                    } else {
+                        crate::ui::controls::secondary(theme, status)
+                    }
+                })
+        };
+        row![choice("Yes", true, done), choice("No", false, not_done)]
+            .spacing(6)
+            .into()
+    } else {
+        crate::ui::controls::text_input("0", &dialog.value)
+            .id(crate::habits::DAY_FIELD)
+            .on_input(|value| msg(Action::DayValue(value)))
+            .on_submit(msg(Action::SaveDay))
+            .size(metrics.label())
+            .into()
+    };
     let card = container(
         column![
             text(format!(
@@ -1164,11 +1240,7 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
             ))
             .size(metrics.label() + 1.0),
             text(label).size(metrics.label() - 1.0).style(medium),
-            crate::ui::controls::text_input("0", &dialog.value)
-                .id(crate::habits::DAY_FIELD)
-                .on_input(|value| msg(Action::DayValue(value)))
-                .on_submit(msg(Action::SaveDay))
-                .size(metrics.label()),
+            answer,
             actions,
         ]
         .spacing(metrics.spacing)
@@ -2040,5 +2112,95 @@ mod tests {
         assert!(broken.error.is_some());
         assert!(!broken.persists());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
+    }
+
+    #[test]
+    fn record_asks_yes_or_no_and_the_answer_is_kept() {
+        let mut state = state();
+        add(&mut state, "h", "Read");
+        let today = state.habits.today();
+        act(&mut state, Action::Record("h".into(), today));
+        assert!(state.habits.day_dialog.as_ref().unwrap().yes_or_no);
+        {
+            let metrics = Metrics::of(iced::Size::new(400.0, 400.0));
+            let mut ui = Simulator::with_size(
+                iced_test::core::Settings::default(),
+                iced::Size::new(400.0, 400.0),
+                day_dialog(&state, &metrics),
+            );
+            assert!(ui.find("Did you do it?").is_ok());
+            ui.click("Yes").unwrap();
+            let messages: Vec<_> = ui.into_messages().collect();
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| matches!(m, Message::Habits(Action::AnswerDay(true))))
+            );
+        }
+        act(&mut state, Action::AnswerDay(true));
+        assert!(state.habits.day_dialog.is_none());
+        assert_eq!(
+            state.habits.computed("h").unwrap().status(today),
+            Status::Yes
+        );
+        act(&mut state, Action::Record("h".into(), today));
+        act(&mut state, Action::AnswerDay(false));
+        assert_eq!(
+            state.habits.computed("h").unwrap().status(today),
+            Status::No
+        );
+    }
+
+    #[test]
+    fn record_asks_a_measurable_habit_for_its_amount() {
+        let mut state = state();
+        add(&mut state, "h", "Run");
+        let habit = state.habits.library.habit_mut("h").unwrap();
+        habit.kind = Kind::Measurable;
+        habit.unit = "miles".into();
+        let today = state.habits.today();
+        act(&mut state, Action::Record("h".into(), today));
+        assert!(!state.habits.day_dialog.as_ref().unwrap().yes_or_no);
+        {
+            let metrics = Metrics::of(iced::Size::new(400.0, 400.0));
+            let mut ui = Simulator::with_size(
+                iced_test::core::Settings::default(),
+                iced::Size::new(400.0, 400.0),
+                day_dialog(&state, &metrics),
+            );
+            assert!(ui.find("Amount in miles").is_ok());
+            assert!(ui.find("Yes").is_err());
+        }
+        act(&mut state, Action::DayValue("2.5".into()));
+        act(&mut state, Action::SaveDay);
+        assert_eq!(
+            state.habits.library.habit("h").unwrap().marks[&today],
+            Mark::Amount(2500)
+        );
+    }
+
+    #[test]
+    fn the_form_saves_a_habits_icons_except_on_a_measurable_one() {
+        let mut state = state();
+        add(&mut state, "h", "Read");
+        act(&mut state, Action::EditHabit("h".into()));
+        form_action(&mut state, FormAction::Icons(Icons::Faces));
+        act(&mut state, Action::SaveForm);
+        let habit = state.habits.library.habit("h").unwrap();
+        assert_eq!(habit.icons, Icons::Faces);
+        act(&mut state, Action::EditHabit("h".into()));
+        assert_eq!(state.habits.form.as_ref().unwrap().icons, Icons::Faces);
+        act(&mut state, Action::CancelEdit);
+
+        act(&mut state, Action::New);
+        form_action(&mut state, FormAction::HabitKind(Kind::Measurable));
+        form_action(&mut state, FormAction::Name("Run".into()));
+        form_action(&mut state, FormAction::Icons(Icons::Faces));
+        act(&mut state, Action::SaveForm);
+        let id = state.habits.selected.clone().unwrap();
+        assert_eq!(
+            state.habits.library.habit(&id).unwrap().icons,
+            Icons::Symbols
+        );
     }
 }
