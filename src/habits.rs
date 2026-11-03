@@ -305,9 +305,6 @@ pub enum Action {
     Ends(EndKind),
     Until(String),
     Count(String),
-    SkipInput(String),
-    SkipAdd,
-    SkipRemove(NaiveDate),
     SimpleRepeat,
     /// A change made in the shared repeat controls.
     Recurrence(crate::recurrence::Action),
@@ -473,22 +470,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Ends(kind) => edit(state, |draft| draft.rule.ends = kind),
         Action::Until(value) => edit(state, |draft| draft.rule.until = value),
         Action::Count(value) => edit(state, |draft| draft.rule.count = value),
-        Action::SkipInput(value) => edit(state, |draft| draft.rule.skip_input = value),
-
-        Action::SkipAdd => {
-            if let Some(draft) = state.habits.draft.as_mut() {
-                match draft.rule.add_skip() {
-                    Ok(()) => draft.error = None,
-                    Err(error) => draft.error = Some(error),
-                }
-            }
-            Task::none()
-        }
-
-        Action::SkipRemove(day) => {
-            edit(state, |draft| draft.rule.skips.retain(|date| *date != day))
-        }
-
         Action::SimpleRepeat => edit(state, |draft| {
             let anchor = draft
                 .anchor_date()
@@ -500,18 +481,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 
         Action::Recurrence(action) => {
             if let Some(draft) = state.habits.draft.as_mut() {
-                if matches!(&action, crate::recurrence::Action::SkipAdd) {
-                    match draft.rule.add_skip() {
-                        Ok(()) => draft.error = None,
-                        Err(error) => draft.error = Some(error),
-                    }
-                } else {
-                    let anchor = draft
-                        .anchor_date()
-                        .unwrap_or_else(|| crate::clock::now().date_naive());
-                    draft.rule.apply_action(action, anchor);
-                    draft.error = None;
-                }
+                let anchor = draft
+                    .anchor_date()
+                    .unwrap_or_else(|| crate::clock::now().date_naive());
+                draft.rule.apply_action(action, anchor);
+                draft.error = None;
             }
             Task::none()
         }

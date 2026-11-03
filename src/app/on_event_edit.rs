@@ -60,14 +60,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
         EventEditMessage::EventEditRecurrence(action) => {
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
                 draft.recurrence_changed = true;
-                if matches!(&action, crate::recurrence::Action::SkipAdd) {
-                    match draft.rule.add_skip() {
-                        Ok(()) => state.calendar.error = None,
-                        Err(error) => state.calendar.error = Some(error),
-                    }
-                } else {
-                    draft.rule.apply_action(action, draft.start.date_naive());
-                }
+                draft.rule.apply_action(action, draft.start.date_naive());
             }
             Task::none()
         }

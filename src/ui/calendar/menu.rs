@@ -348,7 +348,9 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
         iced::widget::Space::new().height(header_offset(metrics)),
-        container(card).padding(metrics.padding).width(Fill),
+        container(iced::widget::opaque(card))
+            .padding(metrics.padding)
+            .width(Fill),
     ]
     .width(Fill);
 

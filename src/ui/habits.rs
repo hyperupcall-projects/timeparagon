@@ -342,7 +342,7 @@ mod tests {
         assert!(ui.find("Weekly").is_ok());
         assert!(ui.find("Does not repeat").is_ok());
         assert!(ui.find("Mon").is_ok());
-        assert!(ui.find("Skip dates").is_ok());
+        assert!(ui.find("Skip dates").is_err());
         assert!(ui.find("RRULE").is_err());
         assert!(ui.find("RDATE").is_err());
         assert!(ui.find("EXDATE").is_err());

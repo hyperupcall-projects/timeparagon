@@ -3,8 +3,10 @@ use super::layout::Metrics;
 use crate::app::{Message, State};
 use crate::calendar::time_format::TimeFormat;
 use chrono::{Datelike, Months, NaiveDate, NaiveTime, Timelike};
+use iced::advanced::widget::{Operation, Tree, tree};
+use iced::advanced::{Layout, Widget, layout, renderer};
 use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
-use iced::{Border, Color, Element, Fill, Shadow, Theme, Vector};
+use iced::{Border, Color, Element, Fill, Renderer, Shadow, Theme, Vector, mouse};
 use std::sync::Arc;
 use timeslay_core::theme as look;
 
@@ -1097,10 +1099,157 @@ where
     iced::widget::slider(range, value, on_change).style(slider_style)
 }
 
+/// Shows the normal arrow where a widget reports [`mouse::Interaction::Idle`],
+/// such as `opaque` or a disabled text input. `iced_layershell` draws that
+/// interaction as the busy spinner. Wrap the root of a layer surface's view: the
+/// layers of a stack still need to see `Idle` to stop hovers reaching those below.
+pub fn arrow_when_idle<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
+    Element::new(ArrowWhenIdle { content })
+}
+
+struct ArrowWhenIdle<'a, M> {
+    content: Element<'a, M>,
+}
+
+impl<M> Widget<M, Theme, Renderer> for ArrowWhenIdle<'_, M> {
+    fn tag(&self) -> tree::Tag {
+        self.content.as_widget().tag()
+    }
+    fn state(&self) -> tree::State {
+        self.content.as_widget().state()
+    }
+    fn children(&self) -> Vec<Tree> {
+        self.content.as_widget().children()
+    }
+    fn diff(&self, tree: &mut Tree) {
+        self.content.as_widget().diff(tree);
+    }
+    fn size(&self) -> iced::Size<iced::Length> {
+        self.content.as_widget().size()
+    }
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content.as_widget_mut().layout(tree, renderer, limits)
+    }
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &iced::Rectangle,
+    ) {
+        self.content
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
+    }
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(tree, layout, renderer, operation);
+    }
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &iced::Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, M>,
+        viewport: &iced::Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+        );
+    }
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &iced::Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        match self
+            .content
+            .as_widget()
+            .mouse_interaction(tree, layout, cursor, viewport, renderer)
+        {
+            mouse::Interaction::Idle => mouse::Interaction::None,
+            interaction => interaction,
+        }
+    }
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &iced::Rectangle,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, M, Theme, Renderer>> {
+        self.content
+            .as_widget_mut()
+            .overlay(tree, layout, renderer, viewport, translation)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::EventDraftMessage;
+    use iced::advanced::renderer::Headless;
+
+    #[test]
+    fn opaque_areas_show_the_arrow_and_still_cover_the_layers_below() {
+        let view: Element<'_, Message> = arrow_when_idle(
+            stack![
+                mouse_area(Space::new().width(Fill).height(Fill))
+                    .interaction(mouse::Interaction::Pointer),
+                iced::widget::opaque(Space::new().width(Fill).height(Fill)),
+            ]
+            .into(),
+        );
+        let mut renderer = iced::futures::executor::block_on(Renderer::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .unwrap();
+        let mut ui = iced_runtime::UserInterface::build(
+            view,
+            iced::Size::new(100.0, 100.0),
+            iced_runtime::user_interface::Cache::default(),
+            &mut renderer,
+        );
+        let position = iced::Point::new(50.0, 50.0);
+        let (state, _) = ui.update(
+            &[iced::Event::Mouse(mouse::Event::CursorMoved { position })],
+            mouse::Cursor::Available(position),
+            &mut renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut Vec::new(),
+        );
+        assert!(matches!(
+            state,
+            iced_runtime::user_interface::State::Updated {
+                mouse_interaction: mouse::Interaction::None,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn high_contrast_neutral_buttons_keep_readable_text_in_each_active_state() {

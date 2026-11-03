@@ -694,8 +694,7 @@ fn range_views_float_without_resizing_the_day_panel() {
         ));
         assert!(
             matches!(actions.as_slice(), [GeometryAction::Open(settings)]
-            if settings.platform_specific.application_id == "timeslay-editor"
-                && !settings.decorations && settings.size.width > 216.0)
+            if !settings.decorations && settings.size.width > 216.0)
         );
         let floating = state.editor_window.unwrap();
         assert_ne!(floating, main);

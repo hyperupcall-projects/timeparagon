@@ -1135,16 +1135,7 @@ fn sidebar_settings(panel: &panel::PanelConfig, views: &config::ViewSettings) ->
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: true,
         icon: window_icon(),
-        platform_specific: sidebar_platform(views),
-        ..Default::default()
-    }
-}
-
-/// The panel's app ID carries its opening animation to KWin. That costs the
-/// panel its desktop-file icon, which only matters for the title bar it lacks.
-fn sidebar_platform(views: &config::ViewSettings) -> window::settings::PlatformSpecific {
-    window::settings::PlatformSpecific {
-        application_id: crate::window_effect::prepare(views, APPLICATION_ID),
+        platform_specific: window_platform(),
         ..Default::default()
     }
 }
@@ -1304,10 +1295,6 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
         resizable: false,
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: false,
-        platform_specific: window::settings::PlatformSpecific {
-            application_id: crate::window_effect::prepare(&state.config.views, "timeslay-editor"),
-            ..Default::default()
-        },
         ..Default::default()
     });
     state.editor_window = Some(id);

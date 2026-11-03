@@ -1,21 +1,22 @@
-// Temporary effect, loaded before the side panel maps a window. The app ID
-// carries the settings with the Wayland map, avoiding asynchronous D-Bus races.
+// Temporary effect, loaded before this process maps a window. KWin keeps a
+// layer surface's namespace from scripts, so the setting is written in here and
+// the effect is reloaded when it changes.
 (function () {
-    function duration(window) {
-        if (window.pid !== __PID__) return null;
-        const match = /(?:^| )timeslay-(instant|fade-([0-9]+))(?: |$)/.exec(window.windowClass);
-        if (!match) return null; // Desktop default belongs to the desktop effect.
-        return match[1] === "instant" ? 0 : Math.min(Number(match[2]), 5000);
+    const DURATION = __DURATION__;
+    function applies(window) {
+        if (window.pid !== __PID__) return false;
+        // The flash overlay fills the screen and fades itself.
+        const screen = window.screen.geometry;
+        return window.width < screen.width || window.height < screen.height;
     }
     effects.windowAdded.connect(function (window) {
-        const ms = duration(window);
-        if (ms === null) return;
+        if (!applies(window)) return;
         // Force also cancels Scale/Fade if their signal handler ran first.
         effect.grab(window, Effect.WindowAddedGrabRole, true);
-        if (ms > 0) {
+        if (DURATION > 0) {
             window.timeSlayOpeningAnimation = animate({
                 window: window,
-                duration: ms,
+                duration: DURATION,
                 curve: QEasingCurve.Linear,
                 type: Effect.Opacity,
                 from: 0,
@@ -24,18 +25,17 @@
         }
     });
     effects.windowClosed.connect(function (window) {
-        const ms = duration(window);
-        if (ms === null) return;
+        if (!applies(window)) return;
         if (window.timeSlayOpeningAnimation) {
             cancel(window.timeSlayOpeningAnimation);
             delete window.timeSlayOpeningAnimation;
         }
         // Force also cancels Scale/Fade's close animation.
         effect.grab(window, Effect.WindowClosedGrabRole, true);
-        if (ms > 0) {
+        if (DURATION > 0) {
             animate({
                 window: window,
-                duration: ms,
+                duration: DURATION,
                 curve: QEasingCurve.Linear,
                 type: Effect.Opacity,
                 from: 1,

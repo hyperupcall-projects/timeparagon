@@ -422,7 +422,7 @@ fn more_popup<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Elemen
         .style(crate::ui::controls::surface);
     stack![
         dismiss,
-        container(card)
+        container(iced::widget::opaque(card))
             .width(Fill)
             .height(Fill)
             .align_x(Alignment::Center)

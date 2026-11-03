@@ -1,12 +1,11 @@
-//! Opening animation for the side panel. A temporary KWin script effect,
-//! loaded over D-Bus, works with its window application ID or layer-shell
-//! namespace: it
-//! fades the panel in and out or shows it at once, and skips KWin's own pop-in.
+//! Open and close transitions for this process's windows. A temporary KWin
+//! script effect, loaded over D-Bus, fades them or shows them at once, and skips
+//! KWin's own pop-in.
 //!
-//! The panel's mode travels in its application ID or namespace (`timeslay-instant`,
-//! `timeslay-fade-300`), which KWin sees when the window maps, so there is no
-//! race with a later D-Bus message. Anything but KWin just gets the desktop
-//! default.
+//! KWin does not show a layer surface's namespace to scripts: `windowClass` comes
+//! from the executable. So the effect picks out windows by process, with the
+//! duration written into its script, and is reloaded when the setting changes.
+//! Anything but KWin just gets the desktop default.
 
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -18,40 +17,53 @@ use crate::config::{ViewSettings, WindowAnimation};
 const SCRIPT: &str = include_str!("window_effect.js");
 const PREFIX: &str = "timeslay-opening-";
 
-/// The application ID for a window that should open with `mode`.
-pub fn application_id(mode: WindowAnimation, duration_ms: u32, desktop_default: &str) -> String {
-    match mode {
-        WindowAnimation::DesktopDefault => desktop_default.to_owned(),
-        WindowAnimation::Instant => "timeslay-instant".to_owned(),
-        WindowAnimation::FadeIn => format!(
-            "timeslay-fade-{}",
-            duration_ms.min(ViewSettings::MAX_FADE_DURATION_MS)
-        ),
+/// How long the transition lasts, or `None` to leave it to the desktop.
+fn duration(views: &ViewSettings) -> Option<u32> {
+    match views.window_animation {
+        WindowAnimation::DesktopDefault => None,
+        WindowAnimation::Instant => Some(0),
+        WindowAnimation::FadeIn => Some(views.fade_duration_ms()),
     }
+}
+
+fn script(pid: u32, duration_ms: u32) -> String {
+    SCRIPT
+        .replace("__PID__", &pid.to_string())
+        .replace("__DURATION__", &duration_ms.to_string())
 }
 
 static EFFECT: Mutex<Option<Effect>> = Mutex::new(None);
 
-/// Makes sure KWin has the effect when the settings ask for one, and returns
-/// the application ID to open the window with.
-pub fn prepare(views: &ViewSettings, desktop_default: &str) -> String {
-    let mode = views.window_animation;
-    if mode != WindowAnimation::DesktopDefault {
-        let mut slot = EFFECT.lock().unwrap_or_else(|e| e.into_inner());
-        match slot.as_mut() {
-            Some(effect) => effect.ensure_loaded(),
-            None => match Effect::start() {
-                Ok(effect) => *slot = Some(effect),
-                Err(error) => log::warn!("panel opening control unavailable: {error:#}"),
-            },
+/// Makes KWin's effect match the settings. KWin handles this before the call
+/// returns, so a window opened afterwards cannot race it.
+pub fn prepare(views: &ViewSettings) {
+    let wanted = duration(views);
+    let mut slot = EFFECT.lock().unwrap_or_else(|e| e.into_inner());
+    match (slot.as_mut(), wanted) {
+        (Some(effect), _) => {
+            if let Err(error) = effect.apply(wanted) {
+                log::warn!("window transition unavailable: {error:#}");
+            }
         }
+        (None, Some(duration_ms)) => match Effect::start(duration_ms) {
+            Ok(effect) => *slot = Some(effect),
+            Err(error) => log::warn!("window transition unavailable: {error:#}"),
+        },
+        (None, None) => {}
     }
-    application_id(mode, views.fade_duration_ms(), desktop_default)
 }
 
-/// Unloads the effect and removes its files. Call when the app is quitting.
+/// Unloads the effect and removes its files. Call when the app is quitting, after
+/// its windows are gone: unloading ends a close transition, so it has to finish
+/// first, and KWin has to see the window close while the effect is still loaded.
 pub fn shutdown() {
-    drop(EFFECT.lock().unwrap_or_else(|e| e.into_inner()).take());
+    let effect = EFFECT.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(duration_ms) = effect.as_ref().and_then(|effect| effect.loaded) {
+        std::thread::sleep(std::time::Duration::from_millis(
+            u64::from(duration_ms) + 50,
+        ));
+    }
+    drop(effect);
 }
 
 fn name(pid: u32) -> String {
@@ -87,11 +99,12 @@ struct Effect {
     connection: zbus::blocking::Connection,
     directory: PathBuf,
     name: String,
-    loaded: bool,
+    /// What the loaded script does; `None` when nothing is loaded.
+    loaded: Option<u32>,
 }
 
 impl Effect {
-    fn start() -> anyhow::Result<Self> {
+    fn start(duration_ms: u32) -> anyhow::Result<Self> {
         let pid = std::process::id();
         let root = effects_dir().ok_or_else(|| anyhow::anyhow!("no user data directory"))?;
         sweep_stale(&root);
@@ -107,52 +120,68 @@ impl Effect {
             connection,
             directory,
             name: name(pid),
-            loaded: false,
+            loaded: None,
         };
-        let code = effect.directory.join("contents/code");
-        std::fs::create_dir_all(&code)?;
+        std::fs::create_dir_all(effect.script_path().parent().expect("has a parent"))?;
         let metadata = serde_json::json!({
             "KPackageStructure": "KWin/Effect",
             "KPlugin": {
                 "Id": effect.name,
-                "Name": "TimeSlay panel opening",
+                "Name": "TimeSlay window transitions",
                 "EnabledByDefault": false,
                 "License": "MIT"
             },
             "X-Plasma-API": "javascript",
             "X-KDE-Ordering": 0
         });
-        for (path, contents) in [
-            (effect.directory.join("metadata.json"), metadata.to_string()),
-            (
-                code.join("main.js"),
-                SCRIPT.replace("__PID__", &pid.to_string()),
-            ),
-        ] {
-            std::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(path)?
-                .write_all(contents.as_bytes())?;
-        }
+        write_private(
+            &effect.directory.join("metadata.json"),
+            &metadata.to_string(),
+        )?;
 
         let supported: bool = proxy(&effect.connection)?.call("isEffectSupported", &("scale",))?;
         anyhow::ensure!(supported, "KWin does not support window animation effects");
-        effect.ensure_loaded();
+        effect.apply(Some(duration_ms))?;
         Ok(effect)
     }
 
-    /// KPackage caches its list of installed packages, so a freshly written
-    /// effect can be rejected at first; it is simply tried again on the next
-    /// window.
-    fn ensure_loaded(&mut self) {
-        if !self.loaded {
-            self.loaded = proxy(&self.connection)
-                .and_then(|proxy| proxy.call("loadEffect", &(self.name.as_str(),)))
-                .unwrap_or(false);
-        }
+    fn script_path(&self) -> PathBuf {
+        self.directory.join("contents/code/main.js")
     }
+
+    /// Swaps the loaded script for one that does `wanted`. KWin reads the file
+    /// again on each load. A failed load stays unloaded and is tried again on
+    /// the next window: KPackage caches its list of installed packages, so a
+    /// freshly written effect can be rejected at first.
+    fn apply(&mut self, wanted: Option<u32>) -> anyhow::Result<()> {
+        if self.loaded == wanted {
+            return Ok(());
+        }
+        let proxy = proxy(&self.connection)?;
+        if self.loaded.take().is_some() {
+            proxy.call::<_, _, ()>("unloadEffect", &(self.name.as_str(),))?;
+        }
+        if let Some(duration_ms) = wanted {
+            write_private(
+                &self.script_path(),
+                &script(std::process::id(), duration_ms),
+            )?;
+            if proxy.call("loadEffect", &(self.name.as_str(),))? {
+                self.loaded = wanted;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?
+        .write_all(contents.as_bytes())
 }
 
 impl Drop for Effect {
@@ -193,23 +222,30 @@ fn sweep_stale(root: &std::path::Path) {
 mod tests {
     use super::*;
 
+    fn views(window_animation: WindowAnimation, fade_duration_ms: u32) -> ViewSettings {
+        ViewSettings {
+            window_animation,
+            fade_duration_ms,
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn the_mode_and_duration_ride_in_the_application_id() {
+    fn each_setting_picks_its_duration() {
+        assert_eq!(duration(&views(WindowAnimation::DesktopDefault, 300)), None);
+        assert_eq!(duration(&views(WindowAnimation::Instant, 300)), Some(0));
+        assert_eq!(duration(&views(WindowAnimation::FadeIn, 300)), Some(300));
         assert_eq!(
-            application_id(WindowAnimation::DesktopDefault, 300, "timeslay"),
-            "timeslay"
+            duration(&views(WindowAnimation::FadeIn, 99_999)),
+            Some(ViewSettings::MAX_FADE_DURATION_MS)
         );
-        assert_eq!(
-            application_id(WindowAnimation::Instant, 300, "timeslay"),
-            "timeslay-instant"
-        );
-        assert_eq!(
-            application_id(WindowAnimation::FadeIn, 300, "timeslay"),
-            "timeslay-fade-300"
-        );
-        assert_eq!(
-            application_id(WindowAnimation::FadeIn, 99_999, "timeslay"),
-            "timeslay-fade-5000"
-        );
+    }
+
+    #[test]
+    fn the_script_is_written_for_this_process_and_duration() {
+        let script = script(1234, 300);
+        assert!(script.contains("window.pid !== 1234"));
+        assert!(script.contains("const DURATION = 300;"));
+        assert!(!script.contains("__"));
     }
 }

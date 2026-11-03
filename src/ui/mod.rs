@@ -911,7 +911,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let aligned = column![
         Space::new().height(tabs_height(state, metrics) + metrics.spacing),
-        container(row![card, Space::new().width(Fill)])
+        container(row![iced::widget::opaque(card), Space::new().width(Fill)])
             .padding(Padding {
                 left: metrics.padding,
                 ..Default::default()
@@ -956,7 +956,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let aligned = column![
         Space::new().height(tabs_height(state, metrics) + metrics.spacing),
-        container(row![Space::new().width(Fill), card])
+        container(row![Space::new().width(Fill), iced::widget::opaque(card)])
             .padding(Padding {
                 right: metrics.padding,
                 ..Default::default()

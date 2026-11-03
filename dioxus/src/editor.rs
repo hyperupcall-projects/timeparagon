@@ -1046,15 +1046,8 @@ fn EventEditor(
                 on_action: move |action: recurrence::Action| {
                     let mut draft = draft.write();
                     draft.recurrence_changed = true;
-                    if matches!(action, recurrence::Action::SkipAdd) {
-                        match draft.rule.add_skip() {
-                            Ok(()) => error.set(None),
-                            Err(message) => error.set(Some(message)),
-                        }
-                    } else {
-                        let anchor = draft.start.date_naive();
-                        draft.rule.apply_action(action, anchor);
-                    }
+                    let anchor = draft.start.date_naive();
+                    draft.rule.apply_action(action, anchor);
                 },
             }
             if !habit {
@@ -2066,38 +2059,6 @@ fn RepeatEditor(
                             oninput: move |event| on_action.call(Action::Count(event.value())),
                         }
                         "repeats"
-                    }
-                }
-                span { class: "editor-label", "Skip dates" }
-                if rule.skips.is_empty() {
-                    p { class: "empty-note", "No skipped dates." }
-                }
-                for skip in rule.skips.iter().copied() {
-                    div { key: "{skip}", class: "editor-item",
-                        span { class: "editor-item-name", "{skip}" }
-                        button {
-                            class: "modal-close",
-                            aria_label: "Stop skipping {skip}",
-                            disabled: busy,
-                            onclick: move |_| on_action.call(Action::SkipRemove(skip)),
-                            "×"
-                        }
-                    }
-                }
-                div { class: "editor-row",
-                    input {
-                        class: "client-input",
-                        r#type: "date",
-                        aria_label: "Date to skip",
-                        disabled: busy,
-                        value: "{rule.skip_input}",
-                        oninput: move |event| on_action.call(Action::SkipInput(event.value())),
-                    }
-                    button {
-                        class: "btn",
-                        disabled: busy,
-                        onclick: move |_| on_action.call(Action::SkipAdd),
-                        "Skip"
                     }
                 }
             }

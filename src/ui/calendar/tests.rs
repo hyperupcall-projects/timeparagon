@@ -2116,6 +2116,65 @@ fn a_hidden_task_chip_shows_neither_its_title_nor_a_way_to_complete_it() {
     );
 }
 
+/// What pressing the mouse at `position` produces.
+fn messages_after_click(
+    overlay: Element<'_, Message>,
+    size: Size,
+    position: iced::Point,
+) -> Vec<Message> {
+    let mut ui = iced_test::Simulator::with_size(Default::default(), size, overlay);
+    ui.point_at(position);
+    ui.simulate([
+        iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+    ]);
+    ui.into_messages().collect()
+}
+
+#[test]
+fn clicking_a_popups_background_keeps_it_open_but_clicking_outside_closes_it() {
+    let mut state = search_state();
+    search_action(&mut state, calendar::search::Action::Toggle);
+    state.main_size = Size::new(900.0, 800.0);
+    let metrics = Metrics::of(state.main_size);
+    // In each card's own padding, clear of every control.
+    let top = header_offset(&metrics) + metrics.padding + 2.0;
+    let search_inside = iced::Point::new(metrics.size.width - metrics.padding - 2.0, top);
+    let menu_inside = iced::Point::new(metrics.padding + 2.0, top);
+    let outside = iced::Point::new(5.0, metrics.size.height - 5.0);
+    let dismissed = |messages: &[Message]| {
+        messages.iter().any(|message| {
+            matches!(
+                message,
+                Message::Calendar(
+                    CalendarMessage::CalendarSearch(calendar::search::Action::Toggle)
+                        | CalendarMessage::CalendarMenuToggled
+                )
+            )
+        })
+    };
+    for (overlay, inside) in [
+        (search_overlay(&state, &metrics), search_inside),
+        (menu_overlay(&state, &metrics), menu_inside),
+    ] {
+        assert!(!dismissed(&messages_after_click(
+            overlay,
+            metrics.size,
+            inside
+        )));
+    }
+    for overlay in [
+        search_overlay(&state, &metrics),
+        menu_overlay(&state, &metrics),
+    ] {
+        assert!(dismissed(&messages_after_click(
+            overlay,
+            metrics.size,
+            outside
+        )));
+    }
+}
+
 #[test]
 fn the_popup_offers_the_detail_filter_and_the_button_stays_lit_for_it() {
     let (mut state, metrics) = detail_state();
