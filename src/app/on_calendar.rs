@@ -289,7 +289,9 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             queue_save(state)
         }
         CalendarMessage::CalendarSyncRequested => sync_calendar(state),
-        CalendarMessage::CalendarAutoSyncRequested => auto_sync_calendar(state),
+        CalendarMessage::CalendarAutoSyncRequested => {
+            Task::batch([auto_sync_calendar(state), crate::notes::refresh(state)])
+        }
         CalendarMessage::CalendarResyncRequested => {
             // Days parked in memory and on disk would paint before the next
             // visit fetched them. Drop them so the resync is the source of

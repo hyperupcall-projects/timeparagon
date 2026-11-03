@@ -113,7 +113,7 @@ for proc in pathlib.Path('/proc').glob('[0-9]*'):
             busy.append(proc.name)
     except (OSError, PermissionError): pass
 if busy:
-    sys.exit('Close the app, Keep browser, and manual Slack bridge, then rerun. PIDs: ' + ', '.join(busy))
+    sys.exit('Close the app, old browser helpers, and manual Slack bridge, then rerun. PIDs: ' + ', '.join(busy))
 PY
 
 # Back up data and installation metadata, preserving mode and timestamps.
@@ -180,6 +180,5 @@ printf 'Inspect settings/data, then launch: %q\n' "$prefix/bin/timeslay"
 echo 'Enable services when ready:'
 echo '  systemctl --user enable timeslay.service timeslay-shortcuts.service timeslay-slack.service'
 echo '  systemctl --user start timeslay-shortcuts.service timeslay-slack.service'
-echo 'Rebuild/reinstall the Keep helper to use its new profile path.'
 echo 'Rerun webextension/install.sh to refresh browser native-host paths.'
 echo 'Update pinned launchers and any TIME_SLAY_* environment variable names you renamed.'

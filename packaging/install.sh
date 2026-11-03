@@ -125,18 +125,8 @@ say "Installed binary:  $binary"
 # modes of the one binary (--sidebar, --dock, --daemon).
 rm -f "$bin_dir/timeslay-panel" "$bin_dir/timeslay-dock"
 
-# Google Keep uses this optional browser helper. Task sync uses Google APIs. Desktop
-# launchers do not inherit a shell's PATH or the checkout's working directory.
-bridge=$repo_root/tools/keep-bridge/keep-bridge
-if [ -x "$bridge" ]; then
-    install -m 0755 "$bridge" "$bin_dir/keep-bridge"
-    # Retire the helper name used by earlier installations.
-    rm -f "$bin_dir/tasks-bridge"
-    say "Installed helper:  $bin_dir/keep-bridge"
-else
-    say "Browser helper is not built. Google Keep requires it; task sync does not."
-    say "Run 'deno task compile' in tools/keep-bridge, then rerun this installer."
-fi
+# Retire the browser helpers that earlier versions installed.
+rm -f "$bin_dir/keep-bridge" "$bin_dir/tasks-bridge"
 
 # --- Install the desktop entry and icon ------------------------------------
 mkdir -p "$app_dir" "$icon_dir"

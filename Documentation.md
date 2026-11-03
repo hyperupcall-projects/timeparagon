@@ -21,6 +21,12 @@ cargo run -p timeslay --release
 Android app releases are built and published in CI. It is recommended to use [Obtainium](https://github.com/ImranR98/Obtainium) to download them.
 
 
+## Features
+
+- [Notes](docs/notes.md)
+- [Voice input](docs/voice-input.md)
+
+
 ## External APIs and Services
 
 TimeSlay integrates with a lot of tools:

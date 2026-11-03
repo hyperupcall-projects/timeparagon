@@ -516,6 +516,11 @@ fn habit_page<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Elem
 
     let mut cards = column![
         overview(state, habit, metrics),
+        card(crate::ui::notes::section(
+            state,
+            crate::notes::habit_link(&habit.id, habit.name.clone()),
+            metrics,
+        )),
         card(
             column![
                 titled_spinner(
