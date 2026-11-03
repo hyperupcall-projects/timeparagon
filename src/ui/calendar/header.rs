@@ -288,7 +288,7 @@ pub(super) fn all_day_row_on<'a>(
     let mut content = column![].spacing(4.0).width(Fill);
     if !weekly {
         let overdue = crate::inbox::overdue_tasks(state).len();
-        let inbox = crate::inbox::tasks(state).len();
+        let inbox = crate::inbox::tasks(state).len() + state.inbox.invitations.len();
         let mut summary = text(format!(
             "{overdue} overdue.  {inbox} in inbox.  {unslotted} not slotted in"
         ))

@@ -35,6 +35,10 @@ pub struct Inbox {
     /// the first day of the month on show.
     pub picker: Option<(String, NaiveDate)>,
     pub error: Option<String>,
+    /// Invitations waiting for an answer, soonest first. They sit here rather
+    /// than as tasks, and leave as soon as they are answered.
+    pub invitations: Vec<Event>,
+    invitation_requests: u64,
     /// The list a task was last created on, for the time before a sync has
     /// brought that list's name back.
     created_list: Option<String>,
@@ -116,6 +120,32 @@ pub enum Action {
     TogglePicker(String),
     /// Show the month this many months after (or before) the one on show.
     PickerShift(i32),
+    /// Google's answer to the request with this number.
+    InvitationsFetched(u64, Result<Vec<Event>, String>),
+    /// Open an invitation in the details pane.
+    OpenInvitation(String),
+}
+
+/// Asks Google which invitations are waiting. They are only looked for on the
+/// primary calendar: on a calendar shared with the user, the guest Google calls
+/// "self" is that calendar's owner, whose invitations aren't the user's to answer.
+pub fn refresh_invitations(state: &mut State) -> Task<Message> {
+    let Some(calendar) = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.primary && !calendar.is_task_list())
+        .cloned()
+    else {
+        return Task::none();
+    };
+    state.inbox.invitation_requests += 1;
+    let request = state.inbox.invitation_requests;
+    let settings = state.config.calendar.clone();
+    blocking::run(move || {
+        calendar::sync_invitations(&settings.client_id, &settings.client_secret, &calendar)
+    })
+    .map(move |result| Message::Inbox(Action::InvitationsFetched(request, result)))
 }
 
 /// Whether `calendar_id` is the list that collects new tasks.
@@ -230,6 +260,23 @@ pub fn triaged_tasks(state: &State) -> Vec<&Event> {
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
+        Action::InvitationsFetched(request, result) => {
+            // Only the latest request can know about the latest reply.
+            if request == state.inbox.invitation_requests {
+                match result {
+                    Ok(invitations) => state.inbox.invitations = invitations,
+                    Err(error) => log::warn!("could not look for invitations: {error}"),
+                }
+            }
+            Task::none()
+        }
+        Action::OpenInvitation(id) => {
+            // A series, or an event far ahead, needn't be in the range on show.
+            if let Some(event) = state.inbox.invitations.iter().find(|e| e.id == id) {
+                state.calendar.detail_event = Some(event.clone());
+            }
+            Task::done(Message::Event(crate::app::EventMessage::EventOpened(id)))
+        }
         Action::Voice(action) => crate::voice::update(state, action),
         Action::Sort(sort) => {
             state.config.calendar.inbox_sort = sort;

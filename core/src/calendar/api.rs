@@ -156,6 +156,12 @@ struct EventEntry {
     attendees: Vec<Person>,
     #[serde(default, rename = "conferenceData")]
     conference: Option<Conference>,
+    #[serde(default, rename = "guestsCanModify")]
+    guests_can_modify: Option<bool>,
+    #[serde(default, rename = "guestsCanInviteOthers")]
+    guests_can_invite_others: Option<bool>,
+    #[serde(default, rename = "guestsCanSeeOtherGuests")]
+    guests_can_see_other_guests: Option<bool>,
     #[serde(default, rename = "extendedProperties")]
     extended_properties: serde_json::Value,
     #[serde(default)]
@@ -172,6 +178,12 @@ struct Person {
     display_name: String,
     #[serde(default, rename = "responseStatus")]
     response_status: String,
+    #[serde(default, rename = "self")]
+    own: bool,
+    #[serde(default)]
+    resource: bool,
+    #[serde(default)]
+    optional: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1291,11 +1303,13 @@ pub fn patch_event_time(
     event_id: &str,
     start: DateTime<Local>,
     end: DateTime<Local>,
+    notify: bool,
 ) -> Result<(), GoogleError> {
     let url = format!(
-        "{EVENTS}/{}/events/{}",
+        "{EVENTS}/{}/events/{}?sendUpdates={}",
         urlencoding::encode(calendar_id),
         urlencoding::encode(event_id),
+        if notify { "all" } else { "none" },
     );
     let body = serde_json::json!({
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
@@ -1364,6 +1378,107 @@ fn editor_event(mut entry: EventEntry, original: &Event) -> Result<Event, String
     };
     parse_event(entry, &calendar, original.start.date_naive())
         .ok_or_else(|| "Could not read habit series".into())
+}
+
+/// Answers an invitation. Only the user's own entry is sent, which is what
+/// `attendeesOmitted` is for: a guest may not be able to see the rest of the
+/// list, and must not overwrite it. Blocking: call it from `blocking::run`.
+pub fn reply_to_event(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    email: &str,
+    response: super::meeting::Response,
+) -> Result<(), GoogleError> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}?sendUpdates=all",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id),
+    );
+    patch(
+        &url,
+        access_token,
+        &reply_body(email, response).to_string(),
+        "Google Calendar",
+    )
+}
+
+fn reply_body(email: &str, response: super::meeting::Response) -> serde_json::Value {
+    serde_json::json!({
+        "attendeesOmitted": true,
+        "attendees": [{ "email": email, "responseStatus": response.api_value() }],
+    })
+}
+
+/// What the app needs to know once an edit has reached Google.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Saved {
+    /// The event's page on Google Calendar.
+    pub link: String,
+    /// The user asked for Zoom and the event still has no Zoom link.
+    pub zoom_needed: bool,
+}
+
+/// Whether Google should email guests about an edit. Saving a form with nothing
+/// of theirs changed, such as the user's own reminders, isn't news; and a Zoom
+/// meeting still to be added means the email is better sent with its link, when
+/// the user saves on Google Calendar and it offers to.
+fn notifies_guests(
+    original: &Event,
+    draft: &super::EditDraft,
+    description: &str,
+    written: super::meeting::Written,
+) -> bool {
+    let changed = written.guests_changed
+        || written.conference_changed
+        || draft.recurrence_changed
+        || draft.title != original.title
+        || draft.start != original.start
+        || draft.end != original.end
+        || description != super::description_notes(&original.details.description);
+    // A guest who may only invite others still has to reach those they invite.
+    draft.meeting.notify
+        && (draft.meeting.can_manage || written.guests_changed)
+        && written.has_guests
+        && changed
+        && !written.zoom_needed
+}
+
+/// Sends an event patch, and reports a conference Google could not create.
+fn patch_event_changes(
+    url: &str,
+    access_token: &str,
+    changes: &serde_json::Value,
+    notify: bool,
+) -> Result<(), GoogleError> {
+    let address = format!("{url}{}", super::meeting::write_query(changes, notify));
+    let result = agent()
+        .request("PATCH", &address)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("Content-Type", "application/json")
+        .send_string(&changes.to_string());
+    let response: serde_json::Value = google::send("Google Calendar", result)?
+        .into_json()
+        .map_err(|error| GoogleError::transport("Google Calendar response", error))?;
+    match super::meeting::conference_failure(&response) {
+        Some(reason) => Err(reason.to_owned().into()),
+        None => Ok(()),
+    }
+}
+
+/// The event's page once it has moved, as the link names its calendar.
+fn link_after_move(
+    access_token: &str,
+    destination: &str,
+    event_id: &str,
+) -> Result<String, GoogleError> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(destination),
+        urlencoding::encode(event_id),
+    );
+    let moved: EventEntry = get(&url, access_token)?;
+    Ok(moved.html_link)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1489,7 +1604,7 @@ pub fn save_event_scope(
     scope: super::SaveScope,
     description: &str,
     color_id: Option<&str>,
-) -> Result<(), GoogleError> {
+) -> Result<Saved, GoogleError> {
     use super::SaveScope;
     let source = original.calendar_id.as_str();
     let destination = draft.calendar_id.as_str();
@@ -1522,17 +1637,24 @@ pub fn save_event_scope(
         &draft.labels,
         Some(&draft.options),
     )?;
+    let request_id = super::meeting::request_id()?;
     if scope == SaveScope::Current || series_id.is_none() {
-        patch(
-            &instance_url,
-            access_token,
-            &changes.to_string(),
-            "Google Calendar",
-        )?;
+        let written = draft
+            .meeting
+            .write(&mut changes, Some(&instance), &request_id);
+        let notify = notifies_guests(original, draft, description, written);
+        patch_event_changes(&instance_url, access_token, &changes, notify)?;
+        let mut link = instance["htmlLink"].as_str().unwrap_or_default().to_owned();
         if moving {
             move_event(access_token, source, &original.id, destination)?;
+            if written.zoom_needed {
+                link = link_after_move(access_token, destination, &original.id)?;
+            }
         }
-        return Ok(());
+        return Ok(Saved {
+            link,
+            zoom_needed: written.zoom_needed,
+        });
     }
     let series_id = series_id.unwrap();
     let master_url = format!("{url}/{}", urlencoding::encode(series_id));
@@ -1598,17 +1720,23 @@ pub fn save_event_scope(
         properties["private"][key] = value.clone();
     }
     changes["extendedProperties"] = properties;
+    let written = draft
+        .meeting
+        .write(&mut changes, Some(&master), &request_id);
+    let notify = notifies_guests(original, draft, description, written);
     if all {
-        patch(
-            &master_url,
-            access_token,
-            &changes.to_string(),
-            "Google Calendar",
-        )?;
+        patch_event_changes(&master_url, access_token, &changes, notify)?;
+        let mut link = master["htmlLink"].as_str().unwrap_or_default().to_owned();
         if moving {
             move_event(access_token, source, series_id, destination)?;
+            if written.zoom_needed {
+                link = link_after_move(access_token, destination, series_id)?;
+            }
         }
-        return Ok(());
+        return Ok(Saved {
+            link,
+            zoom_needed: written.zoom_needed,
+        });
     }
     // Clone writable fields so guests, location, reminders and conferencing survive.
     let mut replacement = master.clone();
@@ -1633,9 +1761,14 @@ pub fn save_event_scope(
     for (key, value) in changes.as_object().unwrap() {
         replacement[key] = value.clone();
     }
-    // The new series starts out on the destination; the old one just ends.
+    // The new series starts out on the destination; the old one just ends. The
+    // conference it copied only survives if Google is asked to read it.
+    let query = super::meeting::write_query(&replacement, notify);
     let response = post(
-        &format!("{EVENTS}/{}/events", urlencoding::encode(destination)),
+        &format!(
+            "{EVENTS}/{}/events{query}",
+            urlencoding::encode(destination)
+        ),
         access_token,
         &replacement.to_string(),
         "Google Calendar",
@@ -1663,7 +1796,10 @@ pub fn save_event_scope(
         }
         return Err(error);
     }
-    Ok(())
+    Ok(Saved {
+        link: created.html_link,
+        zoom_needed: written.zoom_needed,
+    })
 }
 
 fn json_event_start(value: &serde_json::Value) -> Result<DateTime<Local>, String> {
@@ -1792,7 +1928,8 @@ pub fn insert_event(
     recurrence: &[String],
     projects: &[u64],
     options: Option<&super::event_options::EventOptions>,
-) -> Result<String, GoogleError> {
+    meeting: Option<&super::meeting::Form>,
+) -> Result<Inserted, GoogleError> {
     let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
     let mut body = serde_json::json!({
         "summary": title,
@@ -1816,8 +1953,30 @@ pub fn insert_event(
         );
     }
 
-    let response = post(&url, access_token, &body.to_string(), "Google Calendar")?;
-    let created: CreatedEvent = serde_json::from_str(&response)
+    let mut notify = false;
+    if let Some(meeting) = meeting {
+        let request_id = super::meeting::request_id()?;
+        let written = meeting.write(&mut body, None, &request_id);
+        // A Zoom meeting still to be added means the invitation is better sent
+        // with its link, when the user saves on Google Calendar.
+        notify = meeting.notify && written.has_guests && !written.zoom_needed;
+    }
+    let query = super::meeting::write_query(&body, notify);
+
+    let response = post(
+        &format!("{url}{query}"),
+        access_token,
+        &body.to_string(),
+        "Google Calendar",
+    )?;
+    let value: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|error| format!("Google Calendar response: {error}"))?;
+    // The event exists whatever became of its call. Failing here would invite a
+    // second save and a duplicate, so it is left without a link to add later.
+    if let Some(reason) = super::meeting::conference_failure(&value) {
+        log::warn!("{reason}");
+    }
+    let created: EventEntry = serde_json::from_value(value)
         .map_err(|error| format!("Google Calendar response: {error}"))?;
 
     if created.id.is_empty() {
@@ -1825,7 +1984,20 @@ pub fn insert_event(
             .to_owned()
             .into());
     }
-    Ok(created.id)
+    let details = details_of(&created);
+    Ok(Inserted {
+        id: created.id,
+        link: details.link,
+        meeting: details.meeting,
+    })
+}
+
+/// What Google reports about an event it has just created.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inserted {
+    pub id: String,
+    pub link: String,
+    pub meeting: String,
 }
 
 /// Delete the selected instance, truncate its series, or delete its master.
@@ -1834,25 +2006,27 @@ pub fn delete_event_scope(
     calendar_id: &str,
     event_id: &str,
     scope: super::SaveScope,
+    notify: bool,
 ) -> Result<(), GoogleError> {
     use super::SaveScope;
+    let delete_event = |id: &str| delete_event_notifying(access_token, calendar_id, id, notify);
     if scope == SaveScope::Current {
-        return delete_event(access_token, calendar_id, event_id);
+        return delete_event(event_id);
     }
     let base = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
     let instance_url = format!("{base}/{}", urlencoding::encode(event_id));
     let instance: serde_json::Value = get(&instance_url, access_token)?;
     let Some(series_id) = instance["recurringEventId"].as_str() else {
-        return delete_event(access_token, calendar_id, event_id);
+        return delete_event(event_id);
     };
     if scope == SaveScope::All {
-        return delete_event(access_token, calendar_id, series_id);
+        return delete_event(series_id);
     }
     let master_url = format!("{base}/{}", urlencoding::encode(series_id));
     let master: serde_json::Value = get(&master_url, access_token)?;
     let boundary = json_event_start(&instance["originalStartTime"])?;
     if boundary <= json_event_start(&master["start"])? {
-        return delete_event(access_token, calendar_id, series_id);
+        return delete_event(series_id);
     }
     let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
         .map_err(|error| format!("Could not read series recurrence: {error}"))?;
@@ -1869,7 +2043,10 @@ pub fn delete_event_scope(
     )
     .map_err(|_| "This custom series cannot be split here. Use Delete or Delete all events.")?;
     patch(
-        &master_url,
+        &format!(
+            "{master_url}?sendUpdates={}",
+            if notify { "all" } else { "none" }
+        ),
         access_token,
         &serde_json::json!({"recurrence": past}).to_string(),
         "Google Calendar",
@@ -1884,19 +2061,97 @@ pub fn delete_event(
     calendar_id: &str,
     event_id: &str,
 ) -> Result<(), GoogleError> {
+    delete_event_notifying(access_token, calendar_id, event_id, false)
+}
+
+fn delete_event_notifying(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    notify: bool,
+) -> Result<(), GoogleError> {
     let url = format!(
-        "{EVENTS}/{}/events/{}",
+        "{EVENTS}/{}/events/{}?sendUpdates={}",
         urlencoding::encode(calendar_id),
         urlencoding::encode(event_id),
+        if notify { "all" } else { "none" },
     );
 
     delete(&url, access_token, "Google Calendar")
+}
+
+/// How far ahead the inbox looks for invitations to answer.
+const INVITATION_DAYS: i64 = 180;
+
+/// Upcoming invitations on `calendar` the user has yet to answer. A repeating
+/// one comes back once, as its series, rather than once per occurrence.
+/// Blocking: call it from the app's `blocking::run`.
+pub fn fetch_invitations(access_token: &str, calendar: &Calendar) -> Result<Vec<Event>, String> {
+    let now = Utc::now();
+    let base = format!(
+        "{EVENTS}/{}/events?singleEvents=false&maxResults=250&timeMin={}&timeMax={}",
+        urlencoding::encode(&calendar.id),
+        urlencoding::encode(&now.to_rfc3339()),
+        urlencoding::encode(&(now + chrono::Duration::days(INVITATION_DAYS)).to_rfc3339()),
+    );
+    let mut entries = Vec::new();
+    let mut page: Option<String> = None;
+    loop {
+        let url = match &page {
+            Some(token) => format!("{base}&pageToken={}", urlencoding::encode(token)),
+            None => base.clone(),
+        };
+        let list: EventList = get(&url, access_token)?;
+        entries.extend(list.items);
+        match list.next_page_token {
+            Some(next) => page = Some(next),
+            None => break,
+        }
+    }
+    let mut events: Vec<Event> = unanswered_invitations(entries)
+        .into_iter()
+        .filter_map(|entry| parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX))
+        .collect();
+    events.sort_by_key(|event| event.start);
+    Ok(events)
+}
+
+/// The entries the user was invited to and has not answered. An occurrence
+/// changed on its own is dropped when its whole series is waiting anyway.
+fn unanswered_invitations(entries: Vec<EventEntry>) -> Vec<EventEntry> {
+    let waiting: Vec<EventEntry> = entries
+        .into_iter()
+        .filter(|entry| {
+            entry.status.as_deref() != Some("cancelled")
+                && !entry.organizer.as_ref().is_some_and(|person| person.own)
+                && entry
+                    .attendees
+                    .iter()
+                    .any(|person| person.own && person.response_status == "needsAction")
+        })
+        .collect();
+    let series: Vec<String> = waiting
+        .iter()
+        .filter(|entry| !entry.recurrence.is_empty())
+        .map(|entry| entry.id.clone())
+        .collect();
+    waiting
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .recurring_event_id
+                .as_ref()
+                .is_none_or(|id| !series.contains(id))
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
 struct CreatedEvent {
     #[serde(default)]
     id: String,
+    #[serde(default, rename = "htmlLink")]
+    html_link: String,
 }
 
 /// `webViewLink` opens the task in the Google Tasks UI. The API id is the
@@ -2051,6 +2306,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .map(|person| person_label(Some(person), true))
             .filter(|label| !label.is_empty())
             .collect(),
+        attendance: attendance_of(entry),
         labels: entry.extended_properties["private"]["ttLabels"]
             .as_str()
             .and_then(|value| serde_json::from_str(value).ok())
@@ -2065,6 +2321,39 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
         recurring_event_id: entry.recurring_event_id.clone(),
         recurrence: entry.recurrence.clone(),
         color_id: entry.color_id.clone(),
+    }
+}
+
+fn attendance_of(entry: &EventEntry) -> super::meeting::Attendance {
+    use super::meeting::{Attendance, Guest, Permissions, Response};
+    let defaults = Permissions::default();
+    Attendance {
+        guests: entry
+            .attendees
+            .iter()
+            .filter(|person| !person.resource && !person.email.is_empty())
+            .map(|person| Guest {
+                email: person.email.clone(),
+                name: person.display_name.clone(),
+                response: Response::parse(&person.response_status),
+                optional: person.optional,
+            })
+            .collect(),
+        permissions: Permissions {
+            modify: entry.guests_can_modify.unwrap_or(defaults.modify),
+            invite_others: entry
+                .guests_can_invite_others
+                .unwrap_or(defaults.invite_others),
+            see_guests: entry
+                .guests_can_see_other_guests
+                .unwrap_or(defaults.see_guests),
+        },
+        organizer: entry.organizer.as_ref().is_some_and(|person| person.own),
+        own_email: entry
+            .attendees
+            .iter()
+            .find(|person| person.own && !person.email.is_empty())
+            .map(|person| person.email.clone()),
     }
 }
 
@@ -2587,11 +2876,17 @@ mod tests {
                 email: "ada@example.com".into(),
                 display_name: "Ada".into(),
                 response_status: String::new(),
+                own: true,
+                resource: false,
+                optional: false,
             }),
             attendees: vec![Person {
                 email: "grace@example.com".into(),
                 display_name: "Grace".into(),
                 response_status: "accepted".into(),
+                own: false,
+                resource: false,
+                optional: false,
             }],
             ..EventEntry::default()
         };
@@ -2602,6 +2897,12 @@ mod tests {
         assert_eq!(event.details.status, "Confirmed");
         assert_eq!(event.details.organizer, "Ada");
         assert_eq!(event.details.attendees, vec!["Grace (accepted)".to_owned()]);
+        assert!(event.details.attendance.organizer);
+        assert_eq!(event.details.attendance.own_email, None);
+        assert_eq!(
+            event.details.attendance.guests[0].email,
+            "grace@example.com"
+        );
         assert_eq!(
             event.details.meeting,
             "https://meet.google.com/abc-defg-hij"
@@ -2810,5 +3111,59 @@ mod tests {
         let cleared = habit_body("Stretch", "After coffee", start, end, &[], None);
         assert_eq!(cleared["recurrence"], serde_json::json!([]));
         assert!(cleared["colorId"].is_null());
+    }
+
+    #[test]
+    fn a_reply_sends_only_the_users_own_answer() {
+        assert_eq!(
+            reply_body(
+                "me@example.com",
+                crate::calendar::meeting::Response::Tentative
+            ),
+            serde_json::json!({
+                "attendeesOmitted": true,
+                "attendees": [{"email": "me@example.com", "responseStatus": "tentative"}],
+            })
+        );
+    }
+
+    #[test]
+    fn an_invitation_is_read_with_its_permissions_and_without_its_rooms() {
+        use crate::calendar::meeting::Response;
+        let entry: EventEntry = serde_json::from_value(serde_json::json!({
+            "organizer": {"email": "boss@example.com"},
+            "guestsCanInviteOthers": false,
+            "attendees": [
+                {"email": "me@example.com", "self": true, "responseStatus": "needsAction"},
+                {"email": "boss@example.com", "responseStatus": "accepted"},
+                {"email": "room@resource.calendar.google.com", "resource": true},
+            ],
+        }))
+        .unwrap();
+        let attendance = attendance_of(&entry);
+        assert_eq!(attendance.guests.len(), 2);
+        assert!(attendance.can_reply() && !attendance.can_manage() && !attendance.can_invite());
+        assert_eq!(attendance.own_response(), Some(Response::NeedsAction));
+        assert!(attendance.permissions.see_guests);
+    }
+
+    #[test]
+    fn only_unanswered_invitations_reach_the_inbox_once_each() {
+        let entries: Vec<EventEntry> = serde_json::from_value(serde_json::json!([
+            {"id": "waiting", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
+            {"id": "answered", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "accepted"}]},
+            {"id": "mine", "organizer": {"self": true}, "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
+            {"id": "cancelled", "status": "cancelled", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
+            {"id": "other-person", "attendees": [{"email": "a@x.y", "responseStatus": "needsAction"}]},
+            {"id": "series", "recurrence": ["RRULE:FREQ=WEEKLY"], "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
+            {"id": "series_1", "recurringEventId": "series", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
+            {"id": "lone_1", "recurringEventId": "answered-series", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
+        ]))
+        .unwrap();
+        let ids: Vec<String> = unanswered_invitations(entries)
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids, ["waiting", "series", "lone_1"]);
     }
 }
