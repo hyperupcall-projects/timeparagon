@@ -82,9 +82,12 @@ Of course, there's also week, 2-week, and month views:
 	- These are standard calendar events that are colored differently.
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
+	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
+	- Allow setting/connecting goals to Habits (TODO).
 - Notes (TODO)
 	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
+	- Notes can be stored locally to be used with [Obsidian](https://obsidian.md), [Syncthing](https://syncthing.net), or other tools, or in Google Drive.
 - Autolaunchers
 	- Save configure presets for launching and positioning application windows (TODO).
 - Goals (TODO)
@@ -104,16 +107,12 @@ Of course, there's also week, 2-week, and month views:
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
 	- Uses local database as cache to keep UI performant/responsive.
-- Habits
-	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
-	- Allow setting/connecting goals to Habits (TODO).
 - Activity monitoring
 	- Project allocation
 	- Distractions
-	- Custom data
-		- Sleep
-		- Location and exercise
-		- Food?
+	- Sleep
+	- Location and exercise
+	- Food?
 
 ## Terminology
 
