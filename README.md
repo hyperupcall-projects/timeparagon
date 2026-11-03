@@ -32,23 +32,23 @@ Of course, there's also week, 2-week, and month views:
 - View your time:
 	- By day, week, 2 weeks, month
 	- Allow zoomin in/out within the day/week views
-	- Custom search (TODO)
-		- Show only events or tasks that satisfy a search
-		- Omit private event details where applicable
+	- Custom search
+		- Show only events or tasks that satisfy a search of their title or description
+		- Filter by time of day, project, label, availability, public visibility, location, and more.
+		- Toggle to only show details of events with only public visibility.
 - Manage your time:
 	- Events
 		- Tracks the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
 		- Shows dedicated buttons for joining Zoom and Google Meet meetings.
 		- Integrates with Zoom and Google Meet to create meetings and invite attendees (TODO).
 		- Allows for replying to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop) (TODO).
-		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP).
+		- Uses location data to show estimated travel time for events and to add link to Google Maps.
 	- Time blocks
 		- These are standard calendar events with a special interface to easily order tasks within them; great for deep work.
 		- Assign tasks to time blocks.
 		- Brain dump.
 		- Pomodoro timer.
 		- Record distractions.
-		- Reschedule in bulk (TODO)
 	- Habits
 		- These are standard calendar events that are colored differently.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
@@ -104,26 +104,6 @@ Of course, there's also week, 2-week, and month views:
 		- Sleep
 		- Location and exercise
 		- Food?
-
-## Usage
-
-There's currently two implementations:
-
-- An [Iced](https://iced.rs) desktop application.
-- A [Dioxus](https://dioxuslabs.com) mobile application (WIP).
-
-Both can be built:
-
-```sh
-# Iced desktop app.
-cargo run -p timeslay --release
-
-# Install Iced desktop app.
-./packaging/install.sh
-
-# Dioxus mobile app.
-./scripts/build-android.sh
-```
 
 ## Terminology
 

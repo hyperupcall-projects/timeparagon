@@ -174,8 +174,45 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             }
             dispatch(state, *message)
         }
+        CalendarMessage::CalendarSearch(action) => {
+            use calendar::{projects, search};
+            if let search::Action::Projects(projects::Action::Add(id)) = &action
+                && state.config.projects.get(*id).is_none()
+            {
+                return Task::none();
+            }
+            let toggled = matches!(action, search::Action::Toggle);
+            let hiding = matches!(action, search::Action::DetailsByVisibility(true));
+            state.calendar.search.update(action);
+            if hiding {
+                // A pane left open would go on showing what was just hidden.
+                let open = state.calendar.open_event.clone();
+                let close_event = open
+                    .and_then(|id| state.calendar.event(&id).cloned())
+                    .is_some_and(|event| state.calendar.search.hides_details(&event));
+                let closed = close_event
+                    .then(|| crate::app::update(state, Message::Event(EventMessage::EventClosed)));
+                return Task::batch(
+                    closed
+                        .into_iter()
+                        .chain([crate::timeblocking::close(state)]),
+                );
+            }
+            if !(toggled && state.calendar.search.open) {
+                return Task::none();
+            }
+            // One sheet at a time, the same as the menu and the month pickers.
+            state.calendar.menu_open = false;
+            state.calendar.color_editor = None;
+            state.calendar.month_open = false;
+            state.overview_month_open = false;
+            iced::widget::operation::focus(iced::widget::Id::new(ui::calendar::SEARCH_INPUT))
+        }
         CalendarMessage::CalendarMenuToggled => {
             state.calendar.menu_open = !state.calendar.menu_open;
+            if state.calendar.menu_open {
+                state.calendar.search.open = false;
+            }
             // Dismissing the menu also puts away any open color picker, so it
             // does not pop back up the next time the menu is opened.
             state.calendar.color_editor = None;
@@ -415,6 +452,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 state.calendar.month = calendar::first_of_month(state.calendar.day);
                 if !state.range_view_active() {
                     state.calendar.menu_open = false;
+                    state.calendar.search.open = false;
                 }
             }
             Task::none()
@@ -424,6 +462,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             if state.overview_month_open {
                 state.overview_month = calendar::first_of_month(state.week_anchor);
                 state.calendar.menu_open = false;
+                state.calendar.search.open = false;
             }
             Task::none()
         }

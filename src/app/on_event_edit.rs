@@ -98,8 +98,30 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             Task::none()
         }
         EventEditMessage::EventEditCalendarSelected(id) => {
+            let allowed = state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .filter(|draft| !draft.saving && !draft.loading)
+                .and_then(|draft| state.calendar.event(&draft.id))
+                .is_some_and(|event| {
+                    state
+                        .calendar
+                        .move_targets(event, &state.config.calendar)
+                        .iter()
+                        .any(|calendar| calendar.id == id)
+                });
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
-                draft.calendar_id = id;
+                draft.calendar_dropdown_open = false;
+                if allowed {
+                    draft.calendar_id = id;
+                }
+            }
+            Task::none()
+        }
+        EventEditMessage::EventEditCalendarDropdownToggled => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.calendar_dropdown_open = !draft.calendar_dropdown_open;
             }
             Task::none()
         }
@@ -214,9 +236,18 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             .map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
         }
         EventEditMessage::EventEditSaved(Ok(())) => {
+            // Only the draft still marked as saving is the one Google just
+            // wrote; another event may have been opened in the meantime.
+            let mut moved = None;
             if let Some(draft) = &mut state.calendar.edit_draft {
+                if draft.saving {
+                    moved = Some((draft.id.clone(), draft.calendar_id.clone()));
+                }
                 draft.editing_title = false;
                 draft.saving = false;
+            }
+            if let Some((id, calendar_id)) = moved {
+                state.calendar.event_moved(&id, &calendar_id);
             }
             // Keep the inline draft as the user left it until the calendar
             // sync brings the saved event back, so fields do not flicker.

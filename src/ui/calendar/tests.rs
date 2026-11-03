@@ -1821,3 +1821,378 @@ fn shift_and_the_wheel_do_not_zoom_the_day_grid() {
     ]);
     assert!(zoom_messages(ui).is_empty());
 }
+
+fn search_state() -> State {
+    let mut state = State::blank();
+    state.screen = crate::app::Screen::Calendar;
+    state.main_size = Size::new(800.0, 1200.0);
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    state
+}
+
+fn search_action(state: &mut State, action: calendar::search::Action) {
+    let _ = crate::app::update(
+        state,
+        Message::Calendar(CalendarMessage::CalendarSearch(action)),
+    );
+}
+
+#[test]
+fn search_sits_beside_menu_on_every_header_width() {
+    let state = search_state();
+    for width in [180.0, 260.0, 320.0, 539.0, 540.0, 900.0] {
+        let metrics = Metrics::of(Size::new(width, 700.0));
+        for weekly in [false, true] {
+            let mut ui = iced_test::Simulator::with_size(
+                Default::default(),
+                metrics.size,
+                header(&state, &metrics, weekly),
+            );
+            assert!(ui.find("Search").is_ok(), "header at {width}");
+            assert!(ui.find("Menu").is_ok(), "header at {width}");
+        }
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            range_heading(
+                &state,
+                "Oct 2026 ▾".into(),
+                CalendarMessage::CalendarDayShift(-1),
+                CalendarMessage::CalendarDayShift(1),
+                &metrics,
+            ),
+        );
+        assert!(ui.find("Search").is_ok(), "range heading at {width}");
+    }
+}
+
+#[test]
+fn search_popup_shows_each_section_and_reports_the_query() {
+    let mut state = search_state();
+    search_action(&mut state, calendar::search::Action::Toggle);
+    assert!(state.calendar.search.open);
+    let metrics = Metrics::of(state.main_size);
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        search_overlay(&state, &metrics),
+    );
+    for expected in [
+        "Search description",
+        "Search filters",
+        "Time of day",
+        "Projects",
+        "Labels",
+        "Event filters",
+        "Show events that are",
+        "Only show events with public visibility",
+        "Location",
+    ] {
+        assert!(ui.find(expected).is_ok(), "{expected} is missing");
+    }
+    ui.click(iced::widget::Id::new(SEARCH_INPUT)).unwrap();
+    ui.typewrite("st");
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::Calendar(CalendarMessage::CalendarSearch(
+            calendar::search::Action::Query(_)
+        ))
+    )));
+}
+
+#[test]
+fn search_narrows_each_view_while_a_filter_is_on() {
+    const TITLE: &str = "All-day search target";
+    let mut state = search_state();
+    state.week_anchor = state.calendar.day;
+    let mut target = state.calendar.event("standup").unwrap().clone();
+    target.id = "search-target".into();
+    target.title = TITLE.into();
+    target.all_day = true;
+    state.calendar.events.push(target);
+    let metrics = Metrics::of(Size::new(1400.0, 1000.0));
+
+    fn shown(element: Element<'_, Message>, metrics: &Metrics) -> bool {
+        iced_test::Simulator::with_size(Default::default(), metrics.size, element)
+            .find(TITLE)
+            .is_ok()
+    }
+    type Render = for<'a> fn(&'a State, &Metrics) -> Element<'a, Message>;
+    let views: [(&str, Render); 4] = [
+        ("day", view),
+        ("week", weekly_view),
+        ("two weeks", two_week_view),
+        ("month", monthly_view),
+    ];
+    for (name, render) in views {
+        assert!(
+            shown(render(&state, &metrics), &metrics),
+            "{name}, no search"
+        );
+    }
+
+    search_action(
+        &mut state,
+        calendar::search::Action::Query("no event has this title".into()),
+    );
+    for (name, render) in views {
+        assert!(
+            !shown(render(&state, &metrics), &metrics),
+            "{name}, no match"
+        );
+    }
+
+    search_action(
+        &mut state,
+        calendar::search::Action::Query("SEARCH TARGET".into()),
+    );
+    for (name, render) in views {
+        assert!(shown(render(&state, &metrics), &metrics), "{name}, a match");
+    }
+}
+
+#[test]
+fn search_popup_and_the_other_sheets_replace_each_other() {
+    let mut state = search_state();
+    state.calendar.menu_open = true;
+    state.calendar.month_open = true;
+    state.overview_month_open = true;
+    search_action(&mut state, calendar::search::Action::Toggle);
+    assert!(state.calendar.search.open);
+    assert!(!state.calendar.menu_open);
+    assert!(!state.calendar.month_open);
+    assert!(!state.overview_month_open);
+
+    let _ = crate::app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMenuToggled),
+    );
+    assert!(state.calendar.menu_open);
+    assert!(!state.calendar.search.open);
+}
+
+#[test]
+fn closing_the_search_popup_leaves_the_filter_on() {
+    let mut state = search_state();
+    search_action(&mut state, calendar::search::Action::Toggle);
+    search_action(
+        &mut state,
+        calendar::search::Action::Query("standup".into()),
+    );
+    search_action(&mut state, calendar::search::Action::Toggle);
+    assert!(!state.calendar.search.open);
+    assert!(state.calendar.search.is_active());
+}
+
+#[test]
+fn search_ignores_a_project_that_no_longer_exists() {
+    let mut state = search_state();
+    search_action(
+        &mut state,
+        calendar::search::Action::Projects(calendar::projects::Action::Add(u64::MAX)),
+    );
+    assert!(state.calendar.search.projects.ids.is_empty());
+}
+
+fn detail_state() -> (State, Metrics) {
+    let mut state = search_state();
+    state.week_anchor = state.calendar.day;
+    let standup = state.calendar.event("standup").unwrap().clone();
+    for (id, title, visibility) in [
+        (
+            "secret",
+            "Secret all-day",
+            calendar::event_options::Visibility::Private,
+        ),
+        (
+            "open",
+            "Open all-day",
+            calendar::event_options::Visibility::Public,
+        ),
+    ] {
+        let mut event = standup.clone();
+        event.id = id.into();
+        event.title = title.into();
+        event.all_day = true;
+        event.details.options.visibility = visibility;
+        state.calendar.events.push(event);
+    }
+    (state, Metrics::of(Size::new(1400.0, 1000.0)))
+}
+
+#[test]
+fn hidden_details_keep_private_events_on_screen_in_each_view() {
+    fn has(element: Element<'_, Message>, metrics: &Metrics, wanted: &str) -> bool {
+        iced_test::Simulator::with_size(Default::default(), metrics.size, element)
+            .find(wanted)
+            .is_ok()
+    }
+    type Render = for<'a> fn(&'a State, &Metrics) -> Element<'a, Message>;
+    let views: [(&str, Render); 4] = [
+        ("day", view),
+        ("week", weekly_view),
+        ("two weeks", two_week_view),
+        ("month", monthly_view),
+    ];
+    let (mut state, metrics) = detail_state();
+    for (name, render) in views {
+        assert!(
+            has(render(&state, &metrics), &metrics, "Secret all-day"),
+            "{name}"
+        );
+        assert!(
+            !has(render(&state, &metrics), &metrics, PRIVATE_TITLE),
+            "{name}"
+        );
+    }
+
+    search_action(
+        &mut state,
+        calendar::search::Action::DetailsByVisibility(true),
+    );
+    for (name, render) in views {
+        assert!(
+            !has(render(&state, &metrics), &metrics, "Secret all-day"),
+            "{name}"
+        );
+        assert!(
+            has(render(&state, &metrics), &metrics, PRIVATE_TITLE),
+            "{name}"
+        );
+        assert!(
+            has(render(&state, &metrics), &metrics, "Open all-day"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn hidden_details_cannot_be_opened_and_close_a_pane_showing_them() {
+    let (mut state, _) = detail_state();
+    let open = |state: &mut State, id: &str| {
+        let _ = crate::app::update(
+            state,
+            Message::Event(EventMessage::EventOpened(id.to_owned())),
+        );
+    };
+    open(&mut state, "secret");
+    assert_eq!(state.calendar.open_event.as_deref(), Some("secret"));
+
+    search_action(
+        &mut state,
+        calendar::search::Action::DetailsByVisibility(true),
+    );
+    assert_eq!(state.calendar.open_event, None, "the pane closes");
+    assert!(state.calendar.edit_draft.is_none());
+
+    open(&mut state, "secret");
+    assert_eq!(state.calendar.open_event, None, "and stays closed");
+    open(&mut state, "open");
+    assert_eq!(state.calendar.open_event.as_deref(), Some("open"));
+}
+
+#[test]
+fn a_hidden_task_chip_shows_neither_its_title_nor_a_way_to_complete_it() {
+    let (mut state, metrics) = detail_state();
+    let mut task = state.calendar.event("standup").unwrap().clone();
+    task.id = "task:hidden".into();
+    task.calendar_id = "tasks:list".into();
+    task.title = "Hidden task".into();
+    search_action(
+        &mut state,
+        calendar::search::Action::DetailsByVisibility(true),
+    );
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        weekly_task_chip(&state, &task, &metrics),
+    );
+    assert!(ui.find("Hidden task").is_err());
+    assert!(ui.find(PRIVATE_TITLE).is_ok());
+    let _ = ui.click("○");
+    assert!(
+        !ui.into_messages()
+            .any(|m| matches!(m, Message::Task(TaskMessage::TaskToggled(_))))
+    );
+}
+
+#[test]
+fn the_popup_offers_the_detail_filter_and_the_button_stays_lit_for_it() {
+    let (mut state, metrics) = detail_state();
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        search_overlay(&state, &metrics),
+    );
+    assert!(ui.find("Detail filter").is_ok());
+    assert!(ui.find("Show details by visibility").is_ok());
+    drop(ui);
+    search_action(
+        &mut state,
+        calendar::search::Action::DetailsByVisibility(true),
+    );
+    assert!(state.calendar.search.is_modified());
+}
+
+#[test]
+fn the_event_pane_offers_a_calendar_dropdown_without_timeslay() {
+    let mut state = State::blank();
+    let mut snapshot = calendar::sample_snapshot();
+    snapshot.calendars.push(calendar::Calendar {
+        id: "app".into(),
+        name: "TimeSlay".into(),
+        color: calendar::colors::DEFAULT_EVENT,
+        primary: false,
+        selected_by_google: true,
+    });
+    state.calendar = calendar::Store::with_snapshot(snapshot);
+    let _ = crate::app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("standup".into())),
+    );
+    let event = state.calendar.event("standup").unwrap().clone();
+    let current = event.calendar_id.clone();
+    let other = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id != current && calendar.id != "app")
+        .unwrap()
+        .clone();
+    let name = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id == current)
+        .unwrap()
+        .name
+        .clone();
+    let metrics = Metrics::of(Size::new(1200.0, 900.0));
+
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        Size::new(400.0, 1200.0),
+        event_editor(&state, &event, &metrics),
+    );
+    ui.click(name.as_str()).unwrap();
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled)
+    )));
+
+    let _ = crate::app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled),
+    );
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        Size::new(400.0, 1200.0),
+        event_editor(&state, &event, &metrics),
+    );
+    assert!(ui.find("TimeSlay").is_err());
+    ui.click(other.name.as_str()).unwrap();
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::EventEdit(EventEditMessage::EventEditCalendarSelected(id)) if id == other.id
+    )));
+}

@@ -349,6 +349,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             // it is put away first.
             state.alarms.mode = true;
             state.calendar.menu_open = false;
+            state.calendar.search.open = false;
             state.calendar.month_open = false;
             state.overview_month_open = false;
             state.calendar.open_event = None;
@@ -470,6 +471,7 @@ fn open(state: &mut State, id: u64) {
         time_error: None,
     });
     state.calendar.menu_open = false;
+    state.calendar.search.open = false;
     state.calendar.month_open = false;
     state.overview_month_open = false;
 }

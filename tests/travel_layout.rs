@@ -67,7 +67,10 @@ fn travel_is_toggled_from_the_calendar_menu() {
             Size::new(width, 500.0),
             app::view(&state, iced::window::Id::unique()),
         );
-        assert!(header.find("Set Alarm").is_ok(), "no Set Alarm at {width}px");
+        assert!(
+            header.find("Set Alarm").is_ok(),
+            "no Set Alarm at {width}px"
+        );
         assert!(header.find("Menu").is_ok(), "no Menu at {width}px");
         assert!(
             header.find("Toggle Travel").is_err(),

@@ -1396,7 +1396,37 @@ fn event_patch_body(
     Ok(body)
 }
 
-/// Writes a single occurrence, its whole series, or a new series from here.
+fn move_event_url(source: &str, event_id: &str, destination: &str) -> String {
+    format!(
+        "{EVENTS}/{}/events/{}/move?destination={}",
+        urlencoding::encode(source),
+        urlencoding::encode(event_id),
+        urlencoding::encode(destination),
+    )
+}
+
+/// Moves an event, or a whole series by its master's id, to another calendar.
+/// Google keeps the event's id. It refuses to move a single occurrence.
+fn move_event(
+    access_token: &str,
+    source: &str,
+    event_id: &str,
+    destination: &str,
+) -> Result<(), GoogleError> {
+    post(
+        &move_event_url(source, event_id, destination),
+        access_token,
+        "",
+        "Google Calendar",
+    )
+    .map(|_| ())
+}
+
+/// Writes a single occurrence, its whole series, or a new series from here,
+/// taking it to `draft.calendar_id` when that is not where it is now.
+///
+/// The fields are written before the move, so retrying after a refused move
+/// repeats harmless writes rather than looking on the wrong calendar.
 pub fn save_event_scope(
     access_token: &str,
     original: &Event,
@@ -1406,13 +1436,20 @@ pub fn save_event_scope(
     color_id: Option<&str>,
 ) -> Result<(), GoogleError> {
     use super::SaveScope;
-    let url = format!(
-        "{EVENTS}/{}/events",
-        urlencoding::encode(&draft.calendar_id)
-    );
+    let source = original.calendar_id.as_str();
+    let destination = draft.calendar_id.as_str();
+    let moving = source != destination;
+    let url = format!("{EVENTS}/{}/events", urlencoding::encode(source));
     let instance_url = format!("{url}/{}", urlencoding::encode(&original.id));
     let instance: serde_json::Value = get(&instance_url, access_token)?;
     let series_id = instance["recurringEventId"].as_str();
+    if moving && scope == SaveScope::Current && series_id.is_some() {
+        return Err(
+            "One occurrence can't change calendar. Save all events, or the current and future ones."
+                .to_owned()
+                .into(),
+        );
+    }
     let recurrence = draft.recurrence_lines()?;
     let mut changes = event_patch_body(
         &draft.title,
@@ -1431,14 +1468,19 @@ pub fn save_event_scope(
         Some(&draft.options),
     )?;
     if scope == SaveScope::Current || series_id.is_none() {
-        return patch(
+        patch(
             &instance_url,
             access_token,
             &changes.to_string(),
             "Google Calendar",
-        );
+        )?;
+        if moving {
+            move_event(access_token, source, &original.id, destination)?;
+        }
+        return Ok(());
     }
-    let master_url = format!("{url}/{}", urlencoding::encode(series_id.unwrap()));
+    let series_id = series_id.unwrap();
+    let master_url = format!("{url}/{}", urlencoding::encode(series_id));
     let master: serde_json::Value = get(&master_url, access_token)?;
     let master_start = json_event_start(&master["start"])?;
     let boundary = json_event_start(&instance["originalStartTime"])?;
@@ -1502,12 +1544,16 @@ pub fn save_event_scope(
     }
     changes["extendedProperties"] = properties;
     if all {
-        return patch(
+        patch(
             &master_url,
             access_token,
             &changes.to_string(),
             "Google Calendar",
-        );
+        )?;
+        if moving {
+            move_event(access_token, source, series_id, destination)?;
+        }
+        return Ok(());
     }
     // Clone writable fields so guests, location, reminders and conferencing survive.
     let mut replacement = master.clone();
@@ -1532,8 +1578,9 @@ pub fn save_event_scope(
     for (key, value) in changes.as_object().unwrap() {
         replacement[key] = value.clone();
     }
+    // The new series starts out on the destination; the old one just ends.
     let response = post(
-        &url,
+        &format!("{EVENTS}/{}/events", urlencoding::encode(destination)),
         access_token,
         &replacement.to_string(),
         "Google Calendar",
@@ -1550,7 +1597,7 @@ pub fn save_event_scope(
         &truncated.to_string(),
         "Google Calendar",
     ) {
-        if let Err(rollback) = delete_event(access_token, &draft.calendar_id, &created.id) {
+        if let Err(rollback) = delete_event(access_token, destination, &created.id) {
             return Err(GoogleError {
                 detail: format!(
                     "{error}. Could not remove the replacement series: {rollback}. Refresh before retrying."
@@ -2180,6 +2227,17 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn moving_an_event_names_both_calendars_encoded() {
+        assert_eq!(
+            super::move_event_url("me@example.com", "abc", "team#x@group.calendar.google.com"),
+            format!(
+                "{}/me%40example.com/events/abc/move?destination=team%23x%40group.calendar.google.com",
+                super::EVENTS
+            )
+        );
+    }
+
     #[test]
     fn splitting_a_series_keeps_past_dates_and_the_remaining_count() {
         let boundary = DateTime::parse_from_rfc3339("2026-10-30T09:00:00-07:00")

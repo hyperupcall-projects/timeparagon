@@ -324,7 +324,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             Task::none()
         }
 
-        Action::EventLocationSaved(Ok(())) => Task::none(),
+        // A sync already running may have read the old location, which would
+        // bring a place that was just cleared back. This outdates its answer
+        // and fetches again.
+        Action::EventLocationSaved(Ok(())) => crate::app::refresh_week_after_write(state),
 
         Action::EventLocationSaved(Err(error)) => {
             // The place is kept here, so trips still work; only Google's copy
@@ -1013,6 +1016,96 @@ mod tests {
                 .unwrap()
                 .contains("event_places")
         );
+    }
+
+    /// A day of Standup at X, Deep work with no place, and Lunch at Y, with
+    /// the addresses Mapbox really gives, which do not repeat the title.
+    fn day_with_a_trip_to_lunch() -> (State, u64, u64) {
+        let mut state = State::blank();
+        state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
+        let travel = &mut state.config.travel;
+        let x = travel.add_place("Office", "500 Market St, Springfield", "m-x", 1.0, 1.0);
+        let y = travel.add_place("Cafe", "66 Mint St, Springfield", "m-y", 2.0, 2.0);
+        for event in &mut state.calendar.events {
+            event.details.location = String::new();
+        }
+        state.calendar.set_location("standup", "Office");
+        state.calendar.set_location("lunch", "Cafe");
+        (state, x, y)
+    }
+
+    fn give_place(state: &mut State, id: &str, mapbox: &str, name: &str, address: &str) {
+        let _ = update(state, Action::OpenPicker(PickTarget::Event(id.into())));
+        state.travel.picker.as_mut().unwrap().results = vec![Found {
+            place_id: mapbox.into(),
+            name: name.into(),
+            address: address.into(),
+            lat: 0.0,
+            lng: 0.0,
+        }];
+        let _ = update(state, Action::Choose(0));
+    }
+
+    fn trips(state: &State) -> Vec<(Leg, String)> {
+        day_hops(state, state.calendar.day)
+            .into_iter()
+            .map(|hop| (hop.leg, hop.before))
+            .collect()
+    }
+
+    /// Giving a place to an event between two others changes the trips on both
+    /// sides of it: the later event is now reached from this one.
+    #[test]
+    fn a_place_added_between_two_events_moves_the_trip_to_it() {
+        let (mut state, x, y) = day_with_a_trip_to_lunch();
+        let trip = Leg { from: x, to: y };
+        assert_eq!(trips(&state), [(trip, "lunch".to_owned())]);
+
+        give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
+
+        assert_eq!(trips(&state), [(trip, "deep".to_owned())]);
+    }
+
+    /// The row in `event_places` is only one of the two records of an event's
+    /// place. A config reload can drop it, and an event's other occurrences or
+    /// a copy of it never had one. The location on the event has to do.
+    #[test]
+    fn the_trips_follow_the_events_location_without_its_event_places_row() {
+        let (mut state, x, y) = day_with_a_trip_to_lunch();
+
+        give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
+        state.config.travel.event_places.clear();
+
+        assert_eq!(trips(&state), [(Leg { from: x, to: y }, "deep".to_owned())]);
+    }
+
+    #[test]
+    fn clearing_a_place_puts_the_trip_back_even_with_copies_of_the_event() {
+        let (mut state, x, y) = day_with_a_trip_to_lunch();
+        give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
+
+        // Held twice, as an event is once it has been opened on its own.
+        state.calendar.detail_event = state.calendar.event("deep").cloned();
+
+        let _ = update(&mut state, Action::Clear(PickTarget::Event("deep".into())));
+
+        assert_eq!(
+            trips(&state),
+            [(Leg { from: x, to: y }, "lunch".to_owned())],
+            "the copy the trips are worked out from still had the old location"
+        );
+    }
+
+    /// A sync that left before the write reached Google brings the old location
+    /// back with it, so its answer must not be believed.
+    #[test]
+    fn a_written_location_outdates_a_sync_already_running() {
+        let (mut state, ..) = day_with_a_trip_to_lunch();
+        let before = state.timeblocking.revision;
+
+        let _ = update(&mut state, Action::EventLocationSaved(Ok(())));
+
+        assert_ne!(state.timeblocking.revision, before);
     }
 
     #[test]

@@ -1267,8 +1267,7 @@ mod tests {
         assert!(ui.find(triage_hint).is_err());
         assert!(ui.find("Day ends at midnight").is_err());
 
-        let mut ui =
-            Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
+        let mut ui = Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
         assert!(ui.find("Day ends at midnight").is_ok());
     }
 

@@ -31,8 +31,11 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         state
             .calendar
             .all_day_events_on(day, &state.config.calendar)
-            .next()
-            .is_some()
+            .any(|event| {
+                state
+                    .calendar
+                    .search_shows(event, day, &state.config.calendar)
+            })
     }) {
         (metrics.size.height * 0.13).clamp(35.0, 110.0)
     } else {
@@ -234,6 +237,8 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         month_overlay(state, MonthPicker::Overview, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
+    } else if state.calendar.search.open {
+        search_overlay(state, metrics)
     } else {
         Space::new().width(0.0).height(0.0).into()
     };

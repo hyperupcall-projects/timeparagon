@@ -54,7 +54,11 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 .calendar
                 .all_day_events_on(day, &state.config.calendar)
             {
-                if !state.habits.matches_calendar_habit(event) {
+                if !state.habits.matches_calendar_habit(event)
+                    || !state
+                        .calendar
+                        .search_shows(event, day, &state.config.calendar)
+                {
                     continue;
                 }
                 // Overdue and undated tasks belong in the pending list rather
@@ -71,19 +75,35 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 if event.details.sleep.is_some() {
                     continue;
                 }
-                if !state.habits.matches_calendar_habit(event) {
+                if !state.habits.matches_calendar_habit(event)
+                    || !state
+                        .calendar
+                        .search_shows(event, day, &state.config.calendar)
+                {
                     continue;
                 }
                 if state.habits.calendar_habit.is_some() {
                     events = events.push(habit_occurrence(state, event, &cell_metrics));
                     continue;
                 }
-                let label = format!(
-                    "{} {}",
-                    calendar::time_format::clock(event.start, state.config.appearance.time_format),
-                    event.title
-                );
-                let color = event.display_color(&state.config.calendar);
+                let hidden = state.calendar.search.hides_details(event);
+                let label = if hidden {
+                    PRIVATE_TITLE.to_owned()
+                } else {
+                    format!(
+                        "{} {}",
+                        calendar::time_format::clock(
+                            event.start,
+                            state.config.appearance.time_format
+                        ),
+                        event.title
+                    )
+                };
+                let color = if hidden {
+                    PRIVATE_COLOR
+                } else {
+                    event.display_color(&state.config.calendar)
+                };
                 events = events.push(
                     button(
                         text(label)
@@ -239,6 +259,7 @@ pub(super) fn range_heading<'a>(
             MonthPicker::Overview,
         )))
         .style(crate::ui::controls::secondary);
+    let search = search_button(state, metrics);
     let menu = button(text("Menu").size(metrics.label()))
         .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
         .style(crate::ui::controls::secondary);
@@ -253,15 +274,27 @@ pub(super) fn range_heading<'a>(
     ]
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
-    if metrics.size.width < 500.0 {
+    if metrics.size.width < TWO_LINE_HEADER {
         column![
-            row![title, Space::new().width(Fill), menu].align_y(Alignment::Center),
+            title,
+            row![Space::new().width(Fill), search, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
+            controls
+        ]
+        .spacing(metrics.spacing)
+        .into()
+    } else if metrics.size.width < 500.0 {
+        column![
+            row![title, Space::new().width(Fill), search, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center),
             controls
         ]
         .spacing(metrics.spacing)
         .into()
     } else {
-        row![title, controls, Space::new().width(Fill), menu]
+        row![title, controls, Space::new().width(Fill), search, menu]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into()
@@ -333,6 +366,8 @@ pub(super) fn range_layers<'a>(
         month_overlay(state, MonthPicker::Overview, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
+    } else if state.calendar.search.open {
+        search_overlay(state, metrics)
     } else {
         Space::new().width(0).height(0).into()
     };

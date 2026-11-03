@@ -29,6 +29,7 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             state.alarms.editor = None;
             // Keep the day grid's scroll position when switching screens.
             state.calendar.menu_open = false;
+            state.calendar.search.open = false;
             // Each task list opens its own selection in the details pane.
             let tasks_screen =
                 |screen| matches!(screen, Screen::Overdue | Screen::Inbox | Screen::Triaged);

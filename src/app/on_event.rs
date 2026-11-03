@@ -124,6 +124,17 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
         EventMessage::EventOpened(id) => {
+            // The task screens list tasks in full whatever the calendar hides,
+            // so this only stops a click on the calendar itself.
+            let on_calendar = state.range_view_active() || state.screen == Screen::Calendar;
+            if on_calendar
+                && state
+                    .calendar
+                    .event(&id)
+                    .is_some_and(|event| state.calendar.search.hides_details(event))
+            {
+                return Task::none();
+            }
             state.timeblocking.backlog_picker = None;
             if state
                 .calendar
@@ -135,6 +146,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             }
             state.calendar.error = None;
             state.calendar.menu_open = false;
+            state.calendar.search.open = false;
             let mut close_block = None;
             if let Some(event) = state.calendar.event(&id).cloned() {
                 let is_task = event.is_task();

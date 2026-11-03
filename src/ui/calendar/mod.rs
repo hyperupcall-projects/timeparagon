@@ -10,6 +10,7 @@ mod header;
 mod menu;
 mod month;
 mod pointer;
+mod search;
 #[cfg(test)]
 mod sleep_tests;
 #[cfg(test)]
@@ -28,6 +29,7 @@ pub(crate) use header::*;
 use menu::*;
 pub use month::*;
 pub use pointer::*;
+pub(crate) use search::*;
 pub use two_week::*;
 pub use week::*;
 use zoom_wheel::*;
@@ -53,6 +55,7 @@ use crate::app::{
 use crate::app::{Message, MonthPicker, State};
 use crate::calendar::colors::{self, on_color};
 use crate::calendar::layout::{self, Span};
+use crate::calendar::search::{PRIVATE_COLOR, PRIVATE_TITLE};
 use crate::calendar::{self, Event};
 
 use super::layout::Metrics;
@@ -129,6 +132,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         month_overlay(state, MonthPicker::Panel, metrics)
     } else if state.calendar.menu_open {
         menu_overlay(state, metrics)
+    } else if state.calendar.search.open {
+        search_overlay(state, metrics)
     } else {
         iced::widget::Space::new().width(0.0).height(0.0).into()
     };

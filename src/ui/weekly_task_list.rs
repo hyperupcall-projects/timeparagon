@@ -231,7 +231,12 @@ fn day_column<'a>(
     width: f32,
     height: f32,
 ) -> Element<'a, Message> {
-    let events = tb::weekly_list_events(state, day);
+    let mut events = tb::weekly_list_events(state, day);
+    events.retain(|event| {
+        state
+            .calendar
+            .search_shows(event, day, &state.config.calendar)
+    });
     let total: i64 = events
         .iter()
         .filter(|e| !e.all_day)
@@ -335,6 +340,13 @@ fn day_column<'a>(
 }
 
 fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
+    if state.calendar.search.hides_details(event) {
+        return container(text(calendar::search::PRIVATE_TITLE).size(13))
+            .width(Fill)
+            .padding([8, 10])
+            .style(card_style)
+            .into();
+    }
     let task = event.is_task();
     let completed = event.completed;
     let metadata = tb::metadata(event);

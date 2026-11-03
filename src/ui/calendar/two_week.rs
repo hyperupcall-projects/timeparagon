@@ -220,6 +220,12 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         .calendar
         .all_day_events_on(day, &state.config.calendar)
     {
+        if !state
+            .calendar
+            .search_shows(event, day, &state.config.calendar)
+        {
+            continue;
+        }
         // Overdue and undated tasks belong in the pending list rather than
         // appearing on every date.
         if event.is_task() {
@@ -231,6 +237,12 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         }
     }
     for event in state.calendar.timed_events_on(day, &state.config.calendar) {
+        if !state
+            .calendar
+            .search_shows(event, day, &state.config.calendar)
+        {
+            continue;
+        }
         // An event past midnight is listed where it starts, not on each day it
         // touches, unless the day it started on is out of view.
         if calendar::day_at(event.start, day_start_hour) == day || day == first_shown {
@@ -247,9 +259,16 @@ fn all_day_row<'a>(
     past: bool,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let color = event.display_color(&state.config.calendar);
+    let hidden = state.calendar.search.hides_details(event);
+    let color = if hidden {
+        PRIVATE_COLOR
+    } else {
+        event.display_color(&state.config.calendar)
+    };
     let ink = on_color(color);
-    let title = if event.completed {
+    let title = if hidden {
+        PRIVATE_TITLE.to_owned()
+    } else if event.completed {
         format!("✓ {}", event.title)
     } else {
         event.title.clone()
@@ -284,10 +303,17 @@ fn timed_row<'a>(
     past: bool,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let color = event.display_color(&state.config.calendar);
+    let hidden = state.calendar.search.hides_details(event);
+    let color = if hidden {
+        PRIVATE_COLOR
+    } else {
+        event.display_color(&state.config.calendar)
+    };
     let alpha = if past { PAST_ALPHA } else { 1.0 };
     let clock = calendar::time_format::clock(event.start, state.config.appearance.time_format);
-    let label = if event.completed {
+    let label = if hidden {
+        PRIVATE_TITLE.to_owned()
+    } else if event.completed {
         format!("{clock} ✓ {}", event.title)
     } else {
         format!("{clock} {}", event.title)
@@ -329,14 +355,27 @@ fn timed_row<'a>(
 /// A task with its checkbox. It can be dragged to another day, as in the week
 /// and month views.
 fn task_row<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
-    let mut check = button(text(if task.completed { "●" } else { "○" }).size(metrics.label()))
-        .padding(0)
-        .style(crate::ui::controls::ghost);
-    if state.timeblocking.busy.is_empty() {
+    let hidden = state.calendar.search.hides_details(task);
+    let mut check = button(
+        text(if task.completed && !hidden {
+            "●"
+        } else {
+            "○"
+        })
+        .size(metrics.label()),
+    )
+    .padding(0)
+    .style(crate::ui::controls::ghost);
+    if state.timeblocking.busy.is_empty() && !hidden {
         check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
+    let label = if hidden {
+        PRIVATE_TITLE.to_owned()
+    } else {
+        crate::timeblocking::task_label(task)
+    };
     let title = button(
-        text(crate::timeblocking::task_label(task))
+        text(label)
             .size(metrics.label())
             .wrapping(text::Wrapping::None),
     )
