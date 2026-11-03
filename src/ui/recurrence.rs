@@ -9,11 +9,10 @@ use iced::widget::{button, column, row, text};
 use iced::{Alignment, Element, Length, Theme};
 
 use crate::app::Message;
+use crate::calendar::first_day::FirstDayOfWeek;
 use crate::recurrence::{self, EndKind, MonthlyMode, RepeatMode};
 
 use super::layout::Metrics;
-
-const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const NTH_LABELS: [(i8, &str); 6] = [
     (1, "First"),
@@ -48,6 +47,7 @@ fn choice<'a>(
 pub fn editor<'a, F>(
     rule: &'a recurrence::Rule,
     anchor: NaiveDate,
+    first_day: FirstDayOfWeek,
     metrics: &Metrics,
     busy: bool,
     map: F,
@@ -118,7 +118,13 @@ where
 
             if mode == RepeatMode::Weekly {
                 let mut days = Vec::new();
-                for (index, day) in WEEKDAY_LABELS.iter().enumerate() {
+                for (weekday, day) in first_day
+                    .weekdays()
+                    .into_iter()
+                    .zip(first_day.short_labels())
+                {
+                    // The rule keeps its flags Monday first whatever the order shown.
+                    let index = weekday.num_days_from_monday() as usize;
                     days.push(choice(
                         day,
                         rule.weekdays.get(index).copied().unwrap_or(false),
@@ -162,13 +168,15 @@ where
                             ));
                         }
                         let mut weekdays = Vec::new();
-                        for (index, day) in WEEKDAY_LABELS.iter().enumerate() {
+                        for (weekday, day) in first_day
+                            .weekdays()
+                            .into_iter()
+                            .zip(first_day.short_labels())
+                        {
                             weekdays.push(choice(
                                 day,
-                                recurrence::WEEKDAYS[index] == rule.monthly_weekday,
-                                send(recurrence::Action::MonthlyWeekday(
-                                    recurrence::WEEKDAYS[index],
-                                )),
+                                weekday == rule.monthly_weekday,
+                                send(recurrence::Action::MonthlyWeekday(weekday)),
                                 metrics,
                             ));
                         }
@@ -291,4 +299,35 @@ where
     }
 
     body.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::EventDraftMessage;
+    use iced_test::{Simulator, core::Settings};
+
+    #[test]
+    fn weekday_choices_keep_their_day_whatever_the_order_shown() {
+        let size = iced::Size::new(400.0, 600.0);
+        let day = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
+        let mut rule = recurrence::Rule::weekly(day);
+        rule.repeat = RepeatMode::Weekly;
+        for first_day in FirstDayOfWeek::ALL {
+            let mut ui = Simulator::with_size(
+                Settings::default(),
+                size,
+                editor(&rule, day, first_day, &Metrics::of(size), false, |action| {
+                    Message::EventDraft(EventDraftMessage::EventDraftRecurrence(action))
+                }),
+            );
+            ui.click("Sun").unwrap();
+            assert!(ui.into_messages().any(|message| matches!(
+                message,
+                Message::EventDraft(EventDraftMessage::EventDraftRecurrence(
+                    recurrence::Action::ToggleWeekday(6)
+                ))
+            )));
+        }
+    }
 }

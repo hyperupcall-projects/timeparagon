@@ -240,8 +240,14 @@ pub struct CalendarSettings {
     pub sleep_day_start_hour: u32,
     /// Latest wake-up hour (4-14). With no earlier event, sleep ends here.
     pub latest_wakeup_hour: u32,
+    /// The first column of the month and two-week views, the week view when it
+    /// shows a whole week, and the date pickers.
+    pub first_day_of_week: crate::calendar::first_day::FirstDayOfWeek,
     /// Total visible days: 7 from the selected day, or 8 from the previous day.
+    /// Ignored while `weekly_whole_week` is on.
     pub weekly_days: u32,
+    /// Show the whole week holding the selected day, from its first day.
+    pub weekly_whole_week: bool,
     /// Width of each day in the horizontally scrollable weekly view.
     pub weekly_day_width: u32,
     /// Show task cards instead of the weekly time grid.
@@ -307,7 +313,9 @@ impl Default for CalendarSettings {
             sleep_goal_hours: 8,
             sleep_day_start_hour: 0,
             latest_wakeup_hour: 8,
+            first_day_of_week: Default::default(),
             weekly_days: 8,
+            weekly_whole_week: false,
             weekly_day_width: 150,
             weekly_task_list: false,
             weekly_task_order: BTreeMap::new(),
@@ -320,6 +328,32 @@ impl Default for CalendarSettings {
             habit_color: None,
             default_calendar: None,
         }
+    }
+}
+
+/// Which days the week view shows, relative to the selected day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeekRange {
+    SevenFromToday,
+    EightFromYesterday,
+    WholeWeek,
+}
+
+impl WeekRange {
+    pub const ALL: [Self; 3] = [
+        Self::SevenFromToday,
+        Self::EightFromYesterday,
+        Self::WholeWeek,
+    ];
+}
+
+impl std::fmt::Display for WeekRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SevenFromToday => "7 days starting today",
+            Self::EightFromYesterday => "8 days starting yesterday",
+            Self::WholeWeek => "Whole week",
+        })
     }
 }
 
@@ -393,8 +427,44 @@ impl CalendarSettings {
     /// default.
     pub const MAX_DAY_END_HOUR: u32 = 5;
 
+    /// How many days the week view shows, which is also how far it steps.
     pub fn weekly_days(&self) -> u32 {
-        self.weekly_days.clamp(7, 8)
+        if self.weekly_whole_week {
+            7
+        } else {
+            self.weekly_days.clamp(7, 8)
+        }
+    }
+
+    pub fn week_range(&self) -> WeekRange {
+        if self.weekly_whole_week {
+            WeekRange::WholeWeek
+        } else if self.weekly_days() == 7 {
+            WeekRange::SevenFromToday
+        } else {
+            WeekRange::EightFromYesterday
+        }
+    }
+
+    pub fn set_week_range(&mut self, range: WeekRange) {
+        self.weekly_whole_week = range == WeekRange::WholeWeek;
+        match range {
+            WeekRange::SevenFromToday => self.weekly_days = 7,
+            WeekRange::EightFromYesterday => self.weekly_days = 8,
+            WeekRange::WholeWeek => {}
+        }
+    }
+
+    /// The days the week view shows for `anchor`.
+    pub fn week_dates(&self, anchor: chrono::NaiveDate) -> Vec<chrono::NaiveDate> {
+        if self.weekly_whole_week {
+            let start = self.first_day_of_week.week_start(anchor);
+            (0..7)
+                .map(|offset| start + chrono::Duration::days(offset))
+                .collect()
+        } else {
+            crate::calendar::week_dates(anchor, self.weekly_days())
+        }
     }
 
     pub fn weekly_day_width(&self) -> u32 {
@@ -555,6 +625,23 @@ fn save_calendar_visibility_at(
     edit_calendar_table(path, |calendar| {
         calendar.insert("disabled".into(), settings.disabled.clone().into());
         calendar.insert("show_tasks".into(), settings.show_tasks.into());
+    })
+}
+
+/// Saves which day weeks start on, leaving the rest of the file alone.
+pub fn save_first_day_of_week(
+    first_day: crate::calendar::first_day::FirstDayOfWeek,
+) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_first_day_of_week_at(&path, first_day)
+}
+
+fn save_first_day_of_week_at(
+    path: &std::path::Path,
+    first_day: crate::calendar::first_day::FirstDayOfWeek,
+) -> io::Result<()> {
+    edit_calendar_table(path, |calendar| {
+        calendar.insert("first_day_of_week".into(), first_day.name().into());
     })
 }
 
@@ -763,6 +850,28 @@ mod tests {
             assert_eq!(mode, 0o600);
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_the_first_day_of_the_week_keeps_other_settings() {
+        use crate::calendar::first_day::FirstDayOfWeek;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[calendar]\nsync_minutes = 30\n\n[window]\nalways_on_top = true\n",
+        )
+        .unwrap();
+
+        save_first_day_of_week_at(&path, FirstDayOfWeek::Saturday).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        let document: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(document["window"]["always_on_top"].as_bool(), Some(true));
+        let config: Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.calendar.sync_minutes, 30);
+        assert_eq!(config.calendar.first_day_of_week, FirstDayOfWeek::Saturday);
     }
 
     #[test]

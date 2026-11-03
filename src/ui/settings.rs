@@ -1,5 +1,6 @@
 //! The settings tab and the timer-hits-zero menu.
 
+use crate::calendar::first_day::FirstDayOfWeek;
 use crate::calendar::time_format::TimeFormat;
 use iced::widget::{button, column, container, row, text};
 use iced::{Center, Element, Fill, Length};
@@ -31,27 +32,14 @@ impl std::fmt::Display for CalendarOption {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct WeeklyDays(u32);
-
-impl std::fmt::Display for WeeklyDays {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0 == 7 {
-            "7 days starting today"
-        } else {
-            "8 days starting yesterday"
-        })
-    }
-}
-
 fn week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = &state.config.calendar;
     column![
         choice(
             "Days shown",
-            vec![WeeklyDays(7), WeeklyDays(8)],
-            Some(WeeklyDays(settings.weekly_days())),
-            |days| Message::Settings(SettingsMessage::CalendarWeeklyDaysChanged(days.0)),
+            config::WeekRange::ALL.to_vec(),
+            Some(settings.week_range()),
+            |range| Message::Settings(SettingsMessage::CalendarWeekRangeChanged(range)),
             metrics,
         ),
         field(
@@ -237,6 +225,13 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                 TimeFormat::ALL.to_vec(),
                 Some(state.config.appearance.time_format),
                 |v0| Message::Settings(SettingsMessage::TimeFormatSelected(v0)),
+                metrics,
+            ),
+            choice(
+                "First day of the week",
+                FirstDayOfWeek::ALL.to_vec(),
+                Some(settings.first_day_of_week),
+                |v0| Message::Settings(SettingsMessage::FirstDayOfWeekSelected(v0)),
                 metrics,
             ),
             field(
@@ -1273,21 +1268,24 @@ mod tests {
 
     #[test]
     fn week_day_choices_show_the_start_day_and_switch_in_a_narrow_panel() {
+        use crate::config::WeekRange;
         use iced_test::{Simulator, core::Settings};
 
         let size = iced::Size::new(200.0, 400.0);
         let metrics = Metrics::of(size);
-        for (days, label, next) in [
-            (7, "7 days starting today", 8),
-            (8, "8 days starting yesterday", 7),
+        for (range, next) in [
+            (WeekRange::SevenFromToday, WeekRange::EightFromYesterday),
+            (WeekRange::EightFromYesterday, WeekRange::WholeWeek),
+            (WeekRange::WholeWeek, WeekRange::SevenFromToday),
         ] {
             let mut state = State::blank();
-            state.config.calendar.weekly_days = days;
+            state.config.calendar.set_week_range(range);
+            let label = range.to_string();
             let mut ui =
                 Simulator::with_size(Settings::default(), size, week_view(&state, &metrics));
-            ui.click(label).unwrap();
+            ui.click(label.as_str()).unwrap();
             assert!(ui.into_messages().any(|message| matches!(
-                message, Message::Settings(SettingsMessage::CalendarWeeklyDaysChanged(value)) if value == next
+                message, Message::Settings(SettingsMessage::CalendarWeekRangeChanged(value)) if value == next
             )));
         }
     }
@@ -1433,6 +1431,41 @@ mod tests {
             ui.click(label).unwrap();
             assert_eq!(ui.into_messages().count(), 0);
         }
+    }
+
+    #[test]
+    fn the_first_day_of_the_week_defaults_to_sunday_and_persists() {
+        use crate::{app, config::Config, theme::Catalog};
+        use iced_test::{Simulator, core::Settings};
+
+        let old: Config = toml::from_str("[calendar]\nsync_minutes = 60\n").unwrap();
+        assert_eq!(old.calendar.first_day_of_week, FirstDayOfWeek::Sunday);
+        let mut state = State::new(old, Catalog::built_in());
+        for expected in FirstDayOfWeek::ALL {
+            let _ = app::update(
+                &mut state,
+                Message::Settings(SettingsMessage::FirstDayOfWeekSelected(expected)),
+            );
+            let saved = toml::to_string(&state.config).unwrap();
+            let restored: Config = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.calendar.first_day_of_week, expected);
+        }
+
+        // In a narrow panel the choice is a button that moves to the next day.
+        let size = iced::Size::new(180.0, 400.0);
+        state.config.calendar.first_day_of_week = FirstDayOfWeek::Sunday;
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            size,
+            preferences(&state, &Metrics::of(size)),
+        );
+        ui.click("Sunday").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::Settings(SettingsMessage::FirstDayOfWeekSelected(
+                FirstDayOfWeek::Monday
+            ))
+        )));
     }
 
     #[test]

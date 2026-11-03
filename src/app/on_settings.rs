@@ -317,6 +317,12 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             state.config.appearance.time_format = format;
             queue_save(state)
         }
+        SettingsMessage::FirstDayOfWeekSelected(first_day) => {
+            state.config.calendar.first_day_of_week = first_day;
+            // The month and two-week views now span different days.
+            state.two_week_more = None;
+            Task::batch([queue_save(state), show_cached_calendar(state)])
+        }
         SettingsMessage::AlwaysOnTopToggled(on_top) => {
             state.config.window.always_on_top = on_top;
 
@@ -527,8 +533,8 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             let save = queue_save(state);
             Task::batch([save, sync_calendar(state)])
         }
-        SettingsMessage::CalendarWeeklyDaysChanged(days) => {
-            state.config.calendar.weekly_days = days.clamp(7, 8);
+        SettingsMessage::CalendarWeekRangeChanged(range) => {
+            state.config.calendar.set_week_range(range);
             Task::batch([queue_save(state), show_cached_calendar(state)])
         }
         SettingsMessage::CalendarWeeklyWidthChanged(width) => {

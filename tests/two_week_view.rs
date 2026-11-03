@@ -1,7 +1,8 @@
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use iced::{Element, Size};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{CalendarMessage, EventDraftMessage, EventMessage};
+use timeslay::app::{CalendarMessage, EventDraftMessage, EventMessage, SettingsMessage};
+use timeslay::calendar::first_day::FirstDayOfWeek;
 use timeslay::{
     app::{self, Message, State},
     calendar::{self, Store},
@@ -18,6 +19,7 @@ fn anchor() -> NaiveDate {
 
 fn state(events_per_day: u32) -> State {
     let mut state = State::blank();
+    state.config.calendar.first_day_of_week = FirstDayOfWeek::Monday;
     let mut snapshot = calendar::sample_snapshot();
     snapshot.day = anchor();
     let template = snapshot
@@ -26,21 +28,22 @@ fn state(events_per_day: u32) -> State {
         .find(|e| e.id == "standup")
         .unwrap()
         .clone();
-    snapshot.events = calendar::two_week_dates(snapshot.day)
-        .into_iter()
-        .flat_map(|day| (0..events_per_day).map(move |index| (day, index)))
-        .map(|(day, index)| {
-            let mut event = template.clone();
-            event.id = format!("{day}-{index}");
-            event.title = format!("Meeting {index} on {day}");
-            event.start = Local
-                .from_local_datetime(&day.and_hms_opt(8 + index % 12, 0, 0).unwrap())
-                .single()
-                .unwrap();
-            event.end = event.start + Duration::minutes(30);
-            event
-        })
-        .collect();
+    snapshot.events =
+        calendar::two_week_dates(snapshot.day, state.config.calendar.first_day_of_week)
+            .into_iter()
+            .flat_map(|day| (0..events_per_day).map(move |index| (day, index)))
+            .map(|(day, index)| {
+                let mut event = template.clone();
+                event.id = format!("{day}-{index}");
+                event.title = format!("Meeting {index} on {day}");
+                event.start = Local
+                    .from_local_datetime(&day.and_hms_opt(8 + index % 12, 0, 0).unwrap())
+                    .single()
+                    .unwrap();
+                event.end = event.start + Duration::minutes(30);
+                event
+            })
+            .collect();
     state.calendar = Store::with_snapshot(calendar::Snapshot {
         events: vec![],
         ..snapshot.clone()
@@ -75,6 +78,40 @@ fn shows_two_whole_weeks_starting_on_the_anchors_monday() {
     );
     for day in dates {
         assert!(ui.find(format!("{clock} Meeting 0 on {day}")).is_ok());
+    }
+}
+
+#[test]
+fn the_fortnight_and_its_headings_follow_the_first_day_of_the_week() {
+    for (first_day, first_date, label, heading, last_heading) in [
+        (
+            FirstDayOfWeek::Sunday,
+            date(2026, 10, 25),
+            "Oct 25 – Nov 7, 2026 ▾",
+            "SUN",
+            "SAT",
+        ),
+        (
+            FirstDayOfWeek::Saturday,
+            date(2026, 10, 24),
+            "Oct 24 – Nov 6, 2026 ▾",
+            "SAT",
+            "FRI",
+        ),
+    ] {
+        let mut state = state(1);
+        let _ = app::update(
+            &mut state,
+            Message::Settings(SettingsMessage::FirstDayOfWeekSelected(first_day)),
+        );
+        let dates = state.calendar_dates();
+        assert_eq!(dates[0], first_date);
+        assert_eq!(dates.len(), 14);
+        assert!(dates.contains(&anchor()));
+        let mut ui = render(&state, Size::new(1400.0, 1000.0));
+        for text in [label, heading, last_heading] {
+            assert!(ui.find(text).is_ok(), "missing {text} for {first_day}");
+        }
     }
 }
 

@@ -485,6 +485,7 @@ pub enum NotepadMessage {
 pub enum SettingsMessage {
     ThemeSelected(String),
     TimeFormatSelected(TimeFormat),
+    FirstDayOfWeekSelected(calendar::first_day::FirstDayOfWeek),
     AlwaysOnTopToggled(bool),
     CalendarWidthChanged(f32),
     CalendarWeekWidthChanged(f32),
@@ -547,7 +548,7 @@ pub enum SettingsMessage {
     SleepEstimatedEnd(bool),
     SleepSaveRequested,
     SleepSaved(Result<calendar::Event, String>),
-    CalendarWeeklyDaysChanged(u32),
+    CalendarWeekRangeChanged(config::WeekRange),
     CalendarWeeklyWidthChanged(u32),
 
     /// The calendar new events are created on was changed.
@@ -965,9 +966,13 @@ impl State {
 
     pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
         match self.view {
-            CalendarView::Month => calendar::month_grid(self.week_anchor),
-            CalendarView::TwoWeek => calendar::two_week_dates(self.week_anchor),
-            _ => calendar::week_dates(self.week_anchor, self.config.calendar.weekly_days()),
+            CalendarView::Month => {
+                calendar::month_grid(self.week_anchor, self.config.calendar.first_day_of_week)
+            }
+            CalendarView::TwoWeek => {
+                calendar::two_week_dates(self.week_anchor, self.config.calendar.first_day_of_week)
+            }
+            _ => self.config.calendar.week_dates(self.week_anchor),
         }
     }
 

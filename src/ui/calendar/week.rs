@@ -23,7 +23,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     } else {
         metrics
     };
-    let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
+    let days = state.config.calendar.week_dates(state.week_anchor);
     let width = weekly_column_width(&state.config.calendar);
     let day_metrics = Metrics::of(Size::new(width, metrics.size.height));
     let now = crate::clock::now();

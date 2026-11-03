@@ -22,7 +22,7 @@ pub(super) fn header<'a>(
         state.calendar.day
     };
     let heading = if weekly {
-        let days = calendar::week_dates(day, state.config.calendar.weekly_days());
+        let days = state.config.calendar.week_dates(day);
         let format = if metrics.breakpoint.is_compact() {
             "%-m/%-d"
         } else {

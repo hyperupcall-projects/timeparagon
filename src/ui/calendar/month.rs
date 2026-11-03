@@ -10,10 +10,11 @@ pub(super) fn month_cell_height(window_height: f32, weeks: usize, zoom: f32) -> 
     ((window_height - 160.0) / weeks as f32).max(135.0) * zoom
 }
 
-/// A month overview with whole Monday–Sunday weeks. Selecting a date updates
+/// A month overview with whole weeks. Selecting a date updates
 /// the day panel while keeping the month overview anchored in place.
 pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let dates = calendar::month_grid(state.week_anchor);
+    let first_day = state.config.calendar.first_day_of_week;
+    let dates = calendar::month_grid(state.week_anchor, first_day);
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let grid_width = (metrics.size.width - metrics.padding * 2.0).max(840.0);
     let cell_width = grid_width / 7.0;
@@ -23,13 +24,11 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         state.calendar.zoom_ratio(),
     );
     let cell_metrics = Metrics::of(Size::new(cell_width - 12.0, cell_height));
-    let weekdays = row(
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(|day| {
-            container(text(day).size(cell_metrics.label()).center().width(Fill))
-                .width(Length::Fixed(cell_width))
-                .into()
-        }),
-    );
+    let weekdays = row(first_day.short_labels().map(|day| {
+        container(text(day).size(cell_metrics.label()).center().width(Fill))
+            .width(Length::Fixed(cell_width))
+            .into()
+    }));
     let weeks = dates.chunks(7).map(|week| {
         row(week.iter().map(|&day| {
             let in_month = day.month() == state.week_anchor.month();
@@ -414,6 +413,7 @@ pub(super) fn month_overlay<'a>(
         MonthPicker::Panel => state.calendar.month,
         MonthPicker::Overview => state.overview_month,
     };
+    let first_day = state.config.calendar.first_day_of_week;
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let selected = match picker {
         MonthPicker::Panel => state.calendar.day,
@@ -421,11 +421,10 @@ pub(super) fn month_overlay<'a>(
         MonthPicker::Overview => state.week_hover.unwrap_or(state.week_anchor),
     };
     let preview = match picker {
-        MonthPicker::Overview if state.weekly() => Some(calendar::week_dates(
-            selected,
-            state.config.calendar.weekly_days(),
-        )),
-        MonthPicker::Overview if state.two_weekly() => Some(calendar::two_week_dates(selected)),
+        MonthPicker::Overview if state.weekly() => Some(state.config.calendar.week_dates(selected)),
+        MonthPicker::Overview if state.two_weekly() => {
+            Some(calendar::two_week_dates(selected, first_day))
+        }
         _ => None,
     };
 
@@ -448,8 +447,8 @@ pub(super) fn month_overlay<'a>(
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
 
-    let weekdays = row(calendar::WEEKDAY_INITIALS.iter().map(|label| {
-        text(*label)
+    let weekdays = row(first_day.initials().map(|label| {
+        text(label)
             .size(metrics.label() - 1.0)
             .width(Fill)
             .center()
@@ -459,7 +458,7 @@ pub(super) fn month_overlay<'a>(
     .spacing(PICKER_CELL_GAP)
     .width(Fill);
 
-    let days = calendar::month_grid(month);
+    let days = calendar::month_grid(month, first_day);
     let mut weeks: Vec<Element<'a, Message>> = Vec::new();
     for week in days.chunks(7) {
         let cells: Vec<Element<'a, Message>> = week

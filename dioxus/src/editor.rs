@@ -13,6 +13,7 @@ use dioxus::prelude::*;
 use timeslay_core::calendar::event_options::{
     Action as OptionAction, Availability, EventOptions, Method, Unit, Visibility,
 };
+use timeslay_core::calendar::first_day::FirstDayOfWeek;
 use timeslay_core::calendar::{self, EditDraft, Event, SaveScope};
 use timeslay_core::config::{Config, ProjectsSettings};
 use timeslay_core::places::{self, Found, Place, PlaceSettings};
@@ -22,8 +23,6 @@ use timeslay_core::timeblocking as tb;
 
 use crate::css_color;
 use crate::day::{self, AssignedTask, EditContext, HabitRow, TaskFields, TimeBlock};
-
-const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const NTH_LABELS: [(i8, &str); 6] = [
     (1, "First"),
@@ -1042,6 +1041,7 @@ fn EventEditor(
             RepeatEditor {
                 rule: values.rule.clone(),
                 anchor,
+                first_day: context.settings.first_day_of_week,
                 busy: is_busy,
                 on_action: move |action: recurrence::Action| {
                     let mut draft = draft.write();
@@ -1883,11 +1883,22 @@ fn Choice(label: String, selected: bool, busy: bool, onclick: EventHandler<()>) 
     }
 }
 
+/// The weekdays in the order the week shows them, each with its Monday-first
+/// index into the rule.
+fn weekday_choices(first_day: FirstDayOfWeek) -> impl Iterator<Item = (usize, &'static str)> {
+    first_day
+        .weekdays()
+        .into_iter()
+        .map(|day| day.num_days_from_monday() as usize)
+        .zip(first_day.short_labels())
+}
+
 /// The repeat controls: the same words and choices as the iced editors.
 #[component]
 fn RepeatEditor(
     rule: Rule,
     anchor: NaiveDate,
+    first_day: FirstDayOfWeek,
     busy: bool,
     on_action: EventHandler<recurrence::Action>,
 ) -> Element {
@@ -1939,10 +1950,10 @@ fn RepeatEditor(
                 if mode == RepeatMode::Weekly {
                     span { class: "editor-label", "On" }
                     div { class: "editor-wrap",
-                        for (index, day) in WEEKDAY_LABELS.iter().enumerate() {
+                        for (index, day) in weekday_choices(first_day) {
                             Choice {
                                 key: "{day}",
-                                label: *day,
+                                label: day,
                                 selected: rule.weekdays.get(index).copied().unwrap_or(false),
                                 busy,
                                 onclick: move |_| on_action.call(Action::ToggleWeekday(index)),
@@ -1997,10 +2008,10 @@ fn RepeatEditor(
                                 }
                             }
                             div { class: "editor-wrap",
-                                for (index, day) in WEEKDAY_LABELS.iter().enumerate() {
+                                for (index, day) in weekday_choices(first_day) {
                                     Choice {
                                         key: "{day}",
-                                        label: *day,
+                                        label: day,
                                         selected: recurrence::WEEKDAYS[index] == rule.monthly_weekday,
                                         busy,
                                         onclick: move |_| on_action.call(Action::MonthlyWeekday(recurrence::WEEKDAYS[index])),
@@ -2326,6 +2337,20 @@ mod tests {
                 "Move to backlog",
                 "Delete task",
             ],
+        );
+    }
+
+    #[test]
+    fn weekday_choices_start_on_the_first_day_and_keep_their_rule_index() {
+        let choices: Vec<_> = weekday_choices(FirstDayOfWeek::Sunday).collect();
+        assert_eq!(choices[0], (6, "Sun"));
+        assert_eq!(choices[1], (0, "Mon"));
+        let choices: Vec<_> = weekday_choices(FirstDayOfWeek::Saturday).collect();
+        assert_eq!(choices[0], (5, "Sat"));
+        assert_eq!(choices[6], (4, "Fri"));
+        assert_eq!(
+            weekday_choices(FirstDayOfWeek::Monday).next(),
+            Some((0, "Mon"))
         );
     }
 

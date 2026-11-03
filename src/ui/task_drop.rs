@@ -405,7 +405,7 @@ mod tests {
                 start_drag(&mut state);
                 let anchor = state.week_anchor;
                 let day = if monthly {
-                    calendar::month_grid(anchor)[10]
+                    calendar::month_grid(anchor, state.config.calendar.first_day_of_week)[10]
                 } else {
                     state.calendar_dates()[3]
                 };

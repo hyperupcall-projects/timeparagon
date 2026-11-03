@@ -114,6 +114,7 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         super::super::recurrence::editor(
             &draft.rule,
             draft.start.date_naive(),
+            state.config.calendar.first_day_of_week,
             metrics,
             false,
             |v0| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v0)),

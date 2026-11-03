@@ -64,6 +64,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         body = body.push(super::super::recurrence::editor(
             &draft.rule,
             draft.start.date_naive(),
+            state.config.calendar.first_day_of_week,
             metrics,
             false,
             |v0| Message::EventEdit(EventEditMessage::EventEditRecurrence(v0)),

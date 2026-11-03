@@ -6,6 +6,7 @@ pub mod colors;
 mod day_cache;
 pub mod deadline;
 pub mod event_options;
+pub mod first_day;
 pub mod google;
 pub mod layout;
 pub mod notes;
@@ -2532,16 +2533,13 @@ pub fn month_heading(month: NaiveDate) -> String {
     format!("{} {}", month_long(month.month()), month.year())
 }
 
-/// The single-letter weekday labels for the month grid, Monday first.
-pub const WEEKDAY_INITIALS: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
-
-/// The days laid out in a month grid, Monday first and padded to whole weeks.
+/// The days laid out in a month grid, padded to whole weeks.
 ///
 /// The leading and trailing days belong to the neighbouring months so every
 /// row is full; the caller dims them.
-pub fn month_grid(month: NaiveDate) -> Vec<NaiveDate> {
+pub fn month_grid(month: NaiveDate, first_day: first_day::FirstDayOfWeek) -> Vec<NaiveDate> {
     let first = first_of_month(month);
-    let lead = first.weekday().num_days_from_monday() as i64;
+    let lead = first_day.days_into_week(first.weekday());
     let start = first - chrono::Duration::days(lead);
     let cells = lead + days_in_month(first) as i64;
     let weeks = (cells + 6) / 7;
@@ -2551,9 +2549,9 @@ pub fn month_grid(month: NaiveDate) -> Vec<NaiveDate> {
         .collect()
 }
 
-/// Two whole weeks, Monday first, starting with the week that holds `anchor`.
-pub fn two_week_dates(anchor: NaiveDate) -> Vec<NaiveDate> {
-    let start = anchor - chrono::Duration::days(anchor.weekday().num_days_from_monday() as i64);
+/// Two whole weeks, starting with the week that holds `anchor`.
+pub fn two_week_dates(anchor: NaiveDate, first_day: first_day::FirstDayOfWeek) -> Vec<NaiveDate> {
+    let start = first_day.week_start(anchor);
     (0..14)
         .map(|offset| start + chrono::Duration::days(offset))
         .collect()
@@ -2665,6 +2663,7 @@ pub fn sample_snapshot() -> Snapshot {
 
 #[cfg(test)]
 mod tests {
+    use super::first_day::FirstDayOfWeek;
     #[test]
     fn only_plain_events_can_move_and_never_onto_the_app_calendar() {
         let mut snapshot = sample_snapshot();
@@ -3395,7 +3394,7 @@ mod tests {
     fn the_month_grid_starts_on_a_monday_and_covers_the_whole_month() {
         // October 2026 starts on a Thursday and has 31 days.
         let month = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let grid = month_grid(month);
+        let grid = month_grid(month, FirstDayOfWeek::Monday);
 
         assert_eq!(grid.len() % 7, 0, "the grid has to be whole weeks");
         assert_eq!(grid[0].weekday(), chrono::Weekday::Mon);
@@ -3416,11 +3415,92 @@ mod tests {
     fn the_month_grid_is_only_as_tall_as_it_has_to_be() {
         // February 2027 starts on a Monday and has 28 days: exactly four weeks.
         let month = NaiveDate::from_ymd_opt(2027, 2, 1).unwrap();
-        assert_eq!(month_grid(month).len(), 28);
+        assert_eq!(month_grid(month, FirstDayOfWeek::Monday).len(), 28);
 
         // August 2026 starts on a Saturday and has 31 days, so it needs six.
         let month = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
-        assert_eq!(month_grid(month).len(), 42);
+        assert_eq!(month_grid(month, FirstDayOfWeek::Monday).len(), 42);
+        // With Saturday first that same month opens on its first cell.
+        assert_eq!(month_grid(month, FirstDayOfWeek::Saturday).len(), 35);
+    }
+
+    #[test]
+    fn the_month_grid_and_labels_follow_the_first_day_of_the_week() {
+        // October 2026 starts on a Thursday.
+        let month = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        for (first_day, weekday, start, labels) in [
+            (
+                FirstDayOfWeek::Sunday,
+                chrono::Weekday::Sun,
+                (9, 27),
+                ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+            ),
+            (
+                FirstDayOfWeek::Monday,
+                chrono::Weekday::Mon,
+                (9, 28),
+                ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            ),
+            (
+                FirstDayOfWeek::Saturday,
+                chrono::Weekday::Sat,
+                (9, 26),
+                ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"],
+            ),
+        ] {
+            let grid = month_grid(month, first_day);
+            assert_eq!(grid.len() % 7, 0);
+            assert_eq!(grid[0].weekday(), weekday);
+            assert_eq!(
+                grid[0],
+                NaiveDate::from_ymd_opt(2026, start.0, start.1).unwrap()
+            );
+            assert_eq!(first_day.short_labels(), labels);
+            assert_eq!(first_day.initials()[0], &labels[0][..1]);
+            for day in 1..=31 {
+                let date = NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
+                assert_eq!(grid.iter().filter(|d| **d == date).count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn two_weeks_start_with_the_week_holding_the_anchor() {
+        let date = |month, day| NaiveDate::from_ymd_opt(2026, month, day).unwrap();
+        for (anchor, first_day, start) in [
+            // A Thursday.
+            (date(10, 29), FirstDayOfWeek::Sunday, date(10, 25)),
+            (date(10, 29), FirstDayOfWeek::Monday, date(10, 26)),
+            (date(10, 29), FirstDayOfWeek::Saturday, date(10, 24)),
+            // The first day itself stays put.
+            (date(10, 25), FirstDayOfWeek::Sunday, date(10, 25)),
+            (date(10, 26), FirstDayOfWeek::Monday, date(10, 26)),
+            (date(10, 24), FirstDayOfWeek::Saturday, date(10, 24)),
+            // The last day of the week still belongs to it.
+            (date(10, 31), FirstDayOfWeek::Sunday, date(10, 25)),
+            (date(11, 1), FirstDayOfWeek::Monday, date(10, 26)),
+            (date(10, 30), FirstDayOfWeek::Saturday, date(10, 24)),
+        ] {
+            let days = two_week_dates(anchor, first_day);
+            assert_eq!(days.len(), 14);
+            assert_eq!(days[0], start, "{anchor} with {first_day}");
+            assert_eq!(days[13], start + chrono::Duration::days(13));
+        }
+    }
+
+    #[test]
+    fn the_first_day_of_the_week_defaults_to_sunday_and_round_trips() {
+        let settings: crate::config::Config = toml::from_str("[calendar]\n").unwrap();
+        assert_eq!(settings.calendar.first_day_of_week, FirstDayOfWeek::Sunday);
+        for first_day in FirstDayOfWeek::ALL {
+            let parsed: crate::config::Config = toml::from_str(&format!(
+                "[calendar]\nfirst_day_of_week = '{}'\n",
+                first_day.name()
+            ))
+            .unwrap();
+            assert_eq!(parsed.calendar.first_day_of_week, first_day);
+            assert_eq!(FirstDayOfWeek::parse(first_day.name()), Some(first_day));
+        }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Shared native form controls, following calendar/popover and stacked-form layouts.
 use super::layout::Metrics;
 use crate::app::{Message, State};
+use crate::calendar::first_day::FirstDayOfWeek;
 use crate::calendar::time_format::TimeFormat;
 use chrono::{Datelike, Months, NaiveDate, NaiveTime, Timelike};
 use iced::advanced::widget::{Operation, Tree, tree};
@@ -271,6 +272,7 @@ pub fn overlay<'a>(
     p: &'a Picker,
     metrics: &Metrics,
     time_format: TimeFormat,
+    first_day: FirstDayOfWeek,
 ) -> Element<'a, Message> {
     let size = metrics.label();
     let selected = p
@@ -324,8 +326,8 @@ pub fn overlay<'a>(
         .align_y(iced::Center)
         .into()
     };
-    let weekdays = row(crate::calendar::WEEKDAY_INITIALS.iter().map(|s| {
-        text(*s)
+    let weekdays = row(first_day.initials().map(|s| {
+        text(s)
             .size(size - 1.0)
             .style(text::secondary)
             .width(Fill)
@@ -333,7 +335,7 @@ pub fn overlay<'a>(
             .into()
     }))
     .spacing(3);
-    let days = crate::calendar::month_grid(p.month);
+    let days = crate::calendar::month_grid(p.month, first_day);
     let weeks = column(
         days.chunks(7)
             .map(|week| {

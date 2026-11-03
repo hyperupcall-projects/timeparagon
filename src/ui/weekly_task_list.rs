@@ -104,7 +104,7 @@ pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
     .spacing(6)
     .align_y(Alignment::Center);
     if metrics.size.width >= 700.0 {
-        let days = calendar::week_dates(state.week_anchor, state.config.calendar.weekly_days());
+        let days = state.config.calendar.week_dates(state.week_anchor);
         bar = bar.push(control(
             format!(
                 "{} – {}",
