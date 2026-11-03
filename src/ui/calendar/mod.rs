@@ -16,6 +16,7 @@ mod sleep_tests;
 mod tests;
 mod two_week;
 mod week;
+mod zoom_wheel;
 
 use block_text::*;
 pub use day::*;
@@ -29,6 +30,7 @@ pub use month::*;
 pub use pointer::*;
 pub use two_week::*;
 pub use week::*;
+use zoom_wheel::*;
 
 use crate::calendar::time_format::TimeFormat;
 use chrono::{DateTime, Datelike, Local, NaiveDate};

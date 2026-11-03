@@ -125,6 +125,66 @@ fn travel_swatch<'a>() -> Element<'a, Message> {
         .into()
 }
 
+/// A row of the Zoom section. `message` is `None` when there is no further to go.
+fn zoom_button<'a>(
+    label: &'a str,
+    key: &'a str,
+    message: Option<CalendarMessage>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    // Cmd on a Mac and Ctrl elsewhere, the same as the shortcut itself.
+    let modifier = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else {
+        "Ctrl"
+    };
+    button(
+        row![
+            text(label).size(metrics.label()).width(Fill),
+            text(format!("{modifier} {key}"))
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        ]
+        .spacing(8.0),
+    )
+    .width(Fill)
+    .on_press_maybe(message.map(Message::Calendar))
+    .style(crate::ui::controls::secondary)
+    .into()
+}
+
+fn zoom_section<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
+    let height = state.calendar.hour_height;
+    let zoom = |factor| CalendarMessage::CalendarZoomed {
+        factor,
+        anchor: None,
+    };
+    column![
+        text("Zoom").size(metrics.label()).style(text::secondary),
+        zoom_button(
+            "Zoom in",
+            "+",
+            (height < calendar::MAX_HOUR_HEIGHT).then(|| zoom(calendar::ZOOM_STEP)),
+            metrics,
+        ),
+        zoom_button(
+            "Reset zoom",
+            "0",
+            (height != calendar::DEFAULT_HOUR_HEIGHT).then_some(CalendarMessage::CalendarZoomReset),
+            metrics,
+        ),
+        zoom_button(
+            "Zoom out",
+            "-",
+            (height > calendar::MIN_HOUR_HEIGHT).then(|| zoom(1.0 / calendar::ZOOM_STEP)),
+            metrics,
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill)
+    .into()
+}
+
 pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(
         container(iced::widget::Space::new())
@@ -242,6 +302,7 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         .align_y(Alignment::Center),
     );
     panel = panel.push(section);
+    panel = panel.push(zoom_section(state, metrics));
     if state.calendar.calendars.is_empty() {
         panel = panel.push(
             text(if state.calendar.is_signed_in() {

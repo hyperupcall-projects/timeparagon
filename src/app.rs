@@ -343,6 +343,9 @@ pub struct State {
     pub week_anchor: chrono::NaiveDate,
     pub week_hover: Option<chrono::NaiveDate>,
     pub week_scroll_x: f32,
+    /// How far down the calendar grid is scrolled, and how much of it shows.
+    /// A zoom with no pointer to hold still holds the middle of this instead.
+    pub grid_scroll: (f32, f32),
     /// Whether the month picker is showing over the range overview. The day
     /// panel's own picker is `calendar.month_open`.
     pub overview_month_open: bool,
@@ -619,6 +622,8 @@ pub enum CalendarMessage {
     WeekDayAction(chrono::NaiveDate, Box<Message>),
     WeekHover(Option<chrono::NaiveDate>),
     WeekScrolled(f32),
+    /// The vertical scroll of whichever grid is showing: its top and height.
+    CalendarGridScrolled(f32, f32),
 
     CalendarMenuToggled,
     CalendarToggled(String, bool),
@@ -639,11 +644,14 @@ pub enum CalendarMessage {
     /// Multiplies the calendar hour height. Above 1 spreads the hours apart.
     ///
     /// `anchor` is the pixel row under the pointer, measured from the top of
-    /// the day grid, so the zoom can keep that row still under the mouse.
+    /// the grid, so the zoom can keep that row still under the mouse. The keys
+    /// and the menu have no pointer, so they leave it out and the middle of
+    /// the view holds still.
     CalendarZoomed {
         factor: f32,
-        anchor: f32,
+        anchor: Option<f32>,
     },
+    CalendarZoomReset,
     /// Move the day in view by a number of days, positive or negative.
     CalendarDayShift(i64),
     /// Jump the day in view to a specific date, from the month picker.
@@ -833,6 +841,7 @@ impl State {
             week_anchor: calendar::day_at(crate::clock::now(), day_end_hour),
             week_hover: None,
             week_scroll_x: 0.0,
+            grid_scroll: (0.0, 0.0),
             overview_month_open: false,
             overview_month: calendar::first_of_month(calendar::day_at(
                 crate::clock::now(),
@@ -1788,10 +1797,26 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         )));
     }
     if modifiers.command() {
+        // A range view stands in for whichever screen is selected, so the grid
+        // is on show in those as well as on the Calendar screen itself.
+        let grid_showing = state.range_view_active() || state.screen == Screen::Calendar;
+        let zoom = |factor| {
+            Some(Message::Calendar(CalendarMessage::CalendarZoomed {
+                factor,
+                anchor: None,
+            }))
+        };
         return match key.as_ref() {
             Key::Character(",") => Some(Message::Navigation(NavigationMessage::ScreenSelected(
                 Screen::Settings,
             ))),
+            // `=` and `_` are the same keys as `+` and `-`, with Shift the other
+            // way round, so nobody has to hold Shift to zoom in.
+            Key::Character("+" | "=") if grid_showing => zoom(calendar::ZOOM_STEP),
+            Key::Character("-" | "_") if grid_showing => zoom(1.0 / calendar::ZOOM_STEP),
+            Key::Character("0") if grid_showing => {
+                Some(Message::Calendar(CalendarMessage::CalendarZoomReset))
+            }
             _ => None,
         };
     }

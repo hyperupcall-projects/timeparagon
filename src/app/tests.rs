@@ -2040,3 +2040,74 @@ fn the_system_themes_follow_the_system_tone() {
     state.config.appearance.theme = "Dark".into();
     assert_eq!(active_theme(&state, id).unwrap().to_string(), "Dark");
 }
+
+fn command_key(state: &mut State, character: &str) -> Option<Message> {
+    key_message(
+        state,
+        Key::Character(character.into()),
+        keyboard::Modifiers::COMMAND,
+    )
+}
+
+#[test]
+fn the_zoom_keys_step_in_and_out_and_reset() {
+    let mut state = State::blank();
+    state.screen = Screen::Calendar;
+    let default = state.calendar.hour_height;
+
+    // Plain `=` is the key `+` is on, so it counts without Shift held.
+    for character in ["+", "="] {
+        let message = command_key(&mut state, character).expect("zooms in");
+        let _ = update(&mut state, message);
+    }
+    assert!(state.calendar.hour_height > default);
+
+    let grown = state.calendar.hour_height;
+    let message = command_key(&mut state, "-").expect("zooms out");
+    let _ = update(&mut state, message);
+    assert!(state.calendar.hour_height < grown);
+
+    let message = command_key(&mut state, "0").expect("resets");
+    let _ = update(&mut state, message);
+    assert_eq!(state.calendar.hour_height, default);
+}
+
+#[test]
+fn the_zoom_keys_work_on_every_calendar_view() {
+    for view in [
+        CalendarView::Day,
+        CalendarView::Week,
+        CalendarView::TwoWeek,
+        CalendarView::Month,
+    ] {
+        let mut state = State::blank();
+        state.screen = Screen::Calendar;
+        state.view = view;
+        assert!(command_key(&mut state, "+").is_some(), "{view:?}");
+    }
+}
+
+#[test]
+fn the_zoom_keys_leave_a_screen_without_the_grid_alone() {
+    let mut state = State::blank();
+    state.screen = Screen::Notepad;
+
+    assert!(command_key(&mut state, "+").is_none());
+    assert!(command_key(&mut state, "-").is_none());
+    assert!(command_key(&mut state, "0").is_none());
+}
+
+#[test]
+fn the_zoom_keys_need_the_modifier() {
+    let mut state = State::blank();
+    state.screen = Screen::Calendar;
+
+    for character in ["+", "-", "0"] {
+        let pressed = key_message(
+            &mut state,
+            Key::Character(character.into()),
+            keyboard::Modifiers::default(),
+        );
+        assert!(pressed.is_none(), "{character} alone must not zoom");
+    }
+}

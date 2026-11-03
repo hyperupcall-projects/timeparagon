@@ -29,13 +29,15 @@ There's week and month views, just like any other calendar app:
 - Intuitive to use (WIP).
 - View your time:
 	- By day, week, 2 weeks, month
+	- Allow zoomin in/out within the day/week views
 	- Custom search (TODO)
 		- Show only events or tasks that satisfy a search
 		- Omit private event details where applicable
 - Manage your time:
 	- Events
 		- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
-		- Integrates with meeting software like Zoom and Google Meet.
+		- Show dedicated buttons for joining Zoom and Google Meet meetings.
+		- Integrate with Zoom and Google Meet to create meetings and invite attendees (TODO).
 		- Integrates with guest/event/RSVP going/not going feature (TODO)
 		- Uses location data to show estimated travel time for events and to add link to Google Maps (WIP).
 	- Time blocks
@@ -120,24 +122,6 @@ cargo run -p timeslay --release
 # Dioxus mobile app.
 ./scripts/build-android.sh
 ```
-
-## Roadmap
-
-- Perfect event/task flow, fix ui bugs
-- lists/meal planning
-	- lists in general
-- meeting agenda?
-- Logs/instant local field changes/lock field/no waiting for network in interface/show there in queue/undo
-- Start/shutdown/review rituals for day/week/month
-- Offline write queue
-- Eisenhower matrix
-- Theme/project days
-- Daily/weekly highlights
-
-## Bugs
-
-- In plan, when searching for task, does not include habits
-- Application open/close transition settings not being respected, esp for the side panels
 
 ## Terminology
 

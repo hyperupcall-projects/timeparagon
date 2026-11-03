@@ -1644,3 +1644,180 @@ fn a_narrow_block_keeps_the_start_of_the_time() {
     // Too narrow for either, so there is no time at all.
     assert_eq!(time_label("09:15 – 11:00", 11.0, 12.0), None);
 }
+
+#[test]
+fn month_and_two_week_rows_grow_with_the_zoom() {
+    let month = month_cell_height(900.0, 5, 1.0);
+    assert_eq!(month, 148.0);
+    assert_eq!(month_cell_height(900.0, 5, 2.0), month * 2.0);
+    // A short window still scrolls at the same floor before any zoom.
+    assert_eq!(month_cell_height(300.0, 5, 1.0), 135.0);
+
+    assert_eq!(two_week_height(800.0, 1.0), 800.0);
+    assert_eq!(two_week_height(800.0, 1.5), 1200.0);
+    assert_eq!(two_week_height(100.0, 1.0), 270.0);
+}
+
+fn zoom_messages(ui: iced_test::Simulator<'_, Message>) -> Vec<(f32, Option<f32>)> {
+    ui.into_messages()
+        .filter_map(|message| match message {
+            Message::Calendar(CalendarMessage::CalendarZoomed { factor, anchor }) => {
+                Some((factor, anchor))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn ctrl_and_the_wheel_zoom_the_month_grid_and_the_wheel_alone_does_not() {
+    use iced::keyboard::{Event as KeyEvent, Modifiers};
+    let wheel = iced::Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+    });
+    let metrics = Metrics::of(Size::new(1000.0, 800.0));
+
+    let mut state = State::blank();
+    state.view = crate::app::CalendarView::Month;
+    state.grid_scroll = (100.0, 600.0);
+
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        monthly_view(&state, &metrics),
+    );
+    ui.point_at(Point::new(500.0, 400.0));
+    let _ = ui.simulate([wheel.clone()]);
+    assert!(zoom_messages(ui).is_empty(), "a bare wheel only scrolls");
+
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        monthly_view(&state, &metrics),
+    );
+    ui.point_at(Point::new(500.0, 400.0));
+    let _ = ui.simulate([
+        iced::Event::Keyboard(KeyEvent::ModifiersChanged(Modifiers::COMMAND)),
+        wheel,
+    ]);
+    let zooms = zoom_messages(ui);
+    assert_eq!(zooms.len(), 1);
+    assert!(zooms[0].0 > 1.0, "scrolling up zooms in");
+    // The anchor is a row of the grid, so it counts the scroll above the view.
+    assert!(zooms[0].1.is_some_and(|anchor| anchor > 100.0));
+}
+
+#[test]
+fn the_menu_zoom_section_offers_only_what_can_still_happen() {
+    let metrics = Metrics::of(Size::new(400.0, 1400.0));
+
+    let clicked = |state: &State, label: &str| -> Vec<Message> {
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            menu_overlay(state, &metrics),
+        );
+        ui.click(label).unwrap();
+        ui.into_messages().collect()
+    };
+    let resets = |messages: &[Message]| {
+        messages.iter().any(|message| {
+            matches!(
+                message,
+                Message::Calendar(CalendarMessage::CalendarZoomReset)
+            )
+        })
+    };
+    let zoomed = |messages: &[Message]| {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Calendar(CalendarMessage::CalendarZoomed { factor, anchor }) => {
+                    Some((*factor, *anchor))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut state = State::blank();
+    // The sheet is capped to the window, and the section must be on screen.
+    state.main_size = metrics.size;
+    let zoom_in = clicked(&state, "Zoom in");
+    assert_eq!(zoomed(&zoom_in), [(calendar::ZOOM_STEP, None)]);
+    let zoom_out = clicked(&state, "Zoom out");
+    assert_eq!(zoomed(&zoom_out), [(1.0 / calendar::ZOOM_STEP, None)]);
+    assert!(
+        !resets(&clicked(&state, "Reset zoom")),
+        "already at default"
+    );
+
+    state.calendar.hour_height = calendar::MAX_HOUR_HEIGHT;
+    assert!(zoomed(&clicked(&state, "Zoom in")).is_empty());
+    assert!(resets(&clicked(&state, "Reset zoom")));
+
+    state.calendar.hour_height = calendar::MIN_HOUR_HEIGHT;
+    assert!(zoomed(&clicked(&state, "Zoom out")).is_empty());
+}
+
+#[test]
+fn ctrl_and_the_wheel_zoom_the_day_grid_around_the_pointer() {
+    use iced::keyboard::{Event as KeyEvent, Modifiers};
+    let metrics = Metrics::of(Size::new(800.0, 700.0));
+    let state = State::blank();
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        day_grid(&state, &metrics, crate::clock::now()),
+    );
+    ui.point_at(Point::new(400.0, 300.0));
+    let _ = ui.simulate([
+        iced::Event::Keyboard(KeyEvent::ModifiersChanged(Modifiers::COMMAND)),
+        iced::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+        }),
+    ]);
+    let zooms = zoom_messages(ui);
+    assert_eq!(zooms.len(), 1);
+    assert!(zooms[0].0 < 1.0, "scrolling down zooms out");
+    assert!(zooms[0].1.is_some());
+}
+
+#[test]
+fn the_month_zoom_layer_lets_clicks_through_to_the_days() {
+    let metrics = Metrics::of(Size::new(1000.0, 800.0));
+    let mut state = State::blank();
+    state.view = crate::app::CalendarView::Month;
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        monthly_view(&state, &metrics),
+    );
+    ui.click("15").unwrap();
+    // A cell wraps what it publishes with the day it belongs to.
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::Calendar(CalendarMessage::WeekDayAction(_, inner))
+            if matches!(*inner, Message::Calendar(CalendarMessage::CalendarDayOpened(_)))
+    )));
+}
+
+#[test]
+fn shift_and_the_wheel_do_not_zoom_the_day_grid() {
+    use iced::keyboard::{Event as KeyEvent, Modifiers};
+    let metrics = Metrics::of(Size::new(800.0, 700.0));
+    let state = State::blank();
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        day_grid(&state, &metrics, crate::clock::now()),
+    );
+    ui.point_at(Point::new(400.0, 300.0));
+    let _ = ui.simulate([
+        iced::Event::Keyboard(KeyEvent::ModifiersChanged(Modifiers::SHIFT)),
+        iced::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        }),
+    ]);
+    assert!(zoom_messages(ui).is_empty());
+}
