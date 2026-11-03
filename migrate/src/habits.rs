@@ -1,46 +1,35 @@
-//! One-off migration of the Google Keep ritual notes and the Google Tasks
-//! "Habits & Recurring" list into Calendar habits.
+//! One-off migration of the Google Tasks "Habits & Recurring" list into
+//! Calendar habits.
 //!
-//! The Keep notes already carry a time in their metadata ("Recurring task set
-//! for Today, 8:00 AM"), and the old task workaround carried one in its notes
-//! (`DUE_TIME: 18:00`). This turns each recurring item into a habit on the
-//! TimeSlay calendar, keeping its text as the habit's notes. Tasks that a
-//! habit already covers are removed from Google Tasks so they stop appearing
-//! twice; one-off tasks and completed history are left alone.
+//! The old task workaround carried a time in its notes (`DUE_TIME: 18:00`).
+//! This turns each recurring item into a habit on the TimeSlay calendar,
+//! keeping its text as the habit's notes. Tasks that a habit already covers
+//! are removed from Google Tasks so they stop appearing twice; one-off tasks
+//! and completed history are left alone.
 //!
 //! Run it with no arguments to see what it would do:
 //!
 //! ```sh
-//! cargo run -p timeslay-migrate --example migrate_keep_habits
+//! cargo run -p timeslay-migrate --example migrate_task_habits
 //! ```
 //!
 //! and with `--apply` to create the habits and remove the replaced tasks:
 //!
 //! ```sh
-//! cargo run -p timeslay-migrate --example migrate_keep_habits -- --apply
+//! cargo run -p timeslay-migrate --example migrate_task_habits -- --apply
 //! ```
-//!
-//! The Keep notes are left untouched; Google Keep's browser helper is
-//! read-only.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
-use chrono::Timelike;
-use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Weekday};
+use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Timelike, Weekday};
 
 use timeslay::calendar::{
     self,
     api::{self, HabitEvent, TaskListItem},
 };
 use timeslay::config::{CalendarSettings, Config};
-use timeslay::keep::{self, Note, Snapshot};
 
-/// The Keep labels whose notes become habits. The second spelling is accepted
-/// so a slightly differently named label also migrates.
-pub const KEEP_LABELS: [&str; 2] = ["Habits & Rituals", "Habits & Recurring"];
-
-/// The Google Tasks lists that hold recurring items. The Keep spelling is
-/// accepted too, in case the list was renamed to match.
+/// The Google Tasks lists that hold recurring items, under either spelling.
 pub const TASK_LISTS: [&str; 2] = ["Habits & Recurring", "Habits & Rituals"];
 
 /// How long a migrated habit lasts, unless the command line says otherwise.
@@ -49,7 +38,7 @@ pub const DEFAULT_MINUTES: i64 = 30;
 /// One habit the migration would create.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedHabit {
-    /// The Keep note or task this came from, so a rerun can skip it.
+    /// The task this came from.
     pub source_id: String,
     pub title: String,
     pub notes: String,
@@ -96,77 +85,7 @@ pub struct Report {
     pub retained: Vec<TaskInstance>,
     pub kept: Vec<String>,
     pub created: Vec<String>,
-    pub skipped: Vec<String>,
     pub errors: Vec<String>,
-}
-
-/// Builds the Keep plan without touching Google. Existing habit titles are
-/// skipped, so running the migration twice does not make duplicates.
-pub fn plan(
-    snapshot: &Snapshot,
-    existing: &[HabitEvent],
-    today: NaiveDate,
-    minutes: i64,
-) -> Vec<PlannedHabit> {
-    let mut taken: HashSet<String> = existing
-        .iter()
-        .map(|habit| habit_key(&habit.title))
-        .collect();
-    let mut planned = Vec::new();
-
-    for note in snapshot.notes.iter().filter(|note| has_label(note)) {
-        if note.archived {
-            continue;
-        }
-        let title = note.title.trim();
-        if title.is_empty() {
-            continue;
-        }
-        let Some(start) = note_time(note) else {
-            continue;
-        };
-        if !taken.insert(habit_key(title)) {
-            continue;
-        }
-        let end = start + chrono::Duration::minutes(minutes.clamp(1, 24 * 60 - 1));
-        let (date, recurrence) = schedule_title(title, today);
-        planned.push(PlannedHabit {
-            source_id: note.id.clone(),
-            title: title.to_owned(),
-            notes: note_notes(note),
-            date,
-            start,
-            end,
-            recurrence,
-        });
-    }
-    planned
-}
-
-/// The completion reasons for notes that cannot become habits, so a dry run
-/// can say why they were left out.
-pub fn skipped(snapshot: &Snapshot, existing: &[HabitEvent]) -> Vec<String> {
-    let mut reasons = Vec::new();
-    let existing_titles: HashSet<String> = existing
-        .iter()
-        .map(|habit| habit_key(&habit.title))
-        .collect();
-    let mut seen = HashSet::new();
-    for note in snapshot.notes.iter().filter(|note| has_label(note)) {
-        let title = note.title.trim();
-        if note.archived {
-            reasons.push(format!("{title}: archived in Keep"));
-        } else if title.is_empty() {
-            reasons.push("(untitled note): no title".to_owned());
-        } else if note_time(note).is_none() {
-            reasons.push(format!("{title}: no time in its Keep metadata"));
-        } else if existing_titles.contains(&habit_key(title)) {
-            reasons.push(format!("{title}: a habit with that name already exists"));
-        } else if !seen.insert(habit_key(title)) {
-            reasons.push(format!("{title}: another Keep note has the same title"));
-        }
-    }
-    reasons
 }
 
 /// Groups tasks by their recurring title, then decides which need a new habit
@@ -174,7 +93,6 @@ pub fn skipped(snapshot: &Snapshot, existing: &[HabitEvent]) -> Vec<String> {
 pub fn plan_tasks(
     tasks: &[TaskListItem],
     existing: &[HabitEvent],
-    planned: &[PlannedHabit],
     today: NaiveDate,
     minutes: i64,
 ) -> TaskPlan {
@@ -232,16 +150,6 @@ pub fn plan_tasks(
             });
             continue;
         }
-        if let Some(habit) = planned.iter().find(|habit| {
-            habit_key(&habit.title) == key || task_time.is_some_and(|start| habit.start == start)
-        }) {
-            plan.habits.push(TaskHabit {
-                habit: habit.clone(),
-                instances,
-                already: true,
-            });
-            continue;
-        }
         let Some(start) = task_time else {
             plan.kept
                 .push(format!("{title}: no time in its notes, left as a task"));
@@ -271,35 +179,27 @@ pub fn plan_tasks(
 /// it is false they are left in place and reported as retained.
 pub fn run(apply: bool, minutes: i64, remove_tasks: bool) -> Result<Report, String> {
     let settings = Config::load().calendar;
-    let snapshot = keep::fetch(None)?;
     let existing = calendar::sync_habits(
         &settings.client_id,
         &settings.client_secret,
         settings.app_calendar.as_deref(),
     )?;
     let today = timeslay::clock::now().date_naive();
-    let keep_planned = plan(&snapshot, &existing, today, minutes);
     let tasks = habit_tasks(&settings)?;
     let task_plan = match &tasks {
-        Some((_, tasks)) => plan_tasks(tasks, &existing, &keep_planned, today, minutes),
+        Some((_, tasks)) => plan_tasks(tasks, &existing, today, minutes),
         None => TaskPlan::default(),
     };
 
     let mut report = Report {
         dry_run: !apply,
-        planned: keep_planned
+        planned: task_plan
+            .habits
             .iter()
-            .cloned()
-            .chain(
-                task_plan
-                    .habits
-                    .iter()
-                    .filter(|habit| !habit.already)
-                    .map(|habit| habit.habit.clone()),
-            )
+            .filter(|habit| !habit.already)
+            .map(|habit| habit.habit.clone())
             .collect(),
         kept: task_plan.kept.clone(),
-        skipped: skipped(&snapshot, &existing),
         ..Report::default()
     };
     if !apply {
@@ -316,36 +216,10 @@ pub fn run(apply: bool, minutes: i64, remove_tasks: bool) -> Result<Report, Stri
         return Ok(report);
     }
 
-    let calendar_id = existing.first().map(|habit| habit.calendar_id.clone());
-    let mut created = Vec::new();
-    for habit in &keep_planned {
-        match write_habit(&settings, calendar_id.as_deref(), habit) {
-            Ok(()) => {
-                report.created.push(habit.title.clone());
-                created.push(habit.clone());
-            }
-            Err(error) => report.errors.push(format!("{}: {error}", habit.title)),
-        }
-    }
-
-    // A failed Keep write must not cause its matching tasks to be removed, so
-    // re-plan the tasks against the habits that actually exist now.
-    let Some((list_id, tasks)) = tasks else {
+    let Some((list_id, _)) = tasks else {
         return Ok(report);
     };
-    let mut covered = existing;
-    covered.extend(created.iter().map(|habit| HabitEvent {
-        id: String::new(),
-        calendar_id: calendar_id.clone().unwrap_or_default(),
-        title: habit.title.clone(),
-        notes: habit.notes.clone(),
-        start: calendar::at_clock(habit.date, habit.start.hour(), habit.start.minute()),
-        end: calendar::at_clock(habit.date, habit.end.hour(), habit.end.minute()),
-        recurrence: habit.recurrence.clone(),
-        color_id: None,
-    }));
-    let task_plan = plan_tasks(&tasks, &covered, &[], today, minutes);
-
+    let calendar_id = existing.first().map(|habit| habit.calendar_id.clone());
     for group in &task_plan.habits {
         if !group.already {
             match write_habit(&settings, calendar_id.as_deref(), &group.habit) {
@@ -404,43 +278,19 @@ fn write_habit(
 ) -> Result<(), String> {
     let start = calendar::at_clock(habit.date, habit.start.hour(), habit.start.minute());
     let end = calendar::at_clock(habit.date, habit.end.hour(), habit.end.minute());
-    calendar::write_habit(
-        &settings.client_id,
-        &settings.client_secret,
-        calendar::HabitWrite {
-            id: None,
-            calendar_id,
-            title: &habit.title,
-            notes: &habit.notes,
-            start,
-            end,
-            recurrence: &habit.recurrence,
-            color_id: None,
-        },
-    )
-    .map(|_| ())
-}
-
-fn has_label(note: &Note) -> bool {
-    note.labels.iter().any(|label| {
-        KEEP_LABELS
-            .iter()
-            .any(|wanted| label.trim().eq_ignore_ascii_case(wanted))
-    })
-}
-
-fn note_notes(note: &Note) -> String {
-    let description = note.description.trim();
-    if !description.is_empty() {
-        return description.to_owned();
-    }
-    note.checklist
-        .iter()
-        .map(|item| item.text.trim())
-        .filter(|text| !text.is_empty())
-        .map(|text| format!("- {text}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let tokens = calendar::oauth::load_tokens()
+        .ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens =
+        calendar::oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)?;
+    let body = api::habit_body(
+        &habit.title,
+        &habit.notes,
+        start,
+        end,
+        &habit.recurrence,
+        None,
+    );
+    api::insert_habit(&tokens.access_token, calendar_id, &body).map(|_| ())
 }
 
 /// Notes from every instance of a task group, with the retired `DUE_TIME`
@@ -473,15 +323,6 @@ fn clean_task_notes(notes: &str) -> String {
     }
 }
 
-/// The time of day a Keep ritual runs, read from "Today, 8:00 AM" style
-/// metadata (including the narrow no-break spaces Keep uses).
-fn note_time(note: &Note) -> Option<NaiveTime> {
-    note.metadata
-        .iter()
-        .find_map(|line| time_in(line))
-        .or_else(|| time_in(&note.description))
-}
-
 /// The time the old app recorded in a task's notes.
 fn task_time(notes: &str) -> Option<NaiveTime> {
     notes.lines().find_map(|line| {
@@ -497,29 +338,6 @@ fn task_time(notes: &str) -> Option<NaiveTime> {
         }
         None
     })
-}
-
-fn time_in(text: &str) -> Option<NaiveTime> {
-    let text = text.replace(['\u{202f}', '\u{a0}'], " ");
-    for piece in text.split([',', ';']) {
-        let piece = piece.trim();
-        for format in ["%I:%M %p", "%I:%M%p", "%H:%M"] {
-            if let Ok(time) = NaiveTime::parse_from_str(piece, format) {
-                return Some(time);
-            }
-        }
-    }
-    // Keep sometimes writes the time without a comma.
-    for format in ["%I:%M %p", "%I:%M%p"] {
-        let words: Vec<_> = text.split_whitespace().collect();
-        if words.len() >= 2 {
-            let tail = words[words.len() - 2..].join(" ");
-            if let Ok(time) = NaiveTime::parse_from_str(&tail, format) {
-                return Some(time);
-            }
-        }
-    }
-    None
 }
 
 /// A title that says "weekend" or "weekly" repeats on Sunday; the rest are
@@ -565,17 +383,6 @@ fn next_weekday(today: NaiveDate, weekday: Weekday) -> NaiveDate {
 mod tests {
     use super::*;
 
-    fn note(id: &str, title: &str, metadata: &[&str]) -> Note {
-        Note {
-            id: id.into(),
-            title: title.into(),
-            description: "- First item\n\n- Second item".into(),
-            labels: vec!["Habits & Rituals".into()],
-            metadata: metadata.iter().map(|line| (*line).to_owned()).collect(),
-            ..Note::default()
-        }
-    }
-
     fn existing(title: &str, hour: u32, minute: u32) -> HabitEvent {
         let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
         HabitEvent {
@@ -587,6 +394,7 @@ mod tests {
             end: calendar::at_clock(day, hour, minute + 30),
             recurrence: vec!["RRULE:FREQ=DAILY".into()],
             color_id: None,
+            habit_id: None,
         }
     }
 
@@ -598,77 +406,6 @@ mod tests {
             completed: false,
             due: NaiveDate::from_ymd_opt(2026, 10, 28),
         }
-    }
-
-    #[test]
-    fn reads_the_time_keep_writes_in_its_metadata() {
-        assert_eq!(
-            time_in("Recurring task set for Today, 8:00\u{202f}AM"),
-            NaiveTime::from_hms_opt(8, 0, 0)
-        );
-        assert_eq!(
-            time_in("Oct 25, 8:00\u{202f}PM"),
-            NaiveTime::from_hms_opt(20, 0, 0)
-        );
-        assert_eq!(
-            time_in("Recurring task set for Today 10:30 PM"),
-            NaiveTime::from_hms_opt(22, 30, 0)
-        );
-        assert_eq!(time_in("Created Sep 27"), None);
-    }
-
-    #[test]
-    fn daily_rituals_become_daily_habits_and_weekends_become_sundays() {
-        let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
-        let snapshot = Snapshot {
-            notes: vec![
-                note("one", "Night Reflection Ritual", &["Today, 10:30 PM"]),
-                note("two", "Weekend Ritual", &["Oct 25, 8:00 PM"]),
-            ],
-            ..Default::default()
-        };
-        let planned = plan(&snapshot, &[], today, 30);
-        assert_eq!(planned.len(), 2);
-        assert_eq!(planned[0].date, today);
-        assert_eq!(
-            planned[0].start,
-            NaiveTime::from_hms_opt(22, 30, 0).unwrap()
-        );
-        assert_eq!(planned[0].end, NaiveTime::from_hms_opt(23, 0, 0).unwrap());
-        assert_eq!(planned[0].recurrence, ["RRULE:FREQ=DAILY"]);
-        assert_eq!(
-            planned[1].date,
-            NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()
-        );
-        assert_eq!(planned[1].recurrence, ["RRULE:FREQ=WEEKLY;BYDAY=SU"]);
-    }
-
-    #[test]
-    fn a_rerun_skips_habits_that_already_exist() {
-        let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
-        let snapshot = Snapshot {
-            notes: vec![note("one", "Night Reflection Ritual", &["Today, 10:30 PM"])],
-            ..Default::default()
-        };
-        let habits = [existing("Night Reflection Ritual", 22, 30)];
-        let planned = plan(&snapshot, &habits, today, 30);
-        assert!(planned.is_empty());
-        assert_eq!(
-            skipped(&snapshot, &habits),
-            ["Night Reflection Ritual: a habit with that name already exists"]
-        );
-    }
-
-    #[test]
-    fn notes_without_a_time_or_with_another_label_are_left_out() {
-        let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
-        let mut snapshot = Snapshot::default();
-        let mut no_time = note("one", "No time", &["Created Sep 27"]);
-        no_time.description = "- do the thing".into();
-        let mut other_label = note("two", "Other label", &["Today, 8:00 AM"]);
-        other_label.labels = vec!["Objectives".into()];
-        snapshot.notes = vec![no_time, other_label];
-        assert!(plan(&snapshot, &[], today, 30).is_empty());
     }
 
     #[test]
@@ -694,7 +431,7 @@ mod tests {
             task("c", "Submit TA Hours", ""),
         ];
         let habits = [existing("Daily Digital Maintenance Ritual", 9, 30)];
-        let plan = plan_tasks(&tasks, &habits, &[], today, 30);
+        let plan = plan_tasks(&tasks, &habits, today, 30);
 
         assert_eq!(plan.habits.len(), 2);
         let kattis = plan
@@ -736,7 +473,7 @@ mod tests {
             task("c", "Weekend Ritual", ""),
         ];
         let habits = [existing("Weekend Ritual", 20, 0)];
-        let plan = plan_tasks(&tasks, &habits, &[], today, 30);
+        let plan = plan_tasks(&tasks, &habits, today, 30);
         assert_eq!(plan.habits.len(), 2);
         let kattis = plan
             .habits
@@ -761,7 +498,7 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
         let mut done = task("a", "Morning Wake Ritual", "DUE_TIME: 08:00");
         done.completed = true;
-        let plan = plan_tasks(&[done], &[], &[], today, 30);
+        let plan = plan_tasks(&[done], &[], today, 30);
         assert!(plan.habits.is_empty());
         assert!(plan.kept.is_empty());
     }

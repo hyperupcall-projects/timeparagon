@@ -962,6 +962,9 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         planned_slot(state, &block_id, metrics),
     ]
     .spacing(10);
+    if let Some(target) = crate::notes::target_of(state, block) {
+        body = body.push(super::notes::section(state, target, metrics));
+    }
     let mut elapsed = 0;
     for task in tasks {
         elapsed += tb::metadata(task).minutes;

@@ -1,24 +1,21 @@
-//! Moves the Google Keep "Habits & Rituals" notes and the Google Tasks
-//! "Habits & Recurring" list into Calendar habits.
+//! Moves the Google Tasks "Habits & Recurring" list into Calendar habits.
 //!
 //! Run it with no arguments to see what it would do:
 //!
 //! ```sh
-//! cargo run -p timeslay-migrate --example migrate_keep_habits
+//! cargo run -p timeslay-migrate --example migrate_task_habits
 //! ```
 //!
 //! and with `--apply` to create the habits and remove the task instances they
 //! replace:
 //!
 //! ```sh
-//! cargo run -p timeslay-migrate --example migrate_keep_habits -- --apply
+//! cargo run -p timeslay-migrate --example migrate_task_habits -- --apply
 //! ```
 //!
 //! Pass `--minutes N` to change how long each habit lasts (the default is 30).
 //! Pass `--keep-tasks` to create the habits without removing the Google Tasks
 //! they replace.
-//! The Keep notes themselves are left untouched; the browser helper is
-//! read-only, so archive them by hand once you are happy with the habits.
 
 use timeslay_migrate::habits::{self as migrate_habits, DEFAULT_MINUTES};
 
@@ -40,7 +37,7 @@ fn main() {
             },
             other => {
                 eprintln!("unknown argument: {other}");
-                eprintln!("usage: migrate_keep_habits [--apply] [--keep-tasks] [--minutes N]");
+                eprintln!("usage: migrate_task_habits [--apply] [--keep-tasks] [--minutes N]");
                 std::process::exit(2);
             }
         }
@@ -58,7 +55,7 @@ fn main() {
             );
             if report.planned.is_empty() && report.deleted.is_empty() && report.retained.is_empty()
             {
-                println!("  no Keep notes or tasks to migrate");
+                println!("  no tasks to migrate");
             }
             for habit in &report.planned {
                 println!(
@@ -102,9 +99,6 @@ fn main() {
             }
             for reason in &report.kept {
                 println!("  leave: {reason}");
-            }
-            for reason in &report.skipped {
-                println!("  skipped: {reason}");
             }
             for error in &report.errors {
                 eprintln!("  error: {error}");

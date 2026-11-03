@@ -80,6 +80,7 @@ Of course, there's also week, 2-week, and month views:
 		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
 - Habits
 	- These are standard calendar events that are colored differently.
+	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
 	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
@@ -101,16 +102,21 @@ Of course, there's also week, 2-week, and month views:
 	- View as list, kanban, or calendar (TODO).
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
+- Notes.
+	- Markdown documents stored in Google Drive's hidden app folder, listed under More → Notes.
+	- Connect them to events, time blocks, tasks, and habits. A note on a habit shows on every event series connected to it.
+	- Edit and View tabs, with basic Markdown: headings, bullet, numbered and check lists, bold, italics, strikethrough, quotes, code, and links.
+	- Give each note its own light pastel background.
 - People.
 	- Browse and edit contacts from Google accounts and Google workspace directories.
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
 	- Uses local database as cache to keep UI performant/responsive.
-- Activity monitoring
+- Activity Tracking & Statistics
 	- Project allocation
-	- Distractions
-	- Sleep
+	- Deep deep work/Distractions
+	- locations been
 	- Location and exercise
 	- Food?
 
@@ -125,5 +131,4 @@ The design of this app is, in part, constrainted by the fact that:
 
 - Google Task API does not allow for reading/writing the time of day of a due date or deadline (only day).
 - Google Task API does not allow writing the deadline field (only due date).
-- Google Keep API cannot be used by non-workspace users.
 - Integrates only with the KDE Plasma desktop environment on Linux.

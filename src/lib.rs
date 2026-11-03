@@ -27,7 +27,7 @@ pub mod habits;
 pub mod inbox;
 pub mod integrations;
 pub mod ipc;
-pub mod keep;
+pub mod notes;
 pub mod notify;
 pub mod panel;
 pub mod people;
