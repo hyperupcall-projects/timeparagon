@@ -133,6 +133,7 @@ pub fn event_editor<'a>(
         }))
         .push(start);
     if event.details.habit {
+        body = body.push(event_habit_picker(state, event, metrics));
         body = body.push(super::super::recurrence::editor(
             &draft.rule,
             draft.start.date_naive(),
@@ -639,5 +640,69 @@ pub(super) fn sleep_editor<'a>(
     .width(Fill)
     .height(Fill)
     .style(crate::ui::controls::surface)
+    .into()
+}
+
+/// A habit an event can count towards, in the event editor's picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HabitChoice {
+    id: Option<String>,
+    name: String,
+}
+
+impl std::fmt::Display for HabitChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+/// Which habit this event counts towards. A new event with no choice gets the
+/// habit named after it when it is saved, created if need be.
+fn event_habit_picker<'a>(
+    state: &'a State,
+    event: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let new = event.id == crate::habits::NEW_HABIT_ID;
+    let mut options = vec![HabitChoice {
+        id: None,
+        name: if new {
+            "Match the title".to_owned()
+        } else {
+            "None".to_owned()
+        },
+    }];
+    options.extend(
+        state
+            .habits
+            .library
+            .habits
+            .iter()
+            .filter(|habit| !habit.archived && habit.kind != timeslay_core::habits::Kind::No)
+            .map(|habit| HabitChoice {
+                id: Some(habit.id.clone()),
+                name: habit.name.clone(),
+            }),
+    );
+    let current = if new {
+        event.details.habit_id.clone()
+    } else {
+        state.habits.habit_of(event).map(str::to_owned)
+    };
+    let selected = options
+        .iter()
+        .find(|option| option.id == current)
+        .cloned()
+        .or_else(|| options.first().cloned());
+    column![
+        text("Habit").size(metrics.label()).style(text::secondary),
+        crate::ui::controls::pick_list(options, selected, |choice: HabitChoice| {
+            Message::Habits(crate::habits::Action::EventHabitChosen(choice.id))
+        })
+        .text_size(metrics.label())
+        .width(Fill),
+    ]
+    .spacing(6)
+    .width(Fill)
     .into()
 }

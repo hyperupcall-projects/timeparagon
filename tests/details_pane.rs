@@ -428,7 +428,12 @@ fn new_habit_with_the_overview_open_is_edited_inside_the_overview() {
         );
         assert!(state.range_view_active());
 
-        let _ = app::update(&mut state, Message::Habits(habits::Action::New));
+        state
+            .habits
+            .library
+            .habits
+            .push(habits::Habit::new("h", "Stretch"));
+        let _ = app::update(&mut state, Message::Habits(habits::Action::AddEvent("h".into())));
 
         assert_eq!(
             state.calendar.open_event.as_deref(),
@@ -454,11 +459,15 @@ fn new_habit_uses_the_shared_right_pane_and_width_setting() {
     let mut state = state();
     state.screen = Screen::Habits;
     let original = state.main_size;
-    let task = app::update(&mut state, Message::Habits(habits::Action::New));
+    state
+        .habits
+        .library
+        .habits
+        .push(habits::Habit::new("h", "Stretch"));
+    let task = app::update(&mut state, Message::Habits(habits::Action::AddEvent("h".into())));
     let _ = actions(task);
     assert!(state.editor_window.is_some());
     assert_eq!(state.main_size, original);
-    assert!(state.habits.draft.is_none());
     assert_eq!(
         state.calendar.open_event.as_deref(),
         Some(habits::NEW_HABIT_ID)
@@ -496,7 +505,7 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
     let mut state = state();
     state.screen = Screen::Habits;
     let start = state.calendar.events[1].start + chrono::Duration::days(10);
-    state.habits.habits.push(habits::Habit {
+    state.habits.series.push(habits::Series {
         id: "off-day-master".into(),
         calendar_id: "personal".into(),
         title: "Stretch".into(),
@@ -505,11 +514,12 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
         end: start + chrono::Duration::minutes(30),
         recurrence: habits::Recurrence::from_lines(&["RRULE:FREQ=DAILY".into()]),
         color_id: None,
+        habit_id: None,
     });
     let original = state.main_size;
     let task = app::update(
         &mut state,
-        Message::Habits(habits::Action::Edit("off-day-master".into())),
+        Message::Habits(habits::Action::EditEvent("off-day-master".into())),
     );
     let _ = actions(task);
     assert!(state.editor_window.is_some());
@@ -517,7 +527,6 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
     let draft = state.calendar.edit_draft.as_ref().unwrap();
     assert!(draft.loading);
     assert_eq!(draft.title, "Stretch");
-    assert!(state.habits.draft.is_none());
     let mut loaded = draft.clone();
     loaded.loading = false;
     loaded.series_id = Some("off-day-master".into());
@@ -558,7 +567,16 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
     use timeslay::{app::Screen, habits};
     let mut state = state();
     state.screen = Screen::Habits;
-    let _ = app::update(&mut state, Message::Habits(habits::Action::New));
+    state
+        .habits
+        .library
+        .habits
+        .push(habits::Habit::new("h", "Stretch"));
+    let _ = app::update(&mut state, Message::Habits(habits::Action::AddEvent("h".into())));
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditTitleChanged(String::new())),
+    );
     let _ = app::update(
         &mut state,
         Message::EventEdit(EventEditMessage::EventEditSaveRequested),
@@ -584,6 +602,7 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
         end: draft.end,
         recurrence: draft.recurrence_lines().unwrap(),
         color_id: None,
+        habit_id: None,
     };
     let _ = app::update(
         &mut state,
@@ -591,7 +610,7 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
     );
     assert!(!state.details_pane_open);
     assert!(state.calendar.detail_event.is_none());
-    assert_eq!(state.habits.habits[0].id, "created-master");
+    assert_eq!(state.habits.series[0].id, "created-master");
 }
 
 #[test]

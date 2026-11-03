@@ -222,10 +222,10 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     .padding(metrics.padding)
     .width(Fill)
     .height(Fill);
-    if let Some(habit) = &state.habits.calendar_habit {
+    if let Some(name) = state.habits.calendar_habit_name() {
         content = content.push(
             row![
-                text(&habit.title).size(metrics.label()),
+                text(name).size(metrics.label()),
                 crate::ui::controls::quiet_button(
                     text("Close habit calendar").size(metrics.label())
                 )

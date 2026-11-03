@@ -225,7 +225,7 @@ fn month_navigation_remains_reachable_at_small_widths() {
 
 #[test]
 fn habit_month_filters_other_events_and_retains_completion_history() {
-    use timeslay::habits::{Action, Habit, Recurrence};
+    use timeslay::habits::{Action, Habit, Series};
     let mut state = state();
     let day = date(2026, 8, 16);
     let mut completed = state.calendar.events_on(day)[0].clone();
@@ -235,16 +235,26 @@ fn habit_month_filters_other_events_and_retains_completion_history() {
     completed.details.recurring_event_id = Some("stretch-master".into());
     completed.completed = true;
     completed.details.habit_completed_at = Some(completed.start + Duration::minutes(20));
-    state.habits.calendar_habit = Some(Habit {
-        id: "stretch-master".into(),
-        calendar_id: completed.calendar_id.clone(),
-        title: "Stretch".into(),
-        notes: String::new(),
-        start: completed.start,
-        end: completed.end,
-        recurrence: Recurrence::from_lines(&[]),
-        color_id: None,
-    });
+    state
+        .habits
+        .library
+        .habits
+        .push(Habit::new("stretch", "Stretch"));
+    state.habits.recompute();
+    state.habits.calendar_habit = Some("stretch".into());
+    for id in ["stretch-master", "another-series"] {
+        state.habits.series.push(Series {
+            id: id.into(),
+            calendar_id: completed.calendar_id.clone(),
+            title: "Stretch".into(),
+            notes: String::new(),
+            start: completed.start,
+            end: completed.end,
+            recurrence: Default::default(),
+            color_id: None,
+            habit_id: Some("stretch".into()),
+        });
+    }
     let mut pending = completed.clone();
     pending.id = "another-series-instance".into();
     pending.details.recurring_event_id = Some("another-series".into());
