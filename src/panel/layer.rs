@@ -397,11 +397,14 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
         }
         Message::Runtime(Action::Window(action)) => match action {
             WindowAction::Open(id, settings, sender) => {
+                // The dock's resident popover never maps or unmaps, and the
+                // effect would otherwise reach the dock's own surface.
+                if panel.commands.is_none() {
+                    crate::window_effect::prepare(&panel.app.config.views);
+                }
                 let flash = settings.fullscreen;
                 let width = settings.size.width.round().max(1.0) as u32;
                 let popover = panel.app.task_creation_window && !flash;
-                // The app ID carries the animation choice, so identify the
-                // editor by its window ID rather than a fixed application ID.
                 let editor_window = panel.app.editor_window == Some(id);
                 let mut margin = (0, 0, 0, 0);
                 let (anchor, size, zone, namespace) = if editor_window {
@@ -411,7 +414,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                         anchor(side),
                         (width, 0),
                         0,
-                        settings.platform_specific.application_id.clone(),
+                        "timeslay-editor".to_owned(),
                     )
                 } else if popover {
                     panel.id = Some(id);
@@ -438,7 +441,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                         anchor(side),
                         (width, 0),
                         exclusive_zone(&panel.app.config.views, width),
-                        crate::window_effect::prepare(&panel.app.config.views, "timeslay-panel"),
+                        "timeslay-panel".to_owned(),
                     )
                 };
                 panel.opening.insert(id, sender);
@@ -571,7 +574,7 @@ fn boot_surface(popover: bool) -> (Panel, Task<Message>) {
 }
 
 fn view(panel: &Panel, id: window::Id) -> Element<'_, Message> {
-    app::view(&panel.app, id).map(Message::App)
+    crate::ui::controls::arrow_when_idle(app::view(&panel.app, id).map(Message::App))
 }
 
 fn subscription(panel: &Panel) -> Subscription<Message> {
@@ -854,9 +857,7 @@ mod tests {
     fn editor_window_floats_beside_the_panel_without_changing_its_reservation() {
         for side in [Side::Left, Side::Right] {
             for reserved in [false, true] {
-                for mode in crate::config::WindowAnimation::ALL {
-                    let application_id =
-                        crate::window_effect::application_id(mode, 240, "timeslay-editor");
+                {
                     let mut panel = panel();
                     panel.app.sidebar.as_mut().unwrap().side = side;
                     panel.app.config.views.panel_reserve_space = reserved;
@@ -870,10 +871,6 @@ mod tests {
                             id,
                             window::Settings {
                                 size: iced::Size::new(360.0, 800.0),
-                                platform_specific: window::settings::PlatformSpecific {
-                                    application_id: application_id.clone(),
-                                    ..Default::default()
-                                },
                                 ..Default::default()
                             },
                             sender,
@@ -884,7 +881,7 @@ mod tests {
                     assert!(matches!(messages.as_slice(),
                         [Message::Layer(LayerShellCustomActionWithId(None, LayerAction::NewLayerShell { id: target, settings }))]
                         if *target == id && settings.layer == Layer::Top
-                            && settings.namespace.as_deref() == Some(application_id.as_str())
+                            && settings.namespace.as_deref() == Some("timeslay-editor")
                             && settings.exclusive_zone == Some(0)
                             && settings.anchor == anchor(side)
                             && settings.size == Some((360, 0))

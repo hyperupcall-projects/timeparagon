@@ -268,10 +268,12 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
                 .round()
                 .clamp(0.0, config::ViewSettings::MAX_FADE_DURATION_MS as f32)
                 as u32;
+            crate::window_effect::prepare(&state.config.views);
             queue_save(state)
         }
         SettingsMessage::WindowAnimationSelected(animation) => {
             state.config.views.window_animation = animation;
+            crate::window_effect::prepare(&state.config.views);
             queue_save(state)
         }
         SettingsMessage::RestartRequested => {

@@ -475,7 +475,7 @@ pub(super) fn calendar_dropdown_overlay<'a>(
             }
         });
 
-    container(stack![dismiss, card])
+    container(stack![dismiss, iced::widget::opaque(card)])
         .width(Fill)
         .height(Length::Fixed(328.0))
         .into()

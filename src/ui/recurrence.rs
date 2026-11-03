@@ -43,8 +43,8 @@ fn choice<'a>(
         .into()
 }
 
-/// The full repeat editor: simple modes, the controls each mode needs, when
-/// the series ends and the dates skipped out of it.
+/// The full repeat editor: simple modes, the controls each mode needs and
+/// when the series ends.
 pub fn editor<'a, F>(
     rule: &'a recurrence::Rule,
     anchor: NaiveDate,
@@ -287,54 +287,6 @@ where
                 }
                 EndKind::Never => {}
             }
-
-            body = body.push(label("Skip dates"));
-            if rule.skips.is_empty() {
-                body = body.push(
-                    text("No skipped dates.")
-                        .size(metrics.label() - 1.0)
-                        .style(text::secondary),
-                );
-            } else {
-                let mut chips = Vec::new();
-                for day in &rule.skips {
-                    chips.push(
-                        row![
-                            text(day.format("%B %-d").to_string()).size(metrics.label() - 1.0),
-                            button(text("×").size(metrics.label()).center())
-                                .padding([0, 5])
-                                .style(crate::ui::controls::ghost)
-                                .on_press(send(recurrence::Action::SkipRemove(*day))),
-                        ]
-                        .spacing(2)
-                        .align_y(Alignment::Center)
-                        .into(),
-                    );
-                }
-                body = body.push(row(chips).spacing(4).wrap().vertical_spacing(4));
-            }
-            let send = map.clone();
-            let skip_input = super::controls::date(
-                crate::calendar::time_format::TimeFormat::TwelveHour,
-                &rule.skip_input,
-                false,
-                false,
-                !busy,
-                metrics.label(),
-                move |value| send(recurrence::Action::SkipInput(value)),
-            );
-            let send = map.clone();
-            body = body.push(
-                row![
-                    skip_input,
-                    button(text("Skip this date").size(metrics.label()).center())
-                        .padding([3, 7])
-                        .style(crate::ui::controls::secondary)
-                        .on_press(send(recurrence::Action::SkipAdd)),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
-            );
         }
     }
 

@@ -237,7 +237,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
     .spacing(metrics.spacing)
     .width(Fill);
 
-    let card = container(
+    let card = container(iced::widget::opaque(
         container(
             column![
                 title,
@@ -259,7 +259,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
         .padding(metrics.padding)
         .width(Length::Fixed(260.0))
         .style(crate::ui::controls::surface),
-    )
+    ))
     .width(Fill)
     .height(Fill)
     .center_x(Fill)

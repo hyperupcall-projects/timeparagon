@@ -496,7 +496,9 @@ pub(super) fn month_overlay<'a>(
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
         iced::widget::Space::new().height(header_offset(metrics)),
-        container(card).padding(metrics.padding).width(Fill),
+        container(iced::widget::opaque(card))
+            .padding(metrics.padding)
+            .width(Fill),
     ]
     .width(Fill);
 

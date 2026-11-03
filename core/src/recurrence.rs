@@ -159,9 +159,6 @@ pub enum Action {
     Ends(EndKind),
     Until(String),
     Count(String),
-    SkipInput(String),
-    SkipAdd,
-    SkipRemove(NaiveDate),
     SimpleRepeat,
 }
 
@@ -185,9 +182,10 @@ pub struct Rule {
     pub ends: EndKind,
     pub until: String,
     pub count: String,
-    /// Dates removed from the series, shown as "Skip dates".
+    /// Dates removed from the series. They are not edited here, only kept
+    /// from an imported `EXDATE` and written back, so a deleted occurrence
+    /// stays deleted.
     pub skips: Vec<NaiveDate>,
-    pub skip_input: String,
     /// Extra dates kept from an imported `RDATE`; they are written back but
     /// not shown as raw text.
     pub extra: Vec<NaiveDate>,
@@ -211,7 +209,6 @@ impl Rule {
             until: String::new(),
             count: "10".to_owned(),
             skips: Vec::new(),
-            skip_input: String::new(),
             extra: Vec::new(),
             custom: None,
         }
@@ -274,17 +271,6 @@ impl Rule {
             Action::Ends(kind) => self.ends = kind,
             Action::Until(value) => self.until = value,
             Action::Count(value) => self.count = value,
-            Action::SkipInput(value) => self.skip_input = value,
-            Action::SkipAdd => {
-                if let Ok(day) = deadline::parse_date(self.skip_input.trim()) {
-                    if !self.skips.contains(&day) {
-                        self.skips.push(day);
-                        self.skips.sort_unstable();
-                    }
-                    self.skip_input.clear();
-                }
-            }
-            Action::SkipRemove(day) => self.skips.retain(|date| *date != day),
             Action::SimpleRepeat => {
                 self.repeat = RepeatMode::Weekly;
                 self.custom = None;
@@ -293,17 +279,6 @@ impl Rule {
                 }
             }
         }
-    }
-
-    /// Validates an interactive skip add, returning the error to show.
-    pub fn add_skip(&mut self) -> Result<(), String> {
-        let day = deadline::parse_date(self.skip_input.trim())?;
-        if !self.skips.contains(&day) {
-            self.skips.push(day);
-            self.skips.sort_unstable();
-        }
-        self.skip_input.clear();
-        Ok(())
     }
 
     /// Reads an imported recurrence into the structured fields. Returns false

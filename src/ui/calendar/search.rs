@@ -225,7 +225,7 @@ pub(super) fn search_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element
 
     let aligned = column![
         Space::new().height(header_offset(metrics)),
-        container(card)
+        container(iced::widget::opaque(card))
             .padding(metrics.padding)
             .width(Fill)
             .align_x(iced::alignment::Horizontal::Right),
