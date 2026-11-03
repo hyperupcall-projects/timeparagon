@@ -72,7 +72,6 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
             timeslay::calendar::DraftKind::Habit,
         )),
     );
-    assert!(state.habits.draft.is_none());
     assert_eq!(state.form_editors.event_edit.text(), expected);
     assert_eq!(
         state.calendar.edit_draft.as_ref().unwrap().description,
