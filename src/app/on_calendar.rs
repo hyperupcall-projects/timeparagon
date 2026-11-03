@@ -336,17 +336,16 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
         CalendarMessage::CalendarZoomed { factor, anchor } => {
             let before = state.calendar.hour_height;
             state.calendar.zoom(factor);
-            let after = state.calendar.hour_height;
-
-            if after == before {
-                return Task::none();
-            }
-
-            // Keep the row under the pointer fixed. The grid grows by `ratio`,
-            // so the anchored row slides down by `anchor * (ratio - 1)` and the
-            // scroll has to follow it by the same amount.
-            let delta = crate::ui::calendar::zoom_scroll_delta(anchor, before, after);
-            crate::ui::calendar::scroll_by(delta)
+            hold_row_still(state, before, anchor)
+        }
+        CalendarMessage::CalendarZoomReset => {
+            let before = state.calendar.hour_height;
+            state.calendar.reset_zoom();
+            hold_row_still(state, before, None)
+        }
+        CalendarMessage::CalendarGridScrolled(top, height) => {
+            state.grid_scroll = (top, height);
+            Task::none()
         }
         CalendarMessage::CalendarDayShift(days) => {
             let today =
@@ -476,4 +475,18 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             ])
         }
     }
+}
+
+/// Scrolls the grid to make up for a zoom from `before`, so the anchored row
+/// stays where it is on screen rather than sliding away as the grid resizes.
+fn hold_row_still(state: &State, before: f32, anchor: Option<f32>) -> Task<Message> {
+    let after = state.calendar.hour_height;
+    if after == before {
+        return Task::none();
+    }
+
+    let (top, height) = state.grid_scroll;
+    let anchor = anchor.unwrap_or(top + height / 2.0);
+    let delta = crate::ui::calendar::zoom_scroll_delta(anchor, before, after);
+    crate::ui::calendar::scroll_by(state.view, delta)
 }

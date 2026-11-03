@@ -87,6 +87,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             .collect();
         let time_grid = crate::ui::controls::scrollable(row(grids))
             .id(iced::widget::Id::new(WEEK_DAY_SCROLL))
+            .on_scroll(grid_scrolled)
             .width(Fill)
             .height(Fill);
         crate::ui::controls::scrollable(

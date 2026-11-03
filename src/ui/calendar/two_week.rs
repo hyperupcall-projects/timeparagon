@@ -21,12 +21,21 @@ const POPUP_WIDTH: f32 = 300.0;
 /// How far an event that has already ended fades.
 const PAST_ALPHA: f32 = 0.45;
 
+/// The height of the two rows together. At the default zoom they fill the space
+/// unless that would squeeze them; zooming scales from there, and a taller cell
+/// lists more of its day.
+pub(super) fn two_week_height(available: f32, zoom: f32) -> f32 {
+    available.max(MIN_CELL_HEIGHT * 2.0) * zoom
+}
+
 pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let metrics = *metrics;
     let dates = calendar::two_week_dates(state.week_anchor);
+    let zoom = state.calendar.zoom_ratio();
+    let scroll_top = state.grid_scroll.0;
     let grid = responsive(move |size| {
         let width = size.width.max(MIN_GRID_WIDTH);
-        let height = size.height.max(MIN_CELL_HEIGHT * 2.0);
+        let height = two_week_height(size.height, zoom);
         let cell = Size::new(width / 7.0, height / 2.0);
         let weeks = dates.chunks(7).enumerate().map(|(index, week)| {
             row(week
@@ -34,14 +43,16 @@ pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
                 .map(|&day| day_cell(state, day, index == 0, cell, &metrics)))
             .into()
         });
-        crate::ui::controls::scrollable(column(weeks).width(width).height(height))
+        let grid = crate::ui::controls::scrollable(column(weeks).width(width).height(height))
+            .id(iced::widget::Id::new(RANGE_SCROLL))
+            .on_scroll(grid_scrolled)
             .direction(scrollable::Direction::Both {
                 vertical: scrollable::Scrollbar::new(),
                 horizontal: scrollable::Scrollbar::new(),
             })
             .width(Fill)
-            .height(Fill)
-            .into()
+            .height(Fill);
+        zoom_wheel_layer(grid.into(), scroll_top)
     });
 
     let days = calendar::two_week_dates(state.week_anchor);

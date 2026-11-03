@@ -368,11 +368,14 @@ pub(super) fn travel_key(travel: &[TravelBox]) -> u64 {
     hash
 }
 
+/// How far one notch of the wheel zooms.
+pub(super) const WHEEL_ZOOM: f32 = 1.12;
+
 /// Wheel notches to apply. Scroll up is positive.
 ///
 /// Pixel deltas from a trackpad are large, so they are scaled down to the
-/// same step as a mouse notch. Whichever axis moved more wins, because
-/// holding Shift turns the wheel into a horizontal scroll on some desktops.
+/// same step as a mouse notch. Whichever axis moved more wins, because some
+/// mice and desktops report the wheel on the other axis.
 pub(super) fn zoom_steps(delta: mouse::ScrollDelta) -> f32 {
     let (x, y, scale) = match delta {
         mouse::ScrollDelta::Lines { x, y } => (x, y, 1.0),

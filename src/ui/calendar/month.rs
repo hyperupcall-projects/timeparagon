@@ -3,6 +3,13 @@
 use super::*;
 use iced::widget::column;
 
+/// How tall a day is in the month grid. At the default zoom the weeks share the
+/// window unless that would squeeze them; zooming scales from there, and the
+/// grid scrolls or leaves space below once it stops matching the window.
+pub(super) fn month_cell_height(window_height: f32, weeks: usize, zoom: f32) -> f32 {
+    ((window_height - 160.0) / weeks as f32).max(135.0) * zoom
+}
+
 /// A month overview with whole Monday–Sunday weeks. Selecting a date updates
 /// the day panel while keeping the month overview anchored in place.
 pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -10,7 +17,11 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
     let grid_width = (metrics.size.width - metrics.padding * 2.0).max(840.0);
     let cell_width = grid_width / 7.0;
-    let cell_height = ((metrics.size.height - 160.0) / (dates.len() / 7) as f32).max(135.0);
+    let cell_height = month_cell_height(
+        metrics.size.height,
+        dates.len() / 7,
+        state.calendar.zoom_ratio(),
+    );
     let cell_metrics = Metrics::of(Size::new(cell_width - 12.0, cell_height));
     let weekdays = row(
         ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(|day| {
@@ -161,12 +172,15 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     let grid = crate::ui::controls::scrollable(
         column![weekdays, column(weeks)].width(Length::Fixed(grid_width)),
     )
+    .id(iced::widget::Id::new(RANGE_SCROLL))
+    .on_scroll(grid_scrolled)
     .direction(scrollable::Direction::Both {
         vertical: scrollable::Scrollbar::new(),
         horizontal: scrollable::Scrollbar::new(),
     })
     .width(Fill)
     .height(Fill);
+    let grid = zoom_wheel_layer(grid.into(), state.grid_scroll.0);
     let heading = range_heading(
         state,
         state.week_anchor.format("%B %Y ▾").to_string(),

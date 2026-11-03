@@ -10,6 +10,7 @@ pub(super) fn day_grid<'a>(
     container(
         crate::ui::controls::scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
             .id(iced::widget::Id::new(DAY_SCROLL))
+            .on_scroll(grid_scrolled)
             .height(Fill)
             .width(Fill),
     )
@@ -220,6 +221,16 @@ pub(super) fn minutes_into_day(when: DateTime<Local>, day: chrono::NaiveDate, of
 pub(super) const DAY_SCROLL: &str = "cal-day";
 pub(super) const WEEK_DAY_SCROLL: &str = "cal-week-day";
 pub(super) const WEEK_SCROLL: &str = "cal-week";
+/// The grid of the month and two-week views. Only one of them shows at a time.
+pub(super) const RANGE_SCROLL: &str = "cal-range";
+
+/// Reports a grid's scroll, so a zoom knows which row is in the middle of it.
+pub(super) fn grid_scrolled(viewport: scrollable::Viewport) -> Message {
+    Message::Calendar(CalendarMessage::CalendarGridScrolled(
+        viewport.absolute_offset().y,
+        viewport.bounds().height,
+    ))
+}
 
 pub fn scroll_week_to_start() -> iced::Task<Message> {
     iced::widget::operation::scroll_to(
@@ -253,23 +264,29 @@ pub(super) fn scroll_now(
     )
 }
 
-/// Scrolls the day grid by a pixel amount.
+/// Scrolls the grid of a calendar view by a pixel amount.
 ///
-/// Used after a zoom to keep the row under the pointer still: the grid grows
-/// or shrinks around that row, so the scroll follows it by the same delta.
-pub fn scroll_by(delta: f32) -> iced::Task<Message> {
+/// Used after a zoom to keep a row still: the grid grows or shrinks around that
+/// row, so the scroll follows it by the same delta.
+pub fn scroll_by(view: crate::app::CalendarView, delta: f32) -> iced::Task<Message> {
+    use crate::app::CalendarView;
+    let id = match view {
+        CalendarView::Day => DAY_SCROLL,
+        CalendarView::Week => WEEK_DAY_SCROLL,
+        CalendarView::TwoWeek | CalendarView::Month => RANGE_SCROLL,
+    };
     iced::widget::operation::scroll_by(
-        iced::widget::Id::new(DAY_SCROLL),
+        iced::widget::Id::new(id),
         iced::widget::operation::AbsoluteOffset { x: 0.0, y: delta },
     )
 }
 
-/// The scroll adjustment that keeps the row under the pointer still while the
+/// The scroll adjustment that keeps a row still while the
 /// hour height changes from `before` to `after`.
 ///
-/// `anchor` is the pointer's row measured from the top of the grid. The grid
-/// grows by `after / before`, so that row slides down by `anchor * (ratio - 1)`
-/// and the scroll has to follow it by the same amount to stay under the mouse.
+/// `anchor` is the row measured from the top of the grid. The grid grows by
+/// `after / before`, so that row slides down by `anchor * (ratio - 1)` and the
+/// scroll has to follow it by the same amount for it to stay put on screen.
 pub fn zoom_scroll_delta(anchor: f32, before: f32, after: f32) -> f32 {
     if !before.is_finite() || !after.is_finite() || before <= 0.0 {
         return 0.0;

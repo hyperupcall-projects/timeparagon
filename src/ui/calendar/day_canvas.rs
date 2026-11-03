@@ -173,7 +173,8 @@ pub(super) struct Drag {
 pub(super) struct DrawState {
     pub(super) grid: canvas::Cache,
     pub(super) key: std::cell::Cell<u64>,
-    pub(super) shift: std::cell::Cell<bool>,
+    /// Whether Ctrl is held, which turns the wheel into a zoom.
+    pub(super) zoom_held: std::cell::Cell<bool>,
     /// Index of the timed event under the pointer. Kept out of the grid cache.
     pub(super) hovered: std::cell::Cell<Option<usize>>,
     /// The drag in progress, if any. Kept out of the grid cache so the preview
@@ -212,7 +213,7 @@ impl Default for DrawState {
         Self {
             grid: canvas::Cache::new(),
             key: std::cell::Cell::new(0),
-            shift: std::cell::Cell::new(false),
+            zoom_held: std::cell::Cell::new(false),
             hovered: std::cell::Cell::new(None),
             drag: std::cell::RefCell::new(None),
             create: std::cell::RefCell::new(None),
@@ -282,11 +283,11 @@ impl canvas::Program<Message> for DayCanvas {
         }
         match event {
             iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
-                state.shift.set(modifiers.shift());
+                state.zoom_held.set(modifiers.command());
                 None
             }
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta })
-                if state.shift.get() && cursor.position_in(bounds).is_some() =>
+                if state.zoom_held.get() && cursor.position_in(bounds).is_some() =>
             {
                 let steps = zoom_steps(*delta);
                 if steps == 0.0 {
@@ -300,8 +301,8 @@ impl canvas::Program<Message> for DayCanvas {
                 // Scroll up spreads the hours apart; scroll down packs them.
                 Some(
                     canvas::Action::publish(Message::Calendar(CalendarMessage::CalendarZoomed {
-                        factor: 1.12_f32.powf(steps),
-                        anchor,
+                        factor: WHEEL_ZOOM.powf(steps),
+                        anchor: Some(anchor),
                     }))
                     .and_capture(),
                 )

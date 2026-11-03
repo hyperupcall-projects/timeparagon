@@ -585,6 +585,9 @@ pub const DEFAULT_HOUR_HEIGHT: f32 = 48.0;
 pub const MIN_HOUR_HEIGHT: f32 = 24.0;
 /// Tallest hour row, so a zoomed-in day stays a grid rather than a poster.
 pub const MAX_HOUR_HEIGHT: f32 = 180.0;
+/// How far one press of a zoom key or menu button goes. Bigger than a wheel
+/// notch, which comes in runs.
+pub const ZOOM_STEP: f32 = 1.25;
 
 /// Shared membership rule for both memory and disk snapshots.
 fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
@@ -980,7 +983,24 @@ impl Store {
             return;
         }
 
-        self.hour_height = (self.hour_height * factor).clamp(MIN_HOUR_HEIGHT, MAX_HOUR_HEIGHT);
+        let height = (self.hour_height * factor).clamp(MIN_HOUR_HEIGHT, MAX_HOUR_HEIGHT);
+
+        // Rounding must not leave stepping in and back out a hair off the
+        // default, with Reset zoom still lit for no visible difference.
+        self.hour_height = if (height - DEFAULT_HOUR_HEIGHT).abs() < 0.5 {
+            DEFAULT_HOUR_HEIGHT
+        } else {
+            height
+        };
+    }
+
+    pub fn reset_zoom(&mut self) {
+        self.hour_height = DEFAULT_HOUR_HEIGHT;
+    }
+
+    /// The zoom as a multiple of the default, for the views without hour rows.
+    pub fn zoom_ratio(&self) -> f32 {
+        self.hour_height / DEFAULT_HOUR_HEIGHT
     }
 
     pub fn is_signed_in(&self) -> bool {
@@ -3227,6 +3247,28 @@ mod tests {
         assert_eq!(store.hour_height, MIN_HOUR_HEIGHT);
         store.zoom(0.0);
         assert_eq!(store.hour_height, MIN_HOUR_HEIGHT);
+    }
+
+    #[test]
+    fn stepping_in_and_back_out_lands_exactly_on_the_default() {
+        let mut store = Store::new(0);
+        for _ in 0..3 {
+            store.zoom(ZOOM_STEP);
+        }
+        for _ in 0..3 {
+            store.zoom(1.0 / ZOOM_STEP);
+        }
+        assert_eq!(store.hour_height, DEFAULT_HOUR_HEIGHT);
+    }
+
+    #[test]
+    fn reset_zoom_returns_to_the_default() {
+        let mut store = Store::new(0);
+        store.zoom(2.0);
+        assert_eq!(store.zoom_ratio(), 2.0);
+        store.reset_zoom();
+        assert_eq!(store.hour_height, DEFAULT_HOUR_HEIGHT);
+        assert_eq!(store.zoom_ratio(), 1.0);
     }
 
     #[test]
