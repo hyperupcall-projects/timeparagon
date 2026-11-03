@@ -57,7 +57,13 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         ),
     };
 
-    let title = super::controls::page_heading(heading, subtitle, Some(tasks.len()), metrics);
+    let invitations: &[Event] = if list == List::Inbox {
+        &state.inbox.invitations
+    } else {
+        &[]
+    };
+    let count = tasks.len() + invitations.len();
+    let title = super::controls::page_heading(heading, subtitle, Some(count), metrics);
     let header: Element<'a, Message> = if list == List::Inbox {
         let add = button(text("New task").size(metrics.label()).center())
             .on_press(msg(Action::NewTask))
@@ -97,7 +103,17 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
     {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
-    if tasks.is_empty() {
+    if !invitations.is_empty() {
+        body = body.push(
+            text("Invitations")
+                .size(metrics.label() + 1.0)
+                .style(text::secondary),
+        );
+        for invitation in invitations {
+            body = body.push(invitation_card(state, invitation, metrics));
+        }
+    }
+    if count == 0 {
         body = body.push(
             text(match list {
                 List::Overdue => "Nothing overdue",
@@ -116,6 +132,44 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
         .padding(metrics.padding)
         .width(Fill)
         .height(Fill)
+        .into()
+}
+
+/// An invitation waiting for an answer, which can be given right here. Answering
+/// a repeating one answers its whole series, as that's what is listed.
+fn invitation_card<'a>(
+    state: &'a State,
+    event: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let time_format = state.config.appearance.time_format;
+    let mut when = super::calendar::schedule_line(event, time_format);
+    if !event.details.recurrence.is_empty() {
+        when = format!("Repeats · from {when}");
+    }
+    let mut card = column![
+        button(text(event.title.clone()).size(metrics.label()).width(Fill))
+            .padding(0)
+            .width(Fill)
+            .style(crate::ui::controls::ghost)
+            .on_press(msg(Action::OpenInvitation(event.id.clone()))),
+        text(when)
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    ]
+    .spacing(6)
+    .width(Fill);
+    if !event.details.organizer.is_empty() {
+        card = card.push(
+            text(format!("From {}", event.details.organizer))
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
+    container(card.push(super::calendar::reply_buttons(event, metrics)))
+        .padding(metrics.padding)
+        .width(Fill)
+        .style(crate::ui::controls::card_surface)
         .into()
 }
 
@@ -1022,6 +1076,53 @@ mod tests {
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
+    }
+
+    #[test]
+    fn an_invitation_waits_in_the_inbox_and_is_answered_from_there() {
+        use crate::calendar::meeting::{Attendance, Guest, Response};
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let mut invitation = state
+            .calendar
+            .events
+            .iter()
+            .find(|event| !event.is_task())
+            .cloned()
+            .unwrap();
+        invitation.id = "far-ahead".into();
+        invitation.title = "Quarterly review".into();
+        invitation.details.attendance = Attendance {
+            guests: vec![Guest {
+                email: "me@example.com".into(),
+                ..Default::default()
+            }],
+            own_email: Some("me@example.com".into()),
+            ..Default::default()
+        };
+        state.inbox.invitations = vec![invitation];
+        state.screen = crate::app::Screen::Inbox;
+
+        let mut ui = simulator(&state, 900.0);
+        assert!(ui.find("Invitations").is_ok());
+        assert!(ui.find("Quarterly review").is_ok());
+        assert!(ui.find("Nothing to triage").is_err());
+        ui.click("Yes").unwrap();
+        let reply = ui
+            .into_messages()
+            .find(|message| {
+                matches!(
+                    message,
+                    Message::Event(EventMessage::EventReply(id, Response::Accepted))
+                        if id == "far-ahead"
+                )
+            })
+            .expect("the answer is sent");
+
+        // Answering works though the event isn't in the range on show, and
+        // takes it out of the inbox straight away.
+        let _ = crate::app::update(&mut state, reply);
+        assert!(state.inbox.invitations.is_empty());
     }
 
     #[test]

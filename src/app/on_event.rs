@@ -4,6 +4,66 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> {
     match message {
+        EventMessage::EventReply(id, response) => {
+            // An invitation in the inbox needn't be in the range on show.
+            let Some(event) = state
+                .calendar
+                .event(&id)
+                .or_else(|| state.inbox.invitations.iter().find(|e| e.id == id))
+            else {
+                return Task::none();
+            };
+            let attendance = &event.details.attendance;
+            let Some(email) = attendance
+                .can_reply()
+                .then(|| attendance.own_email.clone())
+                .flatten()
+            else {
+                return Task::none();
+            };
+            if attendance.own_response() == Some(response) {
+                return Task::none();
+            }
+            let series = state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .filter(|draft| draft.id == id && draft.meeting.reply_to_series)
+                .and(event.details.recurring_event_id.clone());
+            let target = series.unwrap_or_else(|| id.clone());
+            let calendar_id = event.calendar_id.clone();
+            let previous = attendance.own_response();
+            set_own_response(state, &id, response);
+            // Answered, so it's no longer waiting. A failure brings it back.
+            state
+                .inbox
+                .invitations
+                .retain(|invitation| invitation.id != id && invitation.id != target);
+            let settings = state.config.calendar.clone();
+            state.calendar.error = None;
+            blocking::run(move || {
+                calendar::reply_to_event(
+                    &settings.client_id,
+                    &settings.client_secret,
+                    &calendar_id,
+                    &target,
+                    &email,
+                    response,
+                )
+            })
+            .map(move |result| {
+                Message::Event(EventMessage::EventReplied(id.clone(), previous, result))
+            })
+        }
+        EventMessage::EventReplied(_, _, Ok(())) => refresh_week_after_write(state),
+        EventMessage::EventReplied(id, previous, Err(error)) => {
+            if let Some(previous) = previous {
+                set_own_response(state, &id, previous);
+            }
+            log::warn!("could not answer the invitation: {error}");
+            state.calendar.error = Some(error);
+            crate::inbox::refresh_invitations(state)
+        }
         EventMessage::DescriptionOpen(id) => {
             let value =
                 if let Some(draft) = state.calendar.edit_draft.as_ref().filter(|d| d.id == id) {
@@ -235,14 +295,11 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                     crate::timeblocking::Action::Schedule(id, start, end),
                 );
             }
-            let Some(calendar_id) = state
-                .calendar
-                .event(&id)
-                .filter(|event| !event.is_task())
-                .map(|event| event.calendar_id.clone())
-            else {
+            let Some(event) = state.calendar.event(&id).filter(|event| !event.is_task()) else {
                 return Task::none();
             };
+            let attendance = &event.details.attendance;
+            let ask = attendance.can_manage() && !attendance.guests.is_empty();
 
             // The chip moves now; the lighter shade and the write follow. A
             // second drag on the same event is refused until this one lands.
@@ -250,22 +307,23 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 return Task::none();
             }
 
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            let request_id = id.clone();
-            state.calendar.error = None;
-
-            blocking::run(move || {
-                calendar::set_event_time(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                    start,
-                    end,
-                )
-            })
-            .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
+            if ask {
+                state.calendar.pending_move = Some(calendar::PendingMove { id, start, end });
+                return Task::none();
+            }
+            write_event_time(state, id, start, end, false)
+        }
+        EventMessage::EventMoveConfirmed(notify) => {
+            let Some(pending) = state.calendar.pending_move.take() else {
+                return Task::none();
+            };
+            write_event_time(state, pending.id, pending.start, pending.end, notify)
+        }
+        EventMessage::EventMoveCancelled => {
+            if let Some(pending) = state.calendar.pending_move.take() {
+                state.calendar.fail_time_change(&pending.id);
+            }
+            Task::none()
         }
         EventMessage::EventTimeSaved(id, Ok(())) => {
             state.calendar.confirm_time_change(&id);
@@ -302,7 +360,12 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 draft.save_menu_open = false;
             }
             state.calendar.pending_delete_scope = scope;
+            state.calendar.pending_delete_notify = true;
             state.calendar.pending_delete = Some(id);
+            Task::none()
+        }
+        EventMessage::EventDeleteNotify(notify) => {
+            state.calendar.pending_delete_notify = notify;
             Task::none()
         }
         EventMessage::EventDeleteConfirmed(id) => {
@@ -310,15 +373,15 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 return Task::none();
             }
             let scope = state.calendar.pending_delete_scope;
-            let Some(calendar_id) = state
-                .calendar
-                .event(&id)
-                .filter(|event| !event.is_task())
-                .map(|event| event.calendar_id.clone())
-            else {
+            let Some(event) = state.calendar.event(&id).filter(|event| !event.is_task()) else {
                 state.calendar.pending_delete = None;
                 return Task::none();
             };
+            let calendar_id = event.calendar_id.clone();
+            let attendance = &event.details.attendance;
+            let notify = state.calendar.pending_delete_notify
+                && attendance.can_manage()
+                && !attendance.guests.is_empty();
 
             let client_id = state.config.calendar.client_id.clone();
             let client_secret = state.config.calendar.client_secret.clone();
@@ -332,6 +395,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                     &calendar_id,
                     &request_id,
                     scope,
+                    notify,
                 )
             })
             .map(move |result| Message::Event(EventMessage::EventDeleted(id.clone(), result)))
@@ -375,4 +439,49 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
     }
+}
+
+/// Shows the user's answer on the event, and on its form if that is open.
+fn set_own_response(
+    state: &mut State,
+    id: &str,
+    response: calendar::meeting::Response,
+) -> Option<calendar::meeting::Response> {
+    let event = state.calendar.event_mut_anywhere(id)?;
+    let previous = event.details.attendance.set_own_response(response);
+    let email = event.details.attendance.own_email.clone()?;
+    if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
+        draft.meeting.set_guest_response(&email, response);
+    }
+    previous
+}
+
+/// Sends a time already showing on the chip to Google.
+fn write_event_time(
+    state: &mut State,
+    id: String,
+    start: chrono::DateTime<chrono::Local>,
+    end: chrono::DateTime<chrono::Local>,
+    notify: bool,
+) -> Task<Message> {
+    let Some(calendar_id) = state.calendar.event(&id).map(|e| e.calendar_id.clone()) else {
+        state.calendar.fail_time_change(&id);
+        return Task::none();
+    };
+    let client_id = state.config.calendar.client_id.clone();
+    let client_secret = state.config.calendar.client_secret.clone();
+    let request_id = id.clone();
+    state.calendar.error = None;
+    blocking::run(move || {
+        calendar::set_event_time(
+            &client_id,
+            &client_secret,
+            &calendar_id,
+            &request_id,
+            start,
+            end,
+            notify,
+        )
+    })
+    .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
 }

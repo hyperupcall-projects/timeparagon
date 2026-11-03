@@ -725,3 +725,28 @@ fn starting_up_shows_the_cached_contacts() {
     assert_eq!(store.books[0].contacts[0].name, "Ada Lovelace");
     assert!(!store.books[0].loading);
 }
+
+#[test]
+fn guests_are_found_once_across_accounts_and_can_be_left_out() {
+    let mut state = store_with_book_for_guests();
+    let other = state.books[0].clone();
+    state.books.push(other);
+    // One suggestion per address, however many accounts hold the contact.
+    let found = state.invitees("ada", &[]);
+    let emails = contact().emails;
+    assert!(emails.len() > 1);
+    assert_eq!(found.len(), emails.len());
+    assert!(found.iter().all(|person| person.name == "Ada Lovelace"));
+    let taken: Vec<String> = emails.iter().map(|email| email.to_uppercase()).collect();
+    assert!(state.invitees("ada", &taken).is_empty());
+    assert!(state.invitees("a", &[]).is_empty());
+}
+
+fn store_with_book_for_guests() -> Store {
+    let mut book = Book::for_tests(Login::extra("me@example.com"));
+    book.contacts = vec![contact()];
+    Store {
+        books: vec![book],
+        ..Store::default()
+    }
+}

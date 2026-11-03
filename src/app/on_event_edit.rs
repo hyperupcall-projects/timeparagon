@@ -4,6 +4,24 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Message> {
     match message {
+        EventEditMessage::EventEditMeeting(action) => {
+            let Some(draft) = state
+                .calendar
+                .edit_draft
+                .as_mut()
+                .filter(|draft| !draft.loading && !draft.saving)
+            else {
+                return Task::none();
+            };
+            let search = match &action {
+                calendar::meeting::Action::Query(query) => Some(query.clone()),
+                _ => None,
+            };
+            draft.meeting.update(action);
+            search.map_or_else(Task::none, |query| {
+                crate::people::search_guests(state, &query)
+            })
+        }
         EventEditMessage::EventEditOptions(action) => {
             if let Some(draft) = &mut state.calendar.edit_draft
                 && !draft.loading
@@ -146,6 +164,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             if let Some(draft) = &mut state.calendar.edit_draft {
                 draft.save_menu_open = false;
                 draft.delete_menu_open = false;
+                draft.meeting.add_typed_address();
             }
             let Some(draft) = state.calendar.edit_draft.clone() else {
                 return Task::none();
@@ -231,19 +250,23 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             })
             .map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
         }
-        EventEditMessage::EventEditSaved(Ok(())) => {
+        EventEditMessage::EventEditSaved(Ok(saved)) => {
             // Only the draft still marked as saving is the one Google just
             // wrote; another event may have been opened in the meantime.
             let mut moved = None;
             if let Some(draft) = &mut state.calendar.edit_draft {
                 if draft.saving {
                     moved = Some((draft.id.clone(), draft.calendar_id.clone()));
+                    draft.meeting.mark_saved();
                 }
                 draft.editing_title = false;
                 draft.saving = false;
             }
             if let Some((id, calendar_id)) = moved {
                 state.calendar.event_moved(&id, &calendar_id);
+                if saved.zoom_needed {
+                    open_zoom_setup(state, &saved.link);
+                }
             }
             // Keep the inline draft as the user left it until the calendar
             // sync brings the saved event back, so fields do not flicker.
@@ -265,5 +288,22 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             state.calendar.error = Some(error);
             Task::none()
         }
+    }
+}
+
+/// Zoom for Google Workspace only runs inside Google Calendar, so the user is
+/// taken to the event there, signed in as the account that holds it.
+pub(super) fn open_zoom_setup(state: &mut State, link: &str) {
+    let account = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.primary && !calendar.is_task_list())
+        .map(|calendar| calendar.id.as_str());
+    let opened = calendar::meeting::zoom_setup_url(link, account)
+        .ok_or_else(|| "Could not find this event on Google Calendar to add Zoom".to_owned())
+        .and_then(|url| calendar::oauth::open_in_browser(&url));
+    if let Err(error) = opened {
+        state.calendar.error = Some(error);
     }
 }
