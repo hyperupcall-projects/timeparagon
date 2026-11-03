@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 
 use iced::theme::Palette;
 use iced::{Color, Theme};
+use timeslay_core::theme::Scheme;
 
 /// The colors a six-slot [`Palette`] has no room for.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,25 +75,13 @@ pub fn selected_name(catalog: &Catalog, name: &str) -> String {
 }
 
 impl Entry {
-    fn calm(name: &str, palette: Palette, surfaces: [u32; 7], muted: Color) -> Self {
-        let theme = Theme::custom_with_fn(name.to_owned(), palette, |palette| {
-            palettes::calm_extended(palette, surfaces, muted)
+    fn of(scheme: Scheme) -> Self {
+        let theme = Theme::custom_with_fn(scheme.name().to_owned(), scheme.palette(), move |_| {
+            scheme.extended()
         });
 
         Self {
-            name: name.to_owned(),
-            accents: Accents::derive(&theme),
-            theme,
-        }
-    }
-
-    fn high_contrast(name: &str, palette: Palette, surfaces: [u32; 7]) -> Self {
-        let theme = Theme::custom_with_fn(name.to_owned(), palette, |palette| {
-            palettes::high_contrast_extended(palette, surfaces)
-        });
-
-        Self {
-            name: name.to_owned(),
+            name: scheme.name().to_owned(),
             accents: Accents::derive(&theme),
             theme,
         }
@@ -113,30 +102,7 @@ impl Catalog {
 
     pub fn built_in() -> Self {
         Self {
-            entries: vec![
-                Entry::calm(
-                    "Light",
-                    palettes::LIGHT,
-                    palettes::LIGHT_SURFACES,
-                    Color::from_rgb8(0x76, 0x71, 0x6A),
-                ),
-                Entry::high_contrast(
-                    "Light high contrast",
-                    palettes::LIGHT_HIGH_CONTRAST,
-                    palettes::LIGHT_HIGH_CONTRAST_SURFACES,
-                ),
-                Entry::calm(
-                    "Dark",
-                    palettes::DARK,
-                    palettes::DARK_SURFACES,
-                    Color::from_rgb8(0xA3, 0x9E, 0x95),
-                ),
-                Entry::high_contrast(
-                    "Dark high contrast",
-                    palettes::DARK_HIGH_CONTRAST,
-                    palettes::DARK_HIGH_CONTRAST_SURFACES,
-                ),
-            ],
+            entries: Scheme::ALL.map(Entry::of).to_vec(),
         }
     }
 

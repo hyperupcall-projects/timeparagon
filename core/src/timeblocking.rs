@@ -280,6 +280,33 @@ pub fn overdue(event: &Event) -> bool {
             .is_some_and(|deadline| deadline.is_past(crate::clock::now().naive_local()))
 }
 
+/// Whether an open task's planned time or deadline has passed.
+pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
+    if !event.is_task() || event.completed || metadata(event).ignored {
+        return false;
+    }
+    let scheduled_past = event.start.date_naive() != UNDATED
+        && if event.all_day {
+            event.start.date_naive() < now.date_naive()
+        } else {
+            event.start < now
+        };
+    let deadline_past = calendar::deadline::read_deadline(&event.details.description)
+        .ok()
+        .flatten()
+        .is_some_and(|deadline| deadline.is_past(now.naive_local()));
+    scheduled_past || deadline_past
+}
+
+/// A day task needs a slot unless its linked block is among the day's `events`.
+pub fn needs_slot(event: &Event, events: &[Event]) -> bool {
+    metadata(event).block.as_ref().is_none_or(|key| {
+        !events
+            .iter()
+            .any(|block| !block.is_task() && block_key(block) == *key)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

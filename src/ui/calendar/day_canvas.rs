@@ -53,8 +53,12 @@ pub(super) struct TravelBox {
     pub(super) time_block: bool,
 }
 
-/// The shortest a travel box is drawn, so its words fit in it.
-pub(super) const TRAVEL_MIN_HEIGHT: f32 = 16.0;
+pub(super) use timeslay_core::theme::TRAVEL_MIN_HEIGHT;
+use timeslay_core::theme::{
+    BLOCK_ACTION, BLOCK_FILLED, BLOCK_ROW_OVER, BLOCK_ROW_OVER_TEXT, BLOCK_ROW_TEXT, EVENT_DROPS,
+    EVENT_EDGE, HOUR_LINE, TIME_BLOCK_INSET, TIME_BLOCK_LABEL_SHARE, TIME_BLOCK_ROW,
+    TIME_BLOCK_ROW_GAP, TIME_BLOCK_SHARE, TRAVEL_EDGE,
+};
 
 /// The gray boxes for the day's trips, found from the blocks already laid out.
 pub(super) fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> Vec<TravelBox> {
@@ -675,7 +679,7 @@ impl DayCanvas {
             frame.stroke(
                 &Path::line(Point::new(grid_left, y), Point::new(frame.width(), y)),
                 Stroke {
-                    style: Style::Solid(Color::from_rgba8(0x8A, 0x85, 0x7C, 0.28)),
+                    style: Style::Solid(HOUR_LINE),
                     width: 1.0,
                     ..Stroke::default()
                 },
@@ -723,7 +727,7 @@ impl DayCanvas {
             };
             // Canvas fills have no shadow of their own, so two faint offset
             // copies of the block stand in for one.
-            for (drop, alpha) in [(1.0, 0.10), (2.5, 0.05)] {
+            for (drop, alpha) in EVENT_DROPS {
                 frame.fill(
                     &Path::rounded_rectangle(
                         Point::new(block_bounds.x, block_bounds.y + drop),
@@ -741,14 +745,14 @@ impl DayCanvas {
                 frame.fill_rectangle(
                     Point::new(block_bounds.x, block_bounds.y),
                     Size::new(block_bounds.width, block_bounds.height * occupied),
-                    Color::from_rgba(0.15, 0.15, 0.15, 0.28),
+                    BLOCK_FILLED,
                 );
                 let mut elapsed = 0;
                 for (i, (id, title, minutes)) in block.tasks.iter().enumerate() {
                     elapsed += minutes;
                     let over = elapsed as f32 > duration;
-                    let y = block_bounds.y + i as f32 * 20.0;
-                    let x = block_bounds.x + block_bounds.width + 4.0;
+                    let y = block_bounds.y + i as f32 * TIME_BLOCK_ROW;
+                    let x = block_bounds.x + block_bounds.width + TIME_BLOCK_ROW_GAP;
                     // The task in the air leaves its row behind, matching the
                     // row widget that hides itself while it is dragged.
                     if self.dragged_task.as_deref() == Some(id.as_str()) {
@@ -758,7 +762,7 @@ impl DayCanvas {
                         frame.fill_rectangle(
                             Point::new(x, y),
                             Size::new(block_bounds.width, 19.0),
-                            Color::from_rgba(0.9, 0.2, 0.15, 0.22),
+                            BLOCK_ROW_OVER,
                         );
                     }
                     let label = format!("○ {} · {}m", title, minutes);
@@ -772,9 +776,9 @@ impl DayCanvas {
                             content: label,
                             position: Point::new(x + 3.0, y + 2.0),
                             color: if over {
-                                Color::from_rgb8(220, 65, 55)
+                                BLOCK_ROW_OVER_TEXT
                             } else {
-                                Color::from_rgb8(125, 125, 125)
+                                BLOCK_ROW_TEXT
                             },
                             size: Pixels(11.0),
                             ..Text::default()
@@ -785,7 +789,7 @@ impl DayCanvas {
             frame.stroke(
                 &shape,
                 Stroke {
-                    style: Style::Solid(Color::BLACK.scale_alpha(0.28)),
+                    style: Style::Solid(EVENT_EDGE),
                     width: 1.0,
                     ..Stroke::default()
                 },
@@ -812,7 +816,7 @@ impl DayCanvas {
                 for (rect, name) in [(focus, "Focus"), (plan, "Plan")] {
                     frame.fill(
                         &Path::rounded_rectangle(rect.position(), rect.size(), EVENT_RADIUS.into()),
-                        Color::WHITE.scale_alpha(0.27),
+                        BLOCK_ACTION,
                     );
                     // Keep the label inside its box even in overlapping columns.
                     let size =
@@ -852,7 +856,7 @@ impl DayCanvas {
             frame.stroke(
                 &shape,
                 Stroke {
-                    style: Style::Solid(Color::BLACK.scale_alpha(0.45)),
+                    style: Style::Solid(TRAVEL_EDGE),
                     width: 1.0,
                     ..Stroke::default()
                 },
@@ -888,7 +892,7 @@ impl DayCanvas {
         let span = trip.column_span.max(1) as f32;
         let mut box_width = (span * grid_width / columns - EVENT_GAP).max(8.0);
         if trip.time_block {
-            box_width = (box_width - 6.0) * 0.5;
+            box_width = (box_width - TIME_BLOCK_INSET) * TIME_BLOCK_SHARE;
         }
 
         Rectangle {
@@ -1395,7 +1399,7 @@ impl DayCanvas {
     pub(super) fn block_rect(&self, block: &Block, width: f32) -> Rectangle {
         let mut rect = self.rect_for(block, width, block.start_min, block.end_min);
         if block.time_block {
-            rect.width = (rect.width - 6.0) * 0.5;
+            rect.width = (rect.width - TIME_BLOCK_INSET) * TIME_BLOCK_SHARE;
         }
         rect
     }
@@ -1456,7 +1460,7 @@ pub(super) fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color
 /// through the usual click/drag handling. Returns (label, focus, plan).
 pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectangle) {
     let label = Rectangle {
-        width: bounds.width * 0.6,
+        width: bounds.width * TIME_BLOCK_LABEL_SHARE,
         ..bounds
     };
     let focus = Rectangle {

@@ -18,6 +18,7 @@ pub mod places;
 pub mod recurrence;
 pub mod task_db;
 pub mod task_edit;
+pub mod theme;
 pub mod timeblocking;
 
 /// The color type used by calendar events and settings.

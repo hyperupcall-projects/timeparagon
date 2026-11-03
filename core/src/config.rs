@@ -25,6 +25,23 @@ pub struct Config {
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
     pub travel: crate::places::PlaceSettings,
+    pub appearance: AppearanceSettings,
+}
+
+/// The part of `[appearance]` the Dioxus app follows. The theme is left out:
+/// it is chosen per device there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppearanceSettings {
+    pub time_format: crate::calendar::time_format::TimeFormat,
+}
+
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        Self {
+            time_format: crate::calendar::time_format::TimeFormat::TwentyFourHour,
+        }
+    }
 }
 
 /// A project that tasks can be filed under.
@@ -704,6 +721,20 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_time_format_is_read_from_the_shared_appearance_table() {
+        let config: Config =
+            toml::from_str("[appearance]\ntheme = \"Dark\"\ntime_format = \"compact\"").unwrap();
+        assert_eq!(
+            config.appearance.time_format,
+            crate::calendar::time_format::TimeFormat::Compact
+        );
+        assert_eq!(
+            Config::default().appearance.time_format,
+            crate::calendar::time_format::TimeFormat::TwentyFourHour
+        );
+    }
 
     #[test]
     fn saving_the_client_keeps_other_settings_and_is_private() {
