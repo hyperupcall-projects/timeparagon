@@ -111,20 +111,40 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
             EventDraftMessage::EventDraftProjects(v0)
         )),
         description,
-        super::super::recurrence::editor(
-            &draft.rule,
-            draft.start.date_naive(),
-            state.config.calendar.first_day_of_week,
-            metrics,
-            false,
-            |v0| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v0)),
-        ),
-        event_options(&draft.options, metrics, |v0| Message::EventDraft(
-            EventDraftMessage::EventDraftOptions(v0)
-        )),
     ]
     .spacing(metrics.spacing)
     .width(Fill);
+    // A time block is the user's own time, with nobody to invite.
+    let fields = if draft.kind == calendar::DraftKind::TimeBlock
+        || state.config.calendar.app_calendar.as_deref() == Some(draft.calendar_id.as_str())
+    {
+        fields
+    } else {
+        fields.push(meeting_section(
+            state,
+            &draft.meeting,
+            None,
+            metrics,
+            |v0| Message::EventDraft(EventDraftMessage::EventDraftMeeting(v0)),
+        ))
+    };
+    let fields = fields.push(
+        column![
+            super::super::recurrence::editor(
+                &draft.rule,
+                draft.start.date_naive(),
+                state.config.calendar.first_day_of_week,
+                metrics,
+                false,
+                |v0| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v0)),
+            ),
+            event_options(&draft.options, metrics, |v0| Message::EventDraft(
+                EventDraftMessage::EventDraftOptions(v0)
+            )),
+        ]
+        .spacing(metrics.spacing)
+        .width(Fill),
+    );
 
     container(
         column![

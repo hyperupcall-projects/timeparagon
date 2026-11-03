@@ -40,8 +40,8 @@ Of course, there's also week, 2-week, and month views:
 	- Events
 		- Tracks the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
 		- Shows dedicated buttons for joining Zoom and Google Meet meetings.
-		- Integrates with Zoom and Google Meet to create meetings and invite attendees (TODO).
-		- Allows for replying to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop) (TODO).
+		- Integrates with Zoom and Google Meet to create meetings and invite attendees from your contacts and directory.
+		- Allows for replying to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop), which wait in the inbox until answered.
 		- Uses location data to show estimated travel time for events and to add link to Google Maps.
 	- Time blocks
 		- These are standard calendar events with a special interface to easily order tasks within them; great for deep work.

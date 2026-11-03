@@ -58,6 +58,24 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         ));
     }
     if !is_task(event)
+        && !new_habit
+        && !event.details.habit
+        && !crate::timeblocking::is_block(event, &state.config.calendar)
+        && let Some(draft) = state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .filter(|draft| draft.id == event.id && !draft.loading)
+    {
+        body = body.push(meeting_section(
+            state,
+            &draft.meeting,
+            Some(event),
+            metrics,
+            |v0| Message::EventEdit(EventEditMessage::EventEditMeeting(v0)),
+        ));
+    }
+    if !is_task(event)
         && !event.details.habit
         && let Some(draft) = &state.calendar.edit_draft
     {
@@ -80,7 +98,8 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     if !details.organizer.is_empty() {
         body = body.push(detail_line("Organizer", details.organizer.clone(), metrics));
     }
-    if !details.attendees.is_empty() {
+    // Guests are listed in the Meeting section, once a sync has said who they are.
+    if !details.attendees.is_empty() && details.attendance.guests.is_empty() {
         body = body.push(detail_line("Guests", details.attendees.join("\n"), metrics));
     }
 
@@ -238,6 +257,17 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
     .spacing(metrics.spacing)
     .width(Fill);
 
+    // The choice only exists when there are guests to tell, and it's theirs to hear.
+    let notify: Element<'a, Message> = if !is_task && has_guests_to_tell(event) {
+        crate::ui::controls::checkbox(state.calendar.pending_delete_notify)
+            .label("Email guests about the cancellation")
+            .on_toggle(|v0| Message::Event(EventMessage::EventDeleteNotify(v0)))
+            .text_size(metrics.label())
+            .into()
+    } else {
+        iced::widget::Space::new().width(0.0).height(0.0).into()
+    };
+
     let card = container(iced::widget::opaque(
         container(
             column![
@@ -253,12 +283,72 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
                     }
                 })
                 .size(metrics.label()),
+                notify,
                 buttons
             ]
             .spacing(metrics.spacing),
         )
         .padding(metrics.padding)
         .width(Length::Fixed(260.0))
+        .style(crate::ui::controls::surface),
+    ))
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill);
+
+    stack![dismiss, card].into()
+}
+
+fn has_guests_to_tell(event: &Event) -> bool {
+    let attendance = &event.details.attendance;
+    attendance.can_manage() && !attendance.guests.is_empty()
+}
+
+/// Asks whether a dragged meeting's guests should hear about its new time. The
+/// chip has already moved; Cancel, or a click outside the card, puts it back.
+pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(event) = state
+        .calendar
+        .pending_move
+        .as_ref()
+        .and_then(|pending| state.calendar.event(&pending.id))
+    else {
+        return iced::widget::Space::new().width(0.0).height(0.0).into();
+    };
+    let dismiss = mouse_area(
+        container(iced::widget::Space::new())
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::Event(EventMessage::EventMoveCancelled));
+    let choice = |label: &'static str, message: EventMessage| {
+        button(text(label).size(metrics.label()).center().width(Fill))
+            .width(Fill)
+            .on_press(Message::Event(message))
+    };
+    let card = container(iced::widget::opaque(
+        container(
+            column![
+                text("Email guests about the new time?").size(metrics.label() + 1.0),
+                text(event.title.clone())
+                    .size(metrics.label())
+                    .style(text::secondary),
+                row![
+                    choice("Cancel", EventMessage::EventMoveCancelled)
+                        .style(crate::ui::controls::secondary),
+                    choice("Don't send", EventMessage::EventMoveConfirmed(false))
+                        .style(crate::ui::controls::secondary),
+                    choice("Send", EventMessage::EventMoveConfirmed(true))
+                        .style(crate::ui::controls::primary),
+                ]
+                .spacing(6)
+                .width(Fill),
+            ]
+            .spacing(metrics.spacing),
+        )
+        .padding(metrics.padding)
+        .width(Length::Fixed(300.0))
         .style(crate::ui::controls::surface),
     ))
     .width(Fill)
@@ -289,7 +379,7 @@ pub(super) fn detail_line<'a>(
     .into()
 }
 
-pub(super) fn schedule_line(event: &Event, time_format: TimeFormat) -> String {
+pub(crate) fn schedule_line(event: &Event, time_format: TimeFormat) -> String {
     let date = event.start.format("%A, %B %d, %Y");
     if event.all_day {
         format!("{date} · All day")

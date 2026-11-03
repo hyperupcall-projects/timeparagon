@@ -9,6 +9,7 @@ pub mod event_options;
 pub mod first_day;
 pub mod google;
 pub mod layout;
+pub mod meeting;
 pub mod notes;
 pub mod oauth;
 pub mod projects;
@@ -223,6 +224,8 @@ pub enum DraftKind {
 /// throw away the last valid time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
+    /// Video call, guests and their permissions.
+    pub meeting: meeting::Form,
     /// The type chooser has handed this draft to the details pane.
     pub editor_open: bool,
     pub options: event_options::EventOptions,
@@ -254,6 +257,7 @@ impl Draft {
     /// A draft on `calendar_id` spanning `start` to `end`.
     pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
         Self {
+            meeting: meeting::Form::default(),
             options: Default::default(),
             editor_open: false,
             kind: DraftKind::Event,
@@ -327,6 +331,8 @@ pub enum SaveScope {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditDraft {
+    /// Video call, guests and their permissions.
+    pub meeting: meeting::Form,
     pub sleep: Option<sleep::Record>,
     pub options: event_options::EventOptions,
     pub save_menu_open: bool,
@@ -364,6 +370,7 @@ impl EditDraft {
     /// Build an edit draft from an existing event.
     pub fn from_event(event: &Event) -> Self {
         Self {
+            meeting: meeting::Form::from_event(&event.details),
             sleep: event.details.sleep.clone(),
             options: event.details.options.clone(),
             save_menu_open: false,
@@ -557,6 +564,8 @@ pub struct Details {
     pub meeting: String,
     pub organizer: String,
     pub attendees: Vec<String>,
+    /// The guests as data: their replies, permissions and the user's part.
+    pub attendance: meeting::Attendance,
     /// This is a habit event on the app's TimeSlay calendar.
     pub habit: bool,
     /// The habit this event counts towards, from its `ttHabit` property.
@@ -765,6 +774,18 @@ pub struct Store {
     /// wipe an event.
     pub pending_delete: Option<String>,
     pub pending_delete_scope: SaveScope,
+    /// Whether confirming that delete emails the event's guests.
+    pub pending_delete_notify: bool,
+    /// A dragged meeting, moved on screen and asking whether to tell its guests.
+    pub pending_move: Option<PendingMove>,
+}
+
+/// A move waiting on the user's answer to "email the guests?".
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingMove {
+    pub id: String,
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
 }
 
 impl Store {
@@ -804,6 +825,8 @@ impl Store {
             edit_draft: None,
             pending_delete: None,
             pending_delete_scope: SaveScope::Current,
+            pending_delete_notify: true,
+            pending_move: None,
         }
     }
 
@@ -843,6 +866,8 @@ impl Store {
             edit_draft: None,
             pending_delete: None,
             pending_delete_scope: SaveScope::Current,
+            pending_delete_notify: true,
+            pending_move: None,
         }
     }
 
@@ -1372,7 +1397,7 @@ impl Store {
 
     /// A mutable handle to an event, whether it is on the day in view or parked
     /// in the cache. A write can land while the user is looking at another day.
-    fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
+    pub fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
         if self
             .detail_event
             .as_ref()
@@ -2253,13 +2278,21 @@ pub fn set_event_time(
     event_id: &str,
     start: DateTime<Local>,
     end: DateTime<Local>,
+    notify: bool,
 ) -> Result<(), String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
 
-    api::patch_event_time(&tokens.access_token, calendar_id, event_id, start, end)
-        .map_err(describe_event_write_error)
+    api::patch_event_time(
+        &tokens.access_token,
+        calendar_id,
+        event_id,
+        start,
+        end,
+        notify,
+    )
+    .map_err(describe_event_write_error)
 }
 
 /// Turns a read-only-token rejection into something a user can act on.
@@ -2287,7 +2320,8 @@ pub fn create_event(
     recurrence: &[String],
     projects: &[u64],
     options: Option<&event_options::EventOptions>,
-) -> Result<String, String> {
+    meeting: Option<&meeting::Form>,
+) -> Result<api::Inserted, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2303,6 +2337,7 @@ pub fn create_event(
         recurrence,
         projects,
         options,
+        meeting,
     )
     .map_err(describe_event_write_error)
 }
@@ -2346,8 +2381,10 @@ pub fn create_time_block(
         &[],
         projects,
         None,
+        None,
     )
-    .map_err(describe_event_write_error)?;
+    .map_err(describe_event_write_error)?
+    .id;
 
     Ok((id, calendar_id))
 }
@@ -2402,7 +2439,7 @@ pub fn save_event_scope(
     scope: SaveScope,
     description: &str,
     color_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<api::Saved, String> {
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2415,6 +2452,35 @@ pub fn save_event_scope(
         color_id,
     )
     .map_err(describe_event_write_error)
+}
+
+/// The invitations on `calendar` waiting for an answer. Blocking: run on a
+/// worker thread.
+pub fn sync_invitations(
+    client_id: &str,
+    client_secret: &str,
+    calendar: &Calendar,
+) -> Result<Vec<Event>, String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::fetch_invitations(&tokens.access_token, calendar)
+}
+
+/// Sends the user's answer to an invitation. Blocking: run on a worker thread.
+pub fn reply_to_event(
+    client_id: &str,
+    client_secret: &str,
+    calendar_id: &str,
+    event_id: &str,
+    email: &str,
+    response: meeting::Response,
+) -> Result<(), String> {
+    let tokens =
+        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
+    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    api::reply_to_event(&tokens.access_token, calendar_id, event_id, email, response)
+        .map_err(describe_event_write_error)
 }
 
 /// Deletes a single event on Google. Blocking: run it on a worker thread
@@ -2442,10 +2508,11 @@ pub fn delete_event_scope(
     calendar_id: &str,
     event_id: &str,
     scope: SaveScope,
+    notify: bool,
 ) -> Result<(), String> {
     let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::delete_event_scope(&tokens.access_token, calendar_id, event_id, scope)
+    api::delete_event_scope(&tokens.access_token, calendar_id, event_id, scope, notify)
         .map_err(describe_event_write_error)
 }
 

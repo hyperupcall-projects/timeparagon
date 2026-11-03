@@ -693,6 +693,13 @@ pub enum TaskMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum EventMessage {
+    /// Answer the invitation to this event.
+    EventReply(String, calendar::meeting::Response),
+    EventReplied(
+        String,
+        Option<calendar::meeting::Response>,
+        Result<(), String>,
+    ),
     DescriptionOpen(String),
     DescriptionEdited(text_editor::Action),
     DescriptionClose,
@@ -720,6 +727,12 @@ pub enum EventMessage {
     EventTimeSaved(String, Result<(), String>),
     /// The user clicked Delete on an event's details card. The confirmation
     /// prompt opens before anything is sent to Google.
+    /// Whether the delete being confirmed emails the guests.
+    EventDeleteNotify(bool),
+    /// Write the dragged meeting's new time, emailing the guests or not.
+    EventMoveConfirmed(bool),
+    /// Put the dragged meeting back.
+    EventMoveCancelled,
     EventDeleteRequested(String),
     EventDeleteScoped(String, calendar::SaveScope),
     /// The user confirmed the deletion prompt.
@@ -767,6 +780,7 @@ pub enum EventDraftMessage {
     EventDraftSaveRequested,
     /// Google's answer to creating the event, carrying the chip to draw.
     EventDraftSaved(Result<calendar::Event, String>),
+    EventDraftMeeting(calendar::meeting::Action),
 }
 
 /// The form for editing an event.
@@ -801,7 +815,8 @@ pub enum EventEditMessage {
     EventEditSaveMenuToggled,
     EventEditSaveScoped(calendar::SaveScope),
     /// Google's answer to updating the event.
-    EventEditSaved(Result<(), String>),
+    EventEditSaved(Result<calendar::api::Saved, String>),
+    EventEditMeeting(calendar::meeting::Action),
 }
 
 /// The parts of a play request that survive the trip through rendering.

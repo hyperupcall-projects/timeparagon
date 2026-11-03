@@ -4,6 +4,19 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Message> {
     match message {
+        EventDraftMessage::EventDraftMeeting(action) => {
+            let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) else {
+                return Task::none();
+            };
+            let search = match &action {
+                calendar::meeting::Action::Query(query) => Some(query.clone()),
+                _ => None,
+            };
+            draft.meeting.update(action);
+            search.map_or_else(Task::none, |query| {
+                crate::people::search_guests(state, &query)
+            })
+        }
         EventDraftMessage::EventDraftStarted { start, end } => {
             let Some(calendar_id) = state.calendar.default_calendar_id(&state.config.calendar)
             else {
@@ -185,6 +198,9 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             Task::none()
         }
         EventDraftMessage::EventDraftSaveRequested => {
+            if let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) {
+                draft.meeting.add_typed_address();
+            }
             let Some(draft) = state.calendar.draft.clone() else {
                 return Task::none();
             };
@@ -234,6 +250,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             state.calendar.error = None;
 
             blocking::run(move || {
+                let (mut link, mut meeting_link) = (String::new(), String::new());
                 // A block resolves (and, if need be, creates) the app's own
                 // calendar; an event is written to the calendar it was given.
                 let (id, calendar_id) = if draft.kind == calendar::DraftKind::TimeBlock {
@@ -249,7 +266,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                         &draft.projects.ids,
                     )?
                 } else {
-                    let id = calendar::create_event(
+                    let created = calendar::create_event(
                         &client_id,
                         &client_secret,
                         &draft.calendar_id,
@@ -261,8 +278,11 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                         &recurrence,
                         &draft.projects.ids,
                         Some(&draft.options),
+                        (!is_block).then_some(&draft.meeting),
                     )?;
-                    (id, draft.calendar_id.clone())
+                    link = created.link;
+                    meeting_link = created.meeting;
+                    (created.id, draft.calendar_id.clone())
                 };
 
                 Ok(calendar::Event {
@@ -283,6 +303,18 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                         projects: draft.projects.ids.clone(),
                         description,
                         recurrence: recurrence.clone(),
+                        link,
+                        meeting: meeting_link,
+                        attendance: calendar::meeting::Attendance {
+                            guests: if is_block {
+                                Vec::new()
+                            } else {
+                                draft.meeting.guests.clone()
+                            },
+                            permissions: draft.meeting.permissions,
+                            organizer: true,
+                            own_email: None,
+                        },
                         ..calendar::Details::default()
                     },
                 })
@@ -295,7 +327,17 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 .draft
                 .as_ref()
                 .is_some_and(|draft| draft.kind == calendar::DraftKind::TimeBlock);
+            let zoom = state.calendar.draft.as_ref().is_some_and(|draft| {
+                !was_block
+                    && state.config.calendar.app_calendar.as_deref()
+                        != Some(draft.calendar_id.as_str())
+                    && draft.meeting.zoom_wanted()
+                    && !calendar::meeting::has_zoom_link(&draft.description)
+            });
             state.calendar.draft = None;
+            if zoom {
+                on_event_edit::open_zoom_setup(state, &event.details.link);
+            }
             // A block that had to create the TimeSlay calendar makes that
             // calendar the remembered app calendar.
             let remember = was_block && state.config.calendar.app_calendar.is_none();
