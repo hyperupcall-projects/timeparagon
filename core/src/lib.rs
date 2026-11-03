@@ -15,6 +15,7 @@ pub mod config_sync;
 pub mod fsutil;
 pub mod habits;
 pub mod hex;
+pub mod notes;
 pub mod places;
 pub mod recurrence;
 pub mod task_db;

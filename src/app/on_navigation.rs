@@ -46,13 +46,19 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             if screen != Screen::Habits {
                 state.habits.calendar_habit = None;
             }
+            let left_notes = if state.screen == Screen::Notes && screen != Screen::Notes {
+                crate::notes::leave(state)
+            } else {
+                Task::none()
+            };
             state.screen = screen;
             if screen != Screen::BrainDump {
                 state.brain_dump.open = None;
             }
             let close = crate::timeblocking::close(state);
-            if screen == Screen::KeepNotes {
-                Task::batch([close, refresh_keep(state)])
+            let close = Task::batch([close, left_notes]);
+            if screen == Screen::Notes {
+                Task::batch([close, crate::notes::refresh(state)])
             } else if screen == Screen::People {
                 Task::batch([close, crate::people::refresh(state)])
             } else if screen == Screen::Habits {

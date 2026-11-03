@@ -757,7 +757,7 @@ fn overview_refreshes_and_follows_today_on_other_panel_tabs() {
         Screen::Notepad,
         Screen::Travel,
         Screen::Habits,
-        Screen::KeepNotes,
+        Screen::Notes,
         Screen::BrainDump,
         Screen::Settings,
     ] {
@@ -1935,9 +1935,9 @@ fn the_floating_card_follows_the_pointer_only_while_dragging() {
 }
 
 #[test]
-fn keep_search_does_not_trigger_timer_shortcuts() {
+fn notes_typing_does_not_trigger_timer_shortcuts() {
     let mut state = State::blank();
-    state.screen = Screen::KeepNotes;
+    state.screen = Screen::Notes;
     assert!(
         key_message(
             &mut state,
@@ -1956,25 +1956,6 @@ fn keep_search_does_not_trigger_timer_shortcuts() {
             Screen::Calendar
         )))
     ));
-}
-
-#[test]
-fn keep_failed_refresh_preserves_last_snapshot_and_filters() {
-    let mut state = State::blank();
-    state.keep.snapshot.notes.push(crate::keep::Note {
-        title: "Saved".into(),
-        ..Default::default()
-    });
-    state.keep.query = "saved".into();
-    state.keep.loading = true;
-    let _ = update(
-        &mut state,
-        Message::Keep(KeepMessage::KeepLoaded(Err("Reconnect".into()))),
-    );
-    assert!(!state.keep.loading);
-    assert_eq!(state.keep.snapshot.notes[0].title, "Saved");
-    assert_eq!(state.keep.query, "saved");
-    assert_eq!(state.keep.error.as_deref(), Some("Reconnect"));
 }
 
 #[test]

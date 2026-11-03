@@ -410,12 +410,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
                 let (anchor, size, zone, namespace) = if editor_window {
                     let side = panel.app.sidebar.as_ref().map_or(Side::Left, |s| s.side);
                     margin = editor_window_margin(panel);
-                    (
-                        anchor(side),
-                        (width, 0),
-                        0,
-                        "timeslay-editor".to_owned(),
-                    )
+                    (anchor(side), (width, 0), 0, "timeslay-editor".to_owned())
                 } else if popover {
                     panel.id = Some(id);
                     let (anchor, size, margins) = task_popover(&panel.app.config.views);

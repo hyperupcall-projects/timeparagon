@@ -29,8 +29,8 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // card can tick a task off. A token minted before events were writable lacks
 // the `calendar.events` scope, so a write is refused until the user reconnects.
 // Drive's `drive.appdata` is limited to the app's own hidden folder; it is how
-// the config follows the user between devices (see `config_sync`), and it
-// cannot see any of the user's other Drive files.
+// the config follows the user between devices (see `config_sync`) and where
+// notes are stored (see `notes`), and it cannot see any of the user's other Drive files.
 // Gmail is read-only: a link pasted into a new task is read for its subject, and
 // the mail is never changed. Tokens minted before that scope was asked for get
 // a "Reconnect Google" message from the Gmail integration.

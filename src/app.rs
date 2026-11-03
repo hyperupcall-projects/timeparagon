@@ -24,7 +24,6 @@ mod on_calendar;
 mod on_event;
 mod on_event_draft;
 mod on_event_edit;
-mod on_keep;
 mod on_navigation;
 mod on_notepad;
 mod on_settings;
@@ -127,7 +126,8 @@ pub enum Screen {
     Notepad,
     /// One brain dump page per day, with search across all of them.
     BrainDump,
-    KeepNotes,
+    /// Markdown documents kept in Google Drive's app folder.
+    Notes,
     /// Contacts from every signed-in Google account, and their directories.
     People,
     Settings,
@@ -419,7 +419,7 @@ pub struct State {
     pub brain_dump: crate::brain_dump::Workspace,
     /// The Habits tab: the habit masters and the rule editor.
     pub habits: crate::habits::Store,
-    pub keep: crate::keep::Store,
+    pub notes: crate::notes::Store,
     pub people: crate::people::Store,
     pub inbox: crate::inbox::Inbox,
     /// Google accounts connected for the Gmail integration.
@@ -448,7 +448,7 @@ pub enum Message {
     Notepad(NotepadMessage),
     Settings(SettingsMessage),
     System(SystemMessage),
-    Keep(KeepMessage),
+    Notes(crate::notes::Action),
     Calendar(CalendarMessage),
     Task(TaskMessage),
     Event(EventMessage),
@@ -588,19 +588,6 @@ pub enum SystemMessage {
     OpenGoogleCalendar,
     /// Swap this window for the dock strip on the screen edge.
     DockRequested,
-}
-
-/// The Google Keep screen.
-#[derive(Debug, Clone)]
-pub enum KeepMessage {
-    KeepRefresh,
-    KeepSignin,
-    KeepLoaded(Result<crate::keep::Snapshot, String>),
-    KeepSignedIn(Result<(), String>),
-    KeepQueryChanged(String),
-    KeepLabelChanged(Option<String>),
-    KeepScopeChanged(crate::keep::Scope),
-    KeepEdit(String),
 }
 
 /// What the calendar shows and keeping it in sync.
@@ -879,7 +866,7 @@ impl State {
             system_theme: iced::theme::Mode::None,
             config,
             notepad,
-            keep: crate::keep::Store::default(),
+            notes: crate::notes::Store::default(),
             people: crate::people::Store::default(),
             calendar: calendar::Store::new(day_end_hour),
             calendar_fetch_pending: Vec::new(),
@@ -1167,7 +1154,7 @@ fn boot_state() -> State {
     // test must not read or rewrite the user's cache.
     state.calendar.apply_task_colors(&state.config.calendar);
     state.calendar.cache_days_in(config::cache_days_dir());
-    state.keep.cache_in(config::cache_keep_path());
+    state.notes.go_live(config::cache_notes_path());
     state.people.go_live(config::cache_people_path());
     state.travel.cache_in(config::cache_travel_path());
 
@@ -1388,7 +1375,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::Notepad(message) => on_notepad::update(state, message),
         Message::Settings(message) => on_settings::update(state, message),
         Message::System(message) => on_system::update(state, message),
-        Message::Keep(message) => on_keep::update(state, message),
+        Message::Notes(action) => crate::notes::update(state, action),
         Message::Calendar(message) => on_calendar::update(state, message),
         Message::Task(message) => on_task::update(state, message),
         Message::Event(message) => on_event::update(state, message),
@@ -1574,6 +1561,13 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(
             iced::time::every(STATUS_POLL)
                 .map(|_| Message::System(SystemMessage::AudioStatusPolled)),
+        );
+    }
+
+    if state.notes.wants_tick() {
+        subscriptions.push(
+            iced::time::every(config::SAVE_DEBOUNCE)
+                .map(|_| Message::Notes(crate::notes::Action::Tick)),
         );
     }
 
@@ -1849,13 +1843,19 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         state.screen,
         Screen::Notepad
             | Screen::BrainDump
-            | Screen::KeepNotes
+            | Screen::Notes
             | Screen::People
             | Screen::Overdue
             | Screen::Inbox
             | Screen::Triaged
     ) {
         return match key.as_ref() {
+            // An open note comes away first; a second press leaves the screen.
+            Key::Named(Named::Escape)
+                if state.screen == Screen::Notes && state.notes.open.is_some() =>
+            {
+                Some(Message::Notes(crate::notes::Action::Back))
+            }
             // An open contact comes away first, the same as a task's details.
             Key::Named(Named::Escape) if state.people_panel_open() => {
                 Some(Message::People(crate::people::Action::Close))
@@ -2294,15 +2294,4 @@ fn panel_ipc_listener(
             }
         }
     })
-}
-
-fn refresh_keep(state: &mut State) -> Task<Message> {
-    if state.keep.loading {
-        return Task::none();
-    }
-    state.keep.loading = true;
-    state.keep.error = None;
-    let cache_path = state.keep.cache_path();
-    blocking::run(move || crate::keep::fetch(cache_path))
-        .map(|v0| Message::Keep(KeepMessage::KeepLoaded(v0)))
 }

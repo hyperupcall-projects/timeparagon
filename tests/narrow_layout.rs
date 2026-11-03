@@ -14,8 +14,7 @@ use iced_test::{Error, Simulator as Sim};
 use timeslay::app::MonthPicker;
 use timeslay::app::{self, Message, Screen, State};
 use timeslay::app::{
-    CalendarMessage, EventMessage, KeepMessage, NavigationMessage, NotepadMessage, SettingsMessage,
-    TaskMessage,
+    CalendarMessage, EventMessage, NavigationMessage, NotepadMessage, SettingsMessage, TaskMessage,
 };
 use timeslay::config::Config;
 
@@ -601,7 +600,7 @@ fn tasks_has_its_own_tabs_and_more_opens_a_menu() -> Result<(), Error> {
     // Choosing a destination closes the menu.
     let _ = app::update(
         &mut state,
-        Message::Navigation(NavigationMessage::ScreenSelected(Screen::KeepNotes)),
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notes)),
     );
     assert!(!state.more_menu_open);
 
@@ -2675,15 +2674,15 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
 }
 
 #[test]
-fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
+fn notes_navigation_and_toolbar_fit_every_width() -> Result<(), Error> {
     for width in WIDTHS {
         let mut state = state();
         state.more_menu_open = true;
         let mut ui = render(&state, Size::new(width, HEIGHT));
-        ui.click("Keep")?;
+        ui.click("Notes")?;
         assert!(ui.into_messages().any(|m| matches!(
             m,
-            Message::Navigation(NavigationMessage::ScreenSelected(Screen::KeepNotes))
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notes))
         )));
         state.more_menu_open = false;
         state.screen = Screen::Inbox;
@@ -2693,9 +2692,9 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
             m,
             Message::Navigation(NavigationMessage::ScreenSelected(Screen::Backlog))
         )));
-        state.screen = Screen::KeepNotes;
+        state.screen = Screen::Notes;
         let mut ui = render(&state, Size::new(width, HEIGHT));
-        for label in ["Refresh", "Reconnect", "Active", "Labels"] {
+        for label in ["New note", "Refresh"] {
             assert!(ui.find(label).is_ok(), "{label} missing at {width}");
         }
     }
@@ -2703,40 +2702,20 @@ fn keep_navigation_and_filters_fit_every_width() -> Result<(), Error> {
 }
 
 #[test]
-fn keep_edit_opens_the_selected_note() -> Result<(), Error> {
-    let mut state = state();
-    state.screen = Screen::KeepNotes;
-    state.keep.snapshot.notes.push(timeslay::keep::Note {
-        id: "test-note".into(),
-        url: "https://keep.google.com/#NOTE/test-note".into(),
-        title: "Example".into(),
-        description: "Body".into(),
-        ..Default::default()
-    });
-    let mut ui = render(&state, Size::new(260.0, 720.0));
-    ui.click("Edit")?;
-    assert!(ui.into_messages().any(
-        |m| matches!(m, Message::Keep(KeepMessage::KeepEdit(url)) if url == "https://keep.google.com/#NOTE/test-note")
-    ));
-    Ok(())
-}
-
-#[test]
-fn switching_to_keep_closes_time_block_views_and_starts_refresh() {
+fn switching_to_notes_closes_time_block_views() {
     let mut state = focus_state();
     state.timeblocking.block = Some("standup".into());
 
     state.timeblocking.dragging = Some("task:planned".into());
     let _ = app::update(
         &mut state,
-        Message::Navigation(NavigationMessage::ScreenSelected(Screen::KeepNotes)),
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notes)),
     );
-    assert_eq!(state.screen, Screen::KeepNotes);
+    assert_eq!(state.screen, Screen::Notes);
     assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.focus.is_none());
     assert!(state.timeblocking.block.is_none());
     assert!(state.timeblocking.dragging.is_none());
-    assert!(state.keep.loading);
     assert!(state.config.task_work.active().is_some());
 }
 
