@@ -161,22 +161,7 @@ fn overdue_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Event> 
         .calendar
         .events
         .iter()
-        .filter(|event| {
-            if !event.is_task() || event.completed || tb::metadata(event).ignored {
-                return false;
-            }
-            let scheduled_past = event.start.date_naive() != UNDATED
-                && if event.all_day {
-                    event.start.date_naive() < now.date_naive()
-                } else {
-                    event.start < now
-                };
-            let deadline_past = deadline::read_deadline(&event.details.description)
-                .ok()
-                .flatten()
-                .is_some_and(|deadline| deadline.is_past(now.naive_local()));
-            scheduled_past || deadline_past
-        })
+        .filter(|event| tb::past_due(event, now))
         .collect();
     sort_tasks(&mut tasks, state.config.calendar.overdue_sort);
     tasks

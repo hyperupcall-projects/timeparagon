@@ -52,9 +52,10 @@ class WidgetColors(
             }
             val night = context.resources.configuration.uiMode and
                 Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-            val dark = when (preference) {
-                "light" -> false
-                "dark" -> true
+            // The high contrast choices share these prefixes.
+            val dark = when {
+                preference.startsWith("light") -> false
+                preference.startsWith("dark") -> true
                 else -> night
             }
             return if (dark) {

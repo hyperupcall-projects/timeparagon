@@ -213,16 +213,7 @@ pub(super) fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Ele
 
 /// A day task needs a slot unless its linked block is present on that day.
 pub(super) fn task_needs_slot(state: &State, event: &Event, day: NaiveDate) -> bool {
-    crate::timeblocking::metadata(event)
-        .block
-        .as_ref()
-        .is_none_or(|key| {
-            !state
-                .calendar
-                .events_on(day)
-                .iter()
-                .any(|block| !block.is_task() && crate::timeblocking::block_key(block) == *key)
-        })
+    crate::timeblocking::needs_slot(event, state.calendar.events_on(day))
 }
 
 pub(super) fn all_day_row_on<'a>(
@@ -388,7 +379,11 @@ pub(super) fn event_chip_style(color: Color, ink: Color, status: button::Status)
         background: Some(if hovered { lift(color) } else { color }.into()),
         text_color: ink,
         border: iced::Border {
-            color: Color::BLACK.scale_alpha(if hovered { 0.55 } else { 0.28 }),
+            color: if hovered {
+                Color::BLACK.scale_alpha(0.55)
+            } else {
+                timeslay_core::theme::EVENT_EDGE
+            },
             width: if hovered { 2.0 } else { 1.0 },
             radius: EVENT_RADIUS.into(),
         },

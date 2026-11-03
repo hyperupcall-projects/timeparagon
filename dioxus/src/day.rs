@@ -21,55 +21,61 @@ pub fn load_config() -> Config {
     Config::load()
 }
 
-/// Which colour scheme the view uses.
+/// Which colour scheme the view uses: the choices the desktop's theme picker
+/// offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
+    Light,
+    LightHighContrast,
+    Dark,
+    DarkHighContrast,
     /// Follow the operating system's light/dark setting.
     #[default]
     System,
-    Light,
-    Dark,
+    SystemHighContrast,
 }
 
 impl Theme {
-    pub fn next(self) -> Self {
-        match self {
-            Self::System => Self::Light,
-            Self::Light => Self::Dark,
-            Self::Dark => Self::System,
-        }
-    }
+    /// In the order the desktop's theme picker lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Light,
+        Self::LightHighContrast,
+        Self::Dark,
+        Self::DarkHighContrast,
+        Self::System,
+        Self::SystemHighContrast,
+    ];
 
+    /// What is saved, and what the stylesheet selects on. The Android widget
+    /// reads the part before the first `-`.
     pub fn name(self) -> &'static str {
         match self {
-            Self::System => "system",
             Self::Light => "light",
+            Self::LightHighContrast => "light-high-contrast",
             Self::Dark => "dark",
+            Self::DarkHighContrast => "dark-high-contrast",
+            Self::System => "system",
+            Self::SystemHighContrast => "system-high-contrast",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::System => "System",
             Self::Light => "Light",
+            Self::LightHighContrast => "Light high contrast",
             Self::Dark => "Dark",
+            Self::DarkHighContrast => "Dark high contrast",
+            Self::System => "System",
+            Self::SystemHighContrast => "System high contrast",
         }
     }
 
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::System => "◐",
-            Self::Light => "☀",
-            Self::Dark => "☾",
-        }
-    }
-
-    fn parse(text: &str) -> Self {
-        match text.trim() {
-            "light" => Self::Light,
-            "dark" => Self::Dark,
-            _ => Self::System,
-        }
+    pub fn parse(text: &str) -> Self {
+        let text = text.trim();
+        Self::ALL
+            .into_iter()
+            .find(|theme| theme.name() == text)
+            .unwrap_or_default()
     }
 
     /// The preference lives beside `config.toml` but in its own file: it is a
@@ -173,10 +179,25 @@ pub struct DayModel {
     pub task_groups: Vec<TaskGroup>,
     /// Tasks are switched off in the calendar settings.
     pub tasks_hidden: bool,
+    pub summary: DaySummary,
     /// Minutes from the top of the displayed day window, when the needle
     /// belongs to this day.
     pub now_min: Option<i32>,
     pub hour_start: u32,
+}
+
+/// The tasks that want attention, counted the way the desktop's day view does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DaySummary {
+    pub overdue: usize,
+    pub inbox: usize,
+    pub unslotted: usize,
+}
+
+impl DaySummary {
+    pub fn needs_attention(self) -> bool {
+        self.overdue > 0 || self.inbox > 0 || self.unslotted > 0
+    }
 }
 
 /// One event placed on the timed grid.
@@ -191,8 +212,10 @@ pub struct TimedEvent {
     pub columns: usize,
     pub column_span: usize,
     pub time_block: bool,
-    pub task_count: usize,
-    pub planned_minutes: u32,
+    /// The color to draw it in, with the calendar and kind settings applied.
+    pub color: timeslay_core::Color,
+    /// A time block's tasks, in order.
+    pub tasks: Vec<AssignedTask>,
 }
 
 /// A time block and the tasks assigned to it.
@@ -361,6 +384,8 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
     );
     let (task_groups, tasks_hidden) = task_groups(&events, snapshot, settings, &block_refs);
 
+    let summary = day_summary(snapshot, &events, settings, &loaded_block_keys);
+
     let today = calendar::day_at(timeslay_core::clock::now(), hour_start);
     let now_min = (day == today)
         .then(|| minutes_into_day(timeslay_core::clock::now(), day, offset).clamp(0, 24 * 60));
@@ -373,8 +398,39 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         blocks,
         task_groups,
         tasks_hidden,
+        summary,
         now_min,
         hour_start,
+    }
+}
+
+fn day_summary(
+    snapshot: &Snapshot,
+    events: &[Event],
+    settings: &CalendarSettings,
+    block_keys: &HashSet<String>,
+) -> DaySummary {
+    let now = timeslay_core::clock::now();
+    let tasks = || events.iter().filter(|event| event.is_task());
+    let unslotted = tasks()
+        .filter(|task| task.all_day)
+        .filter(|task| calendar::event_enabled(&snapshot.calendars, task, settings))
+        .filter(|task| !managed_copy(task, settings, block_keys))
+        .filter(|task| {
+            let overdue = tb::overdue(task);
+            let on_day =
+                task.start.date_naive() != tb::UNDATED && task.start.date_naive() == snapshot.day;
+            (on_day || (!settings.hide_overdue_tasks && overdue))
+                && (overdue || tb::needs_slot(task, events))
+        })
+        .count();
+
+    DaySummary {
+        overdue: tasks().filter(|task| tb::past_due(task, now)).count(),
+        inbox: tasks()
+            .filter(|task| untriaged_in(task, settings, &snapshot.calendars))
+            .count(),
+        unslotted,
     }
 }
 
@@ -544,8 +600,8 @@ fn timed_events(
                 columns: slot.columns,
                 column_span: slot.column_span,
                 time_block: block.is_some(),
-                task_count: block.map_or(0, |block| block.tasks.len()),
-                planned_minutes: block.map_or(0, |block| block.planned_minutes),
+                color: event.display_color(settings),
+                tasks: block.map_or_else(Vec::new, |block| block.tasks.clone()),
             }
         })
         .collect()
@@ -1021,11 +1077,19 @@ fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) -> H
 
 /// Whether a task is still waiting in the Inbox to be triaged.
 pub fn untriaged(task: &Event, context: &EditContext) -> bool {
-    let inbox = match &context.settings.inbox_list {
+    untriaged_in(task, &context.settings, &context.calendars)
+}
+
+fn untriaged_in(
+    task: &Event,
+    settings: &CalendarSettings,
+    calendars: &[calendar::Calendar],
+) -> bool {
+    let inbox = match &settings.inbox_list {
         Some(chosen) => {
             chosen.trim_start_matches("tasks:") == task.calendar_id.trim_start_matches("tasks:")
         }
-        None => context.calendars.iter().any(|calendar| {
+        None => calendars.iter().any(|calendar| {
             calendar.id == task.calendar_id
                 && calendar.is_task_list()
                 && calendar
@@ -1287,6 +1351,48 @@ mod tests {
             fetched_at: at(10, 0),
             notice: None,
         }
+    }
+
+    #[test]
+    fn every_theme_survives_being_saved_and_anything_else_follows_the_system() {
+        for theme in Theme::ALL {
+            assert_eq!(Theme::parse(&format!("{}\n", theme.name())), theme);
+        }
+        assert_eq!(Theme::parse("sakura"), Theme::System);
+    }
+
+    #[test]
+    fn the_summary_counts_tasks_past_due_and_without_a_slot() {
+        let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        let slotted = task("a", "Write", Some("blocks/b1"), 1, 45, false);
+        let unslotted = task("b", "Review", None, 2, 30, false);
+        let finished = task("c", "Filed", None, 3, 30, true);
+        let mut late = task("d", "Late", None, 4, 30, false);
+        late.start = at(0, 0) - Duration::days(400);
+        late.end = late.start + Duration::days(1);
+        let snapshot = snapshot(vec![block, slotted, unslotted, finished, late]);
+
+        let summary = build_model(&snapshot, &settings()).summary;
+
+        // The fixture's day is in the past, so every open task is past due.
+        assert_eq!(summary.overdue, 3);
+        assert_eq!(summary.inbox, 0);
+        // Like the desktop, this counts a finished task on the day too, and
+        // not one that only belongs to an earlier day.
+        assert_eq!(summary.unslotted, 2);
+        assert!(summary.needs_attention());
+    }
+
+    #[test]
+    fn an_event_is_drawn_in_its_calendars_custom_color() {
+        let custom = timeslay_core::hex::parse("#123456").unwrap();
+        let mut settings = settings();
+        settings
+            .calendar_colors
+            .insert("cal".to_owned(), custom.into());
+        let snapshot = snapshot(vec![event("e", "cal", "Lunch", at(12, 0), at(13, 0))]);
+
+        assert_eq!(build_model(&snapshot, &settings).timed[0].color, custom);
     }
 
     #[test]

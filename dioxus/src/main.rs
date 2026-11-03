@@ -6,22 +6,28 @@
 
 mod day;
 mod editor;
+mod style;
 #[cfg(any(target_os = "android", test))]
 mod widget;
 
-use chrono::Datelike;
+use chrono::{Datelike, Months, NaiveDate};
 use dioxus::prelude::*;
+use timeslay_core::calendar::time_format::{self, TimeFormat};
 use timeslay_core::calendar::{self, Event};
 use timeslay_core::config::CalendarSettings;
 use timeslay_core::config_sync;
+use timeslay_core::theme as look;
 use timeslay_core::timeblocking as tb;
 
 use day::{BlockRef, DayModel, EditContext, TaskGroup, TaskRow, Theme, TimeBlock, TimedEvent};
 
 /// Height of one hour on the timeline, in pixels.
-const HOUR_HEIGHT: f32 = 64.0;
-/// The shortest a travel box is drawn, so its words fit in it.
-const TRAVEL_MIN_HEIGHT: f32 = 16.0;
+const HOUR_HEIGHT: f32 = 60.0;
+/// The shortest an event is drawn, so a finger can land on it.
+const EVENT_MIN_HEIGHT: f32 = 22.0;
+/// The line heights of an event's title and time in the stylesheet.
+const TITLE_LINE: f32 = 16.0;
+const TIME_LINE: f32 = 15.0;
 
 const SCROLL_SCRIPT: &str = r#"
 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -34,8 +40,6 @@ if (scroller && anchor && scroller.clientHeight) {
 }
 return false;
 "#;
-
-const CSS: &str = include_str!("../assets/day.css");
 
 #[cfg(not(target_os = "android"))]
 fn main() {
@@ -50,9 +54,21 @@ fn main() {
                         .with_min_inner_size(dioxus::desktop::LogicalSize::new(760.0, 560.0)),
                 )
                 .with_menu(None::<dioxus::desktop::muda::Menu>)
-                .with_background_color((11, 13, 19, 255)),
+                .with_background_color(window_background()),
         )
         .launch(App);
+}
+
+/// What shows before the first paint: the default light scheme's page color.
+#[cfg(not(target_os = "android"))]
+fn window_background() -> (u8, u8, u8, u8) {
+    let [red, green, blue, alpha] = look::Scheme::Light
+        .extended()
+        .background
+        .base
+        .color
+        .into_rgba8();
+    (red, green, blue, alpha)
 }
 
 #[cfg(target_os = "android")]
@@ -140,8 +156,10 @@ fn App() -> Element {
     let mut editing = use_signal(|| None::<Event>);
     let block_writing = use_signal(|| false);
     let mut show_tasks = use_signal(|| false);
+    let month_open = use_signal(|| false);
+    let month_shown = use_signal(|| calendar::first_of_month(*current_day.peek()));
     let mut scrolled = use_signal(|| false);
-    let mut follow_today = use_signal(|| true);
+    let follow_today = use_signal(|| true);
     let connecting = use_signal(|| false);
     let mut connect_error = use_signal(|| None::<String>);
     let mut theme = use_signal(Theme::load);
@@ -207,10 +225,10 @@ fn App() -> Element {
             "document.documentElement.dataset.theme = '{name}';"
         ));
     });
-    let cycle_theme = move |_| {
-        let next = theme().next();
-        theme.set(next);
-        next.save();
+    let choose_theme = move |event: FormEvent| {
+        let chosen = Theme::parse(&event.value());
+        theme.set(chosen);
+        chosen.save();
         // The widget reads the same preference.
         #[cfg(target_os = "android")]
         widget::notify();
@@ -328,95 +346,73 @@ fn App() -> Element {
     }
 
     let heading = calendar::day_heading(selected_day, today);
-    let stats = model.as_ref().map(header_stats).unwrap_or_default();
-    let prev_day = move |_| {
-        current_day.set(day::shift_day(current_day(), -1));
-        selected_block.set(None);
-        scrolled.set(false);
-        follow_today.set(false);
+    let time_format = config.read().appearance.time_format;
+    let day_nav = DayNav {
+        current_day,
+        selected_block,
+        scrolled,
+        follow_today,
     };
-    let next_day = move |_| {
-        current_day.set(day::shift_day(current_day(), 1));
-        selected_block.set(None);
-        scrolled.set(false);
-        follow_today.set(false);
-    };
-    let today_settings = settings.clone();
-    let go_today = move |_| {
-        current_day.set(day::today(&today_settings));
-        selected_block.set(None);
-        scrolled.set(false);
-        follow_today.set(true);
-    };
-    let refresh = move |_| revision.set(revision() + 1);
 
     let topbar = rsx! {
-        header { class: "topbar",
-            div { class: "brand",
-                div { class: "brand-mark", "⏳" }
-                div {
-                    div { class: "brand-name", "TimeSlay" }
-                    div { class: "brand-sub", "Day view" }
-                }
-            }
-            div { class: "day-titles",
-                h1 { class: "day-title", "{heading}" }
-                div { class: "day-sub",
-                    if pending {
-                        "Loading..."
-                    } else {
-                        "{selected_day.year()} · {stats}"
-                    }
-                }
-            }
+        header { class: "nav-card",
+            {nav_tab("Schedule", !show_tasks(), "", move |_| show_tasks.set(false))}
+            {nav_tab("Tasks", show_tasks(), "narrow-only", move |_| show_tasks.set(true))}
             div { class: "spacer" }
-            div { class: "controls",
+            button {
+                class: "nav-tab",
+                disabled: model.is_none(),
+                onclick: move |_| show_habits.set(true),
+                "Habits"
+            }
+            {nav_tab("Settings", show_settings(), "", move |_| {
+                settings_id.set(config.peek().calendar.client_id.clone());
+                settings_secret.set(String::new());
+                settings_error.set(None);
+                show_settings.set(true);
+            })}
+        }
+        div { class: "day-header",
+            h1 { class: "day-title", "{heading}" }
+            div { class: "day-controls",
+                {month_picker(selected_day, today, month_open, month_shown, day_nav)}
+                div { class: "spacer" }
                 button {
-                    class: "btn theme-toggle",
-                    title: "Theme: {theme().label()} (click to change)",
-                    onclick: cycle_theme,
-                    span { class: "theme-icon", "{theme().icon()}" }
-                    span { class: "theme-label", "{theme().label()}" }
+                    class: "btn icon",
+                    title: "Previous day",
+                    aria_label: "Previous day",
+                    onclick: move |_| {
+                        let day = day::shift_day(current_day(), -1);
+                        day_nav.go_to(day, false);
+                    },
+                    "‹"
+                }
+                button {
+                    class: "btn",
+                    onclick: move |_| day_nav.go_to(day::today(&config.peek().calendar), true),
+                    "Today"
                 }
                 button {
                     class: "btn icon",
-                    title: "Calendars",
-                    aria_label: "Calendars",
+                    title: "Next day",
+                    aria_label: "Next day",
+                    onclick: move |_| {
+                        let day = day::shift_day(current_day(), 1);
+                        day_nav.go_to(day, false);
+                    },
+                    "›"
+                }
+                button {
+                    class: if show_calendars() { "btn primary" } else { "btn" },
                     onclick: move |_| {
                         calendars_error.set(None);
                         show_calendars.set(true);
                     },
-                    "☰"
+                    "Menu"
                 }
-                button {
-                    class: "btn icon",
-                    title: "Habits",
-                    aria_label: "Habits",
-                    disabled: model.is_none(),
-                    onclick: move |_| show_habits.set(true),
-                    "↻"
-                }
-                button {
-                    class: "btn icon",
-                    title: "Google settings",
-                    aria_label: "Google settings",
-                    onclick: move |_| {
-                        settings_id.set(config.peek().calendar.client_id.clone());
-                        settings_secret.set(String::new());
-                        settings_error.set(None);
-                        show_settings.set(true);
-                    },
-                    "⚙"
-                }
-                button { class: "btn icon", title: "Previous day", onclick: prev_day, "‹" }
-                button { class: "btn", onclick: go_today, "Today" }
-                button { class: "btn icon", title: "Next day", onclick: next_day, "›" }
-                button {
-                    class: "btn primary",
-                    title: "Refresh now",
-                    onclick: refresh,
-                    "⟳ Refresh"
-                }
+            }
+            if pending {
+                p { class: "day-loading", "Loading..." }
             }
         }
     };
@@ -469,25 +465,9 @@ fn App() -> Element {
 
     let body: Element = match &model {
         Some(model) => rsx! {
-            nav { class: "view-tabs", aria_label: "Day view",
-                button {
-                    class: "view-tab",
-                    aria_pressed: (!show_tasks()).to_string(),
-                    aria_controls: "calendar-pane",
-                    onclick: move |_| show_tasks.set(false),
-                    "Calendar"
-                }
-                button {
-                    class: "view-tab",
-                    aria_pressed: show_tasks().to_string(),
-                    aria_controls: "tasks-pane",
-                    onclick: move |_| show_tasks.set(true),
-                    "Tasks"
-                }
-            }
             div { class: "day-body", "data-view": if show_tasks() { "tasks" } else { "calendar" },
                 {sidebar(model, selected_block, editing)}
-                {timeline(model, &travel, selected_block, editing)}
+                {timeline(model, &travel, &settings, time_format, selected_block, editing)}
             }
         },
         None if settings.client_id.trim().is_empty() && !pending => {
@@ -673,72 +653,89 @@ fn App() -> Element {
                 div {
                     class: "modal",
                     role: "dialog",
-                    aria_label: "Google settings",
+                    aria_label: "Settings",
                     onclick: move |event| event.stop_propagation(),
                     div { class: "modal-head",
-                        h2 { "Google settings" }
+                        h2 { "Settings" }
                         div { class: "spacer" }
                         button {
-                            class: "btn icon",
+                            class: "modal-close",
                             title: "Close",
                             onclick: move |_| show_settings.set(false),
-                            "✕"
+                            "×"
                         }
                     }
-                    form {
-                        class: "client-form settings-form",
-                        onsubmit: move |event| {
-                            event.prevent_default();
-                            // An empty secret field keeps the stored secret.
-                            let secret = if settings_secret().trim().is_empty() {
-                                config.peek().calendar.client_secret.clone()
-                            } else {
-                                settings_secret()
-                            };
-                            match day::save_google_client(&settings_id(), &secret) {
-                                Ok(saved) => {
-                                    config.set(saved);
-                                    settings_error.set(None);
-                                    show_settings.set(false);
-                                    revision.set(revision() + 1);
+                    div { class: "modal-body settings-body",
+                        label { r#for: "settings-theme", "Theme" }
+                        select {
+                            id: "settings-theme",
+                            class: "client-input",
+                            onchange: choose_theme,
+                            for choice in Theme::ALL {
+                                option {
+                                    key: "{choice.name()}",
+                                    value: "{choice.name()}",
+                                    selected: choice == theme(),
+                                    "{choice.label()}"
                                 }
-                                Err(error) => settings_error.set(Some(error)),
                             }
-                        },
-                        {error}
-                        label { r#for: "settings-client-id", "Client ID" }
-                        input {
-                            id: "settings-client-id",
-                            class: "client-input",
-                            r#type: "text",
-                            autocomplete: "off",
-                            autocapitalize: "off",
-                            spellcheck: "false",
-                            value: "{settings_id}",
-                            oninput: move |event| settings_id.set(event.value()),
                         }
-                        label { r#for: "settings-client-secret", "Client secret" }
-                        input {
-                            id: "settings-client-secret",
-                            class: "client-input",
-                            r#type: "password",
-                            placeholder: "Leave blank to keep the current secret",
-                            autocomplete: "off",
-                            autocapitalize: "off",
-                            spellcheck: "false",
-                            value: "{settings_secret}",
-                            oninput: move |event| settings_secret.set(event.value()),
-                        }
-                        p { class: "hint",
-                            "After changing the client, use Connect Google to sign in again."
-                        }
-                        div { class: "state-actions",
-                            button { class: "btn primary", r#type: "submit", "Save" }
-                            button {
-                                class: "btn",
-                                r#type: "button",
-                                onclick: move |_| show_settings.set(false),
-                                "Cancel"
+                        h3 { class: "settings-heading", "Google" }
+                        form {
+                            class: "client-form settings-form",
+                            onsubmit: move |event| {
+                                event.prevent_default();
+                                // An empty secret field keeps the stored secret.
+                                let secret = if settings_secret().trim().is_empty() {
+                                    config.peek().calendar.client_secret.clone()
+                                } else {
+                                    settings_secret()
+                                };
+                                match day::save_google_client(&settings_id(), &secret) {
+                                    Ok(saved) => {
+                                        config.set(saved);
+                                        settings_error.set(None);
+                                        show_settings.set(false);
+                                        revision.set(revision() + 1);
+                                    }
+                                    Err(error) => settings_error.set(Some(error)),
+                                }
+                            },
+                            {error}
+                            label { r#for: "settings-client-id", "Client ID" }
+                            input {
+                                id: "settings-client-id",
+                                class: "client-input",
+                                r#type: "text",
+                                autocomplete: "off",
+                                autocapitalize: "off",
+                                spellcheck: "false",
+                                value: "{settings_id}",
+                                oninput: move |event| settings_id.set(event.value()),
+                            }
+                            label { r#for: "settings-client-secret", "Client secret" }
+                            input {
+                                id: "settings-client-secret",
+                                class: "client-input",
+                                r#type: "password",
+                                placeholder: "Leave blank to keep the current secret",
+                                autocomplete: "off",
+                                autocapitalize: "off",
+                                spellcheck: "false",
+                                value: "{settings_secret}",
+                                oninput: move |event| settings_secret.set(event.value()),
+                            }
+                            p { class: "hint",
+                                "After changing the client, use Connect Google to sign in again."
+                            }
+                            div { class: "state-actions",
+                                button { class: "btn primary", r#type: "submit", "Save" }
+                                button {
+                                    class: "btn",
+                                    r#type: "button",
+                                    onclick: move |_| show_settings.set(false),
+                                    "Cancel"
+                                }
                             }
                         }
                     }
@@ -863,7 +860,7 @@ fn App() -> Element {
 
     rsx! {
         document::Title { "TimeSlay · Day" }
-        document::Style { {CSS} }
+        document::Style { {style::STYLESHEET.as_str()} }
         div { class: "app",
             {topbar}
             {banner}
@@ -914,24 +911,136 @@ fn begin_connect(
     });
 }
 
-fn header_stats(model: &DayModel) -> String {
-    let events = model.all_day.len()
-        + model
-            .timed
-            .iter()
-            .filter(|event| !event.event.is_task() && !event.time_block)
-            .count();
-    let tasks: usize = model
-        .task_groups
-        .iter()
-        .map(|group| group.tasks.len())
-        .sum();
-    let blocks = model.blocks.len();
+/// One entry of the navigation card, lit while its page is on show.
+fn nav_tab(
+    label: &'static str,
+    active: bool,
+    extra_class: &'static str,
+    mut on_press: impl FnMut(()) + 'static,
+) -> Element {
+    rsx! {
+        button {
+            class: "nav-tab {extra_class}",
+            aria_pressed: active.to_string(),
+            onclick: move |_| on_press(()),
+            "{label}"
+        }
+    }
+}
 
-    let event_word = if events == 1 { "event" } else { "events" };
-    let task_word = if tasks == 1 { "task" } else { "tasks" };
-    let block_word = if blocks == 1 { "block" } else { "blocks" };
-    format!("{events} {event_word} · {tasks} {task_word} · {blocks} {block_word}")
+/// Moves the view to another day.
+#[derive(Clone, Copy)]
+struct DayNav {
+    current_day: Signal<NaiveDate>,
+    selected_block: Signal<Option<String>>,
+    scrolled: Signal<bool>,
+    follow_today: Signal<bool>,
+}
+
+impl DayNav {
+    fn go_to(mut self, day: NaiveDate, follow_today: bool) {
+        self.current_day.set(day);
+        self.selected_block.set(None);
+        self.scrolled.set(false);
+        self.follow_today.set(follow_today);
+    }
+}
+
+/// The month button, and the month it opens: the desktop's way between days.
+fn month_picker(
+    selected: NaiveDate,
+    today: NaiveDate,
+    mut open: Signal<bool>,
+    mut shown: Signal<NaiveDate>,
+    nav: DayNav,
+) -> Element {
+    let label = format!("{} ▾", calendar::month_short(selected.month()));
+    let month = shown();
+    let days = if open() {
+        calendar::month_grid(month)
+    } else {
+        Vec::new()
+    };
+    let cells = days.into_iter().map(move |day| {
+        let mut class = String::from("month-day");
+        if day.month() != month.month() {
+            class.push_str(" outside");
+        }
+        if day == selected {
+            class.push_str(" selected");
+        }
+        if day == today {
+            class.push_str(" today");
+        }
+        let number = day.day();
+        rsx! {
+            button {
+                key: "{day}",
+                class: "{class}",
+                onclick: move |_| {
+                    open.set(false);
+                    nav.go_to(day, day == today);
+                },
+                "{number}"
+            }
+        }
+    });
+    let picker = open().then(|| {
+        let heading = calendar::month_heading(month);
+        rsx! {
+            div { class: "month-dismiss", onclick: move |_| open.set(false) }
+            div { class: "month-picker", role: "dialog", aria_label: "Choose a day",
+                div { class: "month-head",
+                    button {
+                        class: "btn icon",
+                        title: "Previous month",
+                        aria_label: "Previous month",
+                        onclick: move |_| {
+                            if let Some(previous) = month.checked_sub_months(Months::new(1)) {
+                                shown.set(previous);
+                            }
+                        },
+                        "‹"
+                    }
+                    span { class: "month-name", "{heading}" }
+                    button {
+                        class: "btn icon",
+                        title: "Next month",
+                        aria_label: "Next month",
+                        onclick: move |_| {
+                            if let Some(next) = month.checked_add_months(Months::new(1)) {
+                                shown.set(next);
+                            }
+                        },
+                        "›"
+                    }
+                }
+                div { class: "month-grid",
+                    for weekday in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] {
+                        span { key: "{weekday}", class: "month-weekday", "{weekday}" }
+                    }
+                    {cells}
+                }
+            }
+        }
+    });
+
+    rsx! {
+        div { class: "month-anchor",
+            button {
+                class: if open() { "btn primary" } else { "btn" },
+                aria_expanded: open().to_string(),
+                onclick: move |_| {
+                    if !open() {
+                        shown.set(calendar::first_of_month(selected));
+                    }
+                    open.set(!open());
+                },
+                "{label}"
+            }
+            {picker}
+        }
+    }
 }
 
 fn sidebar(
@@ -939,14 +1048,8 @@ fn sidebar(
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
 ) -> Element {
-    let all_day_empty = model.all_day.is_empty();
     let groups_empty = model.task_groups.is_empty();
 
-    let all_day_chips: Vec<Element> = model
-        .all_day
-        .iter()
-        .map(|event| all_day_chip(event, editing))
-        .collect();
     let groups: Vec<Element> = model
         .task_groups
         .iter()
@@ -956,17 +1059,6 @@ fn sidebar(
     rsx! {
         aside { id: "tasks-pane", class: "sidebar", aria_label: "Tasks",
             div { class: "sidebar-scroll",
-                section { class: "panel-section sidebar-all-day",
-                    div { class: "section-head",
-                        span { class: "section-title", "All day" }
-                        span { class: "count-pill", "{model.all_day.len()}" }
-                    }
-                    if all_day_empty {
-                        p { class: "empty-note", "No all-day events." }
-                    } else {
-                        div { class: "all-day-list", {all_day_chips.into_iter()} }
-                    }
-                }
                 section { class: "panel-section",
                     div { class: "section-head",
                         span { class: "section-title", "Google Tasks" }
@@ -990,22 +1082,32 @@ fn sidebar(
     }
 }
 
-fn all_day_chip(event: &Event, editing: Signal<Option<Event>>) -> Element {
+/// An all-day event: a full-width bar in the event's own color.
+fn all_day_chip(
+    event: &Event,
+    settings: &CalendarSettings,
+    editing: Signal<Option<Event>>,
+) -> Element {
     let mut editing = editing;
     let opened = event.clone();
-    let dot = css_color(event.color);
-    let title = event.title.clone();
-    let completed = event.completed.then(|| {
-        rsx! { span { class: "all-day-check", "✓" } }
-    });
+    let color = event.display_color(settings);
+    let style = format!(
+        "background:{};color:{};",
+        css_color(color),
+        css_color(calendar::colors::on_color(color))
+    );
+    let title = if event.completed {
+        format!("✓ {}", event.title)
+    } else {
+        event.title.clone()
+    };
     rsx! {
         button {
             class: "all-day-chip",
+            style: "{style}",
             title: "{title}",
             onclick: move |_| editing.set(Some(opened.clone())),
-            span { class: "day-dot", style: "background: {dot};" }
-            span { class: "all-day-title", "{title}" }
-            {completed}
+            "{title}"
         }
     }
 }
@@ -1120,20 +1222,21 @@ fn block_link_view(block: &BlockRef, open_block: Signal<Option<String>>) -> Elem
 fn timeline(
     model: &DayModel,
     travel: &[day::TravelBox],
+    settings: &CalendarSettings,
+    time_format: TimeFormat,
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
 ) -> Element {
     let grid_height = 24.0 * HOUR_HEIGHT;
     let hours: Vec<Element> = (0..24u32)
         .map(|row| {
-            let top = row as f32 * HOUR_HEIGHT;
-            let label_top = if row == 0 { top + 2.0 } else { top - 7.0 };
-            let label = calendar::hour_label(day::hour_at(model.hour_start, row));
+            let top = row as f32 * HOUR_HEIGHT + 2.0;
+            let label = time_format::hour(day::hour_at(model.hour_start, row), time_format);
             rsx! {
                 span {
                     key: "label-{row}",
                     class: "hour-label",
-                    style: "top: {label_top}px;",
+                    style: "top: {top}px;",
                     "{label}"
                 }
             }
@@ -1150,7 +1253,12 @@ fn timeline(
     let events: Vec<Element> = model
         .timed
         .iter()
-        .map(|timed| timed_event_view(timed, open_block, editing))
+        .map(|timed| timed_event_view(timed, time_format, open_block, editing))
+        .collect();
+    let block_tasks: Vec<Element> = model
+        .timed
+        .iter()
+        .flat_map(|timed| block_task_rows(timed, editing))
         .collect();
 
     let trips: Vec<Element> = travel
@@ -1180,42 +1288,39 @@ fn timeline(
     });
     let anchor_top = 8.0 * HOUR_HEIGHT;
 
-    let count = model.timed.len();
+    let summary = model.summary;
+    let summary_class = if summary.needs_attention() {
+        "day-summary attention"
+    } else {
+        "day-summary"
+    };
 
     rsx! {
-        section { id: "calendar-pane", class: "timeline-pane", aria_label: "Calendar",
-            div { class: "timeline-head",
-                h2 { "Schedule" }
-                span { class: "hint", "Click anything to edit it. A time block lists its tasks first." }
-                div { class: "spacer" }
-                span { class: "timeline-count", "{count} on the grid" }
-            }
-            div { class: "timeline-scroll",
-                if !model.all_day.is_empty() {
-                    section { class: "calendar-all-day panel-section",
-                        div { class: "section-head",
-                            span { class: "section-title", "All day" }
-                            span { class: "count-pill", "{model.all_day.len()}" }
-                        }
-                        div { class: "all-day-list",
-                            for event in &model.all_day {
-                                {all_day_chip(event, editing)}
-                            }
-                        }
-                    }
+        section { id: "calendar-pane", class: "timeline-pane", aria_label: "Schedule",
+            div { class: "day-overview",
+                p { class: "{summary_class}",
+                    "{summary.overdue} overdue. \u{a0}{summary.inbox} in inbox. \u{a0}{summary.unslotted} not slotted in"
                 }
-                div { class: "timeline", style: "height: {grid_height}px;",
-                    div { class: "gutter", style: "height: {grid_height}px;", {hours.into_iter()} }
-                    div { class: "grid", style: "height: {grid_height}px;",
-                        {lines.into_iter()}
-                        {events.into_iter()}
-                        {trips.into_iter()}
-                        {now_line}
-                        {empty}
-                        div {
-                            id: "timeline-anchor",
-                            class: "anchor",
-                            style: "top: {anchor_top}px;"
+                for event in &model.all_day {
+                    {all_day_chip(event, settings, editing)}
+                }
+            }
+            div { class: "timeline-card",
+                div { class: "timeline-scroll",
+                    div { class: "timeline", style: "height: {grid_height}px;",
+                        div { class: "gutter", style: "height: {grid_height}px;", {hours.into_iter()} }
+                        div { class: "grid", style: "height: {grid_height}px;",
+                            {lines.into_iter()}
+                            {events.into_iter()}
+                            {block_tasks.into_iter()}
+                            {trips.into_iter()}
+                            {now_line}
+                            {empty}
+                            div {
+                                id: "timeline-anchor",
+                                class: "anchor",
+                                style: "top: {anchor_top}px;"
+                            }
                         }
                     }
                 }
@@ -1224,38 +1329,86 @@ fn timeline(
     }
 }
 
+/// How an event's text fits in its height.
+#[derive(Debug, PartialEq, Eq)]
+struct TextFit {
+    /// The gap above the title, which shrinks on a short event.
+    top: u32,
+    /// The most lines the title can take.
+    title_lines: u32,
+    /// The lines of its time that fit under the title.
+    time_lines: usize,
+}
+
+/// A title always gets a line, then the time, then the rest goes to the title.
+fn text_fit(height: f32, time_lines: usize) -> TextFit {
+    let top = (height - TITLE_LINE).clamp(0.0, look::BLOCK_TOP);
+    let room = height - top;
+    let time_lines = (((room - TITLE_LINE) / TIME_LINE).floor().max(0.0) as usize).min(time_lines);
+    let title_lines = ((room - time_lines as f32 * TIME_LINE) / TITLE_LINE)
+        .floor()
+        .max(1.0) as u32;
+    TextFit {
+        top: top as u32,
+        title_lines,
+        time_lines,
+    }
+}
+
+/// The time written on an event: a sleep block says when to go to bed and rise.
+fn event_when(event: &Event, time_format: TimeFormat) -> String {
+    if event.details.sleep.is_some() {
+        calendar::sleep::time_label(event, time_format)
+    } else {
+        time_format::event(event, time_format)
+    }
+}
+
+fn event_label(timed: &TimedEvent, height: f32, time_format: TimeFormat) -> Element {
+    let when = event_when(&timed.event, time_format);
+    let fit = text_fit(height, when.lines().count());
+    let title = timed.title.clone();
+    let times = when
+        .lines()
+        .take(fit.time_lines)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    rsx! {
+        div {
+            class: "event-title",
+            style: "margin-top:{fit.top}px;-webkit-line-clamp:{fit.title_lines};",
+            "{title}"
+        }
+        for time in times {
+            div { class: "event-time", "{time}" }
+        }
+    }
+}
+
 fn timed_event_view(
     timed: &TimedEvent,
+    time_format: TimeFormat,
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
 ) -> Element {
     let mut editing = editing;
     let opened = timed.event.clone();
     let id = timed.event.id.clone();
-    let title = timed.title.clone();
-    let time = calendar::event_time_label(&timed.event);
-    let calendar_name = timed.calendar_name.clone();
     let style = event_style(timed);
-    let tooltip = format!("{title}\n{time}\n{calendar_name}");
-    let task_badge = timed.time_block.then(|| {
-        let count = if timed.task_count == 1 {
-            "1 task".to_owned()
-        } else {
-            format!("{} tasks", timed.task_count)
-        };
-        if timed.planned_minutes == 0 {
-            count
-        } else {
-            format!("{count} · {}", day::duration_label(timed.planned_minutes))
-        }
-    });
-    let badge = match task_badge {
-        Some(badge) => rsx! { div { class: "block-badge", "{badge}" } },
-        None => rsx! { div { class: "event-cal", "{calendar_name}" } },
-    };
+    let height = event_height(timed);
+    let tooltip = format!(
+        "{}\n{}\n{}",
+        timed.title,
+        event_when(&timed.event, time_format),
+        timed.calendar_name
+    );
+    let label = event_label(timed, height, time_format);
 
     if timed.time_block {
         let mut open = open_block;
+        let planned: u32 = timed.tasks.iter().map(|task| task.minutes).sum();
+        let duration = (timed.end_min - timed.start_min).max(1) as f32;
+        let filled = (planned as f32 / duration).min(1.0) * 100.0;
         rsx! {
             button {
                 key: "{id}",
@@ -1263,25 +1416,63 @@ fn timed_event_view(
                 style: "{style}",
                 title: "{tooltip}",
                 onclick: move |_| open.set(Some(id.clone())),
-                div { class: "event-title", "{title}" }
-                div { class: "event-time", "{time}" }
-                {badge}
+                div { class: "block-filled", style: "height:{filled:.2}%;" }
+                div { class: "block-label", {label} }
+                span { class: "block-plan", "Plan" }
             }
         }
     } else {
         rsx! {
             button {
                 key: "{id}",
-                class: "grid-event editable",
+                class: "grid-event",
                 style: "{style}",
                 title: "{tooltip}",
                 onclick: move |_| editing.set(Some(opened.clone())),
-                div { class: "event-title", "{title}" }
-                div { class: "event-time", "{time}" }
-                div { class: "event-cal", "{calendar_name}" }
+                {label}
             }
         }
     }
+}
+
+/// A time block's tasks, listed in the space it leaves beside itself. The
+/// ones that run past the block's end are marked.
+fn block_task_rows(timed: &TimedEvent, editing: Signal<Option<Event>>) -> Vec<Element> {
+    let top = timed.start_min as f32 * HOUR_HEIGHT / 60.0;
+    let duration = (timed.end_min - timed.start_min).max(1) as u32;
+    let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
+    let width = time_block_width(span);
+    let mut elapsed = 0;
+    timed
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| {
+            let mut editing = editing;
+            elapsed += task.minutes;
+            let class = if elapsed > duration {
+                "block-task over"
+            } else {
+                "block-task"
+            };
+            let icon = status_icon(task.status);
+            let title = tb::task_label(&task.event);
+            let minutes = task.minutes;
+            let row_top = top + index as f32 * look::TIME_BLOCK_ROW;
+            let inset = look::EVENT_GAP / 2.0;
+            let gap = look::TIME_BLOCK_ROW_GAP;
+            let opened = task.event.clone();
+            rsx! {
+                button {
+                    key: "{task.event.id}",
+                    class: "{class}",
+                    style: "top:{row_top:.1}px;left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
+                    onclick: move |_| editing.set(Some(opened.clone())),
+                    "{icon} {title} · {minutes}m"
+                }
+            }
+        })
+        .collect()
 }
 
 fn time_block_modal(
@@ -1404,38 +1595,64 @@ pub(crate) fn status_icon(status: tb::TaskStatus) -> &'static str {
     }
 }
 
+fn event_height(timed: &TimedEvent) -> f32 {
+    ((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0).max(EVENT_MIN_HEIGHT)
+}
+
+/// Where a column starts and how wide its span is, as percentages of the grid.
+fn column_position(column: usize, columns: usize, span: usize) -> (f32, f32) {
+    let width = 100.0 / columns.max(1) as f32;
+    (column as f32 * width, span.max(1) as f32 * width)
+}
+
+fn column_width(span: f32) -> String {
+    format!("calc({span:.4}% - {}px)", look::EVENT_GAP)
+}
+
+/// A time block leaves part of its column for its task rows, as on the desktop.
+fn time_block_width(span: f32) -> String {
+    format!(
+        "calc(({span:.4}% - {}px) * {})",
+        look::EVENT_GAP + look::TIME_BLOCK_INSET,
+        look::TIME_BLOCK_SHARE
+    )
+}
+
 fn event_style(timed: &TimedEvent) -> String {
     let top = timed.start_min as f32 * HOUR_HEIGHT / 60.0;
-    let height = ((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0).max(22.0);
-    let column_width = 100.0 / timed.columns.max(1) as f32;
-    let left = timed.column as f32 * column_width;
-    let width = timed.column_span.max(1) as f32 * column_width;
-    let background = css_color(timed.event.color);
-    let ink = css_color(calendar::colors::on_color(timed.event.color));
+    let height = event_height(timed);
+    let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
+    let width = if timed.time_block {
+        time_block_width(span)
+    } else {
+        column_width(span)
+    };
+    let inset = look::EVENT_GAP / 2.0;
+    let background = css_color(timed.color);
+    let ink = css_color(calendar::colors::on_color(timed.color));
 
     format!(
-        "top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + 3px);width:calc({width:.4}% - 6px);background:{background};color:{ink};"
+        "top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
     )
 }
 
 /// Where a trip's box sits: ending at the start of the event it leads to, in
 /// that event's column. Over a time block it is half as wide, as on the desktop.
 fn travel_style(trip: &day::TravelBox) -> String {
-    let height = (trip.minutes as f32 * HOUR_HEIGHT / 60.0).max(TRAVEL_MIN_HEIGHT);
+    let height = (trip.minutes as f32 * HOUR_HEIGHT / 60.0).max(look::TRAVEL_MIN_HEIGHT);
     let top = (trip.anchor_min as f32 * HOUR_HEIGHT / 60.0 - height).max(0.0);
-    let column_width = 100.0 / trip.columns.max(1) as f32;
-    let left = trip.column as f32 * column_width;
-    let span = trip.column_span.max(1) as f32 * column_width;
+    let (left, span) = column_position(trip.column, trip.columns, trip.column_span);
     let width = if trip.time_block {
-        format!("calc(({span:.4}% - 12px) * 0.5)")
+        time_block_width(span)
     } else {
-        format!("calc({span:.4}% - 6px)")
+        column_width(span)
     };
+    let inset = look::EVENT_GAP / 2.0;
     let background = css_color(calendar::colors::TRAVEL);
     let ink = css_color(calendar::colors::on_color(calendar::colors::TRAVEL));
 
     format!(
-        "top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + 3px);width:{width};background:{background};color:{ink};"
+        "top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
     )
 }
 
@@ -1447,4 +1664,35 @@ pub(crate) fn css_color(color: timeslay_core::Color) -> String {
         "rgba({red}, {green}, {blue}, {:.2})",
         color.a.clamp(0.0, 1.0)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_short_event_has_room_for_its_title_only() {
+        assert_eq!(
+            text_fit(15.0, 1),
+            TextFit {
+                top: 0,
+                title_lines: 1,
+                time_lines: 0
+            }
+        );
+        assert_eq!(text_fit(30.0, 1).time_lines, 0);
+    }
+
+    #[test]
+    fn a_tall_event_gives_what_its_time_leaves_to_the_title() {
+        let fit = text_fit(60.0, 1);
+        assert_eq!(fit.time_lines, 1);
+        assert_eq!(fit.title_lines, 2);
+    }
+
+    #[test]
+    fn a_sleep_block_keeps_both_of_its_time_lines_when_they_fit() {
+        assert_eq!(text_fit(64.0, 2).time_lines, 2);
+        assert_eq!(text_fit(40.0, 2).time_lines, 1);
+    }
 }

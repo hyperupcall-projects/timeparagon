@@ -8,6 +8,8 @@ Both apps share data and code via the `timeslay-core` crate:
 - the OAuth token at `~/.config/timeslay/google-token.toml`,
 - the local task database and time-block metadata,
 - the calendar sync and Google Tasks code in `core/`.
+- the palettes, radii and shadows in `core/src/theme/`, which reach this app as
+  CSS variables through `dioxus/src/style.rs`.
 
 ## Usage
 

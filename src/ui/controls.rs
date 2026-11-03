@@ -6,6 +6,7 @@ use chrono::{Datelike, Months, NaiveDate, NaiveTime, Timelike};
 use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Border, Color, Element, Fill, Shadow, Theme, Vector};
 use std::sync::Arc;
+use timeslay_core::theme as look;
 
 type Change = Arc<dyn Fn(String) -> Message + Send + Sync>;
 #[derive(Clone)]
@@ -523,23 +524,25 @@ pub fn page_toolbar<'a>(
     }
 }
 
-/// Corner radii shared by every surface.
-pub const RADIUS_CARD: f32 = 10.0;
-pub const RADIUS_ROW: f32 = 8.0;
-pub const RADIUS_CONTROL: f32 = 7.0;
-pub const RADIUS_SMALL: f32 = 5.0;
+pub use timeslay_core::theme::{RADIUS_CARD, RADIUS_CONTROL, RADIUS_ROW, RADIUS_SMALL, SCRIM};
 
 /// A soft black shadow, deepened on dark themes where it would otherwise vanish.
 pub fn shadow(theme: &Theme, alpha: f32, y: f32, blur_radius: f32) -> Shadow {
-    let depth = if theme.extended_palette().is_dark {
-        3.0
-    } else {
-        1.0
-    };
+    elevated(
+        theme,
+        look::Elevation {
+            alpha,
+            y,
+            blur: blur_radius,
+        },
+    )
+}
+
+fn elevated(theme: &Theme, elevation: look::Elevation) -> Shadow {
     Shadow {
-        color: Color::BLACK.scale_alpha((alpha * depth).min(0.6)),
-        offset: Vector::new(0.0, y),
-        blur_radius,
+        color: elevation.color(theme.extended_palette().is_dark),
+        offset: Vector::new(0.0, elevation.y),
+        blur_radius: elevation.blur,
     }
 }
 
@@ -564,7 +567,7 @@ pub fn card_surface(theme: &Theme) -> container::Style {
             width: 1.0,
             radius: RADIUS_CARD.into(),
         },
-        shadow: shadow(theme, 0.16, 3.0, 12.0),
+        shadow: elevated(theme, look::CARD),
         ..Default::default()
     }
 }
@@ -576,7 +579,7 @@ pub fn row_surface(theme: &Theme) -> container::Style {
             radius: RADIUS_ROW.into(),
             ..card_surface(theme).border
         },
-        shadow: shadow(theme, 0.14, 2.0, 8.0),
+        shadow: elevated(theme, look::ROW),
         ..card_surface(theme)
     }
 }
@@ -609,29 +612,25 @@ pub fn summary_surface(theme: &Theme) -> container::Style {
 /// Floating dialogs and menus: the same card, lifted well off the page.
 pub fn surface(theme: &Theme) -> container::Style {
     container::Style {
-        shadow: shadow(theme, 0.26, 10.0, 30.0),
+        shadow: elevated(theme, look::FLOATING),
         ..card_surface(theme)
     }
 }
 
-/// The dim sheet behind a dialog.
-pub const SCRIM: Color = Color {
-    r: 0.0,
-    g: 0.0,
-    b: 0.0,
-    a: 0.3,
-};
-
 fn raised(mut s: button::Style, theme: &Theme, status: button::Status) -> button::Style {
-    let (alpha, y, blur) = match status {
-        button::Status::Disabled => (0.0, 0.0, 0.0),
-        button::Status::Pressed => (0.08, 0.0, 2.0),
-        button::Status::Hovered => (0.2, 3.0, 9.0),
-        button::Status::Active => (0.14, 1.0, 4.0),
+    let elevation = match status {
+        button::Status::Disabled => look::Elevation {
+            alpha: 0.0,
+            y: 0.0,
+            blur: 0.0,
+        },
+        button::Status::Pressed => look::BUTTON_PRESSED,
+        button::Status::Hovered => look::BUTTON_HOVERED,
+        button::Status::Active => look::BUTTON,
     };
     s.border.radius = RADIUS_CONTROL.into();
     s.border.width = 1.0;
-    s.shadow = shadow(theme, alpha, y, blur);
+    s.shadow = elevated(theme, elevation);
     s
 }
 
@@ -640,10 +639,10 @@ fn filled(
     status: button::Status,
     accent: iced::theme::palette::Pair,
 ) -> button::Style {
-    let shade = |by: f32| iced::theme::palette::mix(accent.color, Color::BLACK, by);
+    let shade = |by: f32| look::shade(accent.color, by);
     let background = match status {
-        button::Status::Hovered => shade(0.08),
-        button::Status::Pressed => shade(0.16),
+        button::Status::Hovered => shade(look::FILLED_HOVER_SHADE),
+        button::Status::Pressed => shade(look::FILLED_PRESS_SHADE),
         _ => accent.color,
     };
     let disabled = status == button::Status::Disabled;
@@ -656,7 +655,11 @@ fn filled(
             ),
             text_color: accent.text.scale_alpha(if disabled { 0.8 } else { 1.0 }),
             border: Border {
-                color: shade(0.14).scale_alpha(if disabled { 0.45 } else { 1.0 }),
+                color: shade(look::FILLED_EDGE_SHADE).scale_alpha(if disabled {
+                    0.45
+                } else {
+                    1.0
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -770,7 +773,7 @@ pub fn nav(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
                 width: 1.0,
                 radius: RADIUS_CONTROL.into(),
             },
-            shadow: shadow(t, 0.08, 1.0, 3.0),
+            shadow: elevated(t, look::NAV_ACTIVE),
             ..Default::default()
         }
     }
@@ -863,7 +866,7 @@ pub fn menu_style(theme: &Theme) -> iced::widget::overlay::menu::Style {
         text_color: card_color(theme).text,
         selected_text_color: accent.text,
         selected_background: accent.color.into(),
-        shadow: shadow(theme, 0.2, 6.0, 18.0),
+        shadow: elevated(theme, look::MENU),
     }
 }
 

@@ -57,16 +57,11 @@ use super::layout::Metrics;
 
 const GUTTER: f32 = 52.0;
 const COMPACT_GUTTER: f32 = 40.0;
-const EVENT_GAP: f32 = 2.0;
-const EVENT_RADIUS: f32 = 6.0;
-const NEEDLE_RADIUS: f32 = 5.5;
 
-/// The gap between a block's left edge and the text inside it.
-const BLOCK_PADDING: f32 = 6.0;
-/// The gap between a block's right edge and the text inside it.
-const BLOCK_PADDING_RIGHT: f32 = 4.0;
-/// The gap above a block's first line of text.
-const BLOCK_TOP: f32 = 3.0;
+use timeslay_core::theme::{
+    BLOCK_PADDING, BLOCK_PADDING_RIGHT, BLOCK_TOP, EVENT_GAP, EVENT_RADIUS, NEEDLE_RADIUS,
+};
+
 /// The gap between a block's title and the time label under it.
 const BLOCK_GAP: f32 = 2.0;
 /// The mark that says a title was cut short to fit its block.
