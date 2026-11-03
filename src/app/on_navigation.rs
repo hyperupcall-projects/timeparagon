@@ -40,6 +40,8 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             if screen == Screen::Habits {
                 state.calendar.open_event = None;
                 state.habits.confirm_delete = None;
+            } else {
+                state.habits.menu = None;
             }
             if screen != Screen::Habits {
                 state.habits.calendar_habit = None;

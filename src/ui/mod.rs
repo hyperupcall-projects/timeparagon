@@ -12,6 +12,7 @@ pub mod controls;
 mod description;
 pub mod flash;
 pub mod habits;
+mod habits_charts;
 pub mod inbox;
 pub mod keep;
 pub mod layout;
@@ -54,6 +55,30 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         if state.people_panel_open() {
             let metrics = Metrics::of(size);
             return container(people::panel(state, &metrics))
+                .width(Fill)
+                .height(Fill)
+                .style(controls::surface)
+                .into();
+        }
+        // Checked before the range views for the same reason. An event opened
+        // from the habit's page goes beside it.
+        if state.habit_panel_open() {
+            let width = habits::PANEL_WIDTH.min(size.width);
+            let metrics = Metrics::of(Size::new(width, size.height));
+            let mut panes = row![container(habits::panel(state, &metrics)).width(width)];
+            if state.calendar.open_event.is_some() {
+                let width = state
+                    .config
+                    .views
+                    .detail_width()
+                    .min((size.width - width).max(1.0));
+                let metrics = Metrics::of(Size::new(width, size.height));
+                panes = panes.push(container(calendar::details_pane(state, &metrics)).width(width));
+            }
+            let metrics = Metrics::of(size);
+            let mut layers = vec![panes.height(Fill).into()];
+            push_dialogs(&mut layers, state, &metrics);
+            return container(iced::widget::stack(layers))
                 .width(Fill)
                 .height(Fill)
                 .style(controls::surface)
@@ -170,6 +195,9 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
     }
     if state.habits.confirm_delete.is_some() {
         layers.push(habits::delete_confirmation(state, metrics));
+    }
+    if state.habits.day_dialog.is_some() {
+        layers.push(habits::day_dialog(state, metrics));
     }
     if let Some(picker) = &state.picker {
         layers.push(controls::overlay(

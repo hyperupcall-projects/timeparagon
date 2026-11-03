@@ -584,6 +584,23 @@ pub struct HabitEvent {
     pub end: DateTime<Local>,
     pub recurrence: Vec<String>,
     pub color_id: Option<String>,
+    /// The habit this event counts towards.
+    pub habit_id: Option<String>,
+}
+
+/// One occurrence that was marked complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HabitCompletion {
+    /// The series master, or the event itself when it does not repeat.
+    pub series_id: String,
+    pub day: NaiveDate,
+}
+
+/// Everything the calendar holds about habit events.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HabitListing {
+    pub series: Vec<HabitEvent>,
+    pub completions: Vec<HabitCompletion>,
 }
 
 /// Every habit master on the app's TimeSlay calendar.
@@ -593,11 +610,21 @@ pub struct HabitEvent {
 /// event rather than one expanded instance per occurrence. The Habits tab
 /// groups these series and opens them in the shared calendar editor.
 pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<HabitEvent>, String> {
+    fetch_habit_listing(access_token, calendar).map(|listing| listing.series)
+}
+
+/// The same masters, along with the occurrences marked complete. Those were
+/// patched individually, so Google lists them as exceptions to their series.
+pub fn fetch_habit_listing(
+    access_token: &str,
+    calendar: Option<&str>,
+) -> Result<HabitListing, String> {
     let Some(calendar_id) = app_calendar_id(access_token, calendar)? else {
-        return Ok(Vec::new());
+        return Ok(HabitListing::default());
     };
     let mut page_token: Option<String> = None;
     let mut habits = Vec::new();
+    let mut completions = Vec::new();
     loop {
         let mut url = format!(
             "{EVENTS}/{}/events?singleEvents=false&maxResults=250&privateExtendedProperty=ttKind%3Dhabit",
@@ -611,8 +638,13 @@ pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<Ha
         for mut entry in page.items {
             entry.options.default_reminders = page.default_reminders.clone();
             migrate_calendar_metadata(access_token, &calendar_id, &mut entry)?;
-            if entry.status.as_deref() != Some("cancelled")
-                && entry.recurring_event_id.is_none()
+            if entry.status.as_deref() == Some("cancelled") {
+                continue;
+            }
+            if let Some(completion) = habit_completion(&entry) {
+                completions.push(completion);
+            }
+            if entry.recurring_event_id.is_none()
                 && let Some(habit) = parse_habit(entry, &calendar_id)
             {
                 habits.push(habit);
@@ -629,7 +661,48 @@ pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<Ha
             .cmp(&right.title.to_lowercase())
             .then(left.start.cmp(&right.start))
     });
-    Ok(habits)
+    Ok(HabitListing {
+        series: habits,
+        completions,
+    })
+}
+
+fn habit_completion(entry: &EventEntry) -> Option<HabitCompletion> {
+    if entry.extended_properties["private"]["ttCompleted"].as_str() != Some("true") {
+        return None;
+    }
+    let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
+    Some(HabitCompletion {
+        series_id: entry
+            .recurring_event_id
+            .clone()
+            .unwrap_or_else(|| entry.id.clone()),
+        day: start.date_naive(),
+    })
+}
+
+/// Sets or clears the habit a series counts towards. Google merges private
+/// properties on a PATCH, so a null removes only this key.
+pub fn link_habit_event(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+    habit_id: Option<&str>,
+) -> Result<(), GoogleError> {
+    let url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(event_id)
+    );
+    let body = serde_json::json!({
+        "extendedProperties": { "private": { crate::habits::LINK_PROPERTY: habit_id } }
+    });
+    patch(
+        &url,
+        access_token,
+        &body.to_string(),
+        "Google Calendar habit",
+    )
 }
 
 /// The TimeSlay calendar id, or `None` when the calendar does not exist yet.
@@ -663,27 +736,6 @@ pub fn insert_habit(
         .map_err(|error| format!("Google Calendar habit response: {error}"))?;
     parse_habit(created, &calendar_id)
         .ok_or_else(|| "Google Calendar did not return the new habit".to_owned())
-}
-
-/// Updates a habit master. Its identity, recurrence and times all stay in the
-/// same Calendar event.
-pub fn patch_habit(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    body: &serde_json::Value,
-) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-    );
-    patch(
-        &url,
-        access_token,
-        &body.to_string(),
-        "Google Calendar habit",
-    )
 }
 
 /// Deletes a habit master and with it every occurrence in its series.
@@ -760,6 +812,9 @@ fn parse_habit(entry: EventEntry, calendar_id: &str) -> Option<HabitEvent> {
         notes: notes.trim_end().to_owned(),
         start,
         end,
+        habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
+            .as_str()
+            .map(str::to_owned),
         recurrence: entry.recurrence,
         color_id: entry.color_id,
     })
@@ -2004,6 +2059,9 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .as_str()
             .and_then(parse_date_time),
         habit: entry.extended_properties["private"]["ttKind"].as_str() == Some("habit"),
+        habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
+            .as_str()
+            .map(str::to_owned),
         recurring_event_id: entry.recurring_event_id.clone(),
         recurrence: entry.recurrence.clone(),
         color_id: entry.color_id.clone(),

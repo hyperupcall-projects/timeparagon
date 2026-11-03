@@ -50,7 +50,10 @@ Of course, there's also week, 2-week, and month views:
 		- Pomodoro timer.
 		- Record distractions.
 	- Habits
-		- These are standard calendar events that are colored differently.
+		- Track goals day by day like [Loop Habit Tracker](https://github.com/iSoron/uhabits), with the same scores, streaks and charts.
+		- Goals: every day, every X days, N times per day, week or month, N times in Y days, or chosen weekdays. Skip days and question marks are set per habit.
+		- Sort the list by hand, name, color, score or status. Archive, delete, or export as CSV.
+		- Connect any number of habit events to a habit. They are standard calendar events that are colored differently, and completing one counts towards the habit.
 		- Allow "floating" habit, so it can be done anytime during the week/month, etc. or show it on a day +- 3 days etc. Or can make it hard deadline (no +), and have it be greedy (TODO)
 	- Sleep
 		- Automatically create events for sleep.
@@ -97,6 +100,8 @@ Of course, there's also week, 2-week, and month views:
 	- One-click contact methos for email, Slack (TODO).
 - Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
 	- Uses local database as cache to keep UI performant/responsive.
+- Habits
+	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
 - Activity monitoring
 	- Project allocation
 	- Distractions

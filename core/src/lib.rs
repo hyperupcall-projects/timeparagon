@@ -13,6 +13,7 @@ pub mod clock;
 pub mod config;
 pub mod config_sync;
 pub mod fsutil;
+pub mod habits;
 pub mod hex;
 pub mod places;
 pub mod recurrence;

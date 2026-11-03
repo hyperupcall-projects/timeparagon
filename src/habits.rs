@@ -1,11 +1,17 @@
-//! Habits: recurring events on the app's single TimeSlay calendar.
+//! Habits: goals tracked day by day, the way Loop Habit Tracker does.
 //!
-//! A habit is an ordinary Google Calendar event tagged with `ttKind=habit`,
-//! so Google expands it and every other client sees a normal recurring event.
-//! The Habits tab opens an occurrence with the same save scopes as other
-//! calendar events. Its repeat controls use the shared [`crate::recurrence`]
-//! editor for events and time blocks, so every recurring item uses the same
-//! words and written with the same `RRULE`/`RDATE`/`EXDATE` logic.
+//! A habit ([`timeslay_core::habits::Habit`]) lives in a local file and needs
+//! nothing else. Separately, a habit event is an ordinary Google Calendar event
+//! tagged `ttKind=habit`, so Google expands it and every other client sees a
+//! normal recurring event. Any number of those can point at one habit through a
+//! `ttHabit` property, and completing an occurrence records a repetition.
+//!
+//! Habit events from before this split have no such property. The first time
+//! one is seen it is given a habit of the same name, along with its completion
+//! history, without writing anything to Google.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, Timelike, Weekday};
 use iced::{Color, Task};
@@ -13,20 +19,23 @@ use iced::{Color, Task};
 use crate::app::{CalendarMessage, EventMessage};
 use crate::app::{Message, State};
 use crate::blocking;
-use crate::calendar::{self, api::HabitEvent, colors, deadline};
+use crate::calendar::{self, api::HabitEvent, api::HabitListing, colors, deadline};
 use crate::recurrence::Rule;
 
 pub use crate::recurrence::{EndKind, MonthlyMode, Recurrence, RepeatMode, WEEKDAYS};
+pub use timeslay_core::habits::{
+    Bucket, Computed, Frequency, Habit, Kind, Library, Mark, SortKey, Status, Streak, TargetType,
+};
 
 /// The `ttKind` Google extended property that marks a habit event.
 pub const KIND: &str = "habit";
 
-/// The text input that holds a habit's name in the editor.
-pub const TITLE_FIELD: &str = "habit-title";
+/// The week the charts group by, matching the rest of the app.
+pub const FIRST_WEEKDAY: Weekday = Weekday::Mon;
 
-/// One habit, as the master event on the TimeSlay calendar.
+/// A habit event, as the master event on the TimeSlay calendar.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Habit {
+pub struct Series {
     pub id: String,
     pub calendar_id: String,
     pub title: String,
@@ -35,9 +44,10 @@ pub struct Habit {
     pub end: DateTime<Local>,
     pub recurrence: Recurrence,
     pub color_id: Option<String>,
+    pub habit_id: Option<String>,
 }
 
-impl Habit {
+impl Series {
     pub fn from_event(event: HabitEvent) -> Self {
         Self {
             id: event.id,
@@ -48,11 +58,12 @@ impl Habit {
             end: event.end,
             recurrence: Recurrence::from_lines(&event.recurrence),
             color_id: event.color_id,
+            habit_id: event.habit_id,
         }
     }
 
-    /// The habit's Google color when it has one, otherwise the app's habit
-    /// color.
+    /// The event's Google color when it has one, otherwise the app's habit
+    /// event color.
     pub fn color(&self, settings: &crate::config::CalendarSettings) -> Color {
         self.color_id
             .as_deref()
@@ -65,12 +76,12 @@ impl Habit {
         if self.recurrence.is_empty() {
             return "Does not repeat".to_owned();
         }
-        Draft::from_habit(self)
+        Draft::from_series(self)
             .rule
             .summary(self.start.date_naive())
     }
 
-    /// The time of day the habit runs.
+    /// The time of day the event runs.
     pub fn time_label(&self) -> String {
         format!(
             "{} – {}",
@@ -78,9 +89,39 @@ impl Habit {
             self.end.format("%H:%M")
         )
     }
+
+    /// The closest goal to an event's repeat, for a habit made from the event.
+    fn frequency(&self) -> Frequency {
+        let rule = Rule::from_recurrence(self.start.date_naive(), &self.recurrence);
+        let every = rule.interval.trim().parse::<u32>().unwrap_or(1).max(1);
+        match rule.repeat {
+            RepeatMode::Daily => Frequency::Interval {
+                times: 1,
+                days: every,
+            },
+            RepeatMode::Weekly if every == 1 && rule.weekdays.contains(&true) => {
+                Frequency::Weekdays {
+                    days: rule.weekdays,
+                }
+            }
+            RepeatMode::Weekly => Frequency::Interval {
+                times: 1,
+                days: every * 7,
+            },
+            RepeatMode::Monthly => Frequency::Interval {
+                times: 1,
+                days: every * 30,
+            },
+            RepeatMode::Yearly => Frequency::Interval {
+                times: 1,
+                days: every * 365,
+            },
+            _ => Frequency::DAILY,
+        }
+    }
 }
 
-/// A habit being filled in before it is written to Google.
+/// A habit event being filled in before it is written to Google.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
     /// `None` when this is a new habit.
@@ -148,7 +189,7 @@ impl Draft {
         draft
     }
 
-    pub fn from_habit(habit: &Habit) -> Self {
+    pub fn from_series(habit: &Series) -> Self {
         let mut draft = Self::new(habit.start.date_naive(), habit.color_id.clone());
         draft.id = Some(habit.id.clone());
         draft.calendar_id = Some(habit.calendar_id.clone());
@@ -230,51 +271,502 @@ pub struct ParsedHabit {
     pub recurrence: Vec<String>,
 }
 
+/// The radio buttons of the frequency section, which are Loop's plus a
+/// times-per-day goal and a goal on chosen weekdays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrequencyKind {
+    EveryDay,
+    TimesPerDay,
+    EveryXDays,
+    TimesPerWeek,
+    TimesPerMonth,
+    TimesInDays,
+    Weekdays,
+}
+
+/// The add and edit page for a habit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Form {
+    /// `None` when this is a new habit.
+    pub id: Option<String>,
+    /// Fixed once a habit exists, since its record would mean something else.
+    pub habit_kind: Kind,
+    pub unit: String,
+    pub target: String,
+    pub target_type: TargetType,
+    /// The period a measurable target covers: 1, 7 or 30 days.
+    pub target_days: u32,
+    pub name: String,
+    pub question: String,
+    pub notes: String,
+    pub color: u8,
+    pub kind: FrequencyKind,
+    pub per_day: String,
+    pub every_days: String,
+    pub per_week: String,
+    pub per_month: String,
+    pub in_times: String,
+    pub in_days: String,
+    pub weekdays: [bool; 7],
+    pub skip_days: bool,
+    pub question_marks: bool,
+    pub error: Option<String>,
+}
+
+impl Form {
+    fn new() -> Self {
+        Self {
+            id: None,
+            habit_kind: Kind::Yes,
+            unit: String::new(),
+            target: "1".into(),
+            target_type: TargetType::AtLeast,
+            target_days: 1,
+            name: String::new(),
+            question: String::new(),
+            notes: String::new(),
+            color: timeslay_core::habits::DEFAULT_COLOR,
+            kind: FrequencyKind::EveryDay,
+            per_day: "2".into(),
+            every_days: "2".into(),
+            per_week: "3".into(),
+            per_month: "10".into(),
+            in_times: "3".into(),
+            in_days: "7".into(),
+            weekdays: [true, false, false, false, false, false, false],
+            skip_days: false,
+            question_marks: false,
+            error: None,
+        }
+    }
+
+    fn from_habit(habit: &Habit) -> Self {
+        let mut form = Self::new();
+        form.id = Some(habit.id.clone());
+        form.habit_kind = habit.kind;
+        form.unit = habit.unit.clone();
+        form.target = timeslay_core::habits::format_amount(habit.target);
+        form.target_type = habit.target_type;
+        if habit.kind == Kind::Measurable {
+            form.target_days = habit.frequency.fraction().1;
+        }
+        form.name = habit.name.clone();
+        form.question = habit.question.clone();
+        form.notes = habit.notes.clone();
+        form.color = habit.color;
+        form.skip_days = habit.skip_days;
+        form.question_marks = habit.question_marks;
+        match habit.frequency {
+            Frequency::Interval { times, days } if times >= days => {}
+            Frequency::Interval { times: 1, days } => {
+                form.kind = FrequencyKind::EveryXDays;
+                form.every_days = days.to_string();
+            }
+            Frequency::Interval { times, days: 7 } => {
+                form.kind = FrequencyKind::TimesPerWeek;
+                form.per_week = times.to_string();
+            }
+            Frequency::Interval { times, days: 30 } => {
+                form.kind = FrequencyKind::TimesPerMonth;
+                form.per_month = times.to_string();
+            }
+            Frequency::Interval { times, days } => {
+                form.kind = FrequencyKind::TimesInDays;
+                form.in_times = times.to_string();
+                form.in_days = days.to_string();
+            }
+            Frequency::TimesPerDay { times } => {
+                form.kind = FrequencyKind::TimesPerDay;
+                form.per_day = times.to_string();
+            }
+            Frequency::Weekdays { days } => {
+                form.kind = FrequencyKind::Weekdays;
+                form.weekdays = days;
+            }
+        }
+        form
+    }
+
+    /// The goal the form describes.
+    pub fn frequency(&self) -> Result<Frequency, String> {
+        match self.habit_kind {
+            Kind::No => return Ok(Frequency::DAILY),
+            Kind::Measurable => {
+                return Ok(Frequency::Interval {
+                    times: 1,
+                    days: self.target_days,
+                });
+            }
+            Kind::Yes => {}
+        }
+        let number = |text: &str| {
+            text.trim()
+                .parse::<u32>()
+                .map_err(|_| "A frequency needs whole numbers".to_owned())
+        };
+        let frequency = match self.kind {
+            FrequencyKind::EveryDay => Frequency::DAILY,
+            FrequencyKind::TimesPerDay => Frequency::TimesPerDay {
+                times: number(&self.per_day)?,
+            },
+            FrequencyKind::EveryXDays => Frequency::Interval {
+                times: 1,
+                days: number(&self.every_days)?,
+            },
+            FrequencyKind::TimesPerWeek => Frequency::Interval {
+                times: number(&self.per_week)?,
+                days: 7,
+            },
+            FrequencyKind::TimesPerMonth => Frequency::Interval {
+                times: number(&self.per_month)?,
+                days: 30,
+            },
+            FrequencyKind::TimesInDays => Frequency::Interval {
+                times: number(&self.in_times)?,
+                days: number(&self.in_days)?,
+            },
+            FrequencyKind::Weekdays => Frequency::Weekdays {
+                days: self.weekdays,
+            },
+        };
+        frequency.validate()?;
+        Ok(frequency)
+    }
+}
+
+/// A change on the habit form.
+#[derive(Debug, Clone)]
+pub enum FormAction {
+    HabitKind(Kind),
+    Unit(String),
+    Target(String),
+    TargetType(TargetType),
+    TargetDays(u32),
+    Name(String),
+    Question(String),
+    Notes(String),
+    Color(u8),
+    Kind(FrequencyKind),
+    PerDay(String),
+    EveryDays(String),
+    PerWeek(String),
+    PerMonth(String),
+    InTimes(String),
+    InDays(String),
+    Weekday(usize),
+    SkipDays(bool),
+    QuestionMarks(bool),
+}
+
+/// A habit's row being pressed, which is a click until the pointer reaches
+/// another row, and a move in the manual order from then on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drag {
+    pub id: String,
+    pub moved: bool,
+}
+
+/// The dialog for one day: how many times it was done, or how much.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayDialog {
+    pub habit_id: String,
+    pub day: NaiveDate,
+    pub value: String,
+}
+
+/// The input in the day dialog.
+pub const DAY_FIELD: &str = "habit-day-value";
+
+/// A drop-down menu that is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Menu {
+    /// The list's sort and filter menu.
+    Filter,
+    /// The list's overflow menu.
+    List,
+    /// The open habit's overflow menu.
+    Habit,
+}
+
 /// What the Habits tab is holding.
 #[derive(Debug, Default)]
 pub struct Store {
-    pub habits: Vec<Habit>,
-    /// Representative of the habit group shown in the month view.
-    pub calendar_habit: Option<Habit>,
-    pub completing: std::collections::HashSet<String>,
-    /// The habit editor, when it is open.
-    pub draft: Option<Draft>,
+    /// Everything saved to disk.
+    pub library: Library,
+    /// Each habit's record worked out for display, as of `today`.
+    computed: HashMap<String, Computed>,
+    today: Option<NaiveDate>,
+    /// The file `library` is kept in. Unset in tests, and when the file exists
+    /// but cannot be read, so that it is not overwritten.
+    path: Option<PathBuf>,
+    /// The habit events on the calendar.
+    pub series: Vec<Series>,
+    /// Whether the events have been fetched at least once.
+    pub loaded: bool,
+    /// The habit open in the extended view.
+    pub selected: Option<String>,
+    /// The add and edit page, shown in place of the extended view.
+    pub form: Option<Form>,
+    pub menu: Option<Menu>,
+    pub day_dialog: Option<DayDialog>,
+    pub dragging: Option<Drag>,
+    /// The row last pressed. It outlives `dragging`, because the global release
+    /// that ends a drag can arrive before the row's own release does.
+    pressed: Option<String>,
+    /// The habit whose events the month view is filtered to.
+    pub calendar_habit: Option<String>,
+    pub completing: HashSet<String>,
     /// A Calendar write is in flight.
     pub busy: bool,
     pub error: Option<String>,
     /// A deletion waiting for confirmation, by habit id.
     pub confirm_delete: Option<String>,
-    /// Whether the list has been fetched at least once.
-    pub loaded: bool,
-}
-
-/// Group separate series and one-off records with the same habit name.
-fn same_habit(left: &Habit, right: &Habit) -> bool {
-    left.calendar_id == right.calendar_id
-        && left.title.trim().to_lowercase() == right.title.trim().to_lowercase()
+    /// Whether confirming also deletes the habit's calendar events.
+    pub delete_events: bool,
 }
 
 impl Store {
-    pub fn unique_habits(&self) -> Vec<&Habit> {
-        let mut unique: Vec<&Habit> = Vec::new();
-        for habit in &self.habits {
-            if !unique.iter().any(|other| same_habit(habit, other)) {
-                unique.push(habit);
+    /// Loads the saved habits. A file that exists but cannot be read is left
+    /// alone rather than replaced by an empty list on the next save.
+    pub fn keep_in(&mut self, path: Option<PathBuf>) {
+        let Some(path) = path else { return };
+        match std::fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(library) => {
+                    self.library = library;
+                    self.path = Some(path);
+                }
+                Err(error) => {
+                    log::warn!("{} could not be parsed: {error}", path.display());
+                    self.error = Some(format!(
+                        "{} could not be read, so changes to habits will not be saved",
+                        path.display()
+                    ));
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.path = Some(path);
+            }
+            Err(error) => {
+                log::warn!("{} could not be read: {error}", path.display());
+                self.error = Some(format!(
+                    "{} could not be read, so changes to habits will not be saved",
+                    path.display()
+                ));
             }
         }
-        unique
+        self.recompute();
+    }
+
+    /// Whether changes reach the disk.
+    pub fn persists(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Today, as far as the computed records go.
+    pub fn today(&self) -> NaiveDate {
+        self.today
+            .unwrap_or_else(|| crate::clock::now().date_naive())
+    }
+
+    /// Works every record out again.
+    pub fn recompute(&mut self) {
+        let today = crate::clock::now().date_naive();
+        self.today = Some(today);
+        self.computed = self
+            .library
+            .habits
+            .iter()
+            .map(|habit| (habit.id.clone(), habit.compute(today)))
+            .collect();
+    }
+
+    fn recompute_one(&mut self, id: &str) {
+        let today = self.today();
+        if let Some(habit) = self.library.habit(id) {
+            self.computed.insert(id.to_owned(), habit.compute(today));
+        }
+    }
+
+    /// Scores change at midnight, whether or not anything was clicked.
+    pub fn roll_over(&mut self) {
+        if self.today != Some(crate::clock::now().date_naive()) {
+            self.recompute();
+        }
+    }
+
+    pub fn computed(&self, id: &str) -> Option<&Computed> {
+        self.computed.get(id)
+    }
+
+    /// The habits to list, in the chosen order.
+    pub fn visible(&self) -> Vec<&Habit> {
+        self.library
+            .visible(&|id| self.computed.get(id), self.today())
+    }
+
+    pub fn selected_habit(&self) -> Option<&Habit> {
+        self.library.habit(self.selected.as_deref()?)
+    }
+
+    /// The habit a series counts towards.
+    fn habit_of_series<'a>(&'a self, series: &'a Series) -> Option<&'a str> {
+        series
+            .habit_id
+            .as_deref()
+            .or_else(|| {
+                self.library
+                    .adopted
+                    .get(&series.id)
+                    .map(String::as_str)
+                    .filter(|id| !id.is_empty())
+            })
+            .filter(|id| self.library.habit(id).is_some())
+    }
+
+    /// The habit an occurrence on the calendar counts towards. Its series has
+    /// the final say, because a completed occurrence keeps its own copy of the
+    /// properties from when it was completed.
+    pub fn habit_of<'a>(&'a self, event: &'a calendar::Event) -> Option<&'a str> {
+        let series_id = event
+            .details
+            .recurring_event_id
+            .as_deref()
+            .unwrap_or(&event.id);
+        if let Some(series) = self.series.iter().find(|series| series.id == series_id) {
+            return self.habit_of_series(series);
+        }
+        event
+            .details
+            .habit_id
+            .as_deref()
+            .or_else(|| {
+                self.library
+                    .adopted
+                    .get(series_id)
+                    .map(String::as_str)
+                    .filter(|id| !id.is_empty())
+            })
+            .filter(|id| self.library.habit(id).is_some())
+    }
+
+    /// The events connected to a habit.
+    pub fn events_of(&self, habit_id: &str) -> Vec<&Series> {
+        self.series
+            .iter()
+            .filter(|series| self.habit_of_series(series) == Some(habit_id))
+            .collect()
+    }
+
+    /// Events not connected to any habit.
+    pub fn unlinked_events(&self) -> Vec<&Series> {
+        self.series
+            .iter()
+            .filter(|series| self.habit_of_series(series).is_none())
+            .collect()
+    }
+
+    /// The name of the habit the month view is filtered to.
+    pub fn calendar_habit_name(&self) -> Option<&str> {
+        let id = self.calendar_habit.as_deref()?;
+        self.library.habit(id).map(|habit| habit.name.as_str())
     }
 
     pub fn matches_calendar_habit(&self, event: &calendar::Event) -> bool {
-        let Some(habit) = &self.calendar_habit else {
+        let Some(id) = self.calendar_habit.as_deref() else {
             return true;
         };
-        event.details.habit
-            && event.calendar_id == habit.calendar_id
-            && (event.id == habit.id
-                || event.details.recurring_event_id.as_deref() == Some(habit.id.as_str())
-                || event.title.trim().to_lowercase() == habit.title.trim().to_lowercase())
+        event.details.habit && self.habit_of(event) == Some(id)
     }
+
+    /// Gives each event the habit it belongs to. An event already pointing at
+    /// a habit this machine has never seen brings that habit back under the
+    /// same id, while a new event gets one by name, plus its past completions.
+    /// Returns whether anything changed.
+    fn adopt(&mut self, listing: &HabitListing) -> bool {
+        let mut changed = false;
+        for series in &self.series {
+            if let Some(id) = &series.habit_id {
+                if self.library.habit(id).is_none() {
+                    let mut habit = Habit::new(id.clone(), series.title.clone());
+                    habit.frequency = series.frequency();
+                    self.library.habits.push(habit);
+                    changed = true;
+                }
+                continue;
+            }
+            if self.library.adopted.contains_key(&series.id) {
+                continue;
+            }
+            let id = match self.library.named(&series.title) {
+                Some(habit) => habit.id.clone(),
+                None => {
+                    let id = new_id();
+                    let mut habit = Habit::new(id.clone(), series.title.clone());
+                    habit.frequency = series.frequency();
+                    self.library.habits.push(habit);
+                    id
+                }
+            };
+            if let Some(habit) = self.library.habit_mut(&id) {
+                for completion in &listing.completions {
+                    if completion.series_id == series.id {
+                        habit.add_rep(completion.day);
+                    }
+                }
+            }
+            self.library.adopted.insert(series.id.clone(), id);
+            changed = true;
+        }
+        changed
+    }
+}
+
+/// The habits file: `$XDG_STATE_HOME/timeslay/habits.json`.
+pub fn path() -> Option<PathBuf> {
+    Some(
+        directories::BaseDirs::new()?
+            .state_dir()?
+            .join("timeslay")
+            .join("habits.json"),
+    )
+}
+
+/// Writes happen on worker threads, so two quick ones must not share the
+/// temporary file.
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn write(path: &std::path::Path, library: &Library) -> std::io::Result<()> {
+    let _guard = WRITING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let bytes = serde_json::to_vec_pretty(library)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    crate::fsutil::write_atomic(path, &bytes, crate::fsutil::Kind::Private)
+}
+
+#[cfg(test)]
+pub(crate) fn write_for_test(state: &State, path: &std::path::Path) {
+    write(path, &state.habits.library).unwrap();
+}
+
+fn persist(state: &State) -> Task<Message> {
+    let Some(path) = state.habits.path.clone() else {
+        return Task::none();
+    };
+    let library = state.habits.library.clone();
+    blocking::run(move || write(&path, &library).map_err(|error| error.to_string()))
+        .map(|result| Message::Habits(Action::Persisted(result)))
+}
+
+fn new_id() -> String {
+    let mut bytes = [0_u8; 8];
+    if getrandom::fill(&mut bytes).is_err() {
+        // Only uniqueness among this person's habits matters.
+        let now = crate::clock::now().timestamp_micros();
+        bytes = now.to_le_bytes();
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 // Messages only live until the next update, so a large variant costs nothing lasting.
@@ -282,55 +774,355 @@ impl Store {
 #[derive(Debug, Clone)]
 pub enum Action {
     Refresh,
+    Loaded(Result<HabitListing, String>),
+    Persisted(Result<(), String>),
+
+    // The list.
+    /// A left click on a day. A measurable habit asks for a number.
+    Toggle(String, NaiveDate),
+    /// A right click on a day: say how many times, or how much.
+    OpenDay(String, NaiveDate),
+    DayValue(String),
+    /// Records the dialog's number.
+    SaveDay,
+    /// Records the dialog's day as skipped.
+    SkipDay,
+    /// Clears what the dialog's day has recorded.
+    ClearDay,
+    CloseDay,
+    Menu(Menu),
+    CloseMenu,
+    Sort(SortKey),
+    HideArchived(bool),
+    HideCompleted(bool),
+    RowPressed(String),
+    RowEntered(String),
+    RowReleased(String),
+    /// The button was let go somewhere that is not a row.
+    DragEnded,
+
+    // The extended view.
+    Open(String),
+    Close,
+    ScoreBucket(Bucket),
+    HistoryBucket(Bucket),
+
+    // The add and edit page.
+    New,
+    EditHabit(String),
+    CancelEdit,
+    Form(FormAction),
+    SaveForm,
+
+    // Looking after a habit.
+    ToggleArchived(String),
+    DeleteRequested(String),
+    DeleteEventsToggled(bool),
+    DeleteCancelled,
+    DeleteConfirmed(String),
+    Deleted(String, Result<(), String>),
+    /// Exports one habit, or all of them.
+    Export(Option<String>),
+    ExportFinished(Result<bool, String>),
+
+    // The calendar events connected to a habit.
+    AddEvent(String),
+    EditEvent(String),
+    LinkEvent(String, String),
+    UnlinkEvent(String),
+    Linked(String, Option<String>, Result<(), String>),
+    /// The habit picked for the event open in the shared editor.
+    EventHabitChosen(Option<String>),
     ShowOnCalendar(String),
     CloseCalendar,
     ToggleCompleted(String),
     CompletionSaved(String, Result<calendar::Event, String>),
-    Loaded(Result<Vec<HabitEvent>, String>),
-    New,
-    Edit(String),
-    CancelEdit,
-    Title(String),
-    Notes(String),
-    Date(String),
-    Start(String),
-    End(String),
-    Repeat(RepeatMode),
-    Interval(String),
-    ToggleWeekday(usize),
-    MonthlyMode(MonthlyMode),
-    MonthlyDay(String),
-    MonthlyNth(i8),
-    MonthlyWeekday(Weekday),
-    Ends(EndKind),
-    Until(String),
-    Count(String),
-    SimpleRepeat,
-    /// A change made in the shared repeat controls.
-    Recurrence(crate::recurrence::Action),
-    Color(Option<Color>),
-    Save,
+    /// An occurrence brought in line with a click on the habit list.
+    OccurrenceSynced(String, Result<calendar::Event, String>),
     Saved(Result<HabitEvent, String>),
-    DeleteRequested(String),
-    DeleteCancelled,
-    DeleteConfirmed(String),
-    Deleted(Result<String, String>),
 }
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
         Action::Refresh => refresh(state),
-        Action::ShowOnCalendar(id) => {
-            let Some(habit) = state
+        Action::Loaded(result) => {
+            state.habits.busy = false;
+            state.habits.loaded = true;
+            match result {
+                Ok(listing) => {
+                    state.habits.series = listing
+                        .series
+                        .iter()
+                        .cloned()
+                        .map(Series::from_event)
+                        .collect();
+                    sort_series(&mut state.habits.series);
+                    state.habits.error = None;
+                    if state.habits.adopt(&listing) {
+                        state.habits.recompute();
+                        return persist(state);
+                    }
+                }
+                Err(error) => state.habits.error = Some(error),
+            }
+            Task::none()
+        }
+        Action::Persisted(result) => {
+            if let Err(error) = result {
+                log::warn!("could not save habits: {error}");
+                state.habits.error = Some(format!("Could not save habits: {error}"));
+            }
+            Task::none()
+        }
+
+        Action::Toggle(id, day) => {
+            if state
                 .habits
-                .habits
-                .iter()
-                .find(|habit| habit.id == id)
-                .cloned()
-            else {
+                .library
+                .habit(&id)
+                .is_some_and(Habit::asks_for_amount)
+            {
+                return open_day(state, id, day);
+            }
+            toggle(state, &id, day)
+        }
+        Action::OpenDay(id, day) => open_day(state, id, day),
+        Action::DayValue(value) => {
+            if let Some(dialog) = &mut state.habits.day_dialog {
+                dialog.value = value;
+            }
+            Task::none()
+        }
+        Action::SaveDay => save_day(state),
+        Action::SkipDay => change_day(state, |habit, day| {
+            habit.marks.insert(day, Mark::Skip);
+        }),
+        Action::ClearDay => change_day(state, |habit, day| {
+            habit.marks.remove(&day);
+        }),
+        Action::CloseDay => {
+            state.habits.day_dialog = None;
+            Task::none()
+        }
+        Action::Menu(menu) => {
+            state.habits.menu = (state.habits.menu != Some(menu)).then_some(menu);
+            Task::none()
+        }
+        Action::CloseMenu => {
+            state.habits.menu = None;
+            Task::none()
+        }
+        Action::Sort(key) => {
+            state.habits.library.choose_sort(key);
+            state.habits.menu = None;
+            persist(state)
+        }
+        Action::HideArchived(hide) => {
+            state.habits.library.hide_archived = hide;
+            persist(state)
+        }
+        Action::HideCompleted(hide) => {
+            state.habits.library.hide_completed = hide;
+            persist(state)
+        }
+        Action::RowPressed(id) => {
+            state.habits.pressed = Some(id.clone());
+            state.habits.dragging = Some(Drag { id, moved: false });
+            Task::none()
+        }
+        Action::RowEntered(over) => {
+            if state.habits.library.sort != SortKey::Manual {
+                return Task::none();
+            }
+            let Some(drag) = &mut state.habits.dragging else {
                 return Task::none();
             };
-            state.habits.calendar_habit = Some(habit);
+            if drag.id != over {
+                drag.moved = true;
+                let id = drag.id.clone();
+                state.habits.library.move_habit(&id, &over);
+            }
+            Task::none()
+        }
+        Action::RowReleased(over) => {
+            let moved = state.habits.dragging.take().is_some_and(|drag| drag.moved);
+            let pressed = state.habits.pressed.take();
+            if moved {
+                persist(state)
+            } else if pressed.as_deref() == Some(over.as_str()) {
+                open(state, over)
+            } else {
+                Task::none()
+            }
+        }
+        Action::DragEnded => match state.habits.dragging.take() {
+            Some(drag) if drag.moved => {
+                state.habits.pressed = None;
+                persist(state)
+            }
+            _ => Task::none(),
+        },
+
+        Action::Open(id) => open(state, id),
+        Action::Close => {
+            state.habits.selected = None;
+            state.habits.form = None;
+            state.habits.menu = None;
+            Task::none()
+        }
+        Action::ScoreBucket(bucket) => {
+            state.habits.library.score_bucket = bucket;
+            persist(state)
+        }
+        Action::HistoryBucket(bucket) => {
+            state.habits.library.history_bucket = bucket;
+            persist(state)
+        }
+
+        Action::New => {
+            state.habits.menu = None;
+            state.habits.confirm_delete = None;
+            state.habits.selected = None;
+            state.habits.form = Some(Form::new());
+            iced::widget::operation::focus(iced::widget::Id::new(NAME_FIELD))
+        }
+        Action::EditHabit(id) => {
+            state.habits.menu = None;
+            let Some(habit) = state.habits.library.habit(&id) else {
+                return Task::none();
+            };
+            state.habits.form = Some(Form::from_habit(habit));
+            Task::none()
+        }
+        Action::CancelEdit => {
+            state.habits.form = None;
+            Task::none()
+        }
+        Action::Form(action) => {
+            if let Some(form) = &mut state.habits.form {
+                edit_form(form, action);
+            }
+            Task::none()
+        }
+        Action::SaveForm => save_form(state),
+
+        Action::ToggleArchived(id) => {
+            state.habits.menu = None;
+            if let Some(habit) = state.habits.library.habit_mut(&id) {
+                habit.archived = !habit.archived;
+            }
+            persist(state)
+        }
+        Action::DeleteRequested(id) => {
+            state.habits.menu = None;
+            state.habits.delete_events = false;
+            state.habits.confirm_delete = Some(id);
+            Task::none()
+        }
+        Action::DeleteEventsToggled(delete) => {
+            state.habits.delete_events = delete;
+            Task::none()
+        }
+        Action::DeleteCancelled => {
+            state.habits.confirm_delete = None;
+            Task::none()
+        }
+        Action::DeleteConfirmed(id) => delete(state, id),
+        Action::Deleted(id, result) => {
+            state.habits.busy = false;
+            state.habits.confirm_delete = None;
+            if let Err(error) = result {
+                state.habits.error = Some(error);
+                return refresh(state);
+            }
+            let events: Vec<String> = state
+                .habits
+                .events_of(&id)
+                .iter()
+                .map(|series| series.id.clone())
+                .collect();
+            let sync = !events.is_empty();
+            for series_id in events {
+                state
+                    .habits
+                    .library
+                    .adopted
+                    .insert(series_id, String::new());
+            }
+            for series in &mut state.habits.series {
+                if series.habit_id.as_deref() == Some(id.as_str()) {
+                    series.habit_id = None;
+                }
+            }
+            state.habits.library.habits.retain(|habit| habit.id != id);
+            state.habits.computed.remove(&id);
+            if state.habits.selected.as_deref() == Some(id.as_str()) {
+                state.habits.selected = None;
+            }
+            state.habits.error = None;
+            let saved = persist(state);
+            if sync {
+                Task::batch([saved, refresh_after_event_change()])
+            } else {
+                saved
+            }
+        }
+        Action::Export(id) => {
+            state.habits.menu = None;
+            export(state, id)
+        }
+        Action::ExportFinished(result) => {
+            if let Err(error) = result {
+                state.habits.error = Some(format!("Could not export: {error}"));
+            }
+            Task::none()
+        }
+
+        Action::AddEvent(habit_id) => {
+            let Some(habit) = state.habits.library.habit(&habit_id) else {
+                return Task::none();
+            };
+            let day = crate::clock::now().date_naive();
+            let color_id = colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
+            let mut draft = Draft::new(day, color_id);
+            draft.title = habit.name.clone();
+            let task = open_new(state, draft);
+            if let Some(event) = &mut state.calendar.detail_event {
+                event.details.habit_id = Some(habit_id);
+            }
+            task
+        }
+        Action::EditEvent(id) => edit_event(state, id),
+        Action::LinkEvent(series_id, habit_id) => link(state, series_id, Some(habit_id)),
+        Action::UnlinkEvent(series_id) => link(state, series_id, None),
+        Action::Linked(series_id, habit_id, result) => {
+            state.habits.busy = false;
+            if let Err(error) = result {
+                state.habits.error = Some(error);
+                return Task::none();
+            }
+            state.habits.error = None;
+            if let Some(series) = state
+                .habits
+                .series
+                .iter_mut()
+                .find(|series| series.id == series_id)
+            {
+                series.habit_id = habit_id.clone();
+            }
+            // Remembered as well, so an event let go of is not claimed again.
+            state
+                .habits
+                .library
+                .adopted
+                .insert(series_id, habit_id.unwrap_or_default());
+            Task::batch([persist(state), refresh_after_event_change()])
+        }
+        Action::EventHabitChosen(habit_id) => event_habit_chosen(state, habit_id),
+        Action::ShowOnCalendar(id) => {
+            // The month takes the window, so the page gives way until it closes.
+            state.habits.selected = None;
+            state.habits.calendar_habit = Some(id);
             state.calendar.open_event = None;
             state.calendar.detail_event = None;
             state.calendar.edit_draft = None;
@@ -340,7 +1132,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             )
         }
         Action::CloseCalendar => {
-            state.habits.calendar_habit = None;
+            state.habits.selected = state.habits.calendar_habit.take();
             crate::app::update(
                 state,
                 Message::Calendar(CalendarMessage::CalendarModeSelected(false)),
@@ -350,25 +1142,27 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if state.habits.completing.contains(&id) {
                 return Task::none();
             }
-            let Some(mut event) = state.calendar.event(&id).cloned() else {
+            let Some(event) = state.calendar.event(&id).cloned() else {
                 return Task::none();
             };
             if !event.details.habit {
                 return Task::none();
             }
-            event.completed = !event.completed;
-            event.details.habit_completed_at = event.completed.then(crate::clock::now);
-            state.habits.completing.insert(id.clone());
-            state.habits.error = None;
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            blocking::run(move || {
-                calendar::set_habit_completed(&client_id, &client_secret, &event)?;
-                Ok(event)
-            })
-            .map(move |result| Message::Habits(Action::CompletionSaved(id.clone(), result)))
+            let completed = !event.completed;
+            write_occurrence(state, event, completed, Action::CompletionSaved)
         }
         Action::CompletionSaved(id, result) => {
+            state.habits.completing.remove(&id);
+            match result {
+                Ok(event) => {
+                    state.calendar.replace_habit_occurrence(&event);
+                    return record_occurrence(state, &event);
+                }
+                Err(error) => state.habits.error = Some(error),
+            }
+            Task::none()
+        }
+        Action::OccurrenceSynced(id, result) => {
             state.habits.completing.remove(&id);
             match result {
                 Ok(event) => state.calendar.replace_habit_occurrence(&event),
@@ -376,215 +1170,517 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             Task::none()
         }
+        Action::Saved(result) => saved_event(state, result),
+    }
+}
 
-        Action::Loaded(result) => {
-            state.habits.busy = false;
-            state.habits.loaded = true;
-            match result {
-                Ok(habits) => {
-                    state.habits.habits = habits.into_iter().map(Habit::from_event).collect();
-                    sort(&mut state.habits.habits);
-                    state.habits.error = None;
-                }
-                Err(error) => state.habits.error = Some(error),
+/// The text input that holds a habit's name on the form.
+pub const NAME_FIELD: &str = "habit-name";
+
+fn open(state: &mut State, id: String) -> Task<Message> {
+    state.habits.selected = Some(id);
+    state.habits.form = None;
+    state.habits.menu = None;
+    state.calendar.open_event = None;
+    state.calendar.detail_event = None;
+    state.calendar.edit_draft = None;
+    Task::none()
+}
+
+fn open_day(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
+    let Some(habit) = state.habits.library.habit(&id) else {
+        return Task::none();
+    };
+    let value = match (habit.kind, habit.marks.get(&day)) {
+        (Kind::Measurable, Some(Mark::Amount(amount))) => {
+            timeslay_core::habits::format_amount(*amount as f64 / 1000.0)
+        }
+        (Kind::Measurable, _) => String::new(),
+        _ => habit.times_on(day).to_string(),
+    };
+    state.habits.day_dialog = Some(DayDialog {
+        habit_id: id,
+        day,
+        value,
+    });
+    iced::widget::operation::focus(iced::widget::Id::new(DAY_FIELD))
+}
+
+fn save_day(state: &mut State) -> Task<Message> {
+    let Some(dialog) = &state.habits.day_dialog else {
+        return Task::none();
+    };
+    let Ok(value) = dialog.value.trim().parse::<f64>() else {
+        return Task::none();
+    };
+    if value < 0.0 || !value.is_finite() {
+        return Task::none();
+    }
+    change_day(state, |habit, day| habit.set_day(day, value))
+}
+
+fn change_day(state: &mut State, change: impl FnOnce(&mut Habit, NaiveDate)) -> Task<Message> {
+    let Some(dialog) = state.habits.day_dialog.take() else {
+        return Task::none();
+    };
+    let Some(habit) = state.habits.library.habit_mut(&dialog.habit_id) else {
+        return Task::none();
+    };
+    change(habit, dialog.day);
+    state.habits.recompute_one(&dialog.habit_id);
+    Task::batch([
+        persist(state),
+        sync_occurrences(state, &dialog.habit_id, dialog.day),
+    ])
+}
+
+/// One step through the click cycle, keeping calendar occurrences in step.
+fn toggle(state: &mut State, id: &str, day: NaiveDate) -> Task<Message> {
+    let Some(status) = state.habits.computed(id).map(|c| c.status(day)) else {
+        return Task::none();
+    };
+    let Some(habit) = state.habits.library.habit_mut(id) else {
+        return Task::none();
+    };
+    habit.toggle(day, status);
+    state.habits.recompute_one(id);
+    Task::batch([persist(state), sync_occurrences(state, id, day)])
+}
+
+/// Completes or reopens the occurrences loaded for `day` to match the habit, so
+/// a click on the list also shows on the calendar. Local data stays the record:
+/// days that are not loaded, or a failed write, leave only the habit changed.
+fn sync_occurrences(state: &mut State, id: &str, day: NaiveDate) -> Task<Message> {
+    let Some(habit) = state.habits.library.habit(id) else {
+        return Task::none();
+    };
+    // Only a "Yes" habit is done by completing an event.
+    if habit.kind != Kind::Yes {
+        return Task::none();
+    }
+    let times = habit.times_on(day) as usize;
+    let wanted = match state.habits.computed(id).map(|c| c.status(day)) {
+        Some(Status::Yes | Status::Partial(_)) => times,
+        _ => 0,
+    };
+    let occurrences: Vec<calendar::Event> = state
+        .calendar
+        .events_on(day)
+        .iter()
+        .filter(|event| {
+            event.details.habit
+                && state.habits.habit_of(event) == Some(id)
+                && !state.habits.completing.contains(&event.id)
+        })
+        .cloned()
+        .collect();
+    let done = occurrences.iter().filter(|event| event.completed).count();
+    let mut writes = Vec::new();
+    if done < wanted {
+        for event in occurrences
+            .iter()
+            .filter(|event| !event.completed)
+            .take(wanted - done)
+        {
+            writes.push(write_occurrence(
+                state,
+                event.clone(),
+                true,
+                Action::OccurrenceSynced,
+            ));
+        }
+    } else {
+        for event in occurrences
+            .iter()
+            .rev()
+            .filter(|event| event.completed)
+            .take(done - wanted)
+        {
+            writes.push(write_occurrence(
+                state,
+                event.clone(),
+                false,
+                Action::OccurrenceSynced,
+            ));
+        }
+    }
+    Task::batch(writes)
+}
+
+fn write_occurrence(
+    state: &mut State,
+    mut event: calendar::Event,
+    completed: bool,
+    done: fn(String, Result<calendar::Event, String>) -> Action,
+) -> Task<Message> {
+    let id = event.id.clone();
+    event.completed = completed;
+    event.details.habit_completed_at = completed.then(crate::clock::now);
+    state.habits.completing.insert(id.clone());
+    state.habits.error = None;
+    let client_id = state.config.calendar.client_id.clone();
+    let client_secret = state.config.calendar.client_secret.clone();
+    blocking::run(move || {
+        calendar::set_habit_completed(&client_id, &client_secret, &event)?;
+        Ok(event)
+    })
+    .map(move |result| Message::Habits(done(id.clone(), result)))
+}
+
+/// Completing an occurrence on the calendar counts as doing the habit that day.
+fn record_occurrence(state: &mut State, event: &calendar::Event) -> Task<Message> {
+    let Some(id) = state.habits.habit_of(event).map(str::to_owned) else {
+        return Task::none();
+    };
+    let day = event.start.date_naive();
+    let Some(habit) = state.habits.library.habit_mut(&id) else {
+        return Task::none();
+    };
+    if habit.kind != Kind::Yes {
+        return Task::none();
+    }
+    if event.completed {
+        habit.add_rep(day);
+    } else {
+        habit.remove_rep(day);
+    }
+    state.habits.recompute_one(&id);
+    persist(state)
+}
+
+fn edit_form(form: &mut Form, action: FormAction) {
+    form.error = None;
+    match action {
+        FormAction::HabitKind(value) => {
+            // A habit that exists keeps its kind.
+            if form.id.is_none() {
+                form.habit_kind = value;
             }
-            Task::none()
         }
-
-        Action::New => {
-            state.habits.confirm_delete = None;
-            let day = crate::clock::now().date_naive();
-            let color_id = colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
-            open_new(state, Draft::new(day, color_id))
+        FormAction::Unit(value) => form.unit = value,
+        FormAction::Target(value) => form.target = value,
+        FormAction::TargetType(value) => form.target_type = value,
+        FormAction::TargetDays(value) => form.target_days = value,
+        FormAction::Name(value) => form.name = value,
+        FormAction::Question(value) => form.question = value,
+        FormAction::Notes(value) => form.notes = value,
+        FormAction::Color(value) => form.color = value,
+        FormAction::Kind(value) => form.kind = value,
+        FormAction::PerDay(value) => {
+            form.kind = FrequencyKind::TimesPerDay;
+            form.per_day = value;
         }
+        FormAction::EveryDays(value) => {
+            form.kind = FrequencyKind::EveryXDays;
+            form.every_days = value;
+        }
+        FormAction::PerWeek(value) => {
+            form.kind = FrequencyKind::TimesPerWeek;
+            form.per_week = value;
+        }
+        FormAction::PerMonth(value) => {
+            form.kind = FrequencyKind::TimesPerMonth;
+            form.per_month = value;
+        }
+        FormAction::InTimes(value) => {
+            form.kind = FrequencyKind::TimesInDays;
+            form.in_times = value;
+        }
+        FormAction::InDays(value) => {
+            form.kind = FrequencyKind::TimesInDays;
+            form.in_days = value;
+        }
+        FormAction::Weekday(index) => {
+            form.kind = FrequencyKind::Weekdays;
+            if let Some(day) = form.weekdays.get_mut(index) {
+                *day = !*day;
+            }
+        }
+        FormAction::SkipDays(value) => form.skip_days = value,
+        FormAction::QuestionMarks(value) => form.question_marks = value,
+    }
+}
 
-        Action::Edit(id) => {
-            let Some(habit) = state.habits.habits.iter().find(|habit| habit.id == id) else {
-                return Task::none();
-            };
-            let event = calendar::Event {
-                id: habit.id.clone(),
-                calendar_id: habit.calendar_id.clone(),
-                title: habit.title.clone(),
-                start: habit.start,
-                end: habit.end,
-                all_day: false,
-                color: habit.color(&state.config.calendar),
-                completed: false,
-                details: calendar::Details {
-                    habit: true,
-                    description: habit.notes.clone(),
-                    recurrence: habit.recurrence.lines().to_vec(),
-                    // Load the full master, including projects and location,
-                    // through the same path as a calendar occurrence.
-                    recurring_event_id: Some(habit.id.clone()),
-                    color_id: habit.color_id.clone(),
-                    ..Default::default()
-                },
-            };
-            state.habits.draft = None;
-            state.habits.confirm_delete = None;
+fn save_form(state: &mut State) -> Task<Message> {
+    let Some(form) = state.habits.form.clone() else {
+        return Task::none();
+    };
+    let name = form.name.trim().to_owned();
+    let target = form.target.trim().parse::<f64>().ok().filter(|t| *t >= 0.0);
+    let result = if name.is_empty() {
+        Err("Give the habit a name".to_owned())
+    } else if form.habit_kind == Kind::Measurable && target.is_none() {
+        Err("The target has to be a number".to_owned())
+    } else {
+        form.frequency()
+    };
+    let frequency = match result {
+        Ok(frequency) => frequency,
+        Err(error) => {
+            if let Some(form) = &mut state.habits.form {
+                form.error = Some(error);
+            }
+            return Task::none();
+        }
+    };
+    let id = form.id.clone().unwrap_or_else(new_id);
+    let today = state.habits.today();
+    if state.habits.library.habit(&id).is_none() {
+        let mut habit = Habit::new(id.clone(), name.clone());
+        habit.kind = form.habit_kind;
+        habit.created = Some(today);
+        state.habits.library.habits.push(habit);
+    }
+    if let Some(habit) = state.habits.library.habit_mut(&id) {
+        habit.unit = form.unit.trim().to_owned();
+        habit.target = target.unwrap_or(0.0);
+        habit.target_type = form.target_type;
+        habit.name = name;
+        habit.question = form.question.trim().to_owned();
+        habit.notes = form.notes.trim().to_owned();
+        habit.color = form.color;
+        habit.frequency = frequency;
+        habit.skip_days = form.skip_days;
+        habit.question_marks = form.question_marks;
+    }
+    state.habits.recompute_one(&id);
+    state.habits.form = None;
+    state.habits.selected = Some(id);
+    persist(state)
+}
+
+fn delete(state: &mut State, id: String) -> Task<Message> {
+    let events: Vec<(String, String)> = state
+        .habits
+        .events_of(&id)
+        .iter()
+        .map(|series| (series.calendar_id.clone(), series.id.clone()))
+        .collect();
+    if events.is_empty() {
+        return Task::done(Message::Habits(Action::Deleted(id, Ok(()))));
+    }
+    let delete_events = state.habits.delete_events;
+    let client_id = state.config.calendar.client_id.clone();
+    let client_secret = state.config.calendar.client_secret.clone();
+    state.habits.busy = true;
+    state.habits.error = None;
+    let result_id = id.clone();
+    blocking::run(move || {
+        for (calendar_id, event_id) in &events {
+            if delete_events {
+                calendar::delete_habit(&client_id, &client_secret, calendar_id, event_id)?;
+            } else {
+                // A kept event must not bring the habit back on the next load.
+                calendar::link_habit_event(
+                    &client_id,
+                    &client_secret,
+                    calendar_id,
+                    event_id,
+                    None,
+                )?;
+            }
+        }
+        Ok(())
+    })
+    .map(move |result| Message::Habits(Action::Deleted(result_id.clone(), result)))
+}
+
+fn export(state: &State, id: Option<String>) -> Task<Message> {
+    let library = &state.habits.library;
+    let habits: Vec<Habit> = match &id {
+        Some(id) => library.habit(id).cloned().into_iter().collect(),
+        None => library.habits.clone(),
+    };
+    let today = state.habits.today();
+    let name = match &habits[..] {
+        [habit] if id.is_some() => format!("{} {today}.zip", habit.name.replace('/', "-")),
+        _ => format!("TimeSlay Habits {today}.zip"),
+    };
+    blocking::run(move || {
+        let Some(file) = rfd::FileDialog::new()
+            .set_title("Export habits")
+            .set_file_name(&name)
+            .add_filter("ZIP archive", &["zip"])
+            .save_file()
+        else {
+            return Ok(false);
+        };
+        let habits: Vec<&Habit> = habits.iter().collect();
+        let bytes = timeslay_core::habits::export_archive(&habits, today);
+        std::fs::write(file, bytes)
+            .map(|()| true)
+            .map_err(|error| error.to_string())
+    })
+    .map(|result| Message::Habits(Action::ExportFinished(result)))
+}
+
+fn link(state: &mut State, series_id: String, habit_id: Option<String>) -> Task<Message> {
+    let Some(series) = state
+        .habits
+        .series
+        .iter()
+        .find(|series| series.id == series_id)
+    else {
+        return Task::none();
+    };
+    let calendar_id = series.calendar_id.clone();
+    write_link(state, calendar_id, series_id, habit_id)
+}
+
+fn write_link(
+    state: &mut State,
+    calendar_id: String,
+    series_id: String,
+    habit_id: Option<String>,
+) -> Task<Message> {
+    let client_id = state.config.calendar.client_id.clone();
+    let client_secret = state.config.calendar.client_secret.clone();
+    state.habits.busy = true;
+    state.habits.error = None;
+    let event_id = series_id.clone();
+    let link = habit_id.clone();
+    blocking::run(move || {
+        calendar::link_habit_event(
+            &client_id,
+            &client_secret,
+            &calendar_id,
+            &event_id,
+            link.as_deref(),
+        )
+    })
+    .map(move |result| Message::Habits(Action::Linked(series_id.clone(), habit_id.clone(), result)))
+}
+
+/// The grids hold occurrences of these events, and the list holds the masters.
+fn refresh_after_event_change() -> Task<Message> {
+    Task::batch([
+        Task::done(Message::Habits(Action::Refresh)),
+        Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested)),
+    ])
+}
+
+/// The habit picker in the shared event editor. An event being created keeps
+/// the choice until it is saved; one that exists is changed straight away, on
+/// its whole series.
+fn event_habit_chosen(state: &mut State, habit_id: Option<String>) -> Task<Message> {
+    if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
+        if let Some(event) = &mut state.calendar.detail_event {
+            event.details.habit_id = habit_id;
+        }
+        return Task::none();
+    }
+    let Some(event) = state
+        .calendar
+        .open_event
+        .as_deref()
+        .and_then(|id| state.calendar.event(id))
+    else {
+        return Task::none();
+    };
+    let series_id = event
+        .details
+        .recurring_event_id
+        .clone()
+        .unwrap_or_else(|| event.id.clone());
+    let calendar_id = event.calendar_id.clone();
+    write_link(state, calendar_id, series_id, habit_id)
+}
+
+/// Opens a habit event in the shared editor.
+fn edit_event(state: &mut State, id: String) -> Task<Message> {
+    let Some(series) = state.habits.series.iter().find(|series| series.id == id) else {
+        return Task::none();
+    };
+    let event = calendar::Event {
+        id: series.id.clone(),
+        calendar_id: series.calendar_id.clone(),
+        title: series.title.clone(),
+        start: series.start,
+        end: series.end,
+        all_day: false,
+        color: series.color(&state.config.calendar),
+        completed: false,
+        details: calendar::Details {
+            habit: true,
+            habit_id: series.habit_id.clone(),
+            description: series.notes.clone(),
+            recurrence: series.recurrence.lines().to_vec(),
+            // Load the full master, including projects and location,
+            // through the same path as a calendar occurrence.
+            recurring_event_id: Some(series.id.clone()),
+            color_id: series.color_id.clone(),
+            ..Default::default()
+        },
+    };
+    state.habits.confirm_delete = None;
+    state.habits.error = None;
+    state.calendar.detail_event = Some(event);
+    crate::app::update(state, Message::Event(EventMessage::EventOpened(id)))
+}
+
+fn saved_event(state: &mut State, result: Result<HabitEvent, String>) -> Task<Message> {
+    state.habits.busy = false;
+    match result {
+        Ok(event) => {
+            let series = Series::from_event(event);
             state.habits.error = None;
-            state.calendar.detail_event = Some(event);
-            crate::app::update(state, Message::Event(EventMessage::EventOpened(id)))
+            if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
+                state.calendar.open_event = None;
+                state.calendar.edit_draft = None;
+                state.calendar.detail_event = None;
+            }
+            if let Some(existing) = state
+                .habits
+                .series
+                .iter_mut()
+                .find(|candidate| candidate.id == series.id)
+            {
+                *existing = series;
+            } else {
+                state.habits.series.push(series);
+            }
+            sort_series(&mut state.habits.series);
+            // The day and week grids hold instances of this series.
+            Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
         }
-
-        Action::CancelEdit => {
-            state.habits.draft = None;
-            Task::none()
-        }
-
-        Action::Title(value) => edit(state, |draft| draft.title = value),
-        Action::Notes(value) => edit(state, |draft| draft.notes = value),
-        Action::Date(value) => edit(state, |draft| draft.date = value),
-        Action::Start(value) => edit(state, |draft| draft.start = value),
-        Action::End(value) => edit(state, |draft| draft.end = value),
-
-        Action::Repeat(mode) => edit(state, |draft| {
-            let anchor = draft
-                .anchor_date()
-                .unwrap_or_else(|| crate::clock::now().date_naive());
-            draft
-                .rule
-                .apply_action(crate::recurrence::Action::Repeat(mode), anchor);
-        }),
-        Action::Interval(value) => edit(state, |draft| draft.rule.interval = value),
-        Action::ToggleWeekday(index) => edit(state, |draft| {
-            let anchor = draft
-                .anchor_date()
-                .unwrap_or_else(|| crate::clock::now().date_naive());
-            draft
-                .rule
-                .apply_action(crate::recurrence::Action::ToggleWeekday(index), anchor);
-        }),
-        Action::MonthlyMode(mode) => edit(state, |draft| draft.rule.monthly = mode),
-        Action::MonthlyDay(value) => edit(state, |draft| draft.rule.monthly_day = value),
-        Action::MonthlyNth(nth) => edit(state, |draft| {
-            draft.rule.monthly = MonthlyMode::NthWeekday;
-            draft.rule.monthly_nth = nth;
-        }),
-        Action::MonthlyWeekday(day) => edit(state, |draft| {
-            draft.rule.monthly = MonthlyMode::NthWeekday;
-            draft.rule.monthly_weekday = day;
-        }),
-        Action::Ends(kind) => edit(state, |draft| draft.rule.ends = kind),
-        Action::Until(value) => edit(state, |draft| draft.rule.until = value),
-        Action::Count(value) => edit(state, |draft| draft.rule.count = value),
-        Action::SimpleRepeat => edit(state, |draft| {
-            let anchor = draft
-                .anchor_date()
-                .unwrap_or_else(|| crate::clock::now().date_naive());
-            draft
-                .rule
-                .apply_action(crate::recurrence::Action::SimpleRepeat, anchor);
-        }),
-
-        Action::Recurrence(action) => {
-            if let Some(draft) = state.habits.draft.as_mut() {
-                let anchor = draft
-                    .anchor_date()
-                    .unwrap_or_else(|| crate::clock::now().date_naive());
-                draft.rule.apply_action(action, anchor);
-                draft.error = None;
+        Err(error) => {
+            if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
+                state.calendar.error = Some(error);
+            } else {
+                state.habits.error = Some(error);
             }
             Task::none()
-        }
-
-        Action::Color(color) => edit(state, |draft| {
-            draft.color_id = color.and_then(colors::event_id).map(str::to_owned);
-        }),
-
-        Action::Save => save(state),
-
-        Action::Saved(result) => {
-            state.habits.busy = false;
-            match result {
-                Ok(event) => {
-                    let habit = Habit::from_event(event);
-                    state.habits.draft = None;
-                    state.habits.error = None;
-                    if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
-                        state.calendar.open_event = None;
-                        state.calendar.edit_draft = None;
-                        state.calendar.detail_event = None;
-                    }
-                    if let Some(existing) = state
-                        .habits
-                        .habits
-                        .iter_mut()
-                        .find(|candidate| candidate.id == habit.id)
-                    {
-                        *existing = habit;
-                    } else {
-                        state.habits.habits.push(habit);
-                    }
-                    sort(&mut state.habits.habits);
-                    // The day and week grids hold instances of this series.
-                    Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
-                }
-                Err(error) => {
-                    if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
-                        state.calendar.error = Some(error);
-                    } else if let Some(draft) = state.habits.draft.as_mut() {
-                        draft.error = Some(error);
-                    } else {
-                        state.habits.error = Some(error);
-                    }
-                    Task::none()
-                }
-            }
-        }
-
-        Action::DeleteRequested(id) => {
-            state.habits.confirm_delete = Some(id);
-            Task::none()
-        }
-
-        Action::DeleteCancelled => {
-            state.habits.confirm_delete = None;
-            Task::none()
-        }
-
-        Action::DeleteConfirmed(id) => {
-            let Some(habit) = state.habits.habits.iter().find(|habit| habit.id == id) else {
-                state.habits.confirm_delete = None;
-                return Task::none();
-            };
-            let calendar_id = habit.calendar_id.clone();
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
-            state.habits.busy = true;
-            state.habits.error = None;
-            blocking::run(move || {
-                calendar::delete_habit(&client_id, &client_secret, &calendar_id, &id).map(|_| id)
-            })
-            .map(|result| Message::Habits(Action::Deleted(result)))
-        }
-
-        Action::Deleted(result) => {
-            state.habits.busy = false;
-            state.habits.confirm_delete = None;
-            match result {
-                Ok(id) => {
-                    state.habits.habits.retain(|habit| habit.id != id);
-                    if state.calendar.open_event.as_deref() == Some(id.as_str()) {
-                        state.calendar.open_event = None;
-                        state.calendar.edit_draft = None;
-                        state.calendar.detail_event = None;
-                    }
-                    state.habits.error = None;
-                    Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
-                }
-                Err(error) => {
-                    state.habits.error = Some(error);
-                    Task::none()
-                }
-            }
         }
     }
 }
 
-/// Unsaved habits never enter the calendar grid or its disk cache.
+/// Which habit a new event should count towards when it is saved, creating one
+/// from the event's title if none was picked. This is what lets a habit event
+/// be made straight from the calendar.
+pub fn habit_for_new_event(state: &mut State, title: &str) -> (String, Task<Message>) {
+    let chosen = state
+        .calendar
+        .detail_event
+        .as_ref()
+        .and_then(|event| event.details.habit_id.clone())
+        .filter(|id| state.habits.library.habit(id).is_some());
+    if let Some(id) = chosen {
+        return (id, Task::none());
+    }
+    if let Some(habit) = state.habits.library.named(title) {
+        return (habit.id.clone(), Task::none());
+    }
+    let id = new_id();
+    state
+        .habits
+        .library
+        .habits
+        .push(Habit::new(id.clone(), title.trim().to_owned()));
+    state.habits.recompute_one(&id);
+    (id, persist(state))
+}
+
+/// Unsaved habit events never enter the calendar grid or its disk cache.
 pub const NEW_HABIT_ID: &str = "timeslay:new-habit";
 
 pub fn open_new(state: &mut State, draft: Draft) -> Task<Message> {
@@ -616,7 +1712,6 @@ pub fn open_new(state: &mut State, draft: Draft) -> Task<Message> {
             ..Default::default()
         },
     };
-    state.habits.draft = None;
     state.habits.error = None;
     state.calendar.error = None;
     state.calendar.detail_event = Some(event);
@@ -638,78 +1733,22 @@ fn refresh(state: &mut State) -> Task<Message> {
     if state.habits.busy {
         return Task::none();
     }
+    // Habits work without Google; only their calendar events need it.
     if !state.calendar.is_signed_in() {
-        state.habits.error = Some("Connect Google Calendar in Settings to use habits".to_owned());
         return Task::none();
     }
     state.habits.busy = true;
-    state.habits.error = None;
     let client_id = state.config.calendar.client_id.clone();
     let client_secret = state.config.calendar.client_secret.clone();
     let app_calendar = state.config.calendar.app_calendar.clone();
     blocking::run(move || {
-        calendar::sync_habits(&client_id, &client_secret, app_calendar.as_deref())
+        calendar::sync_habit_listing(&client_id, &client_secret, app_calendar.as_deref())
     })
     .map(|result| Message::Habits(Action::Loaded(result)))
 }
 
-fn edit(state: &mut State, change: impl FnOnce(&mut Draft)) -> Task<Message> {
-    if let Some(draft) = state.habits.draft.as_mut() {
-        change(draft);
-        draft.error = None;
-    }
-    Task::none()
-}
-
-fn save(state: &mut State) -> Task<Message> {
-    let Some(draft) = state.habits.draft.clone() else {
-        return Task::none();
-    };
-    let parsed = match draft.parsed() {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            if let Some(draft) = state.habits.draft.as_mut() {
-                draft.error = Some(error);
-            }
-            return Task::none();
-        }
-    };
-    let start = calendar::at_clock(parsed.date, parsed.start.hour(), parsed.start.minute());
-    let end = calendar::at_clock(parsed.date, parsed.end.hour(), parsed.end.minute());
-    let id = draft.id.clone();
-    let calendar_id = draft
-        .calendar_id
-        .clone()
-        .or_else(|| state.config.calendar.app_calendar.clone());
-    let title = parsed.title;
-    let notes = draft.notes.clone();
-    let recurrence = parsed.recurrence;
-    let color_id = draft.color_id.clone();
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
-    state.habits.busy = true;
-    state.habits.error = None;
-    blocking::run(move || {
-        calendar::write_habit(
-            &client_id,
-            &client_secret,
-            calendar::HabitWrite {
-                id: id.as_deref(),
-                calendar_id: calendar_id.as_deref(),
-                title: &title,
-                notes: &notes,
-                start,
-                end,
-                recurrence: &recurrence,
-                color_id: color_id.as_deref(),
-            },
-        )
-    })
-    .map(|result| Message::Habits(Action::Saved(result)))
-}
-
-fn sort(habits: &mut [Habit]) {
-    habits.sort_by(|left, right| {
+fn sort_series(series: &mut [Series]) {
+    series.sort_by(|left, right| {
         left.title
             .to_lowercase()
             .cmp(&right.title.to_lowercase())
@@ -752,7 +1791,7 @@ mod tests {
             ),
             ("RRULE:FREQ=YEARLY", "Yearly on October 28"),
         ] {
-            let habit = Habit {
+            let habit = Series {
                 id: "1".into(),
                 calendar_id: "timeslay".into(),
                 title: "Stretch".into(),
@@ -761,8 +1800,9 @@ mod tests {
                 end: calendar::at_clock(date("2026-10-28"), 9, 30),
                 recurrence: Recurrence::from_lines(&[rule.to_owned()]),
                 color_id: None,
+                habit_id: None,
             };
-            let mut draft = Draft::from_habit(&habit);
+            let mut draft = Draft::from_series(&habit);
             assert_eq!(draft.repeat_summary(), expected, "{rule}");
             let lines = draft.recurrence_lines().unwrap();
             assert!(
@@ -816,7 +1856,7 @@ mod tests {
             "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1".to_owned(),
             "RDATE;VALUE=DATE:20261102".to_owned(),
         ]);
-        let habit = Habit {
+        let habit = Series {
             id: "1".into(),
             calendar_id: "timeslay".into(),
             title: "Stretch".into(),
@@ -825,8 +1865,9 @@ mod tests {
             end: calendar::at_clock(date("2026-10-28"), 9, 30),
             recurrence: recurrence.clone(),
             color_id: None,
+            habit_id: None,
         };
-        let mut draft = Draft::from_habit(&habit);
+        let mut draft = Draft::from_series(&habit);
         assert_eq!(draft.rule.repeat, RepeatMode::Custom);
         assert_eq!(draft.repeat_summary(), "Custom schedule");
         assert_eq!(draft.recurrence_lines().unwrap(), recurrence.lines());
@@ -854,7 +1895,7 @@ mod tests {
             "EXDATE;TZID=Europe/London:20261111T090000".to_owned(),
         ];
         let recurrence = Recurrence::from_lines(&lines);
-        let habit = Habit {
+        let habit = Series {
             id: "1".into(),
             calendar_id: "timeslay".into(),
             title: "Stretch".into(),
@@ -863,8 +1904,9 @@ mod tests {
             end: calendar::at_clock(date("2026-10-28"), 9, 30),
             recurrence,
             color_id: None,
+            habit_id: None,
         };
-        let draft = Draft::from_habit(&habit);
+        let draft = Draft::from_series(&habit);
         assert_eq!(draft.rule.repeat, RepeatMode::Weekly);
         assert_eq!(draft.rule.extra, [date("2026-11-02"), date("2026-11-09")]);
         assert_eq!(draft.rule.skips, [date("2026-11-11")]);
@@ -910,7 +1952,7 @@ mod tests {
 
     #[test]
     fn the_recurrence_label_is_readable_without_rfc_details() {
-        let habit = Habit {
+        let habit = Series {
             id: "1".into(),
             calendar_id: "timeslay".into(),
             title: "Stretch".into(),
@@ -919,10 +1961,11 @@ mod tests {
             end: calendar::at_clock(date("2026-10-28"), 9, 30),
             recurrence: Recurrence::from_lines(&["RRULE:FREQ=DAILY".into()]),
             color_id: None,
+            habit_id: None,
         };
         assert_eq!(habit.recurrence_label(), "Daily");
         assert_eq!(habit.time_label(), "09:00 – 09:30");
-        let one_off = Habit {
+        let one_off = Series {
             recurrence: Recurrence::default(),
             ..habit
         };

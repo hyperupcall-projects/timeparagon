@@ -1998,7 +1998,6 @@ fn choosing_habit_opens_the_shared_details_editor() {
     );
 
     assert!(state.calendar.draft.is_none());
-    assert!(state.habits.draft.is_none());
     assert!(state.details_pane_open);
     let habit = state
         .calendar
