@@ -28,7 +28,7 @@ class AndroidReleaseTests(unittest.TestCase):
         config.parent.mkdir()
         self.config_text = '[application]\nname = "TimeSlay"\n'
         config.write_text(self.config_text)
-        (self.root / "Cargo.toml").write_text('version = "0.14.1"\n')
+        (self.root / "Cargo.toml").write_text('version = "0.15.0"\n')
         (self.root / "dioxus/android/kotlin").mkdir(parents=True)
         (self.root / "dioxus/android/res").mkdir(parents=True)
         self.apk = self.root / "target/dx/TimeSlay/release/android/app/app/build/outputs/apk/release/app-release.apk"
