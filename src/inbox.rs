@@ -11,7 +11,7 @@ use iced::widget::{Id, operation};
 use crate::app::CalendarMessage;
 use crate::app::{Message, State};
 use crate::calendar::deadline::{self, Deadline};
-use crate::calendar::{self, Event, api};
+use crate::calendar::{self, Event};
 use crate::integrations::{self, Auth, Source};
 use crate::timeblocking::{self as tb, UNDATED};
 use crate::{blocking, task_db};
@@ -813,42 +813,7 @@ fn create_event_with_metadata(
     due: Option<NaiveDate>,
     metadata: Option<tb::Metadata>,
 ) -> Result<Event, String> {
-    let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
-    let created_at = crate::clock::utc_now();
-    let created = api::insert_task_with(token, &list, &api::NewTask { title, notes, due })?;
-
-    let calendar_id = format!("tasks:{list}");
-    let start = calendar::at_clock(due.unwrap_or(UNDATED), 0, 0);
-    let mut event = Event {
-        id: format!("task:{}", created.id),
-        color: settings
-            .task_color(&calendar_id)
-            .unwrap_or(calendar::colors::TASK),
-        calendar_id,
-        title: created.title,
-        start,
-        end: start + Duration::days(1),
-        all_day: true,
-        completed: false,
-        details: calendar::Details {
-            task_updated_at: created.updated_at,
-            link: created.link,
-            description: notes.to_owned(),
-            ..Default::default()
-        },
-    };
-    // Allocate a stable ID and publish its metadata immediately.
-    let mut database = task_db::open()?;
-    let mut data = database.import(&event)?;
-    if let Some(metadata) = metadata {
-        data.metadata = metadata;
-    }
-    data.metadata.created_at = Some(created_at);
-    // Keep the creation instant retryable if the metadata upload fails.
-    database.save(&event, &data)?;
-    calendar::task_metadata::save(token, &event, &data)?;
-    event.details.task_data = Some(data);
-    Ok(event)
+    timeslay_core::task_edit::create_inbox_task(settings, token, title, notes, due, metadata)
 }
 
 fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {

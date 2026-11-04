@@ -8,6 +8,7 @@
 //! data-only config the Dioxus app reads. The iced application embeds those
 //! same settings in its full config.
 
+pub mod brain_dump;
 pub mod calendar;
 pub mod clock;
 pub mod config;
@@ -20,8 +21,10 @@ pub mod places;
 pub mod recurrence;
 pub mod task_db;
 pub mod task_edit;
+pub mod task_input;
 pub mod theme;
 pub mod timeblocking;
+pub mod todos;
 
 /// The color type used by calendar events and settings.
 pub use iced_core::Color;

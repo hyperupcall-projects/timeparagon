@@ -613,6 +613,59 @@ pub fn schedule_with(
     Ok(())
 }
 
+/// Writes a new task to the inbox list and builds the local [`Event`] for it.
+///
+/// Blocking: callers run this on a worker thread.
+pub fn create_inbox_task(
+    settings: &CalendarSettings,
+    token: &str,
+    title: &str,
+    notes: &str,
+    due: Option<chrono::NaiveDate>,
+    metadata: Option<crate::timeblocking::Metadata>,
+) -> Result<Event, String> {
+    let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
+    let created_at = crate::clock::utc_now();
+    let created = calendar::api::insert_task_with(
+        token,
+        &list,
+        &calendar::api::NewTask { title, notes, due },
+    )?;
+
+    let calendar_id = format!("tasks:{list}");
+    let start = calendar::at_clock(due.unwrap_or(UNDATED), 0, 0);
+    let mut event = Event {
+        id: format!("task:{}", created.id),
+        color: settings
+            .task_color(&calendar_id)
+            .unwrap_or(calendar::colors::TASK),
+        calendar_id,
+        title: created.title,
+        start,
+        end: start + chrono::Duration::days(1),
+        all_day: true,
+        completed: false,
+        details: calendar::Details {
+            task_updated_at: created.updated_at,
+            link: created.link,
+            description: notes.to_owned(),
+            ..Default::default()
+        },
+    };
+    // Allocate a stable ID and publish its metadata immediately.
+    let mut database = crate::task_db::open()?;
+    let mut data = database.import(&event)?;
+    if let Some(metadata) = metadata {
+        data.metadata = metadata;
+    }
+    data.metadata.created_at = Some(created_at);
+    // Keep the creation instant retryable if the metadata upload fails.
+    database.save(&event, &data)?;
+    calendar::task_metadata::save(token, &event, &data)?;
+    event.details.task_data = Some(data);
+    Ok(event)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

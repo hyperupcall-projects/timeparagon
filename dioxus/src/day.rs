@@ -10,11 +10,13 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
 use timeslay_core::calendar::first_day::FirstDayOfWeek;
 use timeslay_core::calendar::layout::{self, Span};
+use timeslay_core::calendar::search::Search;
 use timeslay_core::calendar::sources::TimeSlaySource;
 use timeslay_core::calendar::{self, Event, Snapshot};
 use timeslay_core::config::{CalendarSettings, Config, ProjectsSettings};
 use timeslay_core::places::{self, Found, Place, PlaceSettings};
 use timeslay_core::task_edit::{self, Change};
+use timeslay_core::task_input;
 use timeslay_core::timeblocking as tb;
 
 /// Reads the same configuration the iced app uses.
@@ -119,6 +121,259 @@ pub fn today(settings: &CalendarSettings) -> NaiveDate {
 /// file as the iced app, so signing in there is enough for the Dioxus view.
 pub fn load_day(day: NaiveDate, settings: &CalendarSettings) -> Result<Snapshot, String> {
     calendar::sleep::sync(settings, day, &[day])
+}
+
+/// A day's snapshot narrowed to what a search shows. Only what is drawn goes
+/// through this: writes lay out around the whole day, not the filtered one.
+pub fn filter_snapshot(
+    snapshot: &Snapshot,
+    search: &Search,
+    settings: &CalendarSettings,
+) -> Snapshot {
+    let mut filtered = snapshot.clone();
+    filtered
+        .events
+        .retain(|event| search.shows(event, &snapshot.events, settings));
+    filtered
+}
+
+/// The labels and locations a search can choose from on this day.
+pub fn search_choices(events: &[Event]) -> (Vec<String>, Vec<String>) {
+    let mut labels: Vec<String> = events
+        .iter()
+        .flat_map(|event| tb::metadata(event).labels)
+        .collect();
+    labels.sort_by_key(|label| label.to_lowercase());
+    labels.dedup();
+    let mut locations: Vec<String> = events
+        .iter()
+        .map(|event| event.details.location.trim().to_owned())
+        .filter(|location| !location.is_empty())
+        .collect();
+    locations.sort();
+    locations.dedup();
+    (labels, locations)
+}
+
+/// A task as the quick-add box reads it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QuickTask {
+    pub title: String,
+    pub due: Option<NaiveDate>,
+    pub deadline: Option<NaiveDate>,
+    pub metadata: tb::Metadata,
+}
+
+/// Reads the keywords out of what was typed, like the desktop's new-task box.
+pub fn quick_task(text: &str, today: NaiveDate, projects: &ProjectsSettings) -> QuickTask {
+    let tokens = task_input::detect(text, today, projects);
+    let mut task = QuickTask {
+        title: task_input::remove(text, tokens.iter().map(|token| token.range.clone())),
+        ..QuickTask::default()
+    };
+    for token in tokens {
+        match token.value {
+            task_input::Value::Due(day) => task.due = Some(day),
+            task_input::Value::Deadline(day) => task.deadline = Some(day),
+            task_input::Value::Priority(priority) => task.metadata.priority = Some(priority),
+            task_input::Value::Minutes(minutes) => task.metadata.minutes = minutes,
+            task_input::Value::Label(label) => {
+                if !task.metadata.labels.contains(&label) {
+                    task.metadata.labels.push(label);
+                }
+            }
+            task_input::Value::Project(id) => {
+                if !task.metadata.projects.contains(&id) {
+                    task.metadata.projects.push(id);
+                }
+            }
+        }
+    }
+    task
+}
+
+/// Adds a task to the inbox list, or to `day` when it names no day of its own.
+///
+/// Blocking: callers run this on a worker thread.
+pub fn create_task(
+    task: QuickTask,
+    day: Option<NaiveDate>,
+    settings: &CalendarSettings,
+) -> Result<Event, String> {
+    let title = task.title.trim();
+    if title.is_empty() {
+        return Err("A task needs a name".to_owned());
+    }
+    if title.chars().count() > task_edit::MAX_TITLE_CHARS {
+        return Err(format!(
+            "A task name can be at most {} characters",
+            task_edit::MAX_TITLE_CHARS
+        ));
+    }
+    let notes = match task.deadline {
+        Some(day) => {
+            calendar::deadline::write("", Some(calendar::deadline::parse_input(&day.to_string())?))
+        }
+        None => String::new(),
+    };
+    let token = task_edit::google_access(settings)?;
+    task_edit::create_inbox_task(
+        settings,
+        &token,
+        title,
+        &notes,
+        task.due.or(day),
+        Some(task.metadata),
+    )
+}
+
+/// What the new event and time block forms hold.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewEvent {
+    pub title: String,
+    pub description: String,
+    pub date: String,
+    pub start: String,
+    pub end: String,
+}
+
+impl NewEvent {
+    /// When it starts and ends, or why that cannot be saved.
+    pub fn range(&self) -> Result<(DateTime<Local>, DateTime<Local>), String> {
+        if self.title.trim().is_empty() {
+            return Err("Enter a title".to_owned());
+        }
+        let (start, end) = task_edit::schedule_range(&self.date, &self.start, &self.end)?;
+        if end <= start {
+            return Err("The end time has to be after the start".to_owned());
+        }
+        Ok((start, end))
+    }
+}
+
+/// Blocking: callers run this on a worker thread.
+pub fn create_event(
+    new: &NewEvent,
+    calendar_id: &str,
+    settings: &CalendarSettings,
+) -> Result<(), String> {
+    let (start, end) = new.range()?;
+    calendar::create_event(
+        &settings.client_id,
+        &settings.client_secret,
+        calendar_id,
+        new.title.trim(),
+        &new.description,
+        None,
+        start,
+        end,
+        &[],
+        &[],
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
+/// Blocking: callers run this on a worker thread.
+pub fn create_time_block(new: &NewEvent, settings: &CalendarSettings) -> Result<(), String> {
+    let (start, end) = new.range()?;
+    calendar::create_time_block(
+        &settings.client_id,
+        &settings.client_secret,
+        settings.app_calendar.as_deref(),
+        new.title.trim(),
+        &calendar::event_description(&new.description, "Time Block", &[]),
+        calendar::colors::event_id(settings.time_block_color()),
+        start,
+        end,
+        &[],
+    )
+    .map(|_| ())
+}
+
+/// One entry of the agenda.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgendaRow {
+    pub event: Event,
+    pub time: String,
+    pub color: timeslay_core::Color,
+}
+
+/// Blocking: callers run this on a worker thread.
+pub fn load_agenda(dates: &[NaiveDate], settings: &CalendarSettings) -> Result<Snapshot, String> {
+    let first = *dates.first().ok_or("The range is empty")?;
+    calendar::sync_range(
+        &settings.client_id,
+        &settings.client_secret,
+        &settings.disabled,
+        first,
+        dates,
+        settings.day_start_hour(),
+        settings.app_calendar.as_deref(),
+    )
+}
+
+/// The days of a range with what is on each, all-day items first. A task that
+/// sits inside a block is left to that block, and days with nothing are kept
+/// so the range still reads as a calendar.
+pub fn agenda(
+    snapshot: &Snapshot,
+    dates: &[NaiveDate],
+    settings: &CalendarSettings,
+) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
+    let assigned: HashSet<String> = snapshot
+        .events
+        .iter()
+        .filter(|event| event.is_task())
+        .filter_map(|event| tb::metadata(event).block)
+        .collect();
+    let blocks: HashSet<String> = snapshot
+        .events
+        .iter()
+        .filter(|event| is_time_block(event, settings, &assigned))
+        .map(tb::block_key)
+        .collect();
+    let hour = settings.day_start_hour();
+    dates
+        .iter()
+        .map(|&date| {
+            let mut events: Vec<&Event> = snapshot
+                .events
+                .iter()
+                .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
+                .filter(|event| !managed_copy(event, settings, &blocks))
+                .filter(|event| {
+                    !(event.is_task()
+                        && tb::metadata(event)
+                            .block
+                            .is_some_and(|key| blocks.contains(&key)))
+                })
+                .filter(|event| {
+                    if event.all_day {
+                        // An all-day item's end is the morning after it.
+                        event.start.date_naive() <= date && date < event.end.date_naive()
+                    } else {
+                        calendar::day_at(event.start, hour) == date
+                    }
+                })
+                .collect();
+            events.sort_by_key(|event| (!event.all_day, event.start, event.title.clone()));
+            let rows = events
+                .into_iter()
+                .map(|event| AgendaRow {
+                    event: event.clone(),
+                    time: if event.all_day {
+                        "All day".to_owned()
+                    } else {
+                        calendar::event_time_label(event)
+                    },
+                    color: event.display_color(settings),
+                })
+                .collect();
+            (date, rows)
+        })
+        .collect()
 }
 
 /// Whether a Google token is already on disk.
@@ -271,6 +526,8 @@ pub struct TaskRow {
     pub status: tb::TaskStatus,
     pub minutes: u32,
     pub block: Option<BlockRef>,
+    pub overdue: bool,
+    pub inbox: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -706,6 +963,8 @@ fn task_groups(
             status: tb::task_status(event),
             minutes: metadata.minutes,
             block,
+            overdue: tb::past_due(event, timeslay_core::clock::now()),
+            inbox: untriaged_in(event, settings, &snapshot.calendars),
         });
     }
 
@@ -1359,6 +1618,91 @@ mod tests {
             fetched_at: at(10, 0),
             notice: None,
         }
+    }
+
+    #[test]
+    fn a_search_narrows_what_is_drawn_and_keeps_a_block_for_its_matching_task() {
+        let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        let inside = task("a", "Write report", Some("blocks/b1"), 1, 45, false);
+        let lunch = event("l", "blocks", "Lunch", at(12, 0), at(13, 0));
+        let snapshot = snapshot(vec![block, inside, lunch]);
+        let search = Search {
+            query: "report".to_owned(),
+            ..Search::default()
+        };
+
+        let filtered = filter_snapshot(&snapshot, &search, &settings());
+
+        let titles: Vec<&str> = filtered.events.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, ["Deep work", "Write report"]);
+        // The search being off changes nothing.
+        let everything = filter_snapshot(&snapshot, &Search::default(), &settings());
+        assert_eq!(everything.events.len(), 3);
+    }
+
+    #[test]
+    fn quick_add_takes_the_keywords_out_of_the_title() {
+        let today = day();
+        let task = quick_task(
+            "Pay rent tomorrow p1 @bills ~30m",
+            today,
+            &ProjectsSettings::default(),
+        );
+        assert_eq!(task.due, today.succ_opt());
+        assert_eq!(task.metadata.priority, Some(tb::Priority::P1));
+        assert_eq!(task.metadata.minutes, 30);
+        assert_eq!(task.metadata.labels, ["bills"]);
+        assert_eq!(task.title.trim(), "Pay rent");
+    }
+
+    #[test]
+    fn a_new_event_needs_a_title_and_to_end_after_it_starts() {
+        let new = |title: &str, start: &str, end: &str| NewEvent {
+            title: title.to_owned(),
+            description: String::new(),
+            date: "2026-11-04".to_owned(),
+            start: start.to_owned(),
+            end: end.to_owned(),
+        };
+        assert!(new(" ", "09:00", "10:00").range().is_err());
+        assert!(new("Call", "10:00", "10:00").range().is_err());
+        let (start, end) = new("Call", "09:00", "10:30").range().unwrap();
+        assert_eq!((end - start).num_minutes(), 90);
+        // An end before the start runs past midnight, as it does for tasks.
+        let (start, end) = new("Late", "23:00", "01:00").range().unwrap();
+        assert_eq!((end - start).num_minutes(), 120);
+    }
+
+    #[test]
+    fn the_agenda_lists_each_day_and_leaves_block_tasks_to_their_block() {
+        let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        let inside = task("a", "Write", Some("blocks/b1"), 1, 45, false);
+        let loose = task("b", "Review", None, 2, 20, false);
+        let snapshot = snapshot(vec![block, inside, loose]);
+        let next = day().succ_opt().unwrap();
+
+        let days = agenda(&snapshot, &[day(), next], &settings());
+
+        assert_eq!(days.len(), 2);
+        let titles: Vec<&str> = days[0]
+            .1
+            .iter()
+            .map(|row| row.event.title.as_str())
+            .collect();
+        // All-day items come first.
+        assert_eq!(titles, ["Review", "Deep work"]);
+        assert_eq!(days[0].1[0].time, "All day");
+        assert!(days[1].1.is_empty());
+    }
+
+    #[test]
+    fn a_task_row_knows_when_it_is_overdue() {
+        let mut late = task("d", "Late", None, 4, 30, false);
+        late.start = at(0, 0) - Duration::days(400);
+        late.end = late.start + Duration::days(1);
+        let model = build_model(&snapshot(vec![late]), &settings());
+        assert!(model.task_groups[0].tasks[0].overdue);
+        assert!(!model.task_groups[0].tasks[0].inbox);
     }
 
     #[test]

@@ -14,8 +14,9 @@ use timeslay_core::calendar::event_options::{
     Action as OptionAction, Availability, EventOptions, Method, Unit, Visibility,
 };
 use timeslay_core::calendar::first_day::FirstDayOfWeek;
+use timeslay_core::calendar::meeting;
 use timeslay_core::calendar::{self, EditDraft, Event, SaveScope};
-use timeslay_core::config::{Config, ProjectsSettings};
+use timeslay_core::config::{CalendarSettings, Config, ProjectsSettings};
 use timeslay_core::places::{self, Found, Place, PlaceSettings};
 use timeslay_core::recurrence::{self, EndKind, MonthlyMode, RepeatMode, Rule};
 use timeslay_core::task_edit::{self, Change};
@@ -36,7 +37,7 @@ const NTH_LABELS: [(i8, &str); 6] = [
 const NO_PROJECT_COLOR: &str = "#9a9a9e";
 
 /// Runs a blocking write off the UI thread.
-async fn worker<T: Send + 'static>(
+pub(crate) async fn worker<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tokio::task::spawn_blocking(work)
@@ -502,6 +503,9 @@ fn TaskEditor(
                     }
                     apply.call(Change::Location(place.map(|place| place.id)));
                 },
+            }
+            if let Some(target) = crate::notes::target_of(&event, &context.settings) {
+                crate::notes::LinkedNotes { target, settings: context.settings.clone() }
             }
             div { class: "editor-actions",
                 if untriaged {
@@ -1079,6 +1083,14 @@ fn EventEditor(
                 busy: is_busy,
                 on_action: move |action| draft.write().options.update(action),
             }
+            MeetingActions {
+                event: source_event.clone(),
+                settings: context.settings.clone(),
+                on_saved,
+            }
+            if let Some(target) = crate::notes::target_of(&source_event, &context.settings) {
+                crate::notes::LinkedNotes { target, settings: context.settings.clone() }
+            }
             if !organizer.is_empty() {
                 Field { label: "Organizer", p { class: "editor-value", "{organizer}" } }
             }
@@ -1089,6 +1101,106 @@ fn EventEditor(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Joining a call, and answering an invitation.
+#[component]
+fn MeetingActions(event: Event, settings: CalendarSettings, on_saved: EventHandler<()>) -> Element {
+    let attendance = event.details.attendance.clone();
+    let mut answer = use_signal(move || attendance.own_response());
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    let join = meeting::join_link(&event.details);
+    let email = event
+        .details
+        .attendance
+        .can_reply()
+        .then(|| event.details.attendance.own_email.clone())
+        .flatten();
+    if join.is_none() && email.is_none() {
+        return rsx! {};
+    }
+    let choices = [
+        (meeting::Response::Accepted, "Yes"),
+        (meeting::Response::Tentative, "Maybe"),
+        (meeting::Response::Declined, "No"),
+    ];
+    rsx! {
+        if let Some(url) = join {
+            button {
+                class: "btn primary editor-wide",
+                onclick: move |_| {
+                    let url = url.clone();
+                    spawn(async move {
+                        if let Err(message) = worker(move || calendar::oauth::open_in_browser(&url)).await {
+                            error.set(Some(message));
+                        }
+                    });
+                },
+                "Join meeting"
+            }
+        }
+        if let Some(email) = email {
+            Field { label: "Going?",
+                div { class: "editor-row",
+                    for (response, label) in choices {
+                        {
+                            let email = email.clone();
+                            let event = event.clone();
+                            let settings = settings.clone();
+                            let chosen = answer() == Some(response);
+                            rsx! {
+                                button {
+                                    key: "{label}",
+                                    class: if chosen { "btn primary editor-grow" } else { "btn editor-grow" },
+                                    aria_pressed: chosen.to_string(),
+                                    disabled: busy(),
+                                    onclick: move |_| {
+                                        if chosen {
+                                            return;
+                                        }
+                                        let previous = answer();
+                                        // Shown straight away, and taken back if Google refuses.
+                                        answer.set(Some(response));
+                                        busy.set(true);
+                                        error.set(None);
+                                        let email = email.clone();
+                                        let event = event.clone();
+                                        let settings = settings.clone();
+                                        spawn(async move {
+                                            let result = worker(move || {
+                                                calendar::reply_to_event(
+                                                    &settings.client_id,
+                                                    &settings.client_secret,
+                                                    &event.calendar_id,
+                                                    &event.id,
+                                                    &email,
+                                                    response,
+                                                )
+                                            })
+                                            .await;
+                                            busy.set(false);
+                                            match result {
+                                                Ok(()) => on_saved.call(()),
+                                                Err(message) => {
+                                                    answer.set(previous);
+                                                    error.set(Some(message));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    "{label}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(message) = error() {
+            p { class: "editor-error", role: "alert", "{message}" }
         }
     }
 }
