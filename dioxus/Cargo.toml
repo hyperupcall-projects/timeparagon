@@ -1,6 +1,6 @@
 [package]
 name = "timeslay-dioxus"
-version = "0.14.1"
+version = "0.15.0"
 edition = "2024"
 description = "Slay the day with TimeSlay"
 license = "MPL-2.0"
