@@ -184,6 +184,31 @@ impl Search {
     pub fn matches(&self, event: &Event) -> bool {
         self.matches_entry(event) && self.matches_content(event)
     }
+
+    /// Whether a view should draw this event, given the rest of its day.
+    ///
+    /// A time block is also kept when one of its tasks matches, because those
+    /// tasks are drawn inside it and would otherwise have nowhere to appear.
+    pub fn shows(&self, event: &Event, day_events: &[Event], settings: &CalendarSettings) -> bool {
+        if !self.is_active() {
+            return true;
+        }
+        if !self.matches_entry(event) {
+            return false;
+        }
+        if self.matches_content(event) {
+            return true;
+        }
+        if !timeblocking::is_block(event, settings) {
+            return false;
+        }
+        let key = timeblocking::block_key(event);
+        day_events.iter().any(|task| {
+            task.is_task()
+                && timeblocking::metadata(task).block.as_deref() == Some(key.as_str())
+                && self.matches_content(task)
+        })
+    }
 }
 
 /// Whether an event is under way at this time of day, counting the minute it
@@ -208,29 +233,8 @@ impl Store {
     }
 
     /// Whether a view should draw this event, given the search in effect.
-    ///
-    /// A time block is also kept when one of its tasks matches, because those
-    /// tasks are drawn inside it and would otherwise have nowhere to appear.
     pub fn search_shows(&self, event: &Event, day: NaiveDate, settings: &CalendarSettings) -> bool {
-        let search = &self.search;
-        if !search.is_active() {
-            return true;
-        }
-        if !search.matches_entry(event) {
-            return false;
-        }
-        if search.matches_content(event) {
-            return true;
-        }
-        if !timeblocking::is_block(event, settings) {
-            return false;
-        }
-        let key = timeblocking::block_key(event);
-        self.events_on(day).iter().any(|task| {
-            task.is_task()
-                && timeblocking::metadata(task).block.as_deref() == Some(key.as_str())
-                && search.matches_content(task)
-        })
+        self.search.shows(event, self.events_on(day), settings)
     }
 
     /// Whether a task inside `block` should be listed there: all of them when

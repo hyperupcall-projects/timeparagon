@@ -1121,6 +1121,16 @@ impl std::fmt::Display for SortKey {
     }
 }
 
+/// The habits file: `$XDG_STATE_HOME/timeslay/habits.json`.
+pub fn path() -> Option<std::path::PathBuf> {
+    Some(
+        directories::BaseDirs::new()?
+            .state_dir()?
+            .join("timeslay")
+            .join("habits.json"),
+    )
+}
+
 /// Everything saved between runs. The order of `habits` is the manual order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

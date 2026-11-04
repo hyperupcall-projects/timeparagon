@@ -12,7 +12,9 @@
 //! * `--webextension` — the browser native-messaging host (see
 //!   [`webextension`]), which adds a link to the inbox and exits.
 
-pub use timeslay_core::{calendar, clock, config_sync, fsutil, hex, recurrence, task_db};
+pub use timeslay_core::{
+    calendar, clock, config_sync, fsutil, hex, recurrence, task_db, task_input, todos,
+};
 
 pub mod alarm;
 pub mod alarms;
@@ -33,7 +35,6 @@ pub mod panel;
 pub mod people;
 pub mod projects;
 pub mod theme;
-pub mod todos;
 pub mod travel;
 pub mod ui;
 pub mod webextension;
@@ -43,7 +44,5 @@ pub mod timeblocking;
 
 pub mod pomodoro;
 pub mod task_work;
-
-pub mod task_input;
 
 pub mod voice;

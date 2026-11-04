@@ -26,6 +26,16 @@ pub struct Config {
     pub projects: ProjectsSettings,
     pub travel: crate::places::PlaceSettings,
     pub appearance: AppearanceSettings,
+    pub notepad: NotepadText,
+    pub todos: crate::todos::TodoList,
+    pub brain_dump: crate::brain_dump::Dumps,
+}
+
+/// The part of `[notepad]` the Dioxus app edits. Its font size is the desktop's.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotepadText {
+    pub text: String,
 }
 
 /// The part of `[appearance]` the Dioxus app follows. The theme is left out:
@@ -725,6 +735,44 @@ fn save_event_place_at(
     })
 }
 
+/// Replaces the notepad's text, keeping the rest of `[notepad]`.
+pub fn save_notepad_text(text: &str) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    edit_table(&path, "notepad", |table| {
+        table.insert("text".to_owned(), toml::Value::String(text.to_owned()));
+        Ok(())
+    })
+}
+
+/// Replaces the temporary todo list.
+pub fn save_todos(todos: &crate::todos::TodoList) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_whole_table(&path, "todos", todos)
+}
+
+/// Replaces the brain dump pages.
+pub fn save_brain_dump(dumps: &crate::brain_dump::Dumps) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_whole_table(&path, "brain_dump", dumps)
+}
+
+/// Replaces the list of projects.
+pub fn save_projects(projects: &ProjectsSettings) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_whole_table(&path, "projects", projects)
+}
+
+/// Writes one value over a whole table, leaving every other table in the file
+/// (including the ones only the iced app reads) as they were.
+fn save_whole_table(path: &std::path::Path, name: &str, value: &impl Serialize) -> io::Result<()> {
+    let replacement = toml::Table::try_from(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    edit_table(path, name, |table| {
+        *table = replacement;
+        Ok(())
+    })
+}
+
 fn no_config_directory() -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, "no config directory available")
 }
@@ -808,6 +856,41 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scratch_data_round_trips_and_leaves_the_desktop_tables_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[pomodoro]\nwork_minutes = 25\n[notepad]\nfont_size = 120\ntext = \"old\"\n",
+        )
+        .unwrap();
+
+        let mut todos = crate::todos::TodoList::default();
+        todos.add("write it");
+        save_whole_table(&path, "todos", &todos).unwrap();
+        let mut dumps = crate::brain_dump::Dumps::default();
+        dumps.set(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+            "idea".into(),
+        );
+        save_whole_table(&path, "brain_dump", &dumps).unwrap();
+        edit_table(&path, "notepad", |table| {
+            table.insert("text".to_owned(), toml::Value::String("new".to_owned()));
+            Ok(())
+        })
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let read: Config = toml::from_str(&text).unwrap();
+        assert_eq!(read.todos, todos);
+        assert_eq!(read.brain_dump, dumps);
+        assert_eq!(read.notepad.text, "new");
+        let raw: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(raw["pomodoro"]["work_minutes"].as_integer(), Some(25));
+        assert_eq!(raw["notepad"]["font_size"].as_integer(), Some(120));
+    }
 
     #[test]
     fn the_time_format_is_read_from_the_shared_appearance_table() {

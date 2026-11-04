@@ -729,15 +729,7 @@ impl Store {
     }
 }
 
-/// The habits file: `$XDG_STATE_HOME/timeslay/habits.json`.
-pub fn path() -> Option<PathBuf> {
-    Some(
-        directories::BaseDirs::new()?
-            .state_dir()?
-            .join("timeslay")
-            .join("habits.json"),
-    )
-}
+pub use timeslay_core::habits::path;
 
 /// Writes happen on worker threads, so two quick ones must not share the
 /// temporary file.

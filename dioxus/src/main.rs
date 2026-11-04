@@ -1,11 +1,18 @@
-//! TimeSlay's Dioxus day view.
+//! TimeSlay's Dioxus app.
 //!
-//! This is deliberately just the day: a single screen showing every calendar
-//! event, every Google Task, and every time block for one day. Tapping an item
-//! opens a sheet that edits it; a time block first lists its assigned tasks.
+//! The main screen is the day: every calendar event, every Google Task, and
+//! every time block for one day. Tapping an item opens a sheet that edits it; a
+//! time block first lists its assigned tasks. Everything else (adding, notes,
+//! habits, search, the agenda and the lists) opens as a sheet over the day.
 
+mod agenda;
+mod create;
 mod day;
 mod editor;
+mod habits;
+mod notes;
+mod scratch;
+mod search;
 mod style;
 #[cfg(any(target_os = "android", test))]
 mod widget;
@@ -13,6 +20,7 @@ mod widget;
 use chrono::{Datelike, Months, NaiveDate};
 use dioxus::prelude::*;
 use timeslay_core::calendar::first_day::FirstDayOfWeek;
+use timeslay_core::calendar::search::Search;
 use timeslay_core::calendar::time_format::{self, TimeFormat};
 use timeslay_core::calendar::{self, Event};
 use timeslay_core::config::CalendarSettings;
@@ -88,7 +96,8 @@ fn prepare_android_storage() {
 
     let config = files.join("config");
     let data = files.join("data");
-    for directory in [&config, &data, &cache] {
+    let state = files.join("state");
+    for directory in [&config, &data, &state, &cache] {
         let _ = std::fs::create_dir_all(directory);
     }
 
@@ -97,6 +106,7 @@ fn prepare_android_storage() {
         std::env::set_var("HOME", &files);
         std::env::set_var("XDG_CONFIG_HOME", &config);
         std::env::set_var("XDG_DATA_HOME", &data);
+        std::env::set_var("XDG_STATE_HOME", &state);
         std::env::set_var("XDG_CACHE_HOME", &cache);
     }
 }
@@ -173,6 +183,25 @@ fn App() -> Element {
     let mut settings_error = use_signal(|| None::<String>);
     let mut show_calendars = use_signal(|| false);
     let mut show_habits = use_signal(|| false);
+    let mut show_tracker = use_signal(|| false);
+    let mut show_notes = use_signal(|| false);
+    let mut show_create = use_signal(|| false);
+    let mut show_search = use_signal(|| false);
+    let mut show_agenda = use_signal(|| false);
+    let mut show_scratch = use_signal(|| false);
+    let mut show_more = use_signal(|| false);
+    let task_filter = use_signal(|| TaskFilter::All);
+    let search_state = use_signal(Search::default);
+    // A note's connection or an agenda row, waiting for its day to load.
+    let mut pending_open = use_signal(|| None::<String>);
+    let notes_store = use_context_provider(notes::NotesStore::new);
+    let note_opening = use_signal(|| None::<String>);
+    use_context_provider(|| notes::NoteOpening(note_opening));
+    use_hook(move || {
+        if day::signed_in() {
+            notes_store.sync(config.peek().calendar.clone());
+        }
+    });
     let mut calendars_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
@@ -257,6 +286,7 @@ fn App() -> Element {
             if follow_today()
                 && editing.peek().is_none()
                 && !*show_habits.peek()
+                && !*show_create.peek()
                 && !*block_writing.peek()
             {
                 let today = day::today(&config.peek().calendar);
@@ -269,6 +299,9 @@ fn App() -> Element {
             if last_refresh.elapsed() >= config.peek().calendar.sync_every() {
                 last_refresh = tokio::time::Instant::now();
                 revision.set(revision() + 1);
+                if day::signed_in() {
+                    notes_store.sync(config.peek().calendar.clone());
+                }
             }
         }
     });
@@ -314,6 +347,38 @@ fn App() -> Element {
         }
     });
 
+    // Follow a note's connection or an agenda row once its day is here. Only a
+    // finished fetch of that day can say it is gone: a cached copy may simply
+    // be older than the event.
+    use_effect(move || {
+        let Some(id) = pending_open() else {
+            return;
+        };
+        let day = current_day();
+        let fetching = matches!(*data.state().read(), UseResourceState::Pending);
+        let fetched = match data.read().as_ref() {
+            Some(Ok(snapshot)) if snapshot.day == day => Some(snapshot.clone()),
+            _ => None,
+        };
+        let known = fetched.clone().or_else(|| {
+            cached_days
+                .read()
+                .cached_snapshot()
+                .filter(|snapshot| snapshot.day == day)
+        });
+        let found =
+            known.and_then(|snapshot| snapshot.events.into_iter().find(|event| event.id == id));
+        if let Some(event) = found {
+            pending_open.set(None);
+            editing.set(Some(event));
+        } else if fetched.is_some() && !fetching {
+            pending_open.set(None);
+            let mut message = notes_store.error;
+            message.set(Some("That is no longer on its day.".to_owned()));
+            show_notes.set(true);
+        }
+    });
+
     let pending = matches!(*data.state().read(), UseResourceState::Pending);
     let resource = data.read();
     let fetch_error = match resource.as_ref() {
@@ -346,6 +411,21 @@ fn App() -> Element {
         widget::publish(model, &travel, today, &settings, snapshot.fetched_at);
     }
 
+    // Only what is drawn is filtered. The widget above keeps the whole day, and
+    // trips join up the whole day's events, so they go while a search is on.
+    let searching = search_state.read().is_active();
+    let (model, travel) = if searching {
+        let filtered = snapshot.as_ref().map(|snapshot| {
+            day::build_model(
+                &day::filter_snapshot(snapshot, &search_state.read(), &settings),
+                &settings,
+            )
+        });
+        (filtered, Vec::new())
+    } else {
+        (model, travel)
+    };
+
     let heading = calendar::day_heading(selected_day, today);
     let time_format = config.read().appearance.time_format;
     let day_nav = DayNav {
@@ -353,6 +433,7 @@ fn App() -> Element {
         selected_block,
         scrolled,
         follow_today,
+        pending_open,
     };
 
     let topbar = rsx! {
@@ -360,23 +441,21 @@ fn App() -> Element {
             {nav_tab("Schedule", !show_tasks(), "", move |_| show_tasks.set(false))}
             {nav_tab("Tasks", show_tasks(), "narrow-only", move |_| show_tasks.set(true))}
             div { class: "spacer" }
-            button {
-                class: "nav-tab",
-                disabled: model.is_none(),
-                onclick: move |_| show_habits.set(true),
-                "Habits"
-            }
-            {nav_tab("Settings", show_settings(), "", move |_| {
-                settings_id.set(config.peek().calendar.client_id.clone());
-                settings_secret.set(String::new());
-                settings_error.set(None);
-                show_settings.set(true);
-            })}
+            {nav_tab("Notes", show_notes(), "", move |_| show_notes.set(true))}
+            {nav_tab("Habits", show_tracker(), "", move |_| show_tracker.set(true))}
+            {nav_tab("More", show_more(), "", move |_| show_more.set(true))}
         }
         div { class: "day-header",
             h1 { class: "day-title", "{heading}" }
             div { class: "day-controls",
                 {month_picker(selected_day, today, settings.first_day_of_week, month_open, month_shown, day_nav)}
+                button {
+                    class: if searching { "btn icon primary" } else { "btn icon" },
+                    title: "Search",
+                    aria_label: "Search",
+                    onclick: move |_| show_search.set(true),
+                    "⌕"
+                }
                 div { class: "spacer" }
                 button {
                     class: "btn icon",
@@ -467,7 +546,7 @@ fn App() -> Element {
     let body: Element = match &model {
         Some(model) => rsx! {
             div { class: "day-body", "data-view": if show_tasks() { "tasks" } else { "calendar" },
-                {sidebar(model, selected_block, editing)}
+                {sidebar(model, task_filter, selected_block, editing)}
                 {timeline(model, &travel, &settings, time_format, selected_block, editing)}
             }
         },
@@ -629,6 +708,161 @@ fn App() -> Element {
                 }
             }
         });
+
+    let tracker_sheet = show_tracker().then(|| {
+        rsx! {
+            habits::TrackerSheet {
+                today,
+                on_series: move |()| show_habits.set(true),
+                on_close: move |()| show_tracker.set(false),
+            }
+        }
+    });
+
+    let create_sheet = show_create().then(|| {
+        let store = cached_days.read();
+        let calendars = store.calendars.clone();
+        let default_calendar = store.default_calendar_id(&settings);
+        drop(store);
+        rsx! {
+            create::CreateSheet {
+                settings: settings.clone(),
+                projects: config.read().projects.clone(),
+                calendars,
+                default_calendar,
+                day: selected_day,
+                on_created: after_write,
+                on_close: move |()| show_create.set(false),
+            }
+        }
+    });
+
+    let search_sheet = show_search().then(|| {
+        let (labels, locations) = snapshot
+            .as_ref()
+            .map(|snapshot| day::search_choices(&snapshot.events))
+            .unwrap_or_default();
+        rsx! {
+            search::SearchSheet {
+                search: search_state,
+                labels,
+                locations,
+                projects: config.read().projects.clone(),
+                on_close: move |()| show_search.set(false),
+            }
+        }
+    });
+
+    let agenda_sheet = show_agenda().then(|| {
+        rsx! {
+            agenda::AgendaSheet {
+                settings: settings.clone(),
+                day: selected_day,
+                today,
+                revision,
+                on_day: move |day| {
+                    show_agenda.set(false);
+                    day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                },
+                on_open: move |event: Event| {
+                    let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+                    show_agenda.set(false);
+                    day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                    pending_open.set(Some(event.id));
+                },
+                on_close: move |()| show_agenda.set(false),
+            }
+        }
+    });
+
+    let scratch_sheet = show_scratch().then(|| {
+        rsx! {
+            scratch::ScratchSheet {
+                config,
+                day: selected_day,
+                on_close: move |()| show_scratch.set(false),
+            }
+        }
+    });
+
+    let more_sheet = show_more().then(|| {
+        rsx! {
+            div {
+                class: "modal-backdrop",
+                onclick: move |_| show_more.set(false),
+                div {
+                    class: "modal",
+                    role: "dialog",
+                    aria_label: "More",
+                    onclick: move |event| event.stop_propagation(),
+                    div { class: "modal-head",
+                        h2 { class: "modal-title", "More" }
+                        div { class: "spacer" }
+                        button {
+                            class: "modal-close",
+                            title: "Close",
+                            onclick: move |_| show_more.set(false),
+                            "×"
+                        }
+                    }
+                    div { class: "modal-body more-body",
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
+                                show_agenda.set(true);
+                            },
+                            "Agenda"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
+                                show_scratch.set(true);
+                            },
+                            "Todos, notepad and projects"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                settings_id.set(config.peek().calendar.client_id.clone());
+                                settings_secret.set(String::new());
+                                settings_error.set(None);
+                                show_more.set(false);
+                                show_settings.set(true);
+                            },
+                            "Settings"
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    let notes_events = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.events.clone())
+        .unwrap_or_default();
+    let notes_sheet = (show_notes() || note_opening().is_some()).then(|| {
+        rsx! {
+            notes::NotesSheet {
+                store: notes_store,
+                settings: settings.clone(),
+                events: notes_events,
+                opening: note_opening,
+                on_follow: move |link: timeslay_core::notes::Link| {
+                    let mut note_opening = note_opening;
+                    note_opening.set(None);
+                    show_notes.set(false);
+                    if let Some(day) = link.day {
+                        day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                    }
+                    pending_open.set(Some(link.id));
+                },
+                on_close: move |()| show_notes.set(false),
+            }
+        }
+    });
 
     let edit_sheet = editing().zip(edit_context).map(|(event, context)| {
         rsx! {
@@ -893,9 +1127,25 @@ fn App() -> Element {
             {banner}
             {notice}
             {body}
+            if model.is_some() {
+                button {
+                    class: "fab",
+                    title: "Add",
+                    aria_label: "Add",
+                    onclick: move |_| show_create.set(true),
+                    "+"
+                }
+            }
             {modal}
+            {tracker_sheet}
             {habits_sheet}
+            {agenda_sheet}
             {edit_sheet}
+            {notes_sheet}
+            {create_sheet}
+            {search_sheet}
+            {scratch_sheet}
+            {more_sheet}
             {settings_modal}
             {calendars_modal}
         }
@@ -962,6 +1212,8 @@ struct DayNav {
     selected_block: Signal<Option<String>>,
     scrolled: Signal<bool>,
     follow_today: Signal<bool>,
+    /// Going somewhere else drops whatever was waiting to open.
+    pending_open: Signal<Option<String>>,
 }
 
 impl DayNav {
@@ -970,6 +1222,7 @@ impl DayNav {
         self.selected_block.set(None);
         self.scrolled.set(false);
         self.follow_today.set(follow_today);
+        self.pending_open.set(None);
     }
 }
 
@@ -1071,18 +1324,74 @@ fn month_picker(
     }
 }
 
+/// Which tasks the Tasks tab lists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TaskFilter {
+    All,
+    Overdue,
+    Inbox,
+}
+
+impl TaskFilter {
+    fn keeps(self, task: &TaskRow) -> bool {
+        match self {
+            Self::All => true,
+            Self::Overdue => task.overdue,
+            Self::Inbox => task.inbox,
+        }
+    }
+}
+
 fn sidebar(
     model: &DayModel,
+    filter: Signal<TaskFilter>,
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
 ) -> Element {
-    let groups_empty = model.task_groups.is_empty();
-
+    let mut filter = filter;
+    let chosen = filter();
+    let tasks = || {
+        model
+            .task_groups
+            .iter()
+            .flat_map(|group| group.tasks.iter())
+    };
+    let total = tasks().count();
+    let overdue = tasks().filter(|task| task.overdue).count();
+    let inbox = tasks().filter(|task| task.inbox).count();
     let groups: Vec<Element> = model
         .task_groups
         .iter()
-        .map(|group| task_group_view(group, open_block, editing))
+        .filter_map(|group| {
+            let tasks: Vec<TaskRow> = group
+                .tasks
+                .iter()
+                .filter(|task| chosen.keeps(task))
+                .cloned()
+                .collect();
+            (!tasks.is_empty()).then(|| {
+                task_group_view(
+                    &TaskGroup {
+                        tasks,
+                        ..group.clone()
+                    },
+                    open_block,
+                    editing,
+                )
+            })
+        })
         .collect();
+    let groups_empty = groups.is_empty();
+    let tab = |label: &'static str, count: usize, this: TaskFilter| {
+        rsx! {
+            button {
+                class: "nav-tab",
+                aria_pressed: (chosen == this).to_string(),
+                onclick: move |_| filter.set(this),
+                "{label} {count}"
+            }
+        }
+    };
 
     rsx! {
         aside { id: "tasks-pane", class: "sidebar", aria_label: "Tasks",
@@ -1090,19 +1399,28 @@ fn sidebar(
                 section { class: "panel-section",
                     div { class: "section-head",
                         span { class: "section-title", "Google Tasks" }
-                        span {
-                            class: "count-pill",
-                            "{model.task_groups.iter().map(|group| group.tasks.len()).sum::<usize>()}"
-                        }
                     }
                     if model.tasks_hidden {
                         p { class: "empty-note",
                             "Google Tasks are hidden in Calendars. Tasks inside time blocks still appear when you open a block."
                         }
-                    } else if groups_empty {
-                        p { class: "empty-note", "No Google Tasks for this day." }
                     } else {
-                        div { class: "task-groups", {groups.into_iter()} }
+                        div { class: "token-row",
+                            {tab("All", total, TaskFilter::All)}
+                            {tab("Overdue", overdue, TaskFilter::Overdue)}
+                            {tab("Inbox", inbox, TaskFilter::Inbox)}
+                        }
+                        if groups_empty {
+                            p { class: "empty-note",
+                                match chosen {
+                                    TaskFilter::All => "No Google Tasks for this day.",
+                                    TaskFilter::Overdue => "Nothing is overdue.",
+                                    TaskFilter::Inbox => "The inbox is empty.",
+                                }
+                            }
+                        } else {
+                            div { class: "task-groups", {groups.into_iter()} }
+                        }
                     }
                 }
             }
@@ -1722,5 +2040,218 @@ mod tests {
     fn a_sleep_block_keeps_both_of_its_time_lines_when_they_fit() {
         assert_eq!(text_fit(64.0, 2).time_lines, 2);
         assert_eq!(text_fit(40.0, 2).time_lines, 1);
+    }
+}
+
+#[cfg(test)]
+mod sheet_tests {
+    use super::*;
+    use chrono::{Local, TimeZone};
+    use timeslay_core::config::{Config, ProjectsSettings};
+    use timeslay_core::habits::Habit;
+    use timeslay_core::notes::Library;
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, 4).unwrap()
+    }
+
+    fn render(app: fn() -> Element) -> String {
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    fn assert_offers(html: &str, wanted: &[&str]) {
+        for text in wanted {
+            assert!(html.contains(text), "{text} is missing from {html}");
+        }
+    }
+
+    fn library() -> Library {
+        let mut library = Library::default();
+        let id = library.create("Trip plan", Vec::new());
+        library.edit(&id, |note| {
+            note.body = "# Packing\n\n- [x] Passport".to_owned()
+        });
+        library
+    }
+
+    #[test]
+    fn the_notes_list_offers_its_notes_search_and_new() {
+        fn app() -> Element {
+            let mut store = use_hook(notes::NotesStore::new);
+            use_hook(move || store.library.set(library()));
+            let opening = use_signal(|| None::<String>);
+            rsx! {
+                notes::NotesSheet {
+                    store,
+                    settings: CalendarSettings::default(),
+                    events: Vec::new(),
+                    opening,
+                    on_follow: |_| {},
+                    on_close: |_| {},
+                }
+            }
+        }
+        assert_offers(
+            &render(app),
+            &["Search notes", ">New<", "Trip plan", "Syncing"],
+        );
+    }
+
+    #[test]
+    fn an_open_note_offers_its_tabs_colors_and_delete() {
+        fn app() -> Element {
+            let mut store = use_hook(notes::NotesStore::new);
+            let id = use_hook(move || {
+                let library = library();
+                let id = library.notes[0].id.clone();
+                store.library.set(library);
+                id
+            });
+            let opening = use_signal(move || Some(id));
+            rsx! {
+                notes::NotesSheet {
+                    store,
+                    settings: CalendarSettings::default(),
+                    events: Vec::new(),
+                    opening,
+                    on_follow: |_| {},
+                    on_close: |_| {},
+                }
+            }
+        }
+        assert_offers(
+            &render(app),
+            &[
+                ">Edit<",
+                ">View<",
+                "Trip plan",
+                "Butter",
+                "Mint",
+                "Connected to",
+                "Delete note",
+            ],
+        );
+    }
+
+    #[test]
+    fn adding_offers_every_kind_starting_with_a_task() {
+        fn app() -> Element {
+            rsx! {
+                create::CreateSheet {
+                    settings: CalendarSettings::default(),
+                    projects: ProjectsSettings::default(),
+                    calendars: Vec::new(),
+                    default_calendar: None,
+                    day: today(),
+                    on_created: |_| {},
+                    on_close: |_| {},
+                }
+            }
+        }
+        assert_offers(
+            &render(app),
+            &[
+                ">Task<",
+                ">Event<",
+                ">Time block<",
+                "@home ~30m",
+                "goes to the Inbox",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_search_sheet_offers_each_filter() {
+        fn app() -> Element {
+            let search = use_signal(Search::default);
+            rsx! {
+                search::SearchSheet {
+                    search,
+                    labels: vec!["deep".to_owned()],
+                    locations: vec!["Office".to_owned()],
+                    projects: ProjectsSettings::default(),
+                    on_close: |_| {},
+                }
+            }
+        }
+        assert_offers(
+            &render(app),
+            &[
+                "Search titles",
+                "Look in descriptions",
+                "Only public",
+                "Under way at",
+                "Busy or free",
+                "Office",
+                "deep",
+                ">Clear<",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_lists_open_on_todos_and_offer_the_other_pages() {
+        fn app() -> Element {
+            let config = use_signal(|| {
+                let mut config = Config::default();
+                config.todos.add("Write the report");
+                config.todos.add("Send it");
+                config
+            });
+            rsx! { scratch::ScratchSheet { config, day: today(), on_close: |_| {} } }
+        }
+        assert_offers(
+            &render(app),
+            &[
+                ">Todos<",
+                ">Notepad<",
+                ">Brain dump<",
+                ">Projects<",
+                "Write the report",
+                "Add a step",
+            ],
+        );
+    }
+
+    #[test]
+    fn a_tracked_habit_shows_its_goal_and_days() {
+        fn app() -> Element {
+            let today = today();
+            let mut habit = Habit::new("run", "Run");
+            habit.created = Some(today);
+            habit.answer(today, true);
+            let saved = use_signal(move || habits::for_tests(vec![habit.clone()]));
+            let open = use_signal(|| None::<String>);
+            rsx! { habits::HabitRow { habit: saved.read().library.habits[0].clone(), today, saved, open } }
+        }
+        assert_offers(
+            &render(app),
+            &["Run", "Every day", "streak 1", "✓", "Wed 4"],
+        );
+    }
+
+    #[test]
+    fn the_task_tab_offers_its_filters_with_counts() {
+        fn app() -> Element {
+            let start = Local.with_ymd_and_hms(2026, 11, 4, 0, 0, 0).unwrap();
+            let snapshot = calendar::Snapshot {
+                calendars: Vec::new(),
+                events: Vec::new(),
+                day: today(),
+                fetched_at: start,
+                notice: None,
+            };
+            let model = day::build_model(&snapshot, &CalendarSettings::default());
+            let filter = use_signal(|| TaskFilter::All);
+            let block = use_signal(|| None::<String>);
+            let editing = use_signal(|| None::<Event>);
+            sidebar(&model, filter, block, editing)
+        }
+        assert_offers(
+            &render(app),
+            &["All 0", "Overdue 0", "Inbox 0", "No Google Tasks"],
+        );
     }
 }

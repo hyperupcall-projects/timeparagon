@@ -1433,3 +1433,322 @@ textarea {
         height: min(760px, 88vh);
     }
 }
+
+/* ------------------------------------------------------------- added sheets */
+
+.fab {
+    position: fixed;
+    right: 18px;
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    z-index: 6;
+    width: 54px;
+    height: 54px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 28px;
+    line-height: 1;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+
+.sheet-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sheet-row .client-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.sheet-tabs,
+.token-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.sheet-tabs {
+    flex: none;
+    padding: 4px 12px;
+}
+
+.sheet-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+}
+
+.more-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.linklike {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+    text-decoration: underline;
+}
+
+.note-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.note-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    border: none;
+    border-radius: 8px;
+    text-align: left;
+}
+
+.note-card-title {
+    font-weight: 600;
+}
+
+.note-card-preview,
+.note-card-state {
+    font-size: 12px;
+    opacity: 0.75;
+    overflow-wrap: anywhere;
+}
+
+.note-surface {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 8px;
+}
+
+.note-title,
+.note-text {
+    width: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: inherit;
+}
+
+.note-title {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.note-text {
+    min-height: 40vh;
+    resize: vertical;
+}
+
+.note-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.note-swatch {
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--edge);
+    border-radius: 50%;
+}
+
+.note-swatch[aria-pressed="true"] {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.note-view {
+    min-height: 40vh;
+    overflow-wrap: anywhere;
+}
+
+.note-view p {
+    margin: 0 0 8px;
+}
+
+.note-view blockquote {
+    margin: 0 0 8px;
+    padding-left: 10px;
+    border-left: 3px solid rgba(0, 0, 0, 0.3);
+}
+
+.note-view pre {
+    margin: 0 0 8px;
+    padding: 8px;
+    overflow-x: auto;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.08);
+}
+
+.note-h {
+    margin: 4px 0 8px;
+    font-weight: 700;
+}
+
+.note-h1 { font-size: 22px; }
+.note-h2 { font-size: 19px; }
+.note-h3 { font-size: 16px; }
+.note-h4 { font-size: 14px; }
+
+.note-item {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.note-mark {
+    flex: none;
+}
+
+.note-run.bold { font-weight: 700; }
+.note-run.italic { font-style: italic; }
+.note-run.strike { text-decoration: line-through; }
+
+.note-run.code {
+    padding: 0 3px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.08);
+    font-family: monospace;
+}
+
+.habit-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--hairline);
+}
+
+.habit-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    border: none;
+    background: none;
+    text-align: left;
+}
+
+.habit-days {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+}
+
+.habit-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+
+.habit-day-name {
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.habit-mark {
+    width: 100%;
+    height: 40px;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    background: var(--card);
+}
+
+.habit-mark.done {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.habit-amount {
+    width: 100%;
+    padding: 4px;
+    text-align: center;
+}
+
+.habit-details,
+.habit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.todo-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.todo-text {
+    flex: 1;
+    min-width: 0;
+    min-height: 40px;
+    padding: 4px 6px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.todo-text.current {
+    background: var(--hover);
+    font-weight: 600;
+}
+
+.todo-row .btn.icon {
+    flex: none;
+    width: 32px;
+    min-width: 32px;
+    padding: 0;
+}
+
+.scratch-text {
+    width: 100%;
+    min-height: 40vh;
+    resize: vertical;
+}
+
+.scratch-earlier {
+    white-space: pre-wrap;
+}
+
+.agenda-day {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 8px;
+}
+
+.agenda-date {
+    padding: 4px 0;
+    border: none;
+    background: none;
+    font-weight: 600;
+    text-align: left;
+}
+
+.agenda-date.today {
+    color: var(--accent);
+}
+
+.agenda-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+}

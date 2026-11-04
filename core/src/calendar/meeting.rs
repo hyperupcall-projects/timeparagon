@@ -161,6 +161,28 @@ impl std::fmt::Display for Conference {
     }
 }
 
+/// Where to join an event: its structured conference link, or else a Zoom or
+/// Google Meet link in its text. Only web links are returned, so nothing else
+/// can be launched from an event someone else wrote.
+pub fn join_link(details: &super::Details) -> Option<String> {
+    let web = |link: &str| link.starts_with("https://") || link.starts_with("http://");
+    let structured = details.meeting.trim();
+    if web(structured) {
+        return Some(structured.to_owned());
+    }
+    [&details.location, &details.description]
+        .into_iter()
+        .flat_map(|text| text.split(|c: char| c.is_whitespace() || "\"'<>()[]".contains(c)))
+        .map(|word| word.trim_end_matches(['.', ',', ';', ':', '!', '?']))
+        .find(|word| {
+            let host = host_of(word);
+            web(word)
+                && (is_zoom_host(host) || host.eq_ignore_ascii_case("meet.google.com"))
+                && word.len() > word.find(host).unwrap_or(0) + host.len() + 1
+        })
+        .map(str::to_owned)
+}
+
 fn host_of(link: &str) -> &str {
     let link = link
         .strip_prefix("https://")
@@ -566,6 +588,34 @@ pub fn conference_failure(response: &Value) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_join_link_is_found_but_never_anything_that_is_not_the_web() {
+        let details = |meeting: &str, description: &str| crate::calendar::Details {
+            meeting: meeting.to_owned(),
+            description: description.to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            join_link(&details("https://example.com/call", "")).as_deref(),
+            Some("https://example.com/call")
+        );
+        assert_eq!(
+            join_link(&details(
+                "",
+                "Join <a href=\"https://acme.zoom.us/j/1?pwd=x\">here</a>."
+            ))
+            .as_deref(),
+            Some("https://acme.zoom.us/j/1?pwd=x")
+        );
+        assert_eq!(
+            join_link(&details("", "Call https://meet.google.com/abc-defg-hij.")).as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+        assert_eq!(join_link(&details("tel:+15551234", "")), None);
+        assert_eq!(join_link(&details("", "See https://example.com/j/1")), None);
+        assert_eq!(join_link(&details("", "Home is https://zoom.us/")), None);
+    }
     use crate::calendar::Details;
 
     fn guest(email: &str, response: Response) -> Guest {
