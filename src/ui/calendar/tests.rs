@@ -2292,7 +2292,7 @@ fn a_habit_events_record_button_is_full_height_and_leaves_the_rest_clickable() {
         ]);
         let messages: Vec<_> = ui.into_messages().collect();
         let recorded = messages.iter().any(|m| {
-            matches!(m, Message::Habits(crate::habits::Action::Record(id, on))
+            matches!(m, Message::Habits(crate::habits::Action::OpenDay(id, on))
                 if id == "h" && *on == day)
         });
         assert_eq!(recorded, record, "at {x}, {y}");

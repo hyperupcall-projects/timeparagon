@@ -220,8 +220,10 @@ pub struct DayMark {
     pub kind: Kind,
     /// How many times it was done, shown when more than once.
     pub times: u32,
-    /// A measurable habit's unit.
-    pub unit: String,
+    /// On a "No" habit: how many times it was resisted, shown on a clean day.
+    pub resisted: u32,
+    /// The number recorded for the day.
+    pub value: Option<f64>,
 }
 
 impl canvas::Program<Message> for DayMark {
@@ -295,6 +297,13 @@ impl canvas::Program<Message> for DayMark {
                 9.0,
             );
         }
+        if let Some(value) = self.value {
+            small(&mut frame, habits::format_amount(value), -16.0, color, 9.0);
+        }
+        // As is holding back, however little it changes the score.
+        if self.resisted > 0 && self.status == Status::Clean {
+            small(&mut frame, format!("+{}", self.resisted), 13.0, color, 9.0);
+        }
         if self.icons == Icons::Faces
             && let Some((face, tint)) = self.face(color, quiet, dark)
         {
@@ -302,18 +311,6 @@ impl canvas::Program<Message> for DayMark {
             return vec![frame.into_geometry()];
         }
         match self.status {
-            // Measured days show the number, in color when the target was met.
-            Status::Measured { amount, met } => {
-                let shade = if met { color } else { medium_contrast() };
-                small(
-                    &mut frame,
-                    habits::format_amount(amount as f64 / 1000.0),
-                    -5.0,
-                    shade,
-                    13.0,
-                );
-                small(&mut frame, self.unit.clone(), 8.0, shade, 9.0);
-            }
             Status::Clean => glyph(frame_ref(&mut frame), CHECK, color, 2.6),
             // Doing what was meant to be avoided is the one mark that stands out.
             Status::Slipped(_) => {
@@ -339,10 +336,6 @@ impl canvas::Program<Message> for DayMark {
                     quiet,
                     2.0,
                 );
-            }
-            Status::Unknown if self.kind == Kind::Measurable => {
-                small(&mut frame, "0".to_owned(), -5.0, quiet, 13.0);
-                small(&mut frame, self.unit.clone(), 8.0, quiet, 9.0);
             }
             Status::Yes => glyph(frame_ref(&mut frame), CHECK, color, 2.6),
             // Covered by an earlier repetition: Loop's quieter check.
@@ -390,8 +383,8 @@ impl canvas::Program<Message> for DayMark {
 }
 
 impl DayMark {
-    /// The face a day shows, and its color. Days that say something a face
-    /// cannot, like an amount or a partial count, keep what they always show.
+    /// The face a day shows, and its color. A partial count says something a face
+    /// cannot, so it keeps what it always shows.
     fn face(&self, color: Color, quiet: Color, dark: bool) -> Option<(Face, Color)> {
         match self.status {
             Status::Yes | Status::Clean => Some((Face::Happy, color)),
@@ -399,11 +392,10 @@ impl DayMark {
             Status::Slipped(_) => Some((Face::Disappointed, slip_color(dark))),
             Status::Skip => Some((Face::Question, color)),
             Status::No => Some((Face::Disappointed, quiet)),
-            Status::Unknown if self.kind == Kind::Measurable => None,
             Status::Unknown if self.question_marks => Some((Face::Question, quiet)),
             Status::Unknown if self.kind == Kind::No => None,
             Status::Unknown => Some((Face::Disappointed, quiet)),
-            Status::Partial(_) | Status::Measured { .. } => None,
+            Status::Partial(_) => None,
         }
     }
 }
@@ -632,6 +624,8 @@ pub struct HistoryChart {
     pub series: Vec<(NaiveDate, f64)>,
     pub bucket: Bucket,
     pub color: u8,
+    /// A line to measure the bars against, for the Value chart.
+    pub target: Option<f64>,
 }
 
 impl canvas::Program<Message> for HistoryChart {
@@ -680,7 +674,9 @@ impl canvas::Program<Message> for HistoryChart {
             .series
             .iter()
             .map(|(_, value)| *value)
-            .fold(1.0_f64, f64::max);
+            .chain(self.target)
+            .fold(0.0_f64, f64::max);
+        let most = if most > 0.0 { most } else { 1.0 };
         let mut axis = Vec::new();
         for index in (0..count).rev() {
             let Some((date, value)) = self.series.get(index + skip) else {
@@ -709,6 +705,35 @@ impl canvas::Program<Message> for HistoryChart {
                 iced::alignment::Horizontal::Center,
             );
         }
+        if let Some(target) = self.target {
+            let y = plot - tallest * (target / most) as f32;
+            frame.stroke(
+                &Path::line(Point::new(0.0, y), Point::new(bounds.width, y)),
+                Stroke {
+                    style: canvas::Style::Solid(medium_contrast()),
+                    width: 1.5,
+                    line_dash: canvas::LineDash {
+                        segments: &[5.0, 4.0],
+                        offset: 0,
+                    },
+                    ..Default::default()
+                },
+            );
+            // On a patch of the card, so that it stays readable over a bar.
+            let words = format!("Target {}", habits::format_amount(target));
+            frame.fill_rectangle(
+                Point::new(0.0, y - 15.0),
+                Size::new(words.chars().count() as f32 * 6.5 + 4.0, 14.0),
+                card_background(theme),
+            );
+            label(
+                &mut frame,
+                words,
+                Point::new(2.0, y - 8.0),
+                medium_contrast(),
+                iced::alignment::Horizontal::Left,
+            );
+        }
         draw_axis(&mut frame, &axis, self.bucket, plot, medium_contrast());
         vec![frame.into_geometry()]
     }
@@ -717,7 +742,7 @@ impl canvas::Program<Message> for HistoryChart {
 // ----------------------------------------------------------------- calendar
 
 /// Loop's calendar card: one square per day, in a column per week, ending at
-/// today. Clicking a square moves that day through the same cycle as the list.
+/// today. Clicking a square opens that day's dialog, as on the list.
 pub struct CalendarChart {
     pub habit_id: String,
     pub statuses: Computed,
@@ -788,7 +813,7 @@ impl canvas::Program<Message> for CalendarChart {
             && let Some(day) = self.day_at(point, bounds.width, pan)
         {
             return Some(
-                canvas::Action::publish(Message::Habits(Action::Toggle(
+                canvas::Action::publish(Message::Habits(Action::OpenDay(
                     self.habit_id.clone(),
                     day,
                 )))
@@ -864,17 +889,11 @@ impl canvas::Program<Message> for CalendarChart {
                     continue;
                 }
                 let status = self.statuses.status(day);
-                // Loop's squares: on, dimmed when covered, grey for an amount
-                // that fell short of its target.
+                // Loop's squares: on, and dimmed when covered.
                 let fill = match status {
                     Status::Yes | Status::Clean => color,
-                    Status::Measured { amount, met: true } if amount > 0 => color,
-                    Status::Measured { met: true, .. } => dimmed,
-                    Status::Measured { amount, met: false } if amount > 0 => medium_contrast(),
                     Status::Auto | Status::Skip | Status::Partial(_) => dimmed,
-                    Status::No | Status::Unknown | Status::Slipped(_) | Status::Measured { .. } => {
-                        off
-                    }
+                    Status::No | Status::Unknown | Status::Slipped(_) => off,
                 };
                 let origin = Point::new(x, SQUARE + row as f32 * SQUARE);
                 frame.fill(
@@ -1040,7 +1059,6 @@ impl canvas::Program<Message> for StreakChart {
 pub struct FrequencyChart {
     pub computed: Computed,
     pub color: u8,
-    pub kind: Kind,
     pub today: NaiveDate,
     pub weekday_names: [&'static str; 7],
     /// Monday-based offset of the first row.
@@ -1085,8 +1103,6 @@ impl canvas::Program<Message> for FrequencyChart {
             color,
         ];
         let data = habits::weekday_frequency(&self.computed);
-        // Loop scales amounts by the largest, and days by how many there were.
-        let largest = data.values().flatten().copied().fold(1.0_f64, f64::max);
         let columns = ((bounds.width - WEEKDAY_COLUMN) / FREQUENCY_CELL)
             .floor()
             .max(1.0) as usize;
@@ -1132,11 +1148,7 @@ impl canvas::Program<Message> for FrequencyChart {
             let available = habits::weekdays_in_month(month);
             for row in 0..7 {
                 let weekday = (row + self.first_weekday) % 7;
-                let out_of = if self.kind == Kind::Measurable {
-                    largest
-                } else {
-                    f64::from(available[weekday].max(1))
-                };
+                let out_of = f64::from(available[weekday].max(1));
                 let scale = (values[weekday] / out_of).min(1.0) as f32;
                 if scale <= 0.0 {
                     continue;

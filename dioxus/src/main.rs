@@ -2221,7 +2221,7 @@ mod sheet_tests {
             let today = today();
             let mut habit = Habit::new("run", "Run");
             habit.created = Some(today);
-            habit.answer(today, true);
+            habit.add_rep(today);
             let saved = use_signal(move || habits::for_tests(vec![habit.clone()]));
             let open = use_signal(|| None::<String>);
             rsx! { habits::HabitRow { habit: saved.read().library.habits[0].clone(), today, saved, open } }

@@ -407,7 +407,7 @@ impl canvas::Program<Message> for DayCanvas {
 
                 if let Some((id, day)) = self.record_at(point, bounds.width) {
                     return Some(
-                        canvas::Action::publish(Message::Habits(crate::habits::Action::Record(
+                        canvas::Action::publish(Message::Habits(crate::habits::Action::OpenDay(
                             id.to_owned(),
                             day,
                         )))

@@ -3,7 +3,7 @@ use chrono::Duration;
 use iced::{Size, Theme};
 use iced_test::{Simulator, core::Settings};
 use timeslay::app::{Screen, State};
-use timeslay::habits::{Action, Frequency, Habit, Kind, Mark};
+use timeslay::habits::{Action, Frequency, Habit, Kind, Mark, Measure};
 use timeslay::ui;
 
 fn demo() -> State {
@@ -57,13 +57,16 @@ fn demo() -> State {
     chess.question_marks = true;
     lib.push(chess);
     let mut run = Habit::new("f", "Run");
-    run.kind = Kind::Measurable;
-    run.unit = "miles".into();
-    run.target = 2.0;
+    run.measure = Some(Measure {
+        unit: "miles".into(),
+        target: Some(2.0),
+        days: 1,
+    });
     run.color = 15;
     for back in 0..200_i64 {
         if back % 3 != 2 {
-            run.set_day(today - Duration::days(back), 0.5 + (back % 5) as f64);
+            run.marks.insert(today - Duration::days(back), Mark::Yes);
+            run.set_value(today - Duration::days(back), Some(0.5 + (back % 5) as f64));
         }
     }
     lib.push(run);
@@ -71,10 +74,12 @@ fn demo() -> State {
     smoke.kind = Kind::No;
     smoke.created = Some(today - Duration::days(120));
     smoke.color = 0;
-    smoke.set_day(today - Duration::days(1), 2.0);
-    smoke.set_day(today - Duration::days(40), 1.0);
+    smoke.marks.insert(today - Duration::days(1), Mark::Reps(2));
+    smoke
+        .marks
+        .insert(today - Duration::days(40), Mark::Reps(1));
     lib.push(smoke);
-    lib[0].set_day(today, 3.0);
+    lib[0].marks.insert(today, Mark::Reps(3));
     state.habits.recompute();
     state
 }

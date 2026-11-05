@@ -173,6 +173,12 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                         d.description = value;
                     }
                 }
+                FormField::HabitNotes => {
+                    if let Some(form) = &mut state.habits.form {
+                        form.notes = value;
+                        form.error = None;
+                    }
+                }
             }
             Task::none()
         }
