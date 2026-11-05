@@ -624,33 +624,21 @@ pub struct Store {
 }
 
 impl Store {
-    /// Loads the saved habits. A file that exists but cannot be read is left
-    /// alone rather than replaced by an empty list on the next save.
+    /// Loads the saved habits. Saved habits that cannot be read are left alone
+    /// rather than replaced by an empty list on the next save.
     pub fn keep_in(&mut self, path: Option<PathBuf>) {
         let Some(path) = path else { return };
-        match std::fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice(&bytes) {
-                Ok(library) => {
-                    self.library = library;
-                    self.path = Some(path);
-                }
-                Err(error) => {
-                    log::warn!("{} could not be parsed: {error}", path.display());
-                    self.error = Some(format!(
-                        "{} could not be read, so changes to habits will not be saved",
-                        path.display()
-                    ));
-                }
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        match crate::task_db::read_document(&path, crate::task_db::keys::HABITS) {
+            Ok(library) => {
+                self.library = library.unwrap_or_default();
                 self.path = Some(path);
             }
             Err(error) => {
-                log::warn!("{} could not be read: {error}", path.display());
-                self.error = Some(format!(
-                    "{} could not be read, so changes to habits will not be saved",
-                    path.display()
-                ));
+                log::warn!("the saved habits could not be read: {error}");
+                self.error = Some(
+                    "The saved habits could not be read, so changes to habits will not be saved"
+                        .to_owned(),
+                );
             }
         }
         self.recompute();
@@ -820,19 +808,8 @@ impl Store {
     }
 }
 
-pub use timeslay_core::habits::path;
-
-/// Writes happen on worker threads, so two quick ones must not share the
-/// temporary file.
-static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn write(path: &std::path::Path, library: &Library) -> std::io::Result<()> {
-    let _guard = WRITING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let bytes = serde_json::to_vec_pretty(library)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    crate::fsutil::write_atomic(path, &bytes, crate::fsutil::Kind::Private)
+    crate::task_db::write_document(path, crate::task_db::keys::HABITS, library)
 }
 
 #[cfg(test)]

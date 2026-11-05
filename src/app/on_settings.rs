@@ -419,7 +419,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             // The reset takes the store with it, so the directory is put
             // straight back: days keep being written across a disconnect.
             state.calendar.apply_task_colors(&state.config.calendar);
-            state.calendar.cache_days_in(config::cache_days_dir());
+            state.calendar.cache_days_in(crate::task_db::path());
             state.calendar.connection = Connection::SignedOut;
             crate::people::forget_primary(state)
         }

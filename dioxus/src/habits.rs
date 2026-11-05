@@ -4,7 +4,7 @@
 //! they are saved in is not synced by anything, on either app, so the phone
 //! keeps its own record and says so on the screen.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::{Duration, NaiveDate};
 use dioxus::prelude::*;
@@ -29,30 +29,17 @@ pub fn read(path: Option<PathBuf>) -> Saved {
             ..Saved::default()
         };
     };
-    let unreadable = |path: &Path| {
-        format!(
-            "{} could not be read, so changes to habits will not be saved.",
-            path.display()
-        )
-    };
-    match std::fs::read(&path) {
-        Ok(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(library) => Saved {
-                library,
-                path: Some(path),
-                error: None,
-            },
-            Err(_) => Saved {
-                error: Some(unreadable(&path)),
-                ..Saved::default()
-            },
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Saved {
+    match timeslay_core::task_db::read_document(&path, timeslay_core::task_db::keys::HABITS) {
+        Ok(library) => Saved {
+            library: library.unwrap_or_default(),
             path: Some(path),
-            ..Saved::default()
+            error: None,
         },
         Err(_) => Saved {
-            error: Some(unreadable(&path)),
+            error: Some(
+                "The saved habits could not be read, so changes to habits will not be saved."
+                    .to_owned(),
+            ),
             ..Saved::default()
         },
     }
@@ -61,18 +48,11 @@ pub fn read(path: Option<PathBuf>) -> Saved {
 impl Saved {
     fn save(&mut self) {
         let Some(path) = &self.path else { return };
-        let written = serde_json::to_vec_pretty(&self.library)
-            .map_err(std::io::Error::other)
-            .and_then(|bytes| {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                timeslay_core::fsutil::write_atomic(
-                    path,
-                    &bytes,
-                    timeslay_core::fsutil::Kind::Private,
-                )
-            });
+        let written = timeslay_core::task_db::write_document(
+            path,
+            timeslay_core::task_db::keys::HABITS,
+            &self.library,
+        );
         self.error = written
             .err()
             .map(|error| format!("Could not save habits: {error}"));
@@ -169,7 +149,7 @@ pub fn TrackerSheet(
     on_series: EventHandler<()>,
     on_close: EventHandler<()>,
 ) -> Element {
-    let mut saved = use_signal(|| read(timeslay_core::habits::path()));
+    let mut saved = use_signal(|| read(timeslay_core::task_db::path()));
     let mut adding = use_signal(|| false);
     let open = use_signal(|| None::<String>);
 
@@ -490,22 +470,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_file_that_cannot_be_read_is_never_saved_over() {
+    fn habits_that_cannot_be_read_are_never_saved_over() {
         let directory = tempfile_dir();
-        let path = directory.join("habits.json");
-        std::fs::write(&path, "not json").unwrap();
+        let path = directory.join("test.sqlite3");
+        let key = timeslay_core::task_db::keys::HABITS;
+        timeslay_core::task_db::write_document_json(&path, key, "not json").unwrap();
         let mut saved = read(Some(path.clone()));
         assert!(saved.error.is_some());
         saved.library.habits.push(Habit::new("a", "Run"));
         saved.save();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
+        assert!(read(Some(path)).error.is_some(), "still the bad contents");
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn habits_survive_being_saved_and_read_back() {
         let directory = tempfile_dir();
-        let path = directory.join("nested").join("habits.json");
+        let path = directory.join("nested").join("test.sqlite3");
         let mut saved = read(Some(path.clone()));
         assert_eq!(saved.error, None);
         saved.library.habits.push(Habit::new("a", "Run"));

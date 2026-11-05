@@ -206,7 +206,7 @@ fn App() -> Element {
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
         let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
-        store.cache_days_in(timeslay_core::config::cache_days_dir());
+        store.cache_days_in(timeslay_core::task_db::path());
         store
     });
     // Paint cached data immediately, fetching missing or empty days on navigation.

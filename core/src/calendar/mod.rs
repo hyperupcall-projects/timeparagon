@@ -3,7 +3,7 @@
 
 pub mod api;
 pub mod colors;
-mod day_cache;
+pub(crate) mod day_cache;
 pub mod deadline;
 pub mod event_options;
 pub mod first_day;
@@ -730,7 +730,7 @@ pub struct Store {
     cache: HashMap<NaiveDate, Vec<Event>>,
     /// Dates currently displayed by a range view must survive cache pruning.
     visible_days: Vec<NaiveDate>,
-    /// The directory those days are also written to, so they survive a
+    /// The database those days are also written to, so they survive a
     /// restart. `None` until [`Store::cache_days_in`] is called, which only
     /// `boot` and a reconnect do: a store built by hand must not read or
     /// rewrite the cache the user's own days live in.
@@ -871,7 +871,7 @@ impl Store {
         }
     }
 
-    /// Points the store at the directory cached days are written to, so they
+    /// Points the store at the database cached days are written to, so they
     /// outlive the process.
     ///
     /// The day in view is read straight back when a previous run left it
@@ -879,13 +879,13 @@ impl Store {
     /// first sync lands, and days that fell out of the cache while the app
     /// was closed are dropped. Called at boot and when a reconnect replaces
     /// the store: a store built by hand keeps its days in memory only.
-    pub fn cache_days_in(&mut self, directory: Option<PathBuf>) {
-        self.day_cache = directory;
+    pub fn cache_days_in(&mut self, database: Option<PathBuf>) {
+        self.day_cache = database;
         if self.last_sync.is_none()
             && let Some((fetched_at, calendars)) = self
                 .day_cache
                 .as_ref()
-                .and_then(|directory| day_cache::load_sync_state(directory))
+                .and_then(|database| day_cache::load_sync_state(database))
         {
             self.last_sync = Some(fetched_at);
             self.calendars = calendars;
@@ -910,7 +910,7 @@ impl Store {
     ///
     /// The day being left is parked in the cache, so stepping back to it paints
     /// at once rather than waiting for the sync. A day that has not been seen
-    /// yet comes back from the cache directory if an earlier run left it there,
+    /// yet comes back from the database if an earlier run left it there,
     /// and empty otherwise, filling in when the sync lands. `today` is the
     /// real day the clock is on, used to decide whether the view keeps
     /// following it.
@@ -944,8 +944,8 @@ impl Store {
     /// no longer describes the days filed under it.
     pub fn invalidate_other_days(&mut self) {
         self.cache.clear();
-        if let Some(directory) = self.day_cache.as_ref() {
-            day_cache::clear(directory);
+        if let Some(database) = self.day_cache.as_ref() {
+            day_cache::clear(database);
         }
     }
     pub fn forget_cached_days(&mut self) {
@@ -957,8 +957,8 @@ impl Store {
         self.pending.clear();
 
         // The days on disk were filed under the old boundary too.
-        if let Some(directory) = self.day_cache.as_ref() {
-            day_cache::clear(directory);
+        if let Some(database) = self.day_cache.as_ref() {
+            day_cache::clear(database);
         }
     }
 
@@ -983,11 +983,11 @@ impl Store {
             self.cache.remove(&day);
         }
 
-        let Some(directory) = self.day_cache.as_ref() else {
+        let Some(database) = self.day_cache.as_ref() else {
             return;
         };
-        for month in months_to_drop(day_cache::days(directory), current) {
-            day_cache::remove(directory, month);
+        for month in months_to_drop(day_cache::days(database), current) {
+            day_cache::remove(database, month);
         }
     }
 
@@ -1004,11 +1004,11 @@ impl Store {
 
     /// Writes one day out, so the run after this one paints it at once.
     fn write_day(&self, day: NaiveDate, events: &[Event]) {
-        let Some(directory) = self.day_cache.as_ref() else {
+        let Some(database) = self.day_cache.as_ref() else {
             return;
         };
 
-        if let Err(error) = day_cache::save(directory, day, events, self.day_end_hour) {
+        if let Err(error) = day_cache::save(database, day, events, self.day_end_hour) {
             log::warn!("could not cache {}: {error}", day);
         }
     }
@@ -1137,9 +1137,9 @@ impl Store {
         self.events = snapshot.events;
         self.day = snapshot.day;
         self.last_sync = Some(snapshot.fetched_at);
-        if let Some(directory) = &self.day_cache
+        if let Some(database) = &self.day_cache
             && let Err(error) =
-                day_cache::save_sync_state(directory, snapshot.fetched_at, &self.calendars)
+                day_cache::save_sync_state(database, snapshot.fetched_at, &self.calendars)
         {
             log::warn!("could not cache calendar sync state: {error}");
         }
@@ -1270,8 +1270,8 @@ impl Store {
         {
             *event = updated.clone();
         }
-        if let Some(directory) = &self.day_cache {
-            day_cache::update_events(directory, replace);
+        if let Some(database) = &self.day_cache {
+            day_cache::update_events(database, replace);
         }
     }
 
@@ -1287,14 +1287,14 @@ impl Store {
         for events in self.cache.values_mut() {
             replace(events);
         }
-        if let Some(directory) = &self.day_cache {
-            day_cache::update_events(directory, replace);
+        if let Some(database) = &self.day_cache {
+            day_cache::update_events(database, replace);
         }
     }
 
     pub fn clear_disk_cache(&self) {
-        if let Some(directory) = self.day_cache.as_ref() {
-            day_cache::clear(directory);
+        if let Some(database) = self.day_cache.as_ref() {
+            day_cache::clear(database);
         }
     }
 
@@ -1303,8 +1303,8 @@ impl Store {
         for events in self.cache.values_mut() {
             events.retain(|event| event.id != id);
         }
-        if let Some(directory) = &self.day_cache {
-            day_cache::update_events(directory, |events| events.retain(|event| event.id != id));
+        if let Some(database) = &self.day_cache {
+            day_cache::update_events(database, |events| events.retain(|event| event.id != id));
         }
     }
 
@@ -1390,8 +1390,8 @@ impl Store {
         if let Some(event) = self.detail_event.as_mut().filter(|event| event.id == id) {
             event.details.location = location.to_owned();
         }
-        if let Some(directory) = &self.day_cache {
-            day_cache::update_events(directory, set);
+        if let Some(database) = &self.day_cache {
+            day_cache::update_events(database, set);
         }
     }
 
@@ -1535,8 +1535,8 @@ impl Store {
                 event.color = color;
             }
         }
-        if let Some(directory) = &self.day_cache {
-            day_cache::update_events(directory, apply);
+        if let Some(database) = &self.day_cache {
+            day_cache::update_events(database, apply);
         }
     }
 
@@ -1593,8 +1593,8 @@ impl Store {
                         != Some(task_id.as_str())
             });
         };
-        if let Some(directory) = &self.day_cache {
-            day_cache::update_events(directory, drop_copies);
+        if let Some(database) = &self.day_cache {
+            day_cache::update_events(database, drop_copies);
         }
         drop_copies(&mut self.events);
         for events in self.cache.values_mut() {

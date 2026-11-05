@@ -634,7 +634,11 @@ fn signing_an_account_out_removes_it_from_the_cache() {
     assert!(state.people.draft.is_none());
     let books = wait_for_cache(&path, |books| books.len() == 1);
     assert_eq!(books[0].account(), "main@example.org");
-    assert!(!std::fs::read_to_string(&path).unwrap().contains("Lovelace"));
+    let saved: serde_json::Value =
+        crate::task_db::read_document(&path, crate::task_db::keys::CONTACTS)
+            .unwrap()
+            .unwrap();
+    assert!(!saved.to_string().contains("Lovelace"));
 
     let _ = forget_primary(&mut state);
     wait_for_cache(&path, |books| books.is_empty());
@@ -692,7 +696,7 @@ fn not_learning_who_is_signed_in_drops_nobody() {
 #[test]
 fn the_newest_snapshot_wins_whatever_order_they_are_written_in() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("contacts.json");
+    let path = dir.path().join("test.sqlite3");
     let mut state = book_state();
     let older = cache::snapshot(&state.people.books).unwrap();
     state.people.books[0].contacts.clear();
@@ -705,16 +709,16 @@ fn the_newest_snapshot_wins_whatever_order_they_are_written_in() {
 #[test]
 fn a_damaged_cache_is_the_same_as_none() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("contacts.json");
+    let path = dir.path().join("test.sqlite3");
     assert!(cache::load(&path).is_empty());
-    std::fs::write(&path, "not json").unwrap();
+    crate::task_db::write_document_json(&path, crate::task_db::keys::CONTACTS, "not json").unwrap();
     assert!(cache::load(&path).is_empty());
 }
 
 #[test]
 fn starting_up_shows_the_cached_contacts() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("contacts.json");
+    let path = dir.path().join("test.sqlite3");
     let state = book_state();
     cache::snapshot(&state.people.books)
         .unwrap()

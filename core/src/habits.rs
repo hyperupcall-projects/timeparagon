@@ -1260,16 +1260,6 @@ impl std::fmt::Display for SortKey {
     }
 }
 
-/// The habits file: `$XDG_STATE_HOME/timeslay/habits.json`.
-pub fn path() -> Option<std::path::PathBuf> {
-    Some(
-        directories::BaseDirs::new()?
-            .state_dir()?
-            .join("timeslay")
-            .join("habits.json"),
-    )
-}
-
 /// A named group in the habit list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Section {

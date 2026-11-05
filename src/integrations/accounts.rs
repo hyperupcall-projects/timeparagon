@@ -269,45 +269,30 @@ fn profile_email(access_token: &str) -> Result<String, String> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn path() -> Option<std::path::PathBuf> {
-    Some(
-        crate::config::project_dirs()?
-            .config_dir()
-            .join("gmail-accounts.toml"),
-    )
-}
-
-#[cfg(not(target_os = "android"))]
 fn read() -> io::Result<Vec<Account>> {
-    let Some(path) = path() else {
+    let Some(path) = crate::secrets::path() else {
         return Ok(Vec::new());
     };
-    match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str::<File>(&text)
-            .map(|file| file.accounts)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error),
-    }
+    let file: Option<File> = crate::secrets::read(&path, crate::secrets::keys::GMAIL_ACCOUNTS)?;
+    Ok(file.map(|file| file.accounts).unwrap_or_default())
 }
 
 #[cfg(not(target_os = "android"))]
 fn write(accounts: &[Account]) -> io::Result<()> {
-    let path = path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
+    let path = crate::secrets::path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no state directory available"))?;
+    let key = crate::secrets::keys::GMAIL_ACCOUNTS;
     if accounts.is_empty() {
-        return match std::fs::remove_file(&path) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
-            _ => Ok(()),
-        };
+        return crate::secrets::remove(&path, key);
     }
-    let contents = toml::to_string_pretty(&File {
-        accounts: accounts.to_vec(),
-    })
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
-    // Readable by this user only: these are long-lived credentials for a mailbox.
-    crate::fsutil::write_atomic(&path, contents.as_bytes(), crate::fsutil::Kind::Private)
+    // Long-lived credentials for a mailbox, so readable by this user only.
+    crate::secrets::write(
+        &path,
+        key,
+        &File {
+            accounts: accounts.to_vec(),
+        },
+    )
 }
 
 #[cfg(target_os = "android")]

@@ -19,8 +19,8 @@ use crate::hex::HexColor;
 use crate::todos::TodoList;
 
 pub use timeslay_core::config::{
-    CalendarSettings, Project, ProjectsSettings, TriageRequirements, WeekRange, cache_days_dir,
-    config_path, project_dirs,
+    CalendarSettings, Project, ProjectsSettings, TriageRequirements, WeekRange, config_path,
+    project_dirs,
 };
 pub use timeslay_core::places::{Place, RouteMode, SavedRoute, TravelMode};
 
@@ -800,34 +800,12 @@ impl Flash {
     }
 }
 
-/// Last successful Keep snapshot, including original card previews.
-pub fn cache_notes_path() -> Option<PathBuf> {
-    Some(project_dirs()?.cache_dir().join("notes").join("notes.json"))
-}
-
-/// Every contact fetched from Google, and the directory entries seen in searches.
-pub fn cache_people_path() -> Option<PathBuf> {
-    Some(
-        project_dirs()?
-            .cache_dir()
-            .join("people")
-            .join("contacts.json"),
-    )
-}
-
-/// Travel times already worked out, so a restart does not ask Mapbox again.
-pub fn cache_travel_path() -> Option<PathBuf> {
-    Some(
-        project_dirs()?
-            .cache_dir()
-            .join("travel")
-            .join("routes.json"),
-    )
-}
-
 impl Config {
-    /// Reads the config, falling back to defaults for anything unreadable.
+    /// Reads the config, with the shared data from the database, falling back
+    /// to defaults for anything unreadable.
     pub fn load() -> Self {
+        // First, so data an older build left in the file has moved before it is read.
+        let database = crate::task_db::path();
         let Some(path) = config_path() else {
             log::warn!("no config directory available; using defaults");
             return Self::default();
@@ -840,21 +818,25 @@ impl Config {
             log::warn!("could not make {} private: {error}", path.display());
         }
 
-        match fs::read_to_string(&path) {
-            Ok(contents) => match Self::parse(&contents) {
-                Ok(config) => config,
-                Err(error) => {
-                    log::warn!(
-                        "{} could not be parsed, using defaults instead: {error}",
-                        path.display()
-                    );
-                    Self::default()
-                }
-            },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+        let database = database.as_deref();
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
             Err(error) => {
                 log::warn!("{} could not be read: {error}", path.display());
-                Self::default()
+                String::new()
+            }
+        };
+        match Self::parse(&with_shared(&contents, database)) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!(
+                    "{} could not be parsed, using defaults instead: {error}",
+                    path.display()
+                );
+                // Saving stays refused until the file is fixed, so the data
+                // shown here cannot be overwritten by these defaults.
+                Self::parse(&with_shared("", database)).unwrap_or_default()
             }
         }
     }
@@ -882,9 +864,21 @@ impl Config {
     }
 
     /// Unlike startup, a failed live read must keep the current settings.
-    fn read_from(path: &Path) -> io::Result<Self> {
+    fn read_from(path: &Path, database: Option<&Path>) -> io::Result<Self> {
         let contents = fs::read_to_string(path)?;
-        Self::parse(&contents).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        Self::parse(&with_shared(&contents, database))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    /// The file's text, after the shared data has gone to the database.
+    fn file_contents(&self, database: Option<&Path>) -> io::Result<String> {
+        let mut table = toml::Table::try_from(self)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if let Some(database) = database {
+            crate::shared_data::store(database, &mut table, &crate::shared_data::SECTIONS)?;
+        }
+        toml::to_string_pretty(&table)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     /// Why the config on disk cannot be used, if it cannot.
@@ -898,15 +892,16 @@ impl Config {
         let path = config_path().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "no config directory available")
         })?;
-        self.save_to(&path)
+        let database = crate::task_db::path();
+        self.save_to(&path, database.as_deref())
     }
 
-    fn save_to(&self, path: &Path) -> io::Result<()> {
-        let contents = toml::to_string_pretty(self)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
+    /// The shared data goes to `database`, the rest to the file at `path`.
+    /// Neither is written while the file there does not parse.
+    fn save_to(&self, path: &Path, database: Option<&Path>) -> io::Result<()> {
         crate::fsutil::locked(path, || {
             check_replaceable(path)?;
+            let contents = self.file_contents(database)?;
             write_private(path, contents.as_bytes())
         })
     }
@@ -917,47 +912,76 @@ impl Config {
         let path = config_path().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "no config directory available")
         })?;
-        Self::update_at(&path, change)
+        let database = crate::task_db::path();
+        Self::update_at(&path, database.as_deref(), change)
     }
 
-    fn update_at(path: &Path, change: impl FnOnce(&mut Self)) -> io::Result<()> {
+    fn update_at(
+        path: &Path,
+        database: Option<&Path>,
+        change: impl FnOnce(&mut Self),
+    ) -> io::Result<()> {
         crate::fsutil::locked(path, || {
-            let mut config = match Self::read_from(path) {
+            let mut config = match Self::read_from(path, database) {
                 Ok(config) => config,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Self::parse(&with_shared("", database)).unwrap_or_default()
+                }
                 Err(error) => return Err(error),
             };
             change(&mut config);
-            let contents = toml::to_string_pretty(&config)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            let contents = config.file_contents(database)?;
             write_private(path, contents.as_bytes())
         })
     }
 }
 
+/// The config's text with the shared data from the database put back in, ready
+/// to parse. Text that does not parse is returned as it is, for its error.
+fn with_shared(contents: &str, database: Option<&Path>) -> String {
+    let Some(database) = database else {
+        return contents.to_owned();
+    };
+    let Ok(mut table) = toml::from_str::<toml::Table>(contents) else {
+        return contents.to_owned();
+    };
+    if let Err(error) = crate::shared_data::overlay(database, &mut table) {
+        log::warn!("could not read the shared data: {error}");
+    }
+    toml::to_string(&table).unwrap_or_else(|_| contents.to_owned())
+}
+
 /// Watch the directory, not the inode: editors and our own saves replace the
 /// file by renaming a temporary file. The native watcher does no idle polling.
+/// The database is watched too, for shared data that another process or the
+/// Drive sync changed.
 pub fn watch() -> iced::Subscription<Config> {
     iced::Subscription::run(config_changes)
 }
 
 fn config_changes() -> impl iced::futures::Stream<Item = Config> {
-    config_changes_at(config_path())
+    let database = crate::task_db::path();
+    config_changes_at(config_path(), database)
 }
 
-fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item = Config> {
+fn config_changes_at(
+    path: Option<PathBuf>,
+    database: Option<PathBuf>,
+) -> impl iced::futures::Stream<Item = Config> {
     iced::stream::channel(16, async move |mut output| {
         use iced::futures::{SinkExt, StreamExt};
         let Some(path) = path else { return };
         let Some(parent) = path.parent() else { return };
         let (sender, mut receiver) = iced::futures::channel::mpsc::unbounded();
         let (events, event_rx) = std::sync::mpsc::channel();
-        let watched_path = path.clone();
+        let watched: Vec<PathBuf> = std::iter::once(path.clone())
+            .chain(database.clone())
+            .collect();
         let mut watcher =
             match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 match event {
                     Ok(event)
-                        if event.paths.iter().any(|path| path == &watched_path)
+                        if event.paths.iter().any(|path| watched.contains(path))
                             && matches!(
                                 event.kind,
                                 notify::EventKind::Create(_)
@@ -984,7 +1008,15 @@ fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item =
             log::warn!("could not watch {}: {error}", parent.display());
             return;
         }
+        if let Some(directory) = database.as_deref().and_then(Path::parent)
+            && directory != parent
+            && let Err(error) =
+                notify::Watcher::watch(&mut watcher, directory, notify::RecursiveMode::NonRecursive)
+        {
+            log::warn!("could not watch {}: {error}", directory.display());
+        }
         let reload_path = path.clone();
+        let reload_database = database.clone();
         let worker = std::thread::Builder::new()
             .name("timeslay-config-watch".into())
             .spawn(move || {
@@ -998,7 +1030,7 @@ fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item =
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                         }
                     }
-                    match Config::read_from(&reload_path) {
+                    match Config::read_from(&reload_path, reload_database.as_deref()) {
                         Ok(config) => {
                             if sender.unbounded_send(config).is_err() {
                                 return;
@@ -1016,7 +1048,7 @@ fn config_changes_at(path: Option<PathBuf>) -> impl iced::futures::Stream<Item =
             return;
         }
         // Close the gap between startup's read and installing the watcher.
-        if let Ok(config) = Config::read_from(&path) {
+        if let Ok(config) = Config::read_from(&path, database.as_deref()) {
             let _ = output.send(config).await;
         }
         while let Some(config) = receiver.next().await {
@@ -1067,7 +1099,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         fs::write(&path, "[notepad]\ntext = \"precious\"\n[broken\n").unwrap();
 
-        let error = Config::default().save_to(&path).unwrap_err();
+        let error = Config::default().save_to(&path, None).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("not being saved"), "{error}");
@@ -1075,7 +1107,7 @@ mod tests {
         assert!(check_replaceable(&path).is_err());
 
         fs::write(&path, "[notepad]\ntext = \"fixed\"\n").unwrap();
-        Config::default().save_to(&path).unwrap();
+        Config::default().save_to(&path, None).unwrap();
         assert!(check_replaceable(&path).is_ok());
     }
 
@@ -1087,7 +1119,7 @@ mod tests {
         fs::write(&path, "").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o664)).unwrap();
 
-        Config::default().save_to(&path).unwrap();
+        Config::default().save_to(&path, None).unwrap();
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -1101,7 +1133,7 @@ mod tests {
             for _ in 0..4 {
                 scope.spawn(|| {
                     for _ in 0..5 {
-                        Config::update_at(&path, |config| {
+                        Config::update_at(&path, None, |config| {
                             config.notepad.text.push('x');
                         })
                         .unwrap();
@@ -1109,7 +1141,45 @@ mod tests {
                 });
             }
         });
-        assert_eq!(Config::read_from(&path).unwrap().notepad.text.len(), 20);
+        assert_eq!(
+            Config::read_from(&path, None).unwrap().notepad.text.len(),
+            20
+        );
+    }
+
+    #[test]
+    fn shared_data_is_saved_to_the_database_and_read_back_with_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let database = dir.path().join("test.sqlite3");
+        let mut config = Config::default();
+        config.notepad.text = "milk".into();
+        config.notepad.font_size = 120;
+        config.todos.add("write it");
+        config.brain_dump.set(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
+            "idea".into(),
+        );
+        config.save_to(&path, Some(&database)).unwrap();
+
+        let file: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        for section in ["todos", "brain_dump", "projects", "task_work"] {
+            assert!(file.get(section).is_none(), "{section} left the file");
+        }
+        assert_eq!(file["notepad"].as_table().unwrap().len(), 1);
+        assert_eq!(file["notepad"]["font_size"].as_integer(), Some(120));
+
+        let read = Config::read_from(&path, Some(&database)).unwrap();
+        assert_eq!(read, config);
+
+        // And a config that does not parse keeps the data from being replaced.
+        fs::write(&path, "[broken\n").unwrap();
+        assert!(Config::default().save_to(&path, Some(&database)).is_err());
+        fs::write(&path, "").unwrap();
+        assert_eq!(
+            Config::read_from(&path, Some(&database)).unwrap().todos,
+            config.todos
+        );
     }
 
     #[test]
@@ -1118,7 +1188,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         fs::write(&path, "[broken\n").unwrap();
 
-        assert!(Config::update_at(&path, |_| {}).is_err());
+        assert!(Config::update_at(&path, None, |_| {}).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "[broken\n");
     }
 
@@ -1328,7 +1398,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             iced::futures::executor::block_on(async move {
-                let changes = config_changes_at(Some(watched_path));
+                let changes = config_changes_at(Some(watched_path), None);
                 iced::futures::pin_mut!(changes);
                 // Repeated native events are allowed; forward all snapshots.
                 while let Some(config) = changes.next().await {
@@ -1354,7 +1424,7 @@ mod tests {
         write_private(&path, b"[alarm.sound]\nvolume = 40").unwrap();
         wait_for_volume(40);
         fs::write(&path, "[alarm.sound]\nvolume = ").unwrap();
-        assert!(Config::read_from(&path).is_err());
+        assert!(Config::read_from(&path, None).is_err());
         // Allow the native callback to read the invalid edit before replacing it.
         let deadline = std::time::Instant::now() + Duration::from_millis(300);
         while let Ok(config) =
@@ -1454,16 +1524,6 @@ mod tests {
         let parsed: Config = toml::from_str("").unwrap();
         assert_eq!(parsed.calendar.sync_minutes, 60);
         assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(60 * 60));
-    }
-
-    #[test]
-    fn cached_days_live_under_the_xdg_cache_directory() {
-        let days = cache_days_dir().expect("a cache directory");
-        assert!(
-            days.ends_with(Path::new("timeslay").join("days")),
-            "{} should sit under the XDG cache directory",
-            days.display()
-        );
     }
 
     #[test]

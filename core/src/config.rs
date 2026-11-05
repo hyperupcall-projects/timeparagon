@@ -595,11 +595,6 @@ pub fn config_path() -> Option<PathBuf> {
     Some(project_dirs()?.config_dir().join("config.toml"))
 }
 
-/// Where cached days live, matching the iced app's XDG cache directory.
-pub fn cache_days_dir() -> Option<PathBuf> {
-    Some(project_dirs()?.cache_dir().join("days"))
-}
-
 /// Stores the Google OAuth client in `config.toml`, keeping every other
 /// setting (including ones this crate does not know about) as it was.
 ///
@@ -735,42 +730,33 @@ fn save_event_place_at(
     })
 }
 
-/// Replaces the notepad's text, keeping the rest of `[notepad]`.
+/// The local database, which holds the scratch data below.
+fn database() -> io::Result<PathBuf> {
+    crate::task_db::path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data directory available"))
+}
+
+/// Replaces the notepad's text. Its font size is a setting, left in the config.
 pub fn save_notepad_text(text: &str) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    edit_table(&path, "notepad", |table| {
-        table.insert("text".to_owned(), toml::Value::String(text.to_owned()));
-        Ok(())
-    })
+    let notepad = NotepadText {
+        text: text.to_owned(),
+    };
+    crate::shared_data::save_section(&database()?, "notepad", &notepad)
 }
 
 /// Replaces the temporary todo list.
 pub fn save_todos(todos: &crate::todos::TodoList) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_whole_table(&path, "todos", todos)
+    crate::shared_data::save_section(&database()?, "todos", todos)
 }
 
 /// Replaces the brain dump pages.
 pub fn save_brain_dump(dumps: &crate::brain_dump::Dumps) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_whole_table(&path, "brain_dump", dumps)
+    crate::shared_data::save_section(&database()?, "brain_dump", dumps)
 }
 
 /// Replaces the list of projects.
 pub fn save_projects(projects: &ProjectsSettings) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_whole_table(&path, "projects", projects)
-}
-
-/// Writes one value over a whole table, leaving every other table in the file
-/// (including the ones only the iced app reads) as they were.
-fn save_whole_table(path: &std::path::Path, name: &str, value: &impl Serialize) -> io::Result<()> {
-    let replacement = toml::Table::try_from(value)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    edit_table(path, name, |table| {
-        *table = replacement;
-        Ok(())
-    })
+    crate::shared_data::save_section(&database()?, "projects", projects)
 }
 
 fn no_config_directory() -> io::Error {
@@ -821,8 +807,11 @@ fn edit_table(
 }
 
 impl Config {
-    /// Reads the config, falling back to defaults for anything unreadable.
+    /// Reads the config, with the scratch data from the database, falling back
+    /// to defaults for anything unreadable.
     pub fn load() -> Self {
+        // First, so data an older build left in the file has moved before it is read.
+        let database = crate::task_db::path();
         let Some(path) = config_path() else {
             log::warn!("no config directory available; using defaults");
             return Self::default();
@@ -832,24 +821,41 @@ impl Config {
         {
             log::warn!("could not make {} private: {error}", path.display());
         }
+        Self::load_from(&path, database.as_deref())
+    }
 
-        match fs::read_to_string(&path) {
-            Ok(contents) => match toml::from_str(&contents) {
-                Ok(config) => config,
+    fn load_from(path: &std::path::Path, database: Option<&std::path::Path>) -> Self {
+        let mut table = match fs::read_to_string(path) {
+            Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
+                Ok(table) => table,
                 Err(error) => {
                     log::warn!(
                         "{} could not be parsed, using defaults instead: {error}",
                         path.display()
                     );
-                    Self::default()
+                    toml::Table::new()
                 }
             },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => toml::Table::new(),
             Err(error) => {
                 log::warn!("{} could not be read: {error}", path.display());
-                Self::default()
+                toml::Table::new()
             }
+        };
+        if let Some(database) = database
+            && let Err(error) = crate::shared_data::overlay(database, &mut table)
+        {
+            log::warn!("could not read the scratch data: {error}");
         }
+        toml::Value::Table(table)
+            .try_into()
+            .unwrap_or_else(|error| {
+                log::warn!(
+                    "{} could not be parsed, using defaults instead: {error}",
+                    path.display()
+                );
+                Self::default()
+            })
     }
 }
 
@@ -858,38 +864,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scratch_data_round_trips_and_leaves_the_desktop_tables_alone() {
+    fn scratch_data_comes_from_the_database_and_leaves_the_config_alone() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
-        std::fs::write(
-            &path,
-            "[pomodoro]\nwork_minutes = 25\n[notepad]\nfont_size = 120\ntext = \"old\"\n",
-        )
-        .unwrap();
+        let database = directory.path().join("test.sqlite3");
+        let original = "[pomodoro]\nwork_minutes = 25\n[notepad]\nfont_size = 120\n";
+        std::fs::write(&path, original).unwrap();
 
         let mut todos = crate::todos::TodoList::default();
         todos.add("write it");
-        save_whole_table(&path, "todos", &todos).unwrap();
+        crate::shared_data::save_section(&database, "todos", &todos).unwrap();
         let mut dumps = crate::brain_dump::Dumps::default();
         dumps.set(
             chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
             "idea".into(),
         );
-        save_whole_table(&path, "brain_dump", &dumps).unwrap();
-        edit_table(&path, "notepad", |table| {
-            table.insert("text".to_owned(), toml::Value::String("new".to_owned()));
-            Ok(())
-        })
-        .unwrap();
+        crate::shared_data::save_section(&database, "brain_dump", &dumps).unwrap();
+        let notepad = NotepadText { text: "new".into() };
+        crate::shared_data::save_section(&database, "notepad", &notepad).unwrap();
 
-        let text = std::fs::read_to_string(&path).unwrap();
-        let read: Config = toml::from_str(&text).unwrap();
+        let read = Config::load_from(&path, Some(&database));
         assert_eq!(read.todos, todos);
         assert_eq!(read.brain_dump, dumps);
         assert_eq!(read.notepad.text, "new");
-        let raw: toml::Table = toml::from_str(&text).unwrap();
-        assert_eq!(raw["pomodoro"]["work_minutes"].as_integer(), Some(25));
-        assert_eq!(raw["notepad"]["font_size"].as_integer(), Some(120));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[test]

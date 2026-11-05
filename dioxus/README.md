@@ -9,12 +9,12 @@ sheets over it:
 - Week, two-week and month agendas.
 - Overdue and Inbox filters on the Tasks tab.
 - Joining meetings and answering invitations.
-- Todos, the notepad, brain dumps and projects, shared through `config.toml`.
+- Todos, the notepad, brain dumps and projects, shared through Google Drive.
 - The habit tracker.
 
-The habit tracker's file (`habits.json`) is not synced by anything, so the phone
-keeps its own record, apart from the desktop's. Notes keep their local copy in the
-data directory rather than the cache, because Android may empty an app's cache.
+The habit tracker's data is not synced by anything, so the phone keeps its own
+record, apart from the desktop's. Local data lives in the database in the data
+directory rather than the cache, because Android may empty an app's cache.
 
 These stay on the desktop: the dock and panel, global shortcuts, alarms and the
 Pomodoro timer (neither runs in the background here yet), voice input, People,
@@ -24,8 +24,10 @@ ordinary tasks.
 Both apps share data and code via the `timeslay-core` crate:
 
 - the config at `~/.config/timeslay/config.toml`,
-- the OAuth token at `~/.config/timeslay/google-token.toml`,
-- the local task database and time-block metadata,
+- the local database at `~/.local/share/timeslay/timeslay.sqlite3`, which holds
+  tasks and time-block metadata, cached events, habits, notes and the scratch data,
+- on the desktop, the OAuth token in `~/.local/state/timeslay/secrets.json`,
+  kept out of the database,
 - the calendar sync and Google Tasks code in `core/`.
 - the palettes, radii and shadows in `core/src/theme/`, which reach this app as
   CSS variables through `dioxus/src/style.rs`.
@@ -152,6 +154,11 @@ not appear in Drive and the app cannot see any of your other files. The sync is
 - An **empty** config (missing, blank, or only comments) never replaces
   another one, and a config that does not parse is neither uploaded nor
   overwritten.
+- Todos, the notepad's text, brain dumps, projects and work sessions live in
+  the local database rather than `config.toml`, and sync the same way as
+  `shared-data.json` in the same folder. Its "modification time" is when that
+  data last changed. A config from an older build that still holds them gives
+  them up to the database, which keeps its own copy if it has one.
 - A config file stamped with the epoch is treated as a placeholder, so a config
   already in Drive replaces it.
 

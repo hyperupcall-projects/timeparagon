@@ -324,7 +324,10 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                     state.calendar.apply_task_colors(&state.config.calendar);
                     let reconcile = reconcile_completed_task(state);
                     let fetch = fetch_pending_calendar_days(state, &dates);
-                    let reconcile = Task::batch([reconcile, fetch]);
+                    // A new recurring series may still need adopting into the
+                    // habit library before its occurrences can offer Record.
+                    let habits = Task::done(Message::Habits(crate::habits::Action::Refresh));
+                    let reconcile = Task::batch([reconcile, fetch, habits]);
                     if remember {
                         Task::batch([queue_save(state), reconcile])
                     } else {
@@ -351,7 +354,8 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             let reconcile = reconcile_completed_task(state);
             let fetch = fetch_pending_calendar_days(state, &[day]);
             let invitations = crate::inbox::refresh_invitations(state);
-            let reconcile = Task::batch([reconcile, fetch, invitations]);
+            let habits = Task::done(Message::Habits(crate::habits::Action::Refresh));
+            let reconcile = Task::batch([reconcile, fetch, invitations, habits]);
             if remember {
                 Task::batch([queue_save(state), reconcile])
             } else {

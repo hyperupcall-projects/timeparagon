@@ -1193,6 +1193,81 @@ fn an_empty_range_result_does_not_fetch_forever() {
 }
 
 #[test]
+fn calendar_sync_refreshes_habit_links_for_a_new_series_without_opening_habits() {
+    use crate::habits::{Action, Habit, Mark};
+
+    for range in [false, true] {
+        let mut state = State::blank();
+        state.screen = Screen::Calendar;
+        let mut snapshot = calendar::sample_snapshot();
+        snapshot.calendars.clear();
+        let day = snapshot.day;
+        let yesterday = day.pred_opt().unwrap();
+        let mut habit = Habit::new("breakfast", "Breakfast");
+        habit.marks.insert(yesterday, Mark::Yes);
+        state.habits.library.habits.push(habit);
+        state
+            .habits
+            .library
+            .adopted
+            .insert("old-breakfast-series".into(), "breakfast".into());
+
+        let mut event = snapshot.events[0].clone();
+        event.id = "new-breakfast-series_today".into();
+        event.title = "Breakfast".into();
+        event.details = calendar::Details {
+            habit: true,
+            recurring_event_id: Some("new-breakfast-series".into()),
+            ..Default::default()
+        };
+        snapshot.events = vec![event.clone()];
+        state.calendar.day = day;
+        assert_eq!(state.habits.habit_of(&event), None);
+
+        let message = if range {
+            CalendarMessage::CalendarRangeSynced(
+                state.timeblocking.revision,
+                vec![day, day.succ_opt().unwrap()],
+                Ok(snapshot),
+            )
+        } else {
+            CalendarMessage::CalendarSynced(Ok(snapshot))
+        };
+        let task = update(&mut state, Message::Calendar(message));
+        let refreshes = messages(task)
+            .iter()
+            .filter(|message| matches!(message, Message::Habits(Action::Refresh)))
+            .count();
+        assert_eq!(refreshes, 1, "range sync: {range}");
+
+        // Simulate the listing returned by the scheduled refresh, without
+        // contacting Google or changing the screen.
+        let _ = update(
+            &mut state,
+            Message::Habits(Action::Loaded(Ok(calendar::api::HabitListing {
+                series: vec![calendar::api::HabitEvent {
+                    id: "new-breakfast-series".into(),
+                    calendar_id: event.calendar_id.clone(),
+                    title: event.title.clone(),
+                    notes: String::new(),
+                    start: event.start,
+                    end: event.end,
+                    recurrence: vec!["RRULE:FREQ=DAILY".into()],
+                    color_id: None,
+                    habit_id: None,
+                }],
+                completions: vec![],
+            }))),
+        );
+        let synced = state.calendar.event(&event.id).unwrap();
+        assert_eq!(state.habits.habit_of(synced), Some("breakfast"));
+        assert_eq!(state.habits.library.habits.len(), 1);
+        assert_eq!(state.habits.library.habits[0].marks[&yesterday], Mark::Yes);
+        assert_eq!(state.screen, Screen::Calendar);
+    }
+}
+
+#[test]
 fn a_recent_sync_prevents_an_automatic_fetch_but_manual_sync_still_works() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
