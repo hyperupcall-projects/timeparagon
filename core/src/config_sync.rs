@@ -1,9 +1,14 @@
-//! Keeps `config.toml` in step with the app's hidden Google Drive folder.
+//! Keeps `config.toml`, and the shared data in the local database, in step with
+//! the app's hidden Google Drive folder.
 //!
 //! Google Drive's `appDataFolder` is a per-app space that does not show up in
 //! the user's Drive, so the config can follow the user from desktop to phone
 //! without cluttering anything. Both the iced app and the Dioxus app start
-//! the same engine, which means they share one file there.
+//! the same engine, which means they share the files there: `config.toml`, and
+//! `shared-data.json` for the todos, notepad, brain dumps, projects and work
+//! sessions in [`crate::shared_data`]. Each is synced on its own, by the same
+//! rules. For the shared data, "the local file" below means the database's
+//! copy, and its modification time is when that data last changed.
 //!
 //! The rules, in order of importance:
 //!
@@ -40,6 +45,7 @@ use crate::calendar::oauth;
 use crate::config;
 
 const FILE_NAME: &str = "config.toml";
+const SHARED_FILE_NAME: &str = "shared-data.json";
 const FILES: &str = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
 
@@ -115,8 +121,8 @@ pub fn status() -> Status {
         .unwrap_or(Status::Starting)
 }
 
-/// Counts how many times `config.toml` changed contents under the running app,
-/// whether by an edit, a save, or a download from Drive. A UI that holds the
+/// Counts how many times `config.toml` or the shared data changed contents
+/// under the running app, whether by an edit, a save, or a download from Drive. A UI that holds the
 /// config in memory re-reads it when this moves.
 pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
@@ -150,13 +156,33 @@ fn run(receiver: mpsc::Receiver<Wake>, sender: Sender<Wake>) {
         set_status(Status::Failed("no config directory available".to_owned()));
         return;
     };
-    // Held for as long as the worker lives; dropping it stops the watch.
-    let _watcher = watch(&path, sender);
+    let config_file = ConfigFile {
+        path: path.clone(),
+        database: crate::task_db::path(),
+    };
+    let shared = config_file
+        .database
+        .clone()
+        .map(|database| SharedData { database });
+    // Held for as long as the worker lives; dropping them stops the watches.
+    let _watcher = watch(&path, sender.clone());
+    let _shared_watcher = shared
+        .as_ref()
+        .and_then(|shared| watch(&shared.database, sender));
 
     let mut engine = Engine::default();
+    let mut shared_engine = Engine::default();
     let mut poll = true;
     loop {
-        engine.cycle(&path, poll);
+        let result = engine.cycle(&config_file, &path, poll);
+        let shared_result = shared
+            .as_ref()
+            .map(|shared| shared_engine.cycle(shared, &path, poll));
+        report(match (result, shared_result) {
+            (Err(failure), _) | (Ok(_), Some(Err(failure))) => Err(failure),
+            (Ok(Pass::Skipped), None | Some(Ok(Pass::Skipped))) => Ok(Pass::Skipped),
+            _ => Ok(Pass::Synced),
+        });
 
         poll = match receiver.recv_timeout(POLL_EVERY) {
             Ok(Wake::Now) => true,
@@ -174,6 +200,16 @@ fn run(receiver: mpsc::Receiver<Wake>, sender: Sender<Wake>) {
             Err(RecvTimeoutError::Timeout) => true,
             Err(RecvTimeoutError::Disconnected) => return,
         };
+    }
+}
+
+fn report(result: Result<Pass, Failure>) {
+    match result {
+        Ok(Pass::Synced) => set_status(Status::Synced(SystemTime::now())),
+        Ok(Pass::Skipped) => {}
+        Err(Failure::SignedOut) => set_status(Status::SignedOut),
+        Err(Failure::Reconnect) => set_status(Status::NeedsReconnect),
+        Err(Failure::Other(error)) => set_status(Status::Failed(error)),
     }
 }
 
@@ -195,12 +231,12 @@ fn watch(path: &Path, sender: Sender<Wake>) -> Option<notify::RecommendedWatcher
             {
                 let _ = sender.send(Wake::File);
             }
-            Err(error) => log::warn!("config sync watcher error: {error}"),
+            Err(error) => log::warn!("sync watcher error: {error}"),
             _ => {}
         }) {
             Ok(watcher) => watcher,
             Err(error) => {
-                log::warn!("could not watch the config for changes: {error}");
+                log::warn!("could not watch {} for changes: {error}", path.display());
                 return None;
             }
         };
@@ -234,6 +270,15 @@ fn classify(text: &str) -> Kind {
     }
 }
 
+fn classify_json(text: &str) -> Kind {
+    match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(text) {
+        Ok(fields) if fields.is_empty() => Kind::Empty,
+        Ok(_) => Kind::Ready,
+        Err(_) if text.trim().is_empty() => Kind::Empty,
+        Err(_) => Kind::Invalid,
+    }
+}
+
 type Hash = [u8; 32];
 
 fn hash(text: &str) -> Hash {
@@ -251,6 +296,75 @@ struct LocalFile {
 impl LocalFile {
     fn ready(&self) -> bool {
         self.kind == Kind::Ready
+    }
+}
+
+/// The copy on this device of something synced.
+trait LocalCopy {
+    /// What to call it in the log.
+    fn label(&self) -> &'static str;
+    /// The name of its file on Drive.
+    fn remote_name(&self) -> &'static str;
+    fn classify(&self, text: &str) -> Kind;
+    fn read(&self) -> io::Result<LocalFile>;
+    /// Replaces it with Drive's copy, stamped with Drive's time.
+    fn write(&self, text: &str, modified_ms: i64) -> io::Result<()>;
+}
+
+struct ConfigFile {
+    path: std::path::PathBuf,
+    /// Where shared data in a downloaded config is moved to.
+    database: Option<std::path::PathBuf>,
+}
+
+impl LocalCopy for ConfigFile {
+    fn label(&self) -> &'static str {
+        "the config"
+    }
+    fn remote_name(&self) -> &'static str {
+        FILE_NAME
+    }
+    fn classify(&self, text: &str) -> Kind {
+        classify(text)
+    }
+    fn read(&self) -> io::Result<LocalFile> {
+        read_local(&self.path)
+    }
+    fn write(&self, text: &str, modified_ms: i64) -> io::Result<()> {
+        write_local(&self.path, text, modified_ms)?;
+        // A device on an older build still syncs its data inside the config.
+        if let Some(database) = &self.database {
+            crate::shared_data::adopt(&self.path, database)?;
+        }
+        Ok(())
+    }
+}
+
+struct SharedData {
+    database: std::path::PathBuf,
+}
+
+impl LocalCopy for SharedData {
+    fn label(&self) -> &'static str {
+        "the shared data"
+    }
+    fn remote_name(&self) -> &'static str {
+        SHARED_FILE_NAME
+    }
+    fn classify(&self, text: &str) -> Kind {
+        classify_json(text)
+    }
+    fn read(&self) -> io::Result<LocalFile> {
+        let (text, modified_ms) = crate::shared_data::bundle(&self.database)?;
+        Ok(LocalFile {
+            hash: hash(&text),
+            kind: classify_json(&text),
+            text,
+            modified_ms,
+        })
+    }
+    fn write(&self, text: &str, modified_ms: i64) -> io::Result<()> {
+        crate::shared_data::replace(&self.database, text, modified_ms)
     }
 }
 
@@ -291,10 +405,10 @@ enum Action {
 fn resolve(
     local: &LocalFile,
     remote_text: &str,
+    remote_ready: bool,
     remote_modified_ms: i64,
     local_changed: bool,
 ) -> Action {
-    let remote_ready = classify(remote_text) == Kind::Ready;
     match (local.ready(), remote_ready) {
         (false, false) => Action::Nothing,
         // An empty config never replaces a real one, whichever side it is on.
@@ -361,34 +475,35 @@ trait Drive {
 }
 
 impl Engine {
-    /// One pass, with the outcome folded into [`status`].
-    fn cycle(&mut self, path: &Path, poll: bool) {
-        let result = self.step(path, poll, |local| {
+    /// One pass. The OAuth client comes from the config at `config`.
+    fn cycle(
+        &mut self,
+        local: &impl LocalCopy,
+        config: &Path,
+        poll: bool,
+    ) -> Result<Pass, Failure> {
+        self.step(local, poll, || {
             let tokens = oauth::load_tokens().ok_or(Failure::SignedOut)?;
-            let (client_id, client_secret) = credentials(&local.text);
+            let (client_id, client_secret) =
+                credentials(&fs::read_to_string(config).unwrap_or_default());
             let tokens =
                 oauth::ensure_access(&client_id, &client_secret, tokens).map_err(Failure::Other)?;
             Ok(GoogleDrive {
                 token: tokens.access_token,
+                name: local.remote_name(),
             })
-        });
-        match result {
-            Ok(Pass::Synced) => set_status(Status::Synced(SystemTime::now())),
-            Ok(Pass::Skipped) => {}
-            Err(Failure::SignedOut) => set_status(Status::SignedOut),
-            Err(Failure::Reconnect) => set_status(Status::NeedsReconnect),
-            Err(Failure::Other(error)) => set_status(Status::Failed(error)),
-        }
+        })
     }
 
-    /// `poll` is whether to ask Drive even when the local file looks settled.
+    /// `poll` is whether to ask Drive even when the local copy looks settled.
     fn step<D: Drive>(
         &mut self,
-        path: &Path,
+        source: &impl LocalCopy,
         poll: bool,
-        connect: impl FnOnce(&LocalFile) -> Result<D, Failure>,
+        connect: impl FnOnce() -> Result<D, Failure>,
     ) -> Result<Pass, Failure> {
-        let local = read_local(path).map_err(Failure::other)?;
+        let label = source.label();
+        let local = source.read().map_err(Failure::other)?;
 
         if self.seen != Some(local.hash) {
             if self.seen.is_some() {
@@ -398,10 +513,7 @@ impl Engine {
         }
 
         if local.kind == Kind::Invalid {
-            log::warn!(
-                "{} does not parse; leaving it alone until it does",
-                path.display()
-            );
+            log::warn!("{label} does not parse; leaving it alone until it does");
             return Ok(Pass::Skipped);
         }
         // Our own writes and no-op saves land here: nothing new to tell Drive.
@@ -409,13 +521,13 @@ impl Engine {
             return Ok(Pass::Skipped);
         }
 
-        let drive = connect(&local)?;
+        let drive = connect()?;
         let local_changed = self.last.is_none_or(|last| last.hash != local.hash);
 
         let Some(remote) = drive.find()? else {
             if local.ready() {
                 let uploaded = drive.upload(None, &local.text, local.modified_ms)?;
-                log::info!("uploaded the config to Google Drive");
+                log::info!("uploaded {label} to Google Drive");
                 self.record(local.hash, uploaded.modified_ms);
             }
             return Ok(Pass::Synced);
@@ -437,28 +549,39 @@ impl Engine {
         if !remote_changed {
             if local.ready() {
                 let uploaded = drive.upload(Some(&remote), &local.text, local.modified_ms)?;
-                log::info!("uploaded the config to Google Drive");
+                log::info!("uploaded {label} to Google Drive");
                 self.record(local.hash, uploaded.modified_ms);
             }
             return Ok(Pass::Synced);
         }
 
         let remote_text = drive.download(&remote)?;
-        match resolve(&local, &remote_text, remote.modified_ms, local_changed) {
+        let remote_ready = source.classify(&remote_text) == Kind::Ready;
+        match resolve(
+            &local,
+            &remote_text,
+            remote_ready,
+            remote.modified_ms,
+            local_changed,
+        ) {
             Action::Nothing => {}
             Action::Adopt => self.record(local.hash, remote.modified_ms),
             Action::Upload => {
                 let uploaded = drive.upload(Some(&remote), &local.text, local.modified_ms)?;
-                log::info!("uploaded the config to Google Drive");
+                log::info!("uploaded {label} to Google Drive");
                 self.record(local.hash, uploaded.modified_ms);
             }
             Action::Download => {
-                write_local(path, &remote_text, remote.modified_ms).map_err(Failure::other)?;
-                log::info!("updated the config from Google Drive");
-                let downloaded = hash(&remote_text);
-                self.seen = Some(downloaded);
+                source
+                    .write(&remote_text, remote.modified_ms)
+                    .map_err(Failure::other)?;
+                log::info!("updated {label} from Google Drive");
+                self.seen = Some(source.read().map_err(Failure::other)?.hash);
                 GENERATION.fetch_add(1, Ordering::Relaxed);
-                self.record(downloaded, remote.modified_ms);
+                // Agreed on Drive's text. When the write stored something else,
+                // as moving shared data out of a config does, the next pass
+                // uploads that.
+                self.record(hash(&remote_text), remote.modified_ms);
             }
         }
         Ok(Pass::Synced)
@@ -524,6 +647,7 @@ fn from_millis(ms: i64) -> SystemTime {
 
 struct GoogleDrive {
     token: String,
+    name: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -572,7 +696,7 @@ impl Drive for GoogleDrive {
         let response = send(
             self.request("GET", FILES)
                 .query("spaces", "appDataFolder")
-                .query("q", &format!("name = '{FILE_NAME}' and trashed = false"))
+                .query("q", &format!("name = '{}' and trashed = false", self.name))
                 .query("orderBy", "modifiedTime desc")
                 .query("pageSize", "10")
                 .query("fields", "files(id,modifiedTime)")
@@ -601,7 +725,7 @@ impl Drive for GoogleDrive {
     ) -> Result<RemoteFile, Failure> {
         let mut metadata = serde_json::Map::new();
         if existing.is_none() {
-            metadata.insert("name".into(), FILE_NAME.into());
+            metadata.insert("name".into(), self.name.into());
             metadata.insert("parents".into(), serde_json::json!(["appDataFolder"]));
         }
         if modified_ms >= PLAUSIBLE_AFTER_MS
@@ -764,10 +888,72 @@ mod tests {
     }
 
     fn sync(engine: &mut Engine, dir: &Dir, drive: &FakeDrive, poll: bool) {
+        let file = ConfigFile {
+            path: dir.config(),
+            database: None,
+        };
+        engine.step(&file, poll, || Ok(drive)).map(|_| ()).unwrap();
+    }
+
+    fn sync_shared(engine: &mut Engine, database: &Path, drive: &FakeDrive, poll: bool) {
+        let shared = SharedData {
+            database: database.to_owned(),
+        };
         engine
-            .step(&dir.config(), poll, |_| Ok(drive))
+            .step(&shared, poll, || Ok(drive))
             .map(|_| ())
             .unwrap();
+    }
+
+    #[test]
+    fn shared_data_follows_the_same_rules() {
+        let dir = Dir::new("shared");
+        let database = dir.0.join("test.sqlite3");
+        // Nothing here yet, so Drive's copy fills it in rather than losing to it.
+        let drive = FakeDrive::holding(r#"{"notepad":{"text":"milk"}}"#, NOW);
+        sync_shared(&mut Engine::default(), &database, &drive, true);
+        assert_eq!(
+            crate::shared_data::bundle(&database).unwrap(),
+            (r#"{"notepad":{"text":"milk"}}"#.to_owned(), NOW)
+        );
+        assert_eq!(*drive.uploads.borrow(), 0);
+
+        // A local edit goes up.
+        let mut engine = Engine::default();
+        sync_shared(&mut engine, &database, &drive, true);
+        crate::shared_data::save_section(&database, "notepad", &toml::toml! { text = "bread" })
+            .unwrap();
+        sync_shared(&mut engine, &database, &drive, false);
+        assert_eq!(drive.text().unwrap(), r#"{"notepad":{"text":"bread"}}"#);
+    }
+
+    #[test]
+    fn a_downloaded_config_from_an_older_build_gives_up_its_shared_data() {
+        let dir = Dir::new("old-config");
+        let database = dir.0.join("test.sqlite3");
+        let file = ConfigFile {
+            path: dir.config(),
+            database: Some(database.clone()),
+        };
+        let drive = FakeDrive::holding(
+            "a = 1
+[notepad]
+text = \"milk\"
+",
+            NOW,
+        );
+        let mut engine = Engine::default();
+        engine.step(&file, true, || Ok(&drive)).unwrap();
+        assert_eq!(dir.read().trim(), "a = 1");
+        assert!(
+            crate::shared_data::bundle(&database)
+                .unwrap()
+                .0
+                .contains("milk")
+        );
+        // The stripped config is uploaded, so Drive's copy loses the data too.
+        engine.step(&file, false, || Ok(&drive)).unwrap();
+        assert_eq!(drive.text().unwrap().trim(), "a = 1");
     }
 
     #[test]
@@ -777,6 +963,10 @@ mod tests {
         assert_eq!(classify("# nothing yet\n"), Kind::Empty);
         assert_eq!(classify("[timer]\nlast_duration_secs = 5"), Kind::Ready);
         assert_eq!(classify("[timer\n"), Kind::Invalid);
+        assert_eq!(classify_json("{}"), Kind::Empty);
+        assert_eq!(classify_json(""), Kind::Empty);
+        assert_eq!(classify_json(r#"{"todos":{}}"#), Kind::Ready);
+        assert_eq!(classify_json("[1]"), Kind::Invalid);
     }
 
     #[test]

@@ -81,32 +81,31 @@ impl Theme {
             .unwrap_or_default()
     }
 
-    /// The preference lives beside `config.toml` but in its own file: it is a
-    /// per-device choice, so it must not travel with the synced config.
-    fn path() -> Option<std::path::PathBuf> {
-        Some(
-            timeslay_core::config::project_dirs()?
-                .config_dir()
-                .join("dioxus-theme"),
-        )
-    }
-
+    /// A per-device choice, so it is in the database and not the synced config.
     /// The saved choice, or `System` when nothing has been saved.
     pub fn load() -> Self {
-        Self::path()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+        timeslay_core::task_db::path()
+            .and_then(|path| {
+                timeslay_core::task_db::read_document::<String>(
+                    &path,
+                    timeslay_core::task_db::keys::THEME,
+                )
+                .ok()
+                .flatten()
+            })
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
     }
 
     pub fn save(self) {
-        let Some(path) = Self::path() else {
+        let Some(path) = timeslay_core::task_db::path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(path, self.name());
+        let _ = timeslay_core::task_db::write_document(
+            &path,
+            timeslay_core::task_db::keys::THEME,
+            self.name(),
+        );
     }
 }
 

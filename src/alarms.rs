@@ -10,13 +10,10 @@
 //! `ui::alarms`.
 
 use crate::calendar::time_format::TimeFormat;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
-use directories::BaseDirs;
 use iced::Task;
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +95,7 @@ pub struct Alarms {
 }
 
 impl Alarms {
-    /// Points the alarms at a file and takes in whatever an earlier run left
+    /// Points the alarms at the database and takes in whatever an earlier run left
     /// there. Alarms too far past due are dropped.
     ///
     /// Called at boot only: a state built by hand must not read or rewrite
@@ -243,16 +240,6 @@ pub fn local_at(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Local>> {
     Local.from_local_datetime(&date.and_time(time)).earliest()
 }
 
-/// The alarms file: `$XDG_STATE_HOME/timeslay/alarms.json`.
-pub fn path() -> Option<PathBuf> {
-    Some(
-        BaseDirs::new()?
-            .state_dir()?
-            .join("timeslay")
-            .join("alarms.json"),
-    )
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct File {
@@ -260,42 +247,17 @@ struct File {
 }
 
 fn read(path: &Path) -> Option<Vec<Alarm>> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+    match crate::task_db::read_document::<File>(path, crate::task_db::keys::ALARMS) {
+        Ok(file) => Some(file?.alarms),
         Err(error) => {
-            log::warn!("{} could not be read: {error}", path.display());
-            return None;
-        }
-    };
-
-    match serde_json::from_slice::<File>(&bytes) {
-        Ok(file) => Some(file.alarms),
-        Err(error) => {
-            log::warn!(
-                "{} could not be parsed, ignoring it: {error}",
-                path.display()
-            );
+            log::warn!("the saved alarms could not be read, ignoring them: {error}");
             None
         }
     }
 }
 
-/// Writes happen on worker threads, so two quick ones must not share the
-/// temporary file.
-static WRITING: Mutex<()> = Mutex::new(());
-
-/// Replaces the file, going through a temporary one so a crash mid-write
-/// cannot leave a truncated one behind.
 fn write(path: &Path, alarms: Vec<Alarm>) -> io::Result<()> {
-    let _guard = WRITING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    let bytes = serde_json::to_vec_pretty(&File { alarms })
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
-    crate::fsutil::write_atomic(path, &bytes, crate::fsutil::Kind::Private)
+    crate::task_db::write_document(path, crate::task_db::keys::ALARMS, &File { alarms })
 }
 
 #[derive(Debug, Clone)]
@@ -712,13 +674,13 @@ mod tests {
     }
 
     #[test]
-    fn alarms_survive_the_file() {
+    fn alarms_survive_a_restart() {
         let path = std::env::temp_dir().join(format!(
-            "timeslay-alarms-{}-{}.json",
+            "timeslay-alarms-{}-{}.sqlite3",
             std::process::id(),
             line!()
         ));
-        let _ = fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path);
 
         let mut alarms = Alarms::default();
         let soon = crate::clock::now() + Span::hours(1);
@@ -729,7 +691,7 @@ mod tests {
 
         let mut loaded = Alarms::default();
         loaded.keep_in(Some(path.clone()));
-        let _ = fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path);
 
         assert_eq!(loaded.items(), alarms.items());
     }
@@ -737,11 +699,11 @@ mod tests {
     #[test]
     fn an_alarm_long_overdue_at_startup_is_dropped() {
         let path = std::env::temp_dir().join(format!(
-            "timeslay-alarms-{}-{}.json",
+            "timeslay-alarms-{}-{}.sqlite3",
             std::process::id(),
             line!()
         ));
-        let _ = fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path);
 
         let mut alarms = Alarms::default();
         alarms.add(
@@ -752,7 +714,7 @@ mod tests {
 
         let mut loaded = Alarms::default();
         loaded.keep_in(Some(path.clone()));
-        let _ = fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path);
 
         assert!(loaded.is_empty());
     }

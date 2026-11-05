@@ -1172,13 +1172,14 @@ fn boot_state() -> State {
     // is deliberately not part of `State::new`: a state built by hand in a
     // test must not read or rewrite the user's cache.
     state.calendar.apply_task_colors(&state.config.calendar);
-    state.calendar.cache_days_in(config::cache_days_dir());
-    state.notes.go_live(config::cache_notes_path());
-    state.people.go_live(config::cache_people_path());
-    state.travel.cache_in(config::cache_travel_path());
+    let database = crate::task_db::path();
+    state.calendar.cache_days_in(database.clone());
+    state.notes.go_live(database.clone());
+    state.people.go_live(database.clone());
+    state.travel.cache_in(database.clone());
 
-    state.alarms.keep_in(alarms::path());
-    state.habits.keep_in(crate::habits::path());
+    state.alarms.keep_in(database.clone());
+    state.habits.keep_in(database);
 
     state
 }

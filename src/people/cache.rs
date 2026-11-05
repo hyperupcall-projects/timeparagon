@@ -1,8 +1,9 @@
-//! Every contact Google has sent, kept on disk exactly as it was sent.
+//! Every contact Google has sent, kept in the database exactly as it was sent.
 //!
-//! The file opens the People screen straight away and keeps it useful when
-//! Google can't be reached. It holds personal details, so it is readable by this
-//! user only, and an account's entries leave it when the account is signed out.
+//! The document opens the People screen straight away and keeps it useful when
+//! Google can't be reached. It holds personal details, and the database is
+//! readable by this user only. An account's entries leave it when the account is
+//! signed out.
 
 use std::collections::HashMap;
 use std::io;
@@ -19,7 +20,7 @@ use crate::integrations::accounts::Login;
 /// Hands out each snapshot's place in line. Snapshots are written on scratch
 /// threads that may finish in any order, and the newest one has to win.
 static NEXT: AtomicU64 = AtomicU64::new(1);
-/// The newest snapshot written to each file.
+/// The newest snapshot written to each database.
 static WRITTEN: Mutex<Option<HashMap<PathBuf, u64>>> = Mutex::new(None);
 
 #[derive(Serialize, Deserialize)]
@@ -42,7 +43,7 @@ struct Account {
 /// The books as they stood when this was made, waiting to be written.
 pub(super) struct Snapshot {
     order: u64,
-    bytes: Vec<u8>,
+    json: String,
 }
 
 pub(super) fn snapshot(books: &[Book]) -> Result<Snapshot, serde_json::Error> {
@@ -61,38 +62,31 @@ pub(super) fn snapshot(books: &[Book]) -> Result<Snapshot, serde_json::Error> {
     };
     Ok(Snapshot {
         order: NEXT.fetch_add(1, Ordering::Relaxed),
-        bytes: serde_json::to_vec(&file)?,
+        json: serde_json::to_string(&file)?,
     })
 }
 
 impl Snapshot {
-    /// Writes the file, unless a newer snapshot has already been written to it.
+    /// Writes the document, unless a newer snapshot has already been written to it.
     pub(super) fn write(self, path: &Path) -> io::Result<()> {
         let mut written = WRITTEN.lock().unwrap_or_else(|p| p.into_inner());
         let written = written.get_or_insert_with(HashMap::new);
         if written.get(path).is_some_and(|newest| *newest > self.order) {
             return Ok(());
         }
-        crate::fsutil::write_atomic(path, &self.bytes, crate::fsutil::Kind::Private)?;
+        crate::task_db::write_document_json(path, crate::task_db::keys::CONTACTS, &self.json)?;
         written.insert(path.to_owned(), self.order);
         Ok(())
     }
 }
 
-/// The books from the last run. A missing or unreadable file means starting
-/// empty: everything in it can be fetched again.
+/// The books from the last run. Nothing saved, or something unreadable, means
+/// starting empty: everything in it can be fetched again.
 pub(super) fn load(path: &Path) -> Vec<Book> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            if error.kind() != io::ErrorKind::NotFound {
-                log::warn!("could not read the contacts cache: {error}");
-            }
-            return Vec::new();
-        }
-    };
-    match serde_json::from_slice::<File>(&bytes) {
-        Ok(file) => file.accounts.into_iter().map(book_from).collect(),
+    match crate::task_db::read_document::<File>(path, crate::task_db::keys::CONTACTS) {
+        Ok(file) => file
+            .map(|file| file.accounts.into_iter().map(book_from).collect())
+            .unwrap_or_default(),
         Err(error) => {
             log::warn!("could not read the contacts cache: {error}");
             Vec::new()

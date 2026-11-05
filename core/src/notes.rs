@@ -205,23 +205,16 @@ pub struct Library {
 impl Library {
     /// The cached copy. Unreadable or missing means starting over from Drive.
     pub fn load(path: &Path) -> Self {
-        match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                log::warn!("{} could not be parsed: {error}", path.display());
-                Self::default()
-            }),
-            Err(_) => Self::default(),
-        }
+        crate::task_db::read_document(path, crate::task_db::keys::NOTES)
+            .unwrap_or_else(|error| {
+                log::warn!("the saved notes could not be read: {error}");
+                None
+            })
+            .unwrap_or_default()
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec(self).map_err(std::io::Error::other)?;
-        crate::fsutil::locked(path, || {
-            crate::fsutil::write_atomic(path, &bytes, crate::fsutil::Kind::Private)
-        })
+        crate::task_db::write_document(path, crate::task_db::keys::NOTES, self)
     }
 
     pub fn note(&self, id: &str) -> Option<&Note> {
@@ -1124,13 +1117,14 @@ mod tests {
     #[test]
     fn the_cache_round_trips() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("nested").join("notes.json");
+        let path = directory.path().join("nested").join("test.sqlite3");
         let mut library = Library::default();
         library.create("A", vec![habit()]);
         library.deleted.push("gone".into());
         library.save(&path).unwrap();
         assert_eq!(Library::load(&path), library);
-        std::fs::write(&path, "not json").unwrap();
+        crate::task_db::write_document_json(&path, crate::task_db::keys::NOTES, "not json")
+            .unwrap();
         assert_eq!(Library::load(&path), Library::default());
     }
 }

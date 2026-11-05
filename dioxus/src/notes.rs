@@ -4,7 +4,6 @@
 //! on the desktop. This is the phone's screen for them, and the section that
 //! shows a note's connections in the editors.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::NaiveDate;
@@ -21,18 +20,6 @@ const SAVE_AFTER: Duration = Duration::from_millis(400);
 /// How much longer before the note goes to Drive. Each upload is a whole file.
 const UPLOAD_AFTER: Duration = Duration::from_millis(2600);
 const MAX_CANDIDATES: usize = 8;
-
-/// The library is kept in the data directory, not the cache as on the desktop:
-/// Android may empty an app's cache at any time, which would lose edits that
-/// have not reached Drive yet.
-fn library_path() -> Option<PathBuf> {
-    Some(
-        timeslay_core::config::project_dirs()?
-            .data_dir()
-            .join("notes")
-            .join("notes.json"),
-    )
-}
 
 /// The note an editor asked to open, shared through context.
 #[derive(Clone, Copy)]
@@ -52,7 +39,7 @@ pub struct NotesStore {
 
 impl NotesStore {
     pub fn new() -> Self {
-        let library = library_path()
+        let library = timeslay_core::task_db::path()
             .map(|path| Library::load(&path))
             .unwrap_or_default();
         Self {
@@ -65,7 +52,7 @@ impl NotesStore {
     }
 
     fn save_local(self) {
-        let Some(path) = library_path() else {
+        let Some(path) = timeslay_core::task_db::path() else {
             return;
         };
         if let Err(error) = self.library.peek().save(&path) {

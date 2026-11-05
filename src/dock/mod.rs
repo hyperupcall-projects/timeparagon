@@ -122,7 +122,7 @@ pub fn run() -> Result<()> {
     let day_start_hour = app_config.calendar.day_start_hour();
     let mut store = Store::new(day_start_hour);
     store.apply_task_colors(&app_config.calendar);
-    store.cache_days_in(crate::config::cache_days_dir());
+    store.cache_days_in(crate::task_db::path());
     let today = calendar::day_at(crate::clock::now(), day_start_hour);
     store.set_day(today, today);
 

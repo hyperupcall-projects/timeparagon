@@ -1,4 +1,9 @@
-//! Local cache of remote task metadata and durable ID/alias allocation.
+//! The single local database: remote task metadata, durable ID/alias allocation,
+//! and everything else this device keeps between runs.
+//!
+//! Tasks and cached calendar months have tables of their own. The rest are JSON
+//! documents, one per kind of data, named in [`keys`].
+//!
 //! LEGACY_METADATA_COMPAT: unexported SQLite rows are migration sources only.
 //! This marker covers the old inline JSON, `ttid:` ids and SQLite-only metadata.
 //! It can all go once every device has synced a build that writes metadata to
@@ -8,8 +13,27 @@ use crate::{
     timeblocking::{Metadata, legacy_id, legacy_metadata},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use serde::{Deserialize, Serialize};
-use std::{path::Path, time::Duration};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Once,
+    time::Duration,
+};
+
+mod legacy_files;
+
+/// The names of the documents in the database.
+pub mod keys {
+    pub const HABITS: &str = "habits";
+    pub const ALARMS: &str = "alarms";
+    pub const NOTES: &str = "notes";
+    pub const CONTACTS: &str = "contacts";
+    pub const ROUTES: &str = "routes";
+    pub const SYNC_STATE: &str = "calendar_sync_state";
+    /// Android's widget reads this one too: see `DayRenderer.kt`.
+    pub const THEME: &str = "dioxus_theme";
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskData {
@@ -26,15 +50,27 @@ impl Database {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let db = Connection::open(path).map_err(|e| e.to_string())?;
+        // Holds credentials and personal details. An in-memory database has no file.
+        if let Err(error) = crate::fsutil::make_private(path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
         db.busy_timeout(Duration::from_secs(10))
             .map_err(|e| e.to_string())?;
         db.execute_batch("PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS counter (singleton INTEGER PRIMARY KEY CHECK(singleton=1), next_id INTEGER NOT NULL CHECK(next_id >= 100));
             INSERT OR IGNORE INTO counter VALUES (1,100);
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL, legacy_key TEXT UNIQUE);
-            CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));")
+            CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
+            CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
         Ok(Self(db))
+    }
+
+    pub(crate) fn connection(&mut self) -> &mut Connection {
+        &mut self.0
     }
 
     /// Adopt authoritative remote data even on a fresh installation.
@@ -128,9 +164,112 @@ fn read_data(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskData> {
         legacy_key: row.get(2)?,
     })
 }
+
+/// The database on this device, with whatever older builds left in files
+/// already moved into it.
+pub fn path() -> Option<PathBuf> {
+    static IMPORT: Once = Once::new();
+    let directories = crate::config::project_dirs()?;
+    let path = directories.data_local_dir().join("timeslay.sqlite3");
+    IMPORT.call_once(|| {
+        if let Err(error) = rename_from_tasks(&path) {
+            log::warn!("could not rename tasks.sqlite3: {error}");
+        }
+        let legacy = legacy_files::Directories {
+            config: directories.config_dir().to_owned(),
+            data: directories.data_dir().to_owned(),
+            state: directories.state_dir().map(Path::to_owned),
+            cache: directories.cache_dir().to_owned(),
+        };
+        if let Err(error) = legacy_files::import(&path, &legacy) {
+            log::warn!("could not import older local files: {error}");
+        }
+        let config = directories.config_dir().join("config.toml");
+        if let Err(error) = crate::shared_data::adopt(&config, &path) {
+            log::warn!("could not move shared data out of config.toml: {error}");
+        }
+    });
+    Some(path)
+}
+
+/// Older builds called the database `tasks.sqlite3`. It is renamed, and on
+/// Unix the old name is left as a link to the new one, so an older build still
+/// running opens the same database rather than starting an empty one. SQLite
+/// names a database's journal after the file a link points to, so the two
+/// builds also agree on where the journal is.
+fn rename_from_tasks(path: &Path) -> io::Result<()> {
+    let old = path.with_file_name("tasks.sqlite3");
+    let is_file = std::fs::symlink_metadata(&old).is_ok_and(|metadata| metadata.is_file());
+    if !is_file || std::fs::symlink_metadata(path).is_ok() {
+        return Ok(());
+    }
+    // A journal left by a crash must follow its database, or the
+    // transaction it would roll back is lost.
+    let journal = old.with_file_name("tasks.sqlite3-journal");
+    if journal.exists() {
+        std::fs::rename(&journal, path.with_file_name("timeslay.sqlite3-journal"))?;
+    }
+    match std::fs::rename(&old, path) {
+        // Another process just did it.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        result => result?,
+    }
+    #[cfg(unix)]
+    match std::os::unix::fs::symlink("timeslay.sqlite3", &old) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        result => result?,
+    }
+    Ok(())
+}
+
 pub fn open() -> Result<Database, String> {
-    let directory = crate::config::project_dirs().ok_or("Cannot locate local data directory")?;
-    Database::open(&directory.data_local_dir().join("tasks.sqlite3"))
+    Database::open(&path().ok_or("Cannot locate local data directory")?)
+}
+
+/// A document, or `None` when nothing has saved it yet. Contents that do not
+/// parse are an error, so a caller can decline to save over them.
+pub fn read_document<T: DeserializeOwned>(path: &Path, key: &str) -> io::Result<Option<T>> {
+    let database = Database::open(path).map_err(io::Error::other)?;
+    let text: Option<String> = database
+        .0
+        .query_row("SELECT value FROM documents WHERE key=?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(io::Error::other)?;
+    text.map(|text| {
+        serde_json::from_str(&text)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    })
+    .transpose()
+}
+
+pub fn write_document<T: Serialize + ?Sized>(path: &Path, key: &str, value: &T) -> io::Result<()> {
+    let json = serde_json::to_string(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    write_document_json(path, key, &json)
+}
+
+/// [`write_document`] for a value that is already serialized.
+pub fn write_document_json(path: &Path, key: &str, json: &str) -> io::Result<()> {
+    Database::open(path)
+        .map_err(io::Error::other)?
+        .0
+        .execute(
+            "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, json],
+        )
+        .map(|_| ())
+        .map_err(io::Error::other)
+}
+
+pub fn remove_document(path: &Path, key: &str) -> io::Result<()> {
+    Database::open(path)
+        .map_err(io::Error::other)?
+        .0
+        .execute("DELETE FROM documents WHERE key=?1", [key])
+        .map(|_| ())
+        .map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -146,7 +285,7 @@ mod tests {
                     .unwrap()
                     .as_nanos()
             ))
-            .join("tasks.sqlite3")
+            .join("timeslay.sqlite3")
     }
     fn event(id: &str) -> Event {
         let mut event = crate::calendar::sample_snapshot().events.remove(0);
@@ -187,6 +326,67 @@ mod tests {
         }
         assert_eq!(db.import(&event("after-rollback")).unwrap().id, 102);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn documents_round_trip_and_bad_contents_are_an_error() {
+        let path = path("documents");
+        assert_eq!(read_document::<String>(&path, "a").unwrap(), None);
+        write_document(&path, "a", "first").unwrap();
+        write_document(&path, "a", "second").unwrap();
+        assert_eq!(
+            read_document::<String>(&path, "a").unwrap().as_deref(),
+            Some("second")
+        );
+        write_document_json(&path, "a", "not json").unwrap();
+        assert_eq!(
+            read_document::<String>(&path, "a").unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        remove_document(&path, "a").unwrap();
+        assert_eq!(read_document::<String>(&path, "a").unwrap(), None);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn the_database_is_readable_only_by_this_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = path("private");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        Database::open(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn the_old_name_is_renamed_and_still_leads_to_the_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let old = directory.path().join("tasks.sqlite3");
+        let path = directory.path().join("timeslay.sqlite3");
+        let mut db = Database::open(&old).unwrap();
+        let data = db.import(&event("kept")).unwrap();
+        drop(db);
+
+        rename_from_tasks(&path).unwrap();
+        rename_from_tasks(&path).unwrap();
+
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+        assert_eq!(
+            Database::open(&path)
+                .unwrap()
+                .lookup(&event("kept"))
+                .unwrap(),
+            Some(data.clone())
+        );
+        // An older build opening the old name reaches the same rows.
+        assert_eq!(
+            Database::open(&old)
+                .unwrap()
+                .lookup(&event("kept"))
+                .unwrap(),
+            Some(data)
+        );
     }
     #[test]
     fn allocator_process() {

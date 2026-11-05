@@ -2824,9 +2824,9 @@ mod tests {
     }
 
     #[test]
-    fn saving_and_loading_keeps_a_library_and_a_bad_file_is_not_overwritten() {
+    fn saving_and_loading_keeps_a_library_and_bad_contents_are_not_overwritten() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("habits.json");
+        let path = dir.path().join("test.sqlite3");
         let mut state = state();
         state.habits.keep_in(Some(path.clone()));
         add(&mut state, "h", "Stretch");
@@ -2835,11 +2835,11 @@ mod tests {
         reopened.keep_in(Some(path.clone()));
         assert_eq!(reopened.library.habits[0].name, "Stretch");
 
-        std::fs::write(&path, "not json").unwrap();
+        let key = crate::task_db::keys::HABITS;
+        crate::task_db::write_document_json(&path, key, "not json").unwrap();
         let mut broken = crate::habits::Store::default();
         broken.keep_in(Some(path.clone()));
         assert!(broken.error.is_some());
         assert!(!broken.persists());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
     }
 }

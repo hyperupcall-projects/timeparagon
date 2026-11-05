@@ -1,27 +1,26 @@
-//! Days of events on disk, so the cache outlives the process.
+//! Days of events in the database, so the cache outlives the process.
 //!
 //! The in-memory cache in [`Store`](super::Store) is gone the moment the app
 //! closes, which leaves a restart staring at an empty grid until its first
-//! sync lands. Writing each month out to the XDG cache directory means a day
-//! that was open yesterday paints as soon as it is opened today, and stepping
-//! to another day in the same month reads from the same file instead of
-//! refetching.
+//! sync lands. Saving each month as a row means a day that was open yesterday
+//! paints as soon as it is opened today, and stepping to another day in the
+//! same month reads from the same row instead of refetching.
 //!
 //! Nothing in here is allowed to fail loudly: a cache that cannot be read or
 //! written costs a re-sync, never the day itself.
 
-use std::fs;
 use std::io;
 use std::path::Path;
 
 use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced_core::Color;
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use super::{Calendar, Details, Event, day_at};
-use crate::fsutil::{Kind, write_atomic};
+use crate::task_db::{self, Database, keys};
 
-/// One month's events as the cache file holds them.
+/// One month's events as the cache row holds them.
 ///
 /// `Event` cannot carry serde derives of its own because `iced_core::Color` only
 /// serializes behind a feature, so the color travels as its four channels.
@@ -48,9 +47,8 @@ struct SavedCalendar {
     selected_by_google: bool,
 }
 
-pub fn load_sync_state(directory: &Path) -> Option<(DateTime<Local>, Vec<Calendar>)> {
-    let state: SyncState =
-        serde_json::from_slice(&fs::read(directory.join("sync-state.json")).ok()?).ok()?;
+pub fn load_sync_state(database: &Path) -> Option<(DateTime<Local>, Vec<Calendar>)> {
+    let state: SyncState = task_db::read_document(database, keys::SYNC_STATE).ok()??;
     Some((
         state.fetched_at,
         state
@@ -68,11 +66,10 @@ pub fn load_sync_state(directory: &Path) -> Option<(DateTime<Local>, Vec<Calenda
 }
 
 pub fn save_sync_state(
-    directory: &Path,
+    database: &Path,
     fetched_at: DateTime<Local>,
     calendars: &[Calendar],
 ) -> io::Result<()> {
-    fs::create_dir_all(directory)?;
     let state = SyncState {
         fetched_at,
         calendars: calendars
@@ -86,11 +83,10 @@ pub fn save_sync_state(
             })
             .collect(),
     };
-    let bytes = serde_json::to_vec(&state).map_err(io::Error::other)?;
-    write_atomic(&directory.join("sync-state.json"), &bytes, Kind::Cache)
+    task_db::write_document(database, keys::SYNC_STATE, &state)
 }
 
-/// One event as the cache file holds it.
+/// One event as the cache row holds it.
 #[derive(Serialize, Deserialize)]
 struct SavedEvent {
     id: String,
@@ -142,49 +138,51 @@ impl From<SavedEvent> for Event {
     }
 }
 
+fn open(database: &Path) -> io::Result<Database> {
+    Database::open(database).map_err(io::Error::other)
+}
+
+fn month_text(connection: &rusqlite::Connection, month: &str) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT events FROM calendar_months WHERE month=?1",
+            [month],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
 /// The day's events as an earlier run wrote them, or nothing when no run has
-/// written this month or the file turns out to be unreadable. Only events
+/// written this month or the row turns out to be unreadable. Only events
 /// overlapping `day`'s window (set by `day_end_hour`) are returned, along
 /// with tasks, whose backlog is shared across all views.
-pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Event>> {
-    let path = directory.join(file_name(day));
-
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Event>> {
+    let mut database = match open(database) {
+        Ok(database) => database,
         Err(error) => {
-            log::warn!("{} could not be read: {error}", path.display());
+            log::warn!("cached events could not be read: {error}");
+            return None;
+        }
+    };
+    let month = month_key(day);
+    let text = match month_text(database.connection(), &month) {
+        Ok(text) => text?,
+        Err(error) => {
+            log::warn!("cached events for {month} could not be read: {error}");
             return None;
         }
     };
 
-    match serde_json::from_slice::<SavedMonth>(&bytes) {
+    match serde_json::from_str::<SavedMonth>(&text) {
         Ok(saved) => {
-            // LEGACY_METADATA_COMPAT: only old snapshots missing task metadata
-            // need SQLite. Modern navigation reads the snapshot directly.
-            let needs_legacy_data = saved
-                .events
-                .iter()
-                .any(|event| event.id.starts_with("task:") && event.details.task_data.is_none());
-            let database = needs_legacy_data
-                .then(crate::config::project_dirs)
-                .flatten()
-                .map(|dirs| dirs.data_local_dir().join("tasks.sqlite3"))
-                .filter(|path| path.exists())
-                .and_then(|path| {
-                    crate::task_db::Database::open(&path)
-                        .map_err(|e| log::warn!("Cannot load local task data: {e}"))
-                        .ok()
-                });
             let events: Vec<Event> = saved
                 .events
                 .into_iter()
                 .map(Event::from)
                 .map(|mut event| {
-                    if event.is_task()
-                        && event.details.task_data.is_none()
-                        && let Some(database) = &database
-                    {
+                    // LEGACY_METADATA_COMPAT: only old snapshots missing task
+                    // metadata need the task tables.
+                    if event.is_task() && event.details.task_data.is_none() {
                         match database.lookup(&event) {
                             Ok(Some(data)) => {
                                 event.details.task_data = Some(data);
@@ -202,33 +200,33 @@ pub fn load(directory: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<E
             Some(events)
         }
         Err(error) => {
-            log::warn!(
-                "{} could not be parsed, ignoring it: {error}",
-                path.display()
-            );
+            log::warn!("cached events for {month} could not be parsed, ignoring them: {error}");
             None
         }
     }
 }
 
-/// Writes one day's events into the month file, replacing whatever that day
-/// held. The whole month is written back out, so a crash mid-write cannot
-/// leave a truncated month behind.
+/// Writes one day's events into the month's row, replacing whatever that day
+/// held. The read and the write share a transaction, so two processes saving
+/// the same month cannot lose each other's days.
 pub fn save(
-    directory: &Path,
+    database: &Path,
     day: NaiveDate,
     events: &[Event],
     day_end_hour: u32,
 ) -> io::Result<()> {
-    fs::create_dir_all(directory)?;
-
-    let path = directory.join(file_name(day));
+    let mut database = open(database)?;
+    let month_name = month_key(day);
+    let tx = database
+        .connection()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(io::Error::other)?;
 
     // Load the existing month, or start empty.
-    let mut month: SavedMonth = match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(SavedMonth { events: Vec::new() }),
-        Err(_) => SavedMonth { events: Vec::new() },
-    };
+    let mut month: SavedMonth = month_text(&tx, &month_name)
+        .map_err(io::Error::other)?
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(SavedMonth { events: Vec::new() });
 
     // A snapshot also contains tasks from other days. Replace those by id
     // instead of appending another copy for every day in a weekly refresh.
@@ -242,34 +240,59 @@ pub fn save(
     });
     month.events.extend(events.iter().map(SavedEvent::from));
 
-    let bytes = serde_json::to_vec(&month)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    write_month(&tx, &month_name, &month)?;
+    tx.commit().map_err(io::Error::other)
+}
 
-    write_atomic(&path, &bytes, Kind::Cache)
+fn write_month(
+    connection: &rusqlite::Connection,
+    month: &str,
+    saved: &SavedMonth,
+) -> io::Result<()> {
+    let text = serde_json::to_string(saved)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    connection
+        .execute(
+            "INSERT INTO calendar_months (month,events) VALUES (?1,?2) ON CONFLICT(month) DO UPDATE SET events=excluded.events",
+            params![month, text],
+        )
+        .map(|_| ())
+        .map_err(io::Error::other)
 }
 
 /// Update known records without throwing away unrelated cached dates.
-pub fn update_events(directory: &Path, mut update: impl FnMut(&mut Vec<Event>)) {
-    for month in days(directory) {
-        let path = directory.join(file_name(month));
-        let Some(saved) = fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<SavedMonth>(&bytes).ok())
-        else {
-            continue;
-        };
-        let mut events: Vec<Event> = saved.events.into_iter().map(Event::from).collect();
-        let before = events.clone();
-        update(&mut events);
-        if events == before {
-            continue;
+pub fn update_events(database: &Path, mut update: impl FnMut(&mut Vec<Event>)) {
+    let mut database_handle = match open(database) {
+        Ok(database) => database,
+        Err(error) => {
+            log::warn!("could not update cached events: {error}");
+            return;
         }
-        let updated = SavedMonth {
-            events: events.iter().map(SavedEvent::from).collect(),
-        };
-        let write = || -> io::Result<()> {
-            let bytes = serde_json::to_vec(&updated).map_err(io::Error::other)?;
-            write_atomic(&path, &bytes, Kind::Cache)
+    };
+    for month in days(database) {
+        let month = month_key(month);
+        let mut write = || -> io::Result<()> {
+            let tx = database_handle
+                .connection()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(io::Error::other)?;
+            let Some(saved) = month_text(&tx, &month)
+                .map_err(io::Error::other)?
+                .and_then(|text| serde_json::from_str::<SavedMonth>(&text).ok())
+            else {
+                return Ok(());
+            };
+            let mut events: Vec<Event> = saved.events.into_iter().map(Event::from).collect();
+            let before = events.clone();
+            update(&mut events);
+            if events == before {
+                return Ok(());
+            }
+            let updated = SavedMonth {
+                events: events.iter().map(SavedEvent::from).collect(),
+            };
+            write_month(&tx, &month, &updated)?;
+            tx.commit().map_err(io::Error::other)
         };
         if let Err(error) = write() {
             log::warn!("could not update cached events: {error}");
@@ -277,58 +300,89 @@ pub fn update_events(directory: &Path, mut update: impl FnMut(&mut Vec<Event>)) 
     }
 }
 
-/// Every month sitting in the directory, as the first day of each month.
-/// Anything not named like a month is left out rather than guessed at, so a
-/// stray file survives its neighbours' trim.
-pub fn days(directory: &Path) -> Vec<NaiveDate> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
-        Err(error) => {
-            log::warn!("{} could not be listed: {error}", directory.display());
-            return Vec::new();
-        }
+/// Every cached month, as the first day of each month. A row not named like a
+/// month is left out rather than guessed at.
+pub fn days(database: &Path) -> Vec<NaiveDate> {
+    let listed = || -> Result<Vec<String>, String> {
+        let mut database = Database::open(database)?;
+        let connection = database.connection();
+        let mut statement = connection
+            .prepare("SELECT month FROM calendar_months")
+            .map_err(|error| error.to_string())?;
+        statement
+            .query_map([], |row| row.get(0))
+            .map_err(|error| error.to_string())?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|error| error.to_string())
     };
-
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            let stem = name.strip_suffix(".json")?;
-            let mut parts = stem.split('-');
-            let year = parts.next()?.parse::<i32>().ok()?;
-            let month = parts.next()?.parse::<u32>().ok()?;
-            if parts.next().is_some() {
-                return None;
-            }
-            NaiveDate::from_ymd_opt(year, month, 1)
-        })
-        .collect()
-}
-
-/// Takes one month out of the directory. Nothing to do when it is not there.
-pub fn remove(directory: &Path, day: NaiveDate) {
-    let _ = fs::remove_file(directory.join(file_name(day)));
-}
-
-/// Empties the directory, so every month has to be fetched again.
-pub fn clear(directory: &Path) {
-    match fs::remove_dir_all(directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => log::warn!("{} could not be cleared: {error}", directory.display()),
+    match listed() {
+        Ok(months) => months
+            .iter()
+            .filter_map(|month| parse_month(month))
+            .collect(),
+        Err(error) => {
+            log::warn!("cached months could not be listed: {error}");
+            Vec::new()
+        }
     }
 }
 
-/// The file a month is filed under, e.g. `2026-10.json`.
-fn file_name(day: NaiveDate) -> String {
-    format!("{:04}-{:02}.json", day.year(), day.month())
+/// The first day of a month named like `2026-10`.
+pub(crate) fn parse_month(name: &str) -> Option<NaiveDate> {
+    let mut parts = name.split('-');
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let month = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    NaiveDate::from_ymd_opt(year, month, 1)
 }
 
-/// A throwaway directory under the system's temp dir, removed when the test
+/// Takes one month out of the cache. Nothing to do when it is not there.
+pub fn remove(database: &Path, day: NaiveDate) {
+    let removed = open(database).and_then(|mut database| {
+        database
+            .connection()
+            .execute(
+                "DELETE FROM calendar_months WHERE month=?1",
+                [month_key(day)],
+            )
+            .map_err(io::Error::other)
+    });
+    if let Err(error) = removed {
+        log::warn!("could not remove cached month: {error}");
+    }
+}
+
+/// Empties the cache, so every month has to be fetched again. The sync state
+/// goes too: it says how recently those months were fetched.
+pub fn clear(database: &Path) {
+    let cleared = open(database).and_then(|mut database| {
+        database
+            .connection()
+            .execute_batch(&format!(
+                "BEGIN IMMEDIATE;
+                 DELETE FROM calendar_months;
+                 DELETE FROM documents WHERE key='{}';
+                 COMMIT;",
+                keys::SYNC_STATE
+            ))
+            .map_err(io::Error::other)
+    });
+    if let Err(error) = cleared {
+        log::warn!("the event cache could not be cleared: {error}");
+    }
+}
+
+/// The name a month is filed under, e.g. `2026-10`.
+fn month_key(day: NaiveDate) -> String {
+    format!("{:04}-{:02}", day.year(), day.month())
+}
+
+/// A throwaway database under the system's temp dir, removed when the test
 /// that made it ends either way.
 #[cfg(test)]
-pub(super) struct Scratch(std::path::PathBuf);
+pub(super) struct Scratch(std::path::PathBuf, std::path::PathBuf);
 
 #[cfg(test)]
 impl Scratch {
@@ -342,21 +396,22 @@ impl Scratch {
             "timeslay-month-cache-{}-{unique}-{name}",
             std::process::id()
         ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).expect("scratch directory");
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("scratch directory");
 
-        Self(path)
+        let database = path.join("test.sqlite3");
+        Self(path, database)
     }
 
     pub(super) fn path(&self) -> &Path {
-        &self.0
+        &self.1
     }
 }
 
 #[cfg(test)]
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -365,6 +420,17 @@ mod tests {
     use super::*;
     use crate::calendar::sample_snapshot;
     use chrono::TimeZone;
+
+    fn raw_month(database: &Path, month: &str, text: &str) {
+        open(database)
+            .unwrap()
+            .connection()
+            .execute(
+                "INSERT INTO calendar_months (month,events) VALUES (?1,?2)",
+                [month, text],
+            )
+            .unwrap();
+    }
 
     #[test]
     fn cached_days_include_overlapping_events_and_undated_tasks() {
@@ -387,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn a_month_round_trips_through_the_directory() {
+    fn a_month_round_trips_through_the_database() {
         let scratch = Scratch::new("round-trip");
         let snapshot = sample_snapshot();
         let day = snapshot.day;
@@ -446,24 +512,24 @@ mod tests {
         let scratch = Scratch::new("broken");
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
 
-        fs::write(scratch.path().join(file_name(day)), b"not json").unwrap();
+        raw_month(scratch.path(), &month_key(day), "not json");
 
         assert!(load(scratch.path(), day, 0).is_none());
         assert_eq!(
             days(scratch.path()),
             vec![day.with_day(1).unwrap()],
-            "it is still a month file"
+            "it is still a month"
         );
     }
 
     #[test]
-    fn only_files_named_like_a_month_are_listed() {
+    fn only_rows_named_like_a_month_are_listed() {
         let scratch = Scratch::new("listing");
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
 
         save(scratch.path(), day, &[], 0).unwrap();
-        fs::write(scratch.path().join("notes.txt"), b"mine").unwrap();
-        fs::write(scratch.path().join("2026-10.json.tmp"), b"half a month").unwrap();
+        raw_month(scratch.path(), "notes", "{}");
+        raw_month(scratch.path(), "2026-10-extra", "{}");
 
         assert_eq!(days(scratch.path()), vec![day.with_day(1).unwrap()]);
     }
@@ -474,10 +540,13 @@ mod tests {
         let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
         save(scratch.path(), day, &[], 0).unwrap();
 
+        save_sync_state(scratch.path(), crate::clock::now(), &[]).unwrap();
+
         clear(scratch.path());
 
         assert!(days(scratch.path()).is_empty());
         assert!(load(scratch.path(), day, 0).is_none());
+        assert!(load_sync_state(scratch.path()).is_none());
     }
 
     #[test]

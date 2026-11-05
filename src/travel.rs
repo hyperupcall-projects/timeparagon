@@ -781,10 +781,10 @@ struct Stored {
 }
 
 fn read_cache(path: &Path) -> Vec<(RouteKey, Route)> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let stored: Vec<Stored> = serde_json::from_str(&text).unwrap_or_default();
+    let stored: Vec<Stored> = crate::task_db::read_document(path, crate::task_db::keys::ROUTES)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
     stored
         .into_iter()
@@ -805,9 +805,6 @@ fn read_cache(path: &Path) -> Vec<(RouteKey, Route)> {
 }
 
 fn write_cache(path: &Path, routes: &[(RouteKey, Route)]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let stored: Vec<Stored> = routes
         .iter()
         .map(|(key, route)| Stored {
@@ -819,11 +816,7 @@ fn write_cache(path: &Path, routes: &[(RouteKey, Route)]) -> std::io::Result<()>
         })
         .collect();
 
-    crate::fsutil::write_atomic(
-        path,
-        serde_json::to_string(&stored)?.as_bytes(),
-        crate::fsutil::Kind::Cache,
-    )
+    crate::task_db::write_document(path, crate::task_db::keys::ROUTES, &stored)
 }
 
 #[cfg(test)]
@@ -1568,7 +1561,7 @@ mod tests {
     #[test]
     fn worked_out_trips_come_back_after_a_restart() {
         let dir = std::env::temp_dir().join(format!("tt-travel-{}", std::process::id()));
-        let path = dir.join("routes.json");
+        let path = dir.join("test.sqlite3");
         let key = RouteKey {
             from: 1,
             to: 2,
@@ -1585,7 +1578,8 @@ mod tests {
         travel.cache_in(Some(path.clone()));
         assert_eq!(travel.state(key), Some(&RouteState::Ready(route)));
 
-        std::fs::write(&path, "not json").unwrap();
+        crate::task_db::write_document_json(&path, crate::task_db::keys::ROUTES, "not json")
+            .unwrap();
         let mut travel = Workspace::default();
         travel.cache_in(Some(path));
         assert!(travel.routes.is_empty(), "a damaged cache is just empty");

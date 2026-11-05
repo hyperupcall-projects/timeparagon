@@ -20,3 +20,7 @@ name = "migrate_calendar"
 # Moves the Google Tasks "Habits & Recurring" list into Calendar habits.
 [[example]]
 name = "migrate_task_habits"
+
+# Moves files older builds kept into the local database, without opening the app.
+[[example]]
+name = "migrate_local_data"

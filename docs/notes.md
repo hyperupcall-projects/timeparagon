@@ -10,8 +10,8 @@ They replace the old Google Keep integration, which has been removed.
   the existing `drive.appdata` permission, so nobody needs to reconnect Google.
 - The note's title is the filename. Its color and connections are JSON in the
   file's `description`, so the file itself stays plain Markdown.
-- Notes save automatically and work offline from a local cache at
-  `<cache dir>/notes/notes.json`. They upload about 3 seconds after typing stops.
+- Notes save automatically and work offline from a copy in the local database
+  (`<data dir>/timeslay.sqlite3`). They upload about 3 seconds after typing stops.
 - Notes sync when the window opens, when the Notes screen opens, and on the
   calendar's periodic sync.
 - A new note stays off Drive until it has a title, text, or a connection. An

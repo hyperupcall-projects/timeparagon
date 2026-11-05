@@ -19,6 +19,8 @@ pub mod hex;
 pub mod notes;
 pub mod places;
 pub mod recurrence;
+pub mod secrets;
+pub mod shared_data;
 pub mod task_db;
 pub mod task_edit;
 pub mod task_input;

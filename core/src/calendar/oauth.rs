@@ -2,22 +2,17 @@
 //!
 //! Installed-app clients talk to Google with PKCE: a localhost redirect
 //! catches the authorization code, then we exchange it for a refresh token
-//! stored next to the config on desktop. Android stores encrypted tokens in
+//! stored in `secrets.json` on desktop. Android stores encrypted tokens in
 //! its no-backup directory using a key held by Android Keystore.
 
-#[cfg(not(target_os = "android"))]
-use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-
-use crate::config;
 
 #[cfg(target_os = "android")]
 mod android_tokens;
@@ -91,11 +86,13 @@ impl Tokens {
     }
 }
 
-/// Desktop token file, also used to find legacy plaintext tokens on Android.
-/// Android's current encrypted file is resolved through getNoBackupFilesDir().
-pub fn token_path() -> Option<PathBuf> {
+/// Where older builds kept plaintext tokens, still looked for on Android. Desktop
+/// tokens are in [`crate::secrets`], and Android's current encrypted file is resolved
+/// through getNoBackupFilesDir().
+#[cfg(target_os = "android")]
+pub fn token_path() -> Option<std::path::PathBuf> {
     Some(
-        config::project_dirs()?
+        crate::config::project_dirs()?
             .config_dir()
             .join("google-token.toml"),
     )
@@ -103,9 +100,11 @@ pub fn token_path() -> Option<PathBuf> {
 
 #[cfg(not(target_os = "android"))]
 pub fn load_tokens() -> Option<Tokens> {
-    let path = token_path()?;
-    let text = fs::read_to_string(path).ok()?;
-    toml::from_str(&text).ok()
+    let path = crate::secrets::path()?;
+    crate::secrets::read(&path, crate::secrets::keys::GOOGLE_TOKENS).unwrap_or_else(|error| {
+        log::warn!("could not read Google tokens: {error}");
+        None
+    })
 }
 
 #[cfg(target_os = "android")]
@@ -126,13 +125,9 @@ pub fn save_tokens(tokens: &Tokens) -> io::Result<()> {
 
 #[cfg(not(target_os = "android"))]
 pub fn save_tokens(tokens: &Tokens) -> io::Result<()> {
-    let path = token_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
-
-    let contents = toml::to_string_pretty(tokens)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
-    crate::fsutil::write_atomic(&path, contents.as_bytes(), crate::fsutil::Kind::Private)
+    let path = crate::secrets::path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no state directory available"))?;
+    crate::secrets::write(&path, crate::secrets::keys::GOOGLE_TOKENS, tokens)
 }
 
 pub fn clear_tokens() {
@@ -143,8 +138,10 @@ pub fn clear_tokens() {
         }
     }
     #[cfg(not(target_os = "android"))]
-    if let Some(path) = token_path() {
-        let _ = fs::remove_file(path);
+    if let Some(path) = crate::secrets::path()
+        && let Err(error) = crate::secrets::remove(&path, crate::secrets::keys::GOOGLE_TOKENS)
+    {
+        log::warn!("could not remove Google tokens: {error}");
     }
 }
 

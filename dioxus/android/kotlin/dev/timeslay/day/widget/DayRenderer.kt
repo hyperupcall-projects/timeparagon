@@ -2,6 +2,7 @@ package dev.timeslay.day.widget
 
 import android.content.Context
 import android.content.res.Configuration
+import android.database.sqlite.SQLiteDatabase
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -43,13 +44,22 @@ class WidgetColors(
     val overflow: Int,
 ) {
     companion object {
-        fun of(context: Context): WidgetColors {
-            val preference = try {
-                // `Theme::path` in dioxus/src/day.rs.
-                File(context.filesDir, "config/timeslay/dioxus-theme").readText().trim()
-            } catch (_: Exception) {
-                ""
+        /** `Theme::load` in dioxus/src/day.rs: a JSON string in the local database. */
+        private fun savedTheme(context: Context): String = try {
+            SQLiteDatabase.openDatabase(
+                File(context.filesDir, "data/timeslay/timeslay.sqlite3").path,
+                null,
+                SQLiteDatabase.OPEN_READONLY,
+            ).use { database ->
+                database.rawQuery("SELECT value FROM documents WHERE key = 'dioxus_theme'", null)
+                    .use { row -> if (row.moveToFirst()) row.getString(0).trim('"') else "" }
             }
+        } catch (_: Exception) {
+            ""
+        }
+
+        fun of(context: Context): WidgetColors {
+            val preference = savedTheme(context)
             val night = context.resources.configuration.uiMode and
                 Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
             // The high contrast choices share these prefixes.
