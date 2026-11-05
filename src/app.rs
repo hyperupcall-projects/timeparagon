@@ -82,6 +82,7 @@ pub enum BorderLayer {
 pub enum FormField {
     EventDraft,
     EventEdit,
+    HabitNotes,
 }
 
 /// One editor per [`FormField`]. Each keeps its cursor and selection between
@@ -89,6 +90,7 @@ pub enum FormField {
 pub struct FormEditors {
     pub event_draft: text_editor::Content,
     pub event_edit: text_editor::Content,
+    pub habit_notes: text_editor::Content,
 }
 
 impl FormEditors {
@@ -96,6 +98,7 @@ impl FormEditors {
         Self {
             event_draft: text_editor::Content::new(),
             event_edit: text_editor::Content::new(),
+            habit_notes: text_editor::Content::new(),
         }
     }
 
@@ -103,6 +106,7 @@ impl FormEditors {
         match field {
             FormField::EventDraft => &mut self.event_draft,
             FormField::EventEdit => &mut self.event_edit,
+            FormField::HabitNotes => &mut self.habit_notes,
         }
     }
 }
@@ -1230,6 +1234,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             &mut state.form_editors.event_edit,
             edit.map(|d| d.description.as_str()),
         ),
+        (
+            &mut state.form_editors.habit_notes,
+            state.habits.form.as_ref().map(|form| form.notes.as_str()),
+        ),
     ] {
         let value = value.unwrap_or("");
         if editor.text() != value {
@@ -1749,6 +1757,15 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         return match key.as_ref() {
             Key::Named(Named::Escape) => {
                 Some(Message::Habits(crate::habits::Action::DeleteCancelled))
+            }
+            _ => None,
+        };
+    }
+    if state.habits.section_edit.is_some() {
+        // Naming a section must not reach the clock shortcuts.
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => {
+                Some(Message::Habits(crate::habits::Action::CancelSection))
             }
             _ => None,
         };

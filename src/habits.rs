@@ -24,8 +24,8 @@ use crate::recurrence::Rule;
 
 pub use crate::recurrence::{EndKind, MonthlyMode, Recurrence, RepeatMode, WEEKDAYS};
 pub use timeslay_core::habits::{
-    Bucket, Computed, Frequency, Habit, Icons, Kind, Library, Mark, SortKey, Status, Streak,
-    TargetType,
+    Bucket, Computed, DayEntry, Frequency, Habit, Icons, Kind, Library, Mark, Measure, Outcome,
+    Section, SortKey, Status, Streak,
 };
 
 /// The `ttKind` Google extended property that marks a habit event.
@@ -292,14 +292,19 @@ pub struct Form {
     pub id: Option<String>,
     /// Fixed once a habit exists, since its record would mean something else.
     pub habit_kind: Kind,
+    /// Whether a value is recorded each day.
+    pub measured: bool,
     pub unit: String,
+    /// Blank for a value with no target.
     pub target: String,
-    pub target_type: TargetType,
-    /// The period a measurable target covers: 1, 7 or 30 days.
+    /// The period the target covers: 1, 7 or 30 days.
     pub target_days: u32,
     pub name: String,
     pub question: String,
+    /// The saved copy of the text in the notes editor.
     pub notes: String,
+    /// The section it is listed under, by id.
+    pub section: Option<String>,
     pub color: u8,
     pub kind: FrequencyKind,
     pub per_day: String,
@@ -320,13 +325,14 @@ impl Form {
         Self {
             id: None,
             habit_kind: Kind::Yes,
+            measured: false,
             unit: String::new(),
-            target: "1".into(),
-            target_type: TargetType::AtLeast,
+            target: String::new(),
             target_days: 1,
             name: String::new(),
             question: String::new(),
             notes: String::new(),
+            section: None,
             color: timeslay_core::habits::DEFAULT_COLOR,
             kind: FrequencyKind::EveryDay,
             per_day: "2".into(),
@@ -347,15 +353,18 @@ impl Form {
         let mut form = Self::new();
         form.id = Some(habit.id.clone());
         form.habit_kind = habit.kind;
-        form.unit = habit.unit.clone();
-        form.target = timeslay_core::habits::format_amount(habit.target);
-        form.target_type = habit.target_type;
-        if habit.kind == Kind::Measurable {
-            form.target_days = habit.frequency.fraction().1;
+        if let Some(measure) = &habit.measure {
+            form.measured = true;
+            form.unit = measure.unit.clone();
+            form.target = measure
+                .target
+                .map_or(String::new(), timeslay_core::habits::format_amount);
+            form.target_days = measure.days;
         }
         form.name = habit.name.clone();
         form.question = habit.question.clone();
         form.notes = habit.notes.clone();
+        form.section = habit.section.clone();
         form.color = habit.color;
         form.skip_days = habit.skip_days;
         form.question_marks = habit.question_marks;
@@ -391,17 +400,34 @@ impl Form {
         form
     }
 
+    /// The value the form describes, if it records one.
+    pub fn measure(&self) -> Result<Option<Measure>, String> {
+        if !self.measured {
+            return Ok(None);
+        }
+        let target = self.target.trim();
+        let target = if target.is_empty() {
+            None
+        } else {
+            Some(
+                target
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|target| target.is_finite() && *target >= 0.0)
+                    .ok_or("The target has to be a number of zero or more")?,
+            )
+        };
+        Ok(Some(Measure {
+            unit: self.unit.trim().to_owned(),
+            target,
+            days: self.target_days,
+        }))
+    }
+
     /// The goal the form describes.
     pub fn frequency(&self) -> Result<Frequency, String> {
-        match self.habit_kind {
-            Kind::No => return Ok(Frequency::DAILY),
-            Kind::Measurable => {
-                return Ok(Frequency::Interval {
-                    times: 1,
-                    days: self.target_days,
-                });
-            }
-            Kind::Yes => {}
+        if self.habit_kind == Kind::No {
+            return Ok(Frequency::DAILY);
         }
         let number = |text: &str| {
             text.trim()
@@ -442,13 +468,13 @@ impl Form {
 #[derive(Debug, Clone)]
 pub enum FormAction {
     HabitKind(Kind),
+    Measured(bool),
     Unit(String),
     Target(String),
-    TargetType(TargetType),
     TargetDays(u32),
     Name(String),
     Question(String),
-    Notes(String),
+    Section(Option<String>),
     Color(u8),
     Kind(FrequencyKind),
     PerDay(String),
@@ -471,18 +497,82 @@ pub struct Drag {
     pub moved: bool,
 }
 
-/// The dialog for one day: how many times it was done, or how much.
+/// The dialog for one day, holding its edits until they are saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DayDialog {
     pub habit_id: String,
     pub day: NaiveDate,
+    pub outcome: Outcome,
+    /// How many times it happened, when it did.
+    pub times: u32,
+    pub resisted: u32,
+    /// What is typed for the value. Blank for no value.
     pub value: String,
-    /// Whether it asks for a yes or a no rather than a number.
-    pub yes_or_no: bool,
+    pub error: Option<String>,
+}
+
+impl DayDialog {
+    fn new(habit: &Habit, day: NaiveDate) -> Self {
+        let entry = habit.entry(day);
+        Self {
+            habit_id: habit.id.clone(),
+            day,
+            outcome: entry.outcome,
+            times: entry.times,
+            resisted: entry.resisted,
+            value: entry
+                .value
+                .map_or(String::new(), timeslay_core::habits::format_amount),
+            error: None,
+        }
+    }
+
+    /// Chooses an answer. Having done it starts from the whole of the day's goal.
+    fn choose(&mut self, outcome: Outcome, goal: u32) {
+        self.outcome = outcome;
+        self.times = if outcome == Outcome::Done {
+            self.times.max(goal)
+        } else {
+            0
+        };
+    }
+
+    /// What the dialog holds, unless the value cannot be read.
+    fn entry(&self) -> Result<DayEntry, String> {
+        let value = self.value.trim();
+        let value = if value.is_empty() {
+            None
+        } else {
+            Some(
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .ok_or("The value has to be a number of zero or more")?,
+            )
+        };
+        Ok(DayEntry {
+            outcome: self.outcome,
+            times: self.times,
+            resisted: self.resisted,
+            value,
+        })
+    }
 }
 
 /// The input in the day dialog.
 pub const DAY_FIELD: &str = "habit-day-value";
+
+/// A section being named, in place in the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionEdit {
+    /// `None` when this is a new section.
+    pub id: Option<String>,
+    pub name: String,
+}
+
+/// The input that names a section.
+pub const SECTION_FIELD: &str = "habit-section-name";
 
 /// A drop-down menu that is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -516,6 +606,7 @@ pub struct Store {
     pub form: Option<Form>,
     pub menu: Option<Menu>,
     pub day_dialog: Option<DayDialog>,
+    pub section_edit: Option<SectionEdit>,
     pub dragging: Option<Drag>,
     /// The row last pressed. It outlives `dragging`, because the global release
     /// that ends a drag can arrive before the row's own release does.
@@ -777,21 +868,17 @@ pub enum Action {
     Persisted(Result<(), String>),
 
     // The list.
-    /// A left click on a day. A measurable habit asks for a number.
-    Toggle(String, NaiveDate),
-    /// A right click on a day: say how many times, or how much.
+    /// A click on a day anywhere, or the Record button on a habit event: opens
+    /// the dialog with everything the day can record.
     OpenDay(String, NaiveDate),
-    /// The Record button on a habit event: ask whether it was done, or how much.
-    Record(String, NaiveDate),
-    /// Records the dialog's day as done or not.
-    AnswerDay(bool),
+    DayOutcome(Outcome),
+    /// One more time, or one fewer.
+    StepTimes(bool),
+    StepResisted(bool),
     DayValue(String),
-    /// Records the dialog's number.
+    /// Records what the dialog holds.
     SaveDay,
-    /// Records the dialog's day as skipped.
-    SkipDay,
-    /// Clears what the dialog's day has recorded.
-    ClearDay,
+    /// Closes the dialog without recording anything.
     CloseDay,
     Menu(Menu),
     CloseMenu,
@@ -803,6 +890,19 @@ pub enum Action {
     RowReleased(String),
     /// The button was let go somewhere that is not a row.
     DragEnded,
+
+    // Sections of the list.
+    NewSection,
+    EditSection(String),
+    SectionName(String),
+    SaveSection,
+    CancelSection,
+    DeleteSection(String),
+    /// Moves a section up the list, or down it.
+    ShiftSection(String, bool),
+    ToggleSection(String),
+    /// The pointer reached a section's heading.
+    SectionEntered(String),
 
     // The extended view.
     Open(String),
@@ -878,33 +978,61 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             Task::none()
         }
 
-        Action::Toggle(id, day) => {
-            if state
-                .habits
-                .library
-                .habit(&id)
-                .is_some_and(Habit::asks_for_amount)
-            {
-                return open_day(state, id, day);
-            }
-            toggle(state, &id, day)
-        }
         Action::OpenDay(id, day) => open_day(state, id, day),
-        Action::Record(id, day) => record(state, id, day),
-        Action::AnswerDay(done) => change_day(state, |habit, day| habit.answer(day, done)),
-        Action::DayValue(value) => {
+        Action::DayOutcome(outcome) => {
+            let goal = day_goal(state);
             if let Some(dialog) = &mut state.habits.day_dialog {
+                dialog.choose(outcome, goal);
+            }
+            Task::none()
+        }
+        Action::StepTimes(up) => {
+            if let Some(dialog) = &mut state.habits.day_dialog {
+                dialog.times = if up {
+                    dialog.times.saturating_add(1)
+                } else {
+                    dialog.times.saturating_sub(1).max(1)
+                };
+            }
+            Task::none()
+        }
+        Action::StepResisted(up) => {
+            if let Some(dialog) = &mut state.habits.day_dialog {
+                dialog.resisted = if up {
+                    dialog.resisted.saturating_add(1)
+                } else {
+                    dialog.resisted.saturating_sub(1)
+                };
+                // Having resisted it answers whether it was avoided.
+                if up && dialog.outcome == Outcome::Unanswered {
+                    dialog.outcome = Outcome::NotDone;
+                }
+            }
+            Task::none()
+        }
+        Action::DayValue(value) => {
+            let goal = day_goal(state);
+            let wanted = state
+                .habits
+                .day_dialog
+                .as_ref()
+                .and_then(|dialog| state.habits.library.habit(&dialog.habit_id))
+                .is_some_and(|habit| habit.kind == Kind::Yes);
+            if let Some(dialog) = &mut state.habits.day_dialog {
+                let some = value.trim().parse::<f64>().is_ok_and(|value| value > 0.0);
                 dialog.value = value;
+                dialog.error = None;
+                // A number to record on a habit to do means it was done.
+                if wanted
+                    && some
+                    && matches!(dialog.outcome, Outcome::NotDone | Outcome::Unanswered)
+                {
+                    dialog.choose(Outcome::Done, goal);
+                }
             }
             Task::none()
         }
         Action::SaveDay => save_day(state),
-        Action::SkipDay => change_day(state, |habit, day| {
-            habit.marks.insert(day, Mark::Skip);
-        }),
-        Action::ClearDay => change_day(state, |habit, day| {
-            habit.marks.remove(&day);
-        }),
         Action::CloseDay => {
             state.habits.day_dialog = None;
             Task::none()
@@ -967,6 +1095,65 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             _ => Task::none(),
         },
+
+        Action::NewSection => {
+            state.habits.menu = None;
+            state.habits.section_edit = Some(SectionEdit {
+                id: None,
+                name: String::new(),
+            });
+            iced::widget::operation::focus(iced::widget::Id::new(SECTION_FIELD))
+        }
+        Action::EditSection(id) => {
+            let Some(section) = state.habits.library.section_mut(&id) else {
+                return Task::none();
+            };
+            let name = section.name.clone();
+            state.habits.section_edit = Some(SectionEdit { id: Some(id), name });
+            iced::widget::operation::focus(iced::widget::Id::new(SECTION_FIELD))
+        }
+        Action::SectionName(name) => {
+            if let Some(edit) = &mut state.habits.section_edit {
+                edit.name = name;
+            }
+            Task::none()
+        }
+        Action::SaveSection => save_section(state),
+        Action::CancelSection => {
+            state.habits.section_edit = None;
+            Task::none()
+        }
+        Action::DeleteSection(id) => {
+            state.habits.section_edit = None;
+            state.habits.library.remove_section(&id);
+            if let Some(form) = &mut state.habits.form
+                && form.section.as_deref() == Some(id.as_str())
+            {
+                form.section = None;
+            }
+            persist(state)
+        }
+        Action::ShiftSection(id, up) => {
+            state.habits.library.shift_section(&id, up);
+            persist(state)
+        }
+        Action::ToggleSection(id) => {
+            if let Some(section) = state.habits.library.section_mut(&id) {
+                section.collapsed = !section.collapsed;
+            }
+            persist(state)
+        }
+        Action::SectionEntered(section) => {
+            if state.habits.library.sort != SortKey::Manual {
+                return Task::none();
+            }
+            if let Some(drag) = &mut state.habits.dragging {
+                drag.moved = true;
+                let id = drag.id.clone();
+                state.habits.library.move_to_section(&id, &section);
+            }
+            Task::none()
+        }
 
         Action::Open(id) => open(state, id),
         Action::Close => {
@@ -1196,79 +1383,69 @@ fn open_day(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
     let Some(habit) = state.habits.library.habit(&id) else {
         return Task::none();
     };
-    let value = match (habit.kind, habit.marks.get(&day)) {
-        (Kind::Measurable, Some(Mark::Amount(amount))) => {
-            timeslay_core::habits::format_amount(*amount as f64 / 1000.0)
-        }
-        (Kind::Measurable, _) => String::new(),
-        _ => habit.times_on(day).to_string(),
-    };
-    state.habits.day_dialog = Some(DayDialog {
-        habit_id: id,
-        day,
-        value,
-        yes_or_no: false,
-    });
-    iced::widget::operation::focus(iced::widget::Id::new(DAY_FIELD))
+    state.habits.day_dialog = Some(DayDialog::new(habit, day));
+    if habit.measure.is_some() {
+        iced::widget::operation::focus(iced::widget::Id::new(DAY_FIELD))
+    } else {
+        Task::none()
+    }
 }
 
-/// Opens the day dialog for a habit event's Record button, asking for a yes or
-/// a no wherever a number is not needed.
-fn record(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
-    let yes_or_no = state
+/// How many times make the dialog's day complete.
+fn day_goal(state: &State) -> u32 {
+    state
         .habits
-        .library
-        .habit(&id)
-        .is_some_and(Habit::asks_yes_or_no);
-    let focus = open_day(state, id, day);
-    if !yes_or_no {
-        return focus;
-    }
-    if let Some(dialog) = &mut state.habits.day_dialog {
-        dialog.yes_or_no = true;
-    }
-    Task::none()
+        .day_dialog
+        .as_ref()
+        .and_then(|dialog| state.habits.library.habit(&dialog.habit_id))
+        .map_or(1, |habit| habit.frequency.per_day())
 }
 
+/// Records what the dialog holds, keeping calendar occurrences in step. A value
+/// that cannot be read keeps the dialog open to say so.
 fn save_day(state: &mut State) -> Task<Message> {
-    let Some(dialog) = &state.habits.day_dialog else {
+    let Some(dialog) = &mut state.habits.day_dialog else {
         return Task::none();
     };
-    let Ok(value) = dialog.value.trim().parse::<f64>() else {
+    let entry = match dialog.entry() {
+        Ok(entry) => entry,
+        Err(error) => {
+            dialog.error = Some(error);
+            return Task::none();
+        }
+    };
+    let (id, day) = (dialog.habit_id.clone(), dialog.day);
+    state.habits.day_dialog = None;
+    let Some(habit) = state.habits.library.habit_mut(&id) else {
         return Task::none();
     };
-    if value < 0.0 || !value.is_finite() {
+    habit.set_entry(day, entry);
+    state.habits.recompute_one(&id);
+    Task::batch([persist(state), sync_occurrences(state, &id, day)])
+}
+
+/// Names a section. A blank name leaves things as they were.
+fn save_section(state: &mut State) -> Task<Message> {
+    let Some(edit) = state.habits.section_edit.take() else {
+        return Task::none();
+    };
+    let name = edit.name.trim().to_owned();
+    if name.is_empty() {
         return Task::none();
     }
-    change_day(state, |habit, day| habit.set_day(day, value))
-}
-
-fn change_day(state: &mut State, change: impl FnOnce(&mut Habit, NaiveDate)) -> Task<Message> {
-    let Some(dialog) = state.habits.day_dialog.take() else {
-        return Task::none();
-    };
-    let Some(habit) = state.habits.library.habit_mut(&dialog.habit_id) else {
-        return Task::none();
-    };
-    change(habit, dialog.day);
-    state.habits.recompute_one(&dialog.habit_id);
-    Task::batch([
-        persist(state),
-        sync_occurrences(state, &dialog.habit_id, dialog.day),
-    ])
-}
-
-/// One step through the click cycle, keeping calendar occurrences in step.
-fn toggle(state: &mut State, id: &str, day: NaiveDate) -> Task<Message> {
-    let Some(status) = state.habits.computed(id).map(|c| c.status(day)) else {
-        return Task::none();
-    };
-    let Some(habit) = state.habits.library.habit_mut(id) else {
-        return Task::none();
-    };
-    habit.toggle(day, status);
-    state.habits.recompute_one(id);
-    Task::batch([persist(state), sync_occurrences(state, id, day)])
+    match edit.id {
+        Some(id) => {
+            if let Some(section) = state.habits.library.section_mut(&id) {
+                section.name = name;
+            }
+        }
+        None => state.habits.library.sections.push(Section {
+            id: new_id(),
+            name,
+            collapsed: false,
+        }),
+    }
+    persist(state)
 }
 
 /// Completes or reopens the occurrences loaded for `day` to match the habit, so
@@ -1381,13 +1558,13 @@ fn edit_form(form: &mut Form, action: FormAction) {
                 form.habit_kind = value;
             }
         }
+        FormAction::Measured(value) => form.measured = value,
         FormAction::Unit(value) => form.unit = value,
         FormAction::Target(value) => form.target = value,
-        FormAction::TargetType(value) => form.target_type = value,
         FormAction::TargetDays(value) => form.target_days = value,
         FormAction::Name(value) => form.name = value,
         FormAction::Question(value) => form.question = value,
-        FormAction::Notes(value) => form.notes = value,
+        FormAction::Section(value) => form.section = value,
         FormAction::Color(value) => form.color = value,
         FormAction::Kind(value) => form.kind = value,
         FormAction::PerDay(value) => {
@@ -1431,16 +1608,14 @@ fn save_form(state: &mut State) -> Task<Message> {
         return Task::none();
     };
     let name = form.name.trim().to_owned();
-    let target = form.target.trim().parse::<f64>().ok().filter(|t| *t >= 0.0);
     let result = if name.is_empty() {
         Err("Give the habit a name".to_owned())
-    } else if form.habit_kind == Kind::Measurable && target.is_none() {
-        Err("The target has to be a number".to_owned())
     } else {
-        form.frequency()
+        form.measure()
+            .and_then(|measure| Ok((measure, form.frequency()?)))
     };
-    let frequency = match result {
-        Ok(frequency) => frequency,
+    let (measure, frequency) = match result {
+        Ok(goal) => goal,
         Err(error) => {
             if let Some(form) = &mut state.habits.form {
                 form.error = Some(error);
@@ -1457,22 +1632,16 @@ fn save_form(state: &mut State) -> Task<Message> {
         state.habits.library.habits.push(habit);
     }
     if let Some(habit) = state.habits.library.habit_mut(&id) {
-        habit.unit = form.unit.trim().to_owned();
-        habit.target = target.unwrap_or(0.0);
-        habit.target_type = form.target_type;
+        habit.measure = measure;
         habit.name = name;
         habit.question = form.question.trim().to_owned();
         habit.notes = form.notes.trim().to_owned();
+        habit.section = form.section.clone();
         habit.color = form.color;
         habit.frequency = frequency;
         habit.skip_days = form.skip_days;
         habit.question_marks = form.question_marks;
-        // A measurable habit's days show their amounts, so it has no icons to pick.
-        habit.icons = if habit.kind == Kind::Measurable {
-            Icons::Symbols
-        } else {
-            form.icons
-        };
+        habit.icons = form.icons;
     }
     state.habits.recompute_one(&id);
     state.habits.form = None;
@@ -1522,6 +1691,7 @@ fn export(state: &State, id: Option<String>) -> Task<Message> {
         Some(id) => library.habit(id).cloned().into_iter().collect(),
         None => library.habits.clone(),
     };
+    let sections = library.sections.clone();
     let today = state.habits.today();
     let name = match &habits[..] {
         [habit] if id.is_some() => format!("{} {today}.zip", habit.name.replace('/', "-")),
@@ -1537,7 +1707,7 @@ fn export(state: &State, id: Option<String>) -> Task<Message> {
             return Ok(false);
         };
         let habits: Vec<&Habit> = habits.iter().collect();
-        let bytes = timeslay_core::habits::export_archive(&habits, today);
+        let bytes = timeslay_core::habits::export_archive(&habits, &sections, today);
         std::fs::write(file, bytes)
             .map(|()| true)
             .map_err(|error| error.to_string())

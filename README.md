@@ -81,6 +81,8 @@ Of course, there's also week, 2-week, and month views:
 - Habits
 	- These are standard calendar events that are colored differently.
 	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)
+	- Two types: "Did it" and "Avoided it". Either can also track a daily value with a target, shown in a Value chart
+	- Group habits into sections. Clicking any day opens a popup with everything that day can record
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
 	- Modeled from [Loop Habits](https://github.com/isoron/uhabits)

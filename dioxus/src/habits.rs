@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Duration, NaiveDate};
 use dioxus::prelude::*;
-use timeslay_core::habits::{Frequency, Habit, Kind, Library, Status, TargetType, format_amount};
+use timeslay_core::habits::{Frequency, Habit, Kind, Library, Measure, Status, format_amount};
 
 /// How many days the tracker's row shows, ending today.
 const DAYS: i64 = 5;
@@ -109,11 +109,10 @@ pub fn day_symbol(status: Status) -> String {
         Status::No => "×".to_owned(),
         Status::Skip => "»".to_owned(),
         Status::Unknown => "–".to_owned(),
-        Status::Measured { amount, .. } => format_amount(amount as f64 / 1000.0),
     }
 }
 
-/// Parses what was typed as a measurable habit's amount.
+/// Parses what was typed as a habit's value or target.
 pub fn parse_amount(text: &str) -> Result<f64, String> {
     match text.trim().parse::<f64>() {
         Ok(value) if value.is_finite() && value >= 0.0 => Ok(value),
@@ -149,10 +148,17 @@ pub fn parse_new(
     habit.kind = kind;
     habit.frequency = frequency;
     habit.created = Some(timeslay_core::clock::now().date_naive());
-    if kind == Kind::Measurable {
-        habit.target = parse_amount(target)?;
-        habit.unit = unit.trim().to_owned();
-        habit.target_type = TargetType::AtLeast;
+    // Filling in either one tracks a value.
+    if !target.trim().is_empty() || !unit.trim().is_empty() {
+        habit.measure = Some(Measure {
+            unit: unit.trim().to_owned(),
+            target: if target.trim().is_empty() {
+                None
+            } else {
+                Some(parse_amount(target)?)
+            },
+            days: 1,
+        });
     }
     Ok(habit)
 }
@@ -261,47 +267,50 @@ pub(crate) fn HabitRow(
         let symbol = day_symbol(status);
         let done = status.completed();
         let id = habit.id.clone();
+        let toggle_day_id = habit.id.clone();
         let label = day.format("%a %-d").to_string();
         rsx! {
             div { key: "{day}", class: "habit-day",
                 span { class: "habit-day-name", "{label}" }
-                if habit.asks_for_amount() {
+                button {
+                    class: if done { "habit-mark done" } else { "habit-mark" },
+                    aria_label: "{habit.name} on {label}: {symbol}",
+                    onclick: move |_| {
+                        let mut saved = saved.write();
+                        if let Some(habit) = saved.library.habit_mut(&toggle_day_id) {
+                            habit.toggle(day, status);
+                        }
+                        saved.save();
+                    },
+                    "{symbol}"
+                }
+                if habit.measure.is_some() {
                     input {
                         class: "client-input habit-amount",
                         r#type: "number",
                         inputmode: "decimal",
                         min: "0",
                         step: "any",
-                        aria_label: "{habit.name} on {label}",
-                        value: match status {
-                            Status::Measured { amount, .. } => format_amount(amount as f64 / 1000.0),
-                            _ => String::new(),
-                        },
+                        aria_label: "Value for {habit.name} on {label}",
+                        value: habit.value_on(day).map_or(String::new(), format_amount),
                         onchange: move |event: FormEvent| {
+                            let text = event.value();
+                            let value = if text.trim().is_empty() {
+                                Ok(None)
+                            } else {
+                                parse_amount(&text).map(Some)
+                            };
                             let mut saved = saved.write();
-                            match parse_amount(&event.value()) {
+                            match value {
                                 Ok(value) => {
                                     if let Some(habit) = saved.library.habit_mut(&id) {
-                                        habit.set_day(day, value);
+                                        habit.set_value(day, value);
                                     }
                                     saved.save();
                                 }
                                 Err(message) => saved.error = Some(message),
                             }
                         },
-                    }
-                } else {
-                    button {
-                        class: if done { "habit-mark done" } else { "habit-mark" },
-                        aria_label: "{habit.name} on {label}: {symbol}",
-                        onclick: move |_| {
-                            let mut saved = saved.write();
-                            if let Some(habit) = saved.library.habit_mut(&id) {
-                                habit.toggle(day, status);
-                            }
-                            saved.save();
-                        },
-                        "{symbol}"
                     }
                 }
             }
@@ -420,12 +429,10 @@ fn NewHabit(saved: Signal<Saved>, on_done: EventHandler<()>) -> Element {
                 aria_label: "Kind",
                 onchange: move |event: FormEvent| kind.set(match event.value().as_str() {
                     "no" => Kind::No,
-                    "measurable" => Kind::Measurable,
                     _ => Kind::Yes,
                 }),
-                option { value: "yes", selected: kind() == Kind::Yes, "Do it" }
-                option { value: "no", selected: kind() == Kind::No, "Avoid it" }
-                option { value: "measurable", selected: kind() == Kind::Measurable, "Measure it" }
+                option { value: "yes", selected: kind() == Kind::Yes, "{Kind::Yes.label()}" }
+                option { value: "no", selected: kind() == Kind::No, "{Kind::No.label()}" }
             }
             div { class: "sheet-row",
                 input {
@@ -449,27 +456,25 @@ fn NewHabit(saved: Signal<Saved>, on_done: EventHandler<()>) -> Element {
                 }
                 span { class: "hint", "days" }
             }
-            if kind() == Kind::Measurable {
-                div { class: "sheet-row",
-                    input {
-                        class: "client-input",
-                        r#type: "number",
-                        inputmode: "decimal",
-                        min: "0",
-                        step: "any",
-                        placeholder: "At least",
-                        aria_label: "Target",
-                        value: "{target}",
-                        oninput: move |event| target.set(event.value()),
-                    }
-                    input {
-                        class: "client-input",
-                        r#type: "text",
-                        placeholder: "Unit",
-                        aria_label: "Unit",
-                        value: "{unit}",
-                        oninput: move |event| unit.set(event.value()),
-                    }
+            div { class: "sheet-row",
+                input {
+                    class: "client-input",
+                    r#type: "number",
+                    inputmode: "decimal",
+                    min: "0",
+                    step: "any",
+                    placeholder: "Target per day (optional)",
+                    aria_label: "Target",
+                    value: "{target}",
+                    oninput: move |event| target.set(event.value()),
+                }
+                input {
+                    class: "client-input",
+                    r#type: "text",
+                    placeholder: "Unit (optional)",
+                    aria_label: "Unit",
+                    value: "{unit}",
+                    oninput: move |event| unit.set(event.value()),
                 }
             }
             div { class: "sheet-row",
@@ -521,6 +526,21 @@ mod tests {
         let habit = make(" Run ", "3", "7").unwrap();
         assert_eq!(habit.name, "Run");
         assert_eq!(habit.frequency, Frequency::Interval { times: 3, days: 7 });
+    }
+
+    #[test]
+    fn a_new_habit_tracks_a_value_once_a_target_or_unit_is_given() {
+        let make = |target: &str, unit: &str| {
+            parse_new("Run", Kind::No, "1", "1", target, unit, "id".to_owned())
+        };
+        assert_eq!(make("", " ").unwrap().measure, None);
+        let measure = make("2.5", " miles ").unwrap().measure.unwrap();
+        assert_eq!(
+            (measure.target, measure.unit.as_str()),
+            (Some(2.5), "miles")
+        );
+        assert_eq!(make("", "miles").unwrap().measure.unwrap().target, None);
+        assert!(make("lots", "").is_err());
     }
 
     #[test]

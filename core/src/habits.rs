@@ -7,9 +7,14 @@
 //!
 //! Interval snapping, scores and streaks follow Loop's `EntryList`, `ScoreList`
 //! and `StreakList`, so a record scores the same here as in Loop. Added to that:
-//! a times-per-day goal, a goal on chosen weekdays, a "No" habit that is a success
-//! on every day it is not done, recording how many times a day it was done, and
-//! skip days and question marks being set per habit instead of globally.
+//! a times-per-day goal, a goal on chosen weekdays, an "Avoided it" habit that is
+//! a success on every day it is not done, recording how many times a day it was
+//! done, skip days and question marks being set per habit instead of globally,
+//! and habits being grouped into sections.
+//!
+//! A habit's [`Kind`] alone decides what counts as success. Any habit can also
+//! record a number each day, with a target ([`Measure`]). That is kept for the
+//! Value chart and never changes the score.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// The Google extended property naming the habit an event belongs to.
 pub const LINK_PROPERTY: &str = "ttHabit";
 
-/// What a habit records, and so what counts as success.
+/// What counts as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -29,17 +34,69 @@ pub enum Kind {
     Yes,
     /// Never doing it is the goal, so every day it is not done is a success.
     No,
-    /// An amount tracked against a target, like Loop's numeric habits.
-    Measurable,
 }
 
-/// Which side of a measurable habit's target is the goal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TargetType {
-    #[default]
-    AtLeast,
-    AtMost,
+impl Kind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yes => "Did it",
+            Self::No => "Avoided it",
+        }
+    }
+}
+
+/// A number recorded alongside a habit, such as miles run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Measure {
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub target: Option<f64>,
+    /// The period the target covers, and the Value chart adds up: 1, 7 or 30 days.
+    #[serde(default = "one_day")]
+    pub days: u32,
+}
+
+fn one_day() -> u32 {
+    1
+}
+
+impl Measure {
+    /// The period of the Value chart.
+    pub fn bucket(&self) -> Bucket {
+        match self.days {
+            0 | 1 => Bucket::Day,
+            2..=7 => Bucket::Week,
+            _ => Bucket::Month,
+        }
+    }
+
+    /// The target in words. Doing more of what is wanted is better, and doing
+    /// more of what is being avoided is worse, so the side follows from the kind.
+    pub fn label(&self, kind: Kind) -> String {
+        let unit = if self.unit.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", self.unit)
+        };
+        let Some(target) = self.target else {
+            return if self.unit.is_empty() {
+                "Tracking a value".to_owned()
+            } else {
+                format!("Tracking{unit}")
+            };
+        };
+        let side = match kind {
+            Kind::Yes => "At least",
+            Kind::No => "At most",
+        };
+        let period = match self.bucket() {
+            Bucket::Day => "day",
+            Bucket::Week => "week",
+            _ => "month",
+        };
+        format!("{side} {}{unit} per {period}", format_amount(target))
+    }
 }
 
 /// How a habit's days are drawn in the list.
@@ -171,8 +228,6 @@ pub enum Mark {
     Reps(u32),
     No,
     Skip,
-    /// A measurable habit's value, in thousandths as Loop stores it.
-    Amount(i64),
 }
 
 /// What a day works out to, once the goal has been applied.
@@ -192,12 +247,6 @@ pub enum Status {
     Clean,
     /// On a "No" habit: done this many times.
     Slipped(u32),
-    /// On a measurable habit: the day's amount in thousandths, and whether the
-    /// period it falls in met the target.
-    Measured {
-        amount: i64,
-        met: bool,
-    },
 }
 
 impl Status {
@@ -205,7 +254,6 @@ impl Status {
     pub fn counted(self) -> f64 {
         match self {
             Self::Yes | Self::Clean => 1.0,
-            Self::Measured { amount, .. } => amount.max(0) as f64 / 1000.0,
             _ => 0.0,
         }
     }
@@ -214,7 +262,6 @@ impl Status {
     pub fn completed(self) -> bool {
         match self {
             Self::Yes | Self::Auto | Self::Skip | Self::Clean => true,
-            Self::Measured { met, .. } => met,
             Self::No | Self::Unknown | Self::Partial(_) | Self::Slipped(_) => false,
         }
     }
@@ -259,8 +306,32 @@ fn default_color() -> u8 {
     DEFAULT_COLOR
 }
 
+/// What was answered about a day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// It happened: a success on "Did it", a slip on "Avoided it".
+    Done,
+    /// It did not happen.
+    NotDone,
+    Skipped,
+    /// Nothing is known, on a habit that shows question marks.
+    Unanswered,
+}
+
+/// Everything that can be recorded for one day.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DayEntry {
+    pub outcome: Outcome,
+    /// How many times it happened, when it did.
+    pub times: u32,
+    /// How many times it was resisted, on an "Avoided it" habit.
+    pub resisted: u32,
+    pub value: Option<f64>,
+}
+
 /// One habit: its goal, its settings and everything recorded for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredHabit")]
 pub struct Habit {
     pub id: String,
     pub name: String,
@@ -269,12 +340,6 @@ pub struct Habit {
     /// The day it was added, from which a "No" habit starts counting.
     #[serde(default)]
     pub created: Option<NaiveDate>,
-    #[serde(default)]
-    pub unit: String,
-    #[serde(default)]
-    pub target: f64,
-    #[serde(default)]
-    pub target_type: TargetType,
     #[serde(default)]
     pub question: String,
     #[serde(default)]
@@ -295,6 +360,162 @@ pub struct Habit {
     pub icons: Icons,
     #[serde(default)]
     pub marks: BTreeMap<NaiveDate, Mark>,
+    /// On a "No" habit: how many times it came to mind on a day without being
+    /// done. It is kept apart from `marks` so that it never changes the score.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resisted: BTreeMap<NaiveDate, u32>,
+    /// The [`Section`] it is listed under, by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    /// The number recorded each day, if this habit records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure: Option<Measure>,
+    /// Each day's number in thousandths. It outlives `measure` being turned off.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<NaiveDate, i64>,
+}
+
+/// A habit as any version has saved it.
+#[derive(Deserialize)]
+struct StoredHabit {
+    id: String,
+    name: String,
+    #[serde(default)]
+    kind: StoredKind,
+    #[serde(default)]
+    created: Option<NaiveDate>,
+    #[serde(default)]
+    unit: String,
+    #[serde(default)]
+    target: f64,
+    #[serde(default)]
+    target_type: StoredTargetType,
+    #[serde(default)]
+    question: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default = "default_color")]
+    color: u8,
+    #[serde(default)]
+    frequency: Frequency,
+    #[serde(default)]
+    archived: bool,
+    #[serde(default)]
+    skip_days: bool,
+    #[serde(default)]
+    question_marks: bool,
+    #[serde(default)]
+    icons: Icons,
+    #[serde(default)]
+    marks: BTreeMap<NaiveDate, StoredMark>,
+    #[serde(default)]
+    resisted: BTreeMap<NaiveDate, u32>,
+    #[serde(default)]
+    section: Option<String>,
+    #[serde(default)]
+    measure: Option<Measure>,
+    #[serde(default)]
+    values: BTreeMap<NaiveDate, i64>,
+}
+
+#[derive(Deserialize, Default, PartialEq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum StoredKind {
+    #[default]
+    Yes,
+    No,
+    Measurable,
+}
+
+#[derive(Deserialize, Default, PartialEq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum StoredTargetType {
+    #[default]
+    AtLeast,
+    AtMost,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum StoredMark {
+    Yes,
+    Reps(u32),
+    No,
+    Skip,
+    Amount(i64),
+}
+
+impl From<StoredHabit> for Habit {
+    /// Measurable used to be a third kind of habit, where an amount decided the
+    /// day. It becomes whichever kind has the same goal, with its amounts kept as
+    /// values, and each day judged against the target as it was recorded.
+    fn from(stored: StoredHabit) -> Self {
+        let measurable = stored.kind == StoredKind::Measurable;
+        let at_most = measurable && stored.target_type == StoredTargetType::AtMost;
+        let days = match stored.frequency.fraction().1 {
+            0 | 1 => 1,
+            2..=7 => 7,
+            _ => 30,
+        };
+        let mut marks = BTreeMap::new();
+        let mut values = stored.values;
+        for (day, mark) in stored.marks {
+            let mark = match mark {
+                StoredMark::Yes => Some(Mark::Yes),
+                StoredMark::Reps(times) => Some(Mark::Reps(times)),
+                StoredMark::No => Some(Mark::No),
+                StoredMark::Skip => Some(Mark::Skip),
+                StoredMark::Amount(amount) => {
+                    values.insert(day, amount);
+                    let value = amount as f64 / 1000.0;
+                    if at_most {
+                        (value > stored.target / f64::from(days)).then_some(Mark::Reps(1))
+                    } else {
+                        // A longer period's target can be met over several days.
+                        (value > 0.0 && (days != 1 || value >= stored.target)).then_some(Mark::Yes)
+                    }
+                }
+            };
+            if let Some(mark) = mark {
+                marks.insert(day, mark);
+            }
+        }
+        Self {
+            id: stored.id,
+            name: stored.name,
+            kind: if at_most || stored.kind == StoredKind::No {
+                Kind::No
+            } else {
+                Kind::Yes
+            },
+            created: stored.created,
+            question: stored.question,
+            notes: stored.notes,
+            color: stored.color,
+            frequency: if at_most {
+                Frequency::DAILY
+            } else {
+                stored.frequency
+            },
+            archived: stored.archived,
+            skip_days: stored.skip_days,
+            question_marks: stored.question_marks,
+            icons: stored.icons,
+            marks,
+            resisted: stored.resisted,
+            section: stored.section,
+            measure: if measurable {
+                Some(Measure {
+                    unit: stored.unit,
+                    target: (stored.target > 0.0).then_some(stored.target),
+                    days,
+                })
+            } else {
+                stored.measure
+            },
+            values,
+        }
+    }
 }
 
 impl Habit {
@@ -304,9 +525,6 @@ impl Habit {
             name: name.into(),
             kind: Kind::Yes,
             created: None,
-            unit: String::new(),
-            target: 0.0,
-            target_type: TargetType::AtLeast,
             question: String::new(),
             notes: String::new(),
             color: DEFAULT_COLOR,
@@ -316,31 +534,21 @@ impl Habit {
             question_marks: false,
             icons: Icons::Symbols,
             marks: BTreeMap::new(),
+            resisted: BTreeMap::new(),
+            section: None,
+            measure: None,
+            values: BTreeMap::new(),
         }
     }
 
     /// Every day's status, its score and its streaks, as of `today`.
     pub fn compute(&self, today: NaiveDate) -> Computed {
-        let (statuses, scores, from) = match self.kind {
-            Kind::Yes => {
-                let statuses = statuses(self.frequency, &self.marks);
-                let from = first_day(&statuses, today);
-                let scores = scores(self.frequency, &statuses, from, today);
-                (statuses, scores, from)
-            }
-            Kind::No => {
-                let statuses = abstain_statuses(self, today);
-                let from = first_day(&statuses, today);
-                let scores = scores(Frequency::DAILY, &statuses, from, today);
-                (statuses, scores, from)
-            }
-            Kind::Measurable => {
-                let statuses = measured_statuses(self, today);
-                let from = first_day(&statuses, today);
-                let scores = measured_scores(self, &statuses, from, today);
-                (statuses, scores, from)
-            }
+        let (statuses, frequency) = match self.kind {
+            Kind::Yes => (statuses(self.frequency, &self.marks), self.frequency),
+            Kind::No => (abstain_statuses(self, today), Frequency::DAILY),
         };
+        let from = first_day(&statuses, today).min(self.first_value().unwrap_or(today));
+        let scores = scores(frequency, &statuses, from, today);
         let streaks = streaks(&statuses, today);
         let total = statuses.values().map(|status| status.counted()).sum();
         Computed {
@@ -359,29 +567,84 @@ impl Habit {
             .map_or(0, |mark| reps(*mark, self.frequency.per_day()))
     }
 
-    /// Whether a click needs a number, as it does for a measurable habit.
-    pub fn asks_for_amount(&self) -> bool {
-        self.kind == Kind::Measurable
+    /// How many times it was thought about but not done on a day.
+    pub fn resisted_on(&self, day: NaiveDate) -> u32 {
+        self.resisted.get(&day).copied().unwrap_or(0)
     }
 
-    /// Whether a day comes down to a plain yes or no. A measurable habit needs
-    /// an amount, and a times-per-day goal needs to know how many.
-    pub fn asks_yes_or_no(&self) -> bool {
-        self.kind != Kind::Measurable && self.frequency.per_day() == 1
-    }
-
-    /// Records a plain answer to whether it was done on a day. Saying yes to a
-    /// day already done keeps the number of times recorded for it.
-    pub fn answer(&mut self, day: NaiveDate, done: bool) {
-        if self.kind == Kind::Measurable || (done && self.times_on(day) > 0) {
-            return;
+    /// Records how many times it was thought about but not done on a day.
+    pub fn set_resisted(&mut self, day: NaiveDate, times: u32) {
+        if times == 0 {
+            self.resisted.remove(&day);
+        } else {
+            self.resisted.insert(day, times);
         }
-        let mark = match (done, self.kind) {
-            (false, _) => Mark::No,
-            (true, Kind::No) => Mark::Reps(1),
-            (true, _) => Mark::Yes,
+    }
+
+    /// The number recorded on a day.
+    pub fn value_on(&self, day: NaiveDate) -> Option<f64> {
+        self.values.get(&day).map(|value| *value as f64 / 1000.0)
+    }
+
+    /// Records the number for a day, or removes it.
+    pub fn set_value(&mut self, day: NaiveDate, value: Option<f64>) {
+        match value {
+            Some(value) => {
+                self.values
+                    .insert(day, (value.max(0.0) * 1000.0).round() as i64);
+            }
+            None => {
+                self.values.remove(&day);
+            }
+        }
+    }
+
+    fn first_value(&self) -> Option<NaiveDate> {
+        self.values.keys().next().copied()
+    }
+
+    /// Everything recorded for a day. With no answer on record, a day has not
+    /// happened unless the habit asks for days to be answered.
+    pub fn entry(&self, day: NaiveDate) -> DayEntry {
+        let times = self.times_on(day);
+        let resisted = self.resisted_on(day);
+        DayEntry {
+            outcome: match self.marks.get(&day) {
+                Some(Mark::Skip) => Outcome::Skipped,
+                _ if times > 0 => Outcome::Done,
+                None if self.question_marks && resisted == 0 => Outcome::Unanswered,
+                _ => Outcome::NotDone,
+            },
+            times,
+            resisted,
+            value: self.value_on(day),
+        }
+    }
+
+    /// Replaces everything recorded for a day.
+    pub fn set_entry(&mut self, day: NaiveDate, entry: DayEntry) {
+        match entry.outcome {
+            Outcome::Done => {
+                self.marks.insert(day, Mark::Reps(entry.times.max(1)));
+            }
+            Outcome::Skipped => {
+                self.marks.insert(day, Mark::Skip);
+            }
+            // Only a habit with question marks tells this apart from no answer.
+            Outcome::NotDone if self.question_marks => {
+                self.marks.insert(day, Mark::No);
+            }
+            Outcome::NotDone | Outcome::Unanswered => {
+                self.marks.remove(&day);
+            }
+        }
+        let resisted = if self.kind == Kind::No {
+            entry.resisted
+        } else {
+            0
         };
-        self.marks.insert(day, mark);
+        self.set_resisted(day, resisted);
+        self.set_value(day, entry.value);
     }
 
     /// The goal, in words.
@@ -389,45 +652,6 @@ impl Habit {
         match self.kind {
             Kind::Yes => self.frequency.label(),
             Kind::No => "Never".to_owned(),
-            Kind::Measurable => {
-                let side = match self.target_type {
-                    TargetType::AtLeast => "At least",
-                    TargetType::AtMost => "At most",
-                };
-                let period = match self.frequency.fraction().1 {
-                    1 => "day",
-                    7 => "week",
-                    _ => "month",
-                };
-                let amount = format_amount(self.target);
-                let unit = if self.unit.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", self.unit)
-                };
-                format!("{side} {amount}{unit} per {period}")
-            }
-        }
-    }
-
-    /// Records an amount or a number of times done, from the day dialog. Zero
-    /// on a "Yes" or "No" habit returns the day to its default.
-    pub fn set_day(&mut self, day: NaiveDate, value: f64) {
-        match self.kind {
-            Kind::Measurable => {
-                self.marks
-                    .insert(day, Mark::Amount((value.max(0.0) * 1000.0).round() as i64));
-            }
-            Kind::Yes | Kind::No => {
-                let times = value.max(0.0).round() as u32;
-                if times == 0 && self.kind == Kind::No && self.question_marks {
-                    self.marks.insert(day, Mark::No);
-                } else if times == 0 {
-                    self.marks.remove(&day);
-                } else {
-                    self.marks.insert(day, Mark::Reps(times));
-                }
-            }
         }
     }
 
@@ -497,9 +721,10 @@ fn first_day(statuses: &BTreeMap<NaiveDate, Status>, today: NaiveDate) -> NaiveD
     statuses.keys().next().copied().unwrap_or(today).min(today)
 }
 
-/// A number without the noise: `2.5`, `10`, `0.25`.
+/// A number without the noise: `2.5`, `10`, `0.25`. Values are kept in thousandths,
+/// so this shows all of what is stored.
 pub fn format_amount(value: f64) -> String {
-    let text = format!("{value:.2}");
+    let text = format!("{value:.3}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
@@ -507,7 +732,7 @@ fn reps(mark: Mark, goal: u32) -> u32 {
     match mark {
         Mark::Yes => goal,
         Mark::Reps(reps) => reps,
-        Mark::No | Mark::Skip | Mark::Amount(_) => 0,
+        Mark::No | Mark::Skip => 0,
     }
 }
 
@@ -643,6 +868,48 @@ impl std::fmt::Display for Bucket {
     }
 }
 
+/// Whatever was recorded in each period, newest first, with empty periods kept.
+fn fill_periods(
+    grouped: &BTreeMap<NaiveDate, f64>,
+    bucket: Bucket,
+    first_weekday: Weekday,
+    today: NaiveDate,
+) -> Vec<(NaiveDate, f64)> {
+    let Some(oldest) = grouped.keys().next().copied() else {
+        return Vec::new();
+    };
+    let mut series = Vec::new();
+    let mut start = bucket.start(today, first_weekday);
+    while start >= oldest {
+        series.push((start, grouped.get(&start).copied().unwrap_or(0.0)));
+        let previous = bucket.previous(start);
+        if previous == start {
+            break;
+        }
+        start = previous;
+    }
+    series
+}
+
+/// The values added up over each of the target's periods, newest first, for the
+/// Value chart.
+pub fn value_series(
+    habit: &Habit,
+    first_weekday: Weekday,
+    today: NaiveDate,
+) -> Vec<(NaiveDate, f64)> {
+    let bucket = habit.measure.as_ref().map_or(Bucket::Day, Measure::bucket);
+    let mut grouped: BTreeMap<NaiveDate, f64> = BTreeMap::new();
+    for (day, value) in &habit.values {
+        if *day <= today {
+            *grouped
+                .entry(bucket.start(*day, first_weekday))
+                .or_default() += *value as f64 / 1000.0;
+        }
+    }
+    fill_periods(&grouped, bucket, first_weekday, today)
+}
+
 /// The average score of each period, newest first, as Loop's score card shows.
 pub fn score_series(
     computed: &Computed,
@@ -681,20 +948,7 @@ pub fn history_series(
                 .or_default() += status.counted();
         }
     }
-    let Some(oldest) = grouped.keys().next().copied() else {
-        return Vec::new();
-    };
-    let mut series = Vec::new();
-    let mut start = bucket.start(today, first_weekday);
-    while start >= oldest {
-        series.push((start, grouped.get(&start).copied().unwrap_or(0.0)));
-        let previous = bucket.previous(start);
-        if previous == start {
-            break;
-        }
-        start = previous;
-    }
-    series
+    fill_periods(&grouped, bucket, first_weekday, today)
 }
 
 /// What was counted per weekday (Monday first) of each month, for the frequency
@@ -815,7 +1069,7 @@ fn statuses(
                     Mark::Yes => Status::Yes,
                     Mark::Reps(reps) if reps >= goal => Status::Yes,
                     Mark::Reps(reps) => Status::Partial(reps),
-                    Mark::No | Mark::Amount(_) => Status::No,
+                    Mark::No => Status::No,
                     Mark::Skip => Status::Skip,
                 },
             );
@@ -857,7 +1111,7 @@ fn statuses(
             Mark::Yes | Mark::Reps(1..) => {
                 result.insert(*day, Status::Yes);
             }
-            Mark::No | Mark::Reps(0) | Mark::Amount(_) => {
+            Mark::No | Mark::Reps(0) => {
                 // A "no" inside a covered stretch stays covered, as in Loop.
                 result.entry(*day).or_insert(Status::No);
             }
@@ -867,9 +1121,18 @@ fn statuses(
 }
 
 /// A "No" habit: every day since it began is a success unless it was done. With
-/// question marks on, only a day said to be clean counts.
+/// question marks on, only a day said to be clean counts, which having resisted
+/// it does say.
 fn abstain_statuses(habit: &Habit, today: NaiveDate) -> BTreeMap<NaiveDate, Status> {
-    let oldest = habit.marks.keys().next().copied();
+    let oldest = [
+        habit.marks.keys().next(),
+        habit.resisted.keys().next(),
+        habit.values.keys().next(),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .copied();
     let from = match (habit.created, oldest) {
         (Some(created), Some(oldest)) => created.min(oldest),
         (Some(day), None) | (None, Some(day)) => day,
@@ -883,7 +1146,7 @@ fn abstain_statuses(habit: &Habit, today: NaiveDate) -> BTreeMap<NaiveDate, Stat
             Some(Mark::Yes) => Status::Slipped(1),
             Some(Mark::Reps(times @ 1..)) => Status::Slipped(*times),
             Some(_) => Status::Clean,
-            None if habit.question_marks => Status::Unknown,
+            None if habit.question_marks && habit.resisted_on(day) == 0 => Status::Unknown,
             None => Status::Clean,
         };
         if status != Status::Unknown {
@@ -892,130 +1155,6 @@ fn abstain_statuses(habit: &Habit, today: NaiveDate) -> BTreeMap<NaiveDate, Stat
         day += Duration::days(1);
     }
     result
-}
-
-fn period_start(day: NaiveDate, days: u32) -> NaiveDate {
-    match days {
-        0 | 1 => day,
-        2..=7 => Bucket::Week.start(day, Weekday::Mon),
-        _ => Bucket::Month.start(day, Weekday::Mon),
-    }
-}
-
-/// Loop's `recomputeCompletion` for numeric habits: amounts are summed over the
-/// day, week or month, against a target reduced by the days skipped.
-fn measured_statuses(habit: &Habit, today: NaiveDate) -> BTreeMap<NaiveDate, Status> {
-    let (_, denominator) = habit.frequency.fraction();
-    let period_length: f64 = match denominator {
-        0 | 1 => 1.0,
-        2..=7 => 7.0,
-        _ => 30.0,
-    };
-    let daily_target = habit.target / f64::from(denominator);
-    let base_target = if f64::from(denominator) == period_length {
-        habit.target
-    } else {
-        daily_target * period_length
-    };
-
-    let from = habit
-        .marks
-        .keys()
-        .next()
-        .copied()
-        .unwrap_or(today)
-        .min(today);
-    let mut periods: BTreeMap<NaiveDate, (i64, u32)> = BTreeMap::new();
-    let mut day = from;
-    while day <= today {
-        let slot = periods.entry(period_start(day, denominator)).or_default();
-        match habit.marks.get(&day) {
-            Some(Mark::Amount(amount)) => slot.0 += (*amount).max(0),
-            Some(Mark::Skip) => slot.1 += 1,
-            _ => {}
-        }
-        day += Duration::days(1);
-    }
-
-    let met = |(sum, skipped): (i64, u32)| {
-        let target = (base_target - daily_target * f64::from(skipped)).max(0.0);
-        let sum = sum as f64 / 1000.0;
-        match habit.target_type {
-            TargetType::AtLeast => sum >= target,
-            TargetType::AtMost => sum <= target,
-        }
-    };
-
-    let mut result = BTreeMap::new();
-    let mut day = from;
-    while day <= today {
-        let status = match habit.marks.get(&day) {
-            Some(Mark::Skip) => Status::Skip,
-            mark => Status::Measured {
-                amount: match mark {
-                    Some(Mark::Amount(amount)) => *amount,
-                    _ => 0,
-                },
-                met: periods
-                    .get(&period_start(day, denominator))
-                    .copied()
-                    .is_some_and(met),
-            },
-        };
-        result.insert(day, status);
-        day += Duration::days(1);
-    }
-    result
-}
-
-/// The numeric half of Loop's `ScoreList.recompute`.
-fn measured_scores(
-    habit: &Habit,
-    statuses: &BTreeMap<NaiveDate, Status>,
-    from: NaiveDate,
-    today: NaiveDate,
-) -> Vec<f64> {
-    let (_, denominator) = habit.frequency.fraction();
-    let freq = habit.frequency.as_f64();
-    let at_most = habit.target_type == TargetType::AtMost;
-    let mut scores = Vec::new();
-    let mut window = std::collections::VecDeque::new();
-    let mut rolling = 0_i64;
-    let mut previous = if at_most { 1.0 } else { 0.0 };
-    let mut day = from;
-    while day <= today {
-        let status = statuses.get(&day).copied().unwrap_or(Status::Unknown);
-        if status != Status::Skip {
-            let amount = match status {
-                Status::Measured { amount, .. } => amount.max(0),
-                _ => 0,
-            };
-            window.push_back(amount);
-            rolling += amount;
-            if window.len() > denominator as usize {
-                rolling -= window.pop_front().unwrap_or(0);
-            }
-            let sum = rolling as f64 / 1000.0;
-            let target = habit.target;
-            let completed = if !at_most {
-                if target > 0.0 {
-                    (sum / target).min(1.0)
-                } else {
-                    1.0
-                }
-            } else if target > 0.0 {
-                (1.0 - (sum - target) / target).clamp(0.0, 1.0)
-            } else if sum > 0.0 {
-                0.0
-            } else {
-                1.0
-            };
-            previous = compute_score(freq, previous, completed);
-        }
-        scores.push(previous);
-        day += Duration::days(1);
-    }
-    scores
 }
 
 /// Loop's `Score.compute`.
@@ -1131,11 +1270,22 @@ pub fn path() -> Option<std::path::PathBuf> {
     )
 }
 
-/// Everything saved between runs. The order of `habits` is the manual order.
+/// A named group in the habit list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+/// Everything saved between runs. The order of `habits` is the manual order, and
+/// the order of `sections` is the order they are listed in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Library {
     pub habits: Vec<Habit>,
+    pub sections: Vec<Section>,
     pub sort: SortKey,
     /// Choosing the current sort again reverses it, as in Loop.
     pub reversed: bool,
@@ -1153,6 +1303,7 @@ impl Default for Library {
     fn default() -> Self {
         Self {
             habits: Vec::new(),
+            sections: Vec::new(),
             sort: SortKey::Manual,
             reversed: false,
             hide_archived: true,
@@ -1183,16 +1334,102 @@ impl Library {
         }
     }
 
-    /// Moves a habit to where another one is in the manual order.
+    /// Moves a habit to where another one is in the manual order, and so into
+    /// that one's section.
     pub fn move_habit(&mut self, id: &str, onto: &str) {
         let from = self.habits.iter().position(|habit| habit.id == id);
         let to = self.habits.iter().position(|habit| habit.id == onto);
         if let (Some(from), Some(to)) = (from, to)
             && from != to
         {
-            let habit = self.habits.remove(from);
+            let section = self.habits[to].section.clone();
+            let mut habit = self.habits.remove(from);
+            habit.section = section;
             self.habits.insert(to, habit);
         }
+    }
+
+    /// Moves a habit to the top of a section.
+    pub fn move_to_section(&mut self, id: &str, section: &str) {
+        let Some(from) = self.habits.iter().position(|habit| habit.id == id) else {
+            return;
+        };
+        let mut habit = self.habits.remove(from);
+        habit.section = Some(section.to_owned());
+        let to = self
+            .habits
+            .iter()
+            .position(|other| other.section.as_deref() == Some(section))
+            .unwrap_or(from);
+        self.habits.insert(to, habit);
+    }
+
+    pub fn section_mut(&mut self, id: &str) -> Option<&mut Section> {
+        self.sections.iter_mut().find(|section| section.id == id)
+    }
+
+    /// Moves a section one place up or down the list.
+    pub fn shift_section(&mut self, id: &str, up: bool) {
+        let Some(index) = self.sections.iter().position(|section| section.id == id) else {
+            return;
+        };
+        let other = if up {
+            index.checked_sub(1)
+        } else {
+            Some(index + 1).filter(|next| *next < self.sections.len())
+        };
+        if let Some(other) = other {
+            self.sections.swap(index, other);
+        }
+    }
+
+    /// Deletes a section. Its habits stay, outside of any section.
+    pub fn remove_section(&mut self, id: &str) {
+        self.sections.retain(|section| section.id != id);
+        for habit in &mut self.habits {
+            if habit.section.as_deref() == Some(id) {
+                habit.section = None;
+            }
+        }
+    }
+
+    /// Lays habits from [`Self::visible`] out under their sections, keeping their
+    /// order. Those in no section come first, without a heading, as do any whose
+    /// section is gone. A section whose habits are all filtered out is left out,
+    /// while one with no habits at all stays, so that it can be filled.
+    pub fn grouped<'a>(
+        &'a self,
+        visible: Vec<&'a Habit>,
+    ) -> Vec<(Option<&'a Section>, Vec<&'a Habit>)> {
+        let known = |habit: &Habit| {
+            habit
+                .section
+                .as_deref()
+                .filter(|id| self.sections.iter().any(|section| section.id == *id))
+                .map(str::to_owned)
+        };
+        let (outside, inside): (Vec<&Habit>, Vec<&Habit>) = visible
+            .into_iter()
+            .partition(|habit| known(habit).is_none());
+        let mut groups = Vec::new();
+        if !outside.is_empty() {
+            groups.push((None, outside));
+        }
+        for section in &self.sections {
+            let listed: Vec<&Habit> = inside
+                .iter()
+                .copied()
+                .filter(|habit| habit.section.as_deref() == Some(section.id.as_str()))
+                .collect();
+            let empty = !self
+                .habits
+                .iter()
+                .any(|habit| habit.section.as_deref() == Some(section.id.as_str()));
+            if !listed.is_empty() || empty {
+                groups.push((Some(section), listed));
+            }
+        }
+        groups
     }
 
     /// The habit that uses a name, ignoring case and surrounding spaces.
@@ -1240,13 +1477,12 @@ impl Library {
 /// Done first, then whatever is still open, as Loop's status order.
 fn status_rank(status: Status) -> u8 {
     match status {
-        Status::Yes | Status::Clean | Status::Measured { met: true, .. } => 0,
+        Status::Yes | Status::Clean => 0,
         Status::Auto => 1,
         Status::Skip => 2,
         Status::Partial(_) => 3,
-        Status::Measured { met: false, .. } => 4,
-        Status::No | Status::Slipped(_) => 5,
-        Status::Unknown => 6,
+        Status::No | Status::Slipped(_) => 4,
+        Status::Unknown => 5,
     }
 }
 
@@ -1273,7 +1509,6 @@ fn status_text(status: Status) -> String {
         Status::Partial(reps) => reps.to_string(),
         Status::Clean => "CLEAN".to_owned(),
         Status::Slipped(_) => "SLIPPED".to_owned(),
-        Status::Measured { amount, .. } => format_amount(amount as f64 / 1000.0),
         Status::No => "NO".to_owned(),
         Status::Skip => "SKIP".to_owned(),
         Status::Unknown => "UNKNOWN".to_owned(),
@@ -1290,14 +1525,16 @@ fn folder_name(position: usize, name: &str) -> String {
     format!("{:03} {}/", position + 1, safe.trim())
 }
 
-fn habit_list_csv(habits: &[&Habit]) -> String {
+fn habit_list_csv(habits: &[&Habit], sections: &[Section]) -> String {
     let mut out = csv_line(&[
         "Position",
         "Name",
         "Type",
+        "Section",
         "Unit",
         "Target Type",
         "Target Value",
+        "Target Days",
         "Question",
         "Description",
         "FrequencyNumerator",
@@ -1310,25 +1547,28 @@ fn habit_list_csv(habits: &[&Habit]) -> String {
     ]);
     for (position, habit) in habits.iter().enumerate() {
         let (numerator, denominator) = habit.frequency.fraction();
+        let section = sections
+            .iter()
+            .find(|section| Some(section.id.as_str()) == habit.section.as_deref())
+            .map_or("", |section| section.name.as_str());
+        let measure = habit.measure.as_ref();
+        let target = measure.and_then(|measure| measure.target);
         out += &csv_line(&[
             &format!("{:03}", position + 1),
             &habit.name,
             match habit.kind {
-                Kind::Yes => "YES",
-                Kind::No => "NO",
-                Kind::Measurable => "MEASURABLE",
+                Kind::Yes => "DID_IT",
+                Kind::No => "AVOIDED_IT",
             },
-            &habit.unit,
-            match (habit.kind, habit.target_type) {
-                (Kind::Measurable, TargetType::AtLeast) => "AT_LEAST",
-                (Kind::Measurable, TargetType::AtMost) => "AT_MOST",
-                _ => "",
+            section,
+            measure.map_or("", |measure| measure.unit.as_str()),
+            match (target, habit.kind) {
+                (None, _) => "",
+                (Some(_), Kind::Yes) => "AT_LEAST",
+                (Some(_), Kind::No) => "AT_MOST",
             },
-            &if habit.kind == Kind::Measurable {
-                format_amount(habit.target)
-            } else {
-                String::new()
-            },
+            &target.map_or(String::new(), format_amount),
+            &measure.map_or(String::new(), |measure| measure.days.to_string()),
             &habit.question,
             &habit.notes,
             &numerator.to_string(),
@@ -1343,16 +1583,47 @@ fn habit_list_csv(habits: &[&Habit]) -> String {
     out
 }
 
+/// One row per day and one column per habit, newest day first.
+fn day_grid(
+    habits: &[&Habit],
+    oldest: NaiveDate,
+    today: NaiveDate,
+    cell: impl Fn(usize, &Habit, NaiveDate) -> String,
+) -> String {
+    let mut header = vec!["Date"];
+    header.extend(habits.iter().map(|habit| habit.name.as_str()));
+    let mut out = csv_line(&header);
+    let mut day = today;
+    while day >= oldest {
+        let date = day.to_string();
+        let cells: Vec<String> = habits
+            .iter()
+            .enumerate()
+            .map(|(index, habit)| cell(index, habit, day))
+            .collect();
+        let mut fields = vec![date.as_str()];
+        fields.extend(cells.iter().map(String::as_str));
+        out += &csv_line(&fields);
+        day -= Duration::days(1);
+    }
+    out
+}
+
+fn value_cell(habit: &Habit, day: NaiveDate) -> String {
+    habit.value_on(day).map_or(String::new(), format_amount)
+}
+
 /// A CSV archive laid out as Loop's export is: a `Habits.csv` list, a folder per
-/// habit, and `Scores.csv` and `Checkmarks.csv` with a column per habit.
-pub fn export_archive(habits: &[&Habit], today: NaiveDate) -> Vec<u8> {
+/// habit, and `Scores.csv` and `Checkmarks.csv` with a column per habit. Added to
+/// that are `Values.csv` and `Resisted.csv`, for the habits that have any.
+pub fn export_archive(habits: &[&Habit], sections: &[Section], today: NaiveDate) -> Vec<u8> {
     let computed: Vec<Computed> = habits.iter().map(|habit| habit.compute(today)).collect();
-    let mut files = vec![("Habits.csv".to_owned(), habit_list_csv(habits))];
+    let mut files = vec![("Habits.csv".to_owned(), habit_list_csv(habits, sections))];
 
     for (position, (habit, computed)) in habits.iter().zip(&computed).enumerate() {
         let folder = folder_name(position, &habit.name);
         let mut scores = csv_line(&["Date", "Score"]);
-        let mut checks = csv_line(&["Date", "Value", "Times"]);
+        let mut checks = csv_line(&["Date", "Status", "Times", "Resisted", "Value"]);
         let mut day = today;
         while day >= computed.first_day() {
             let date = day.to_string();
@@ -1361,6 +1632,8 @@ pub fn export_archive(habits: &[&Habit], today: NaiveDate) -> Vec<u8> {
                 &date,
                 &status_text(computed.status(day)),
                 &habit.times_on(day).to_string(),
+                &habit.resisted_on(day).to_string(),
+                &value_cell(habit, day),
             ]);
             day -= Duration::days(1);
         }
@@ -1373,32 +1646,44 @@ pub fn export_archive(habits: &[&Habit], today: NaiveDate) -> Vec<u8> {
         .map(Computed::first_day)
         .min()
         .unwrap_or(today);
-    let mut header = vec!["Date"];
-    header.extend(habits.iter().map(|habit| habit.name.as_str()));
-    let mut scores = csv_line(&header);
-    let mut checks = csv_line(&header);
-    let mut day = today;
-    while day >= oldest {
-        let date = day.to_string();
-        let score_cells: Vec<String> = computed
-            .iter()
-            .map(|computed| format!("{:.4}", computed.score(day)))
-            .collect();
-        let check_cells: Vec<String> = computed
-            .iter()
-            .map(|computed| status_text(computed.status(day)))
-            .collect();
-        let row = |cells: &[String]| {
-            let mut fields = vec![date.as_str()];
-            fields.extend(cells.iter().map(String::as_str));
-            csv_line(&fields)
-        };
-        scores += &row(&score_cells);
-        checks += &row(&check_cells);
-        day -= Duration::days(1);
+    files.push((
+        "Scores.csv".to_owned(),
+        day_grid(habits, oldest, today, |index, _, day| {
+            format!("{:.4}", computed[index].score(day))
+        }),
+    ));
+    files.push((
+        "Checkmarks.csv".to_owned(),
+        day_grid(habits, oldest, today, |index, _, day| {
+            status_text(computed[index].status(day))
+        }),
+    ));
+    let measured: Vec<&Habit> = habits
+        .iter()
+        .copied()
+        .filter(|habit| habit.measure.is_some() || !habit.values.is_empty())
+        .collect();
+    if !measured.is_empty() {
+        files.push((
+            "Values.csv".to_owned(),
+            day_grid(&measured, oldest, today, |_, habit, day| {
+                value_cell(habit, day)
+            }),
+        ));
     }
-    files.push(("Scores.csv".to_owned(), scores));
-    files.push(("Checkmarks.csv".to_owned(), checks));
+    let resisting: Vec<&Habit> = habits
+        .iter()
+        .copied()
+        .filter(|habit| !habit.resisted.is_empty())
+        .collect();
+    if !resisting.is_empty() {
+        files.push((
+            "Resisted.csv".to_owned(),
+            day_grid(&resisting, oldest, today, |_, habit, day| {
+                habit.resisted_on(day).to_string()
+            }),
+        ));
+    }
     zip(&files)
 }
 
@@ -1734,7 +2019,7 @@ mod tests {
         let mut once = habit(Frequency::DAILY);
         let mut thrice = habit(Frequency::DAILY);
         once.marks.insert(ago(1), Mark::Yes);
-        thrice.set_day(ago(1), 3.0);
+        thrice.marks.insert(ago(1), Mark::Reps(3));
         assert_eq!(thrice.times_on(ago(1)), 3);
         assert_eq!(once.times_on(ago(1)), 1);
         let (once, thrice) = (once.compute(today()), thrice.compute(today()));
@@ -1761,7 +2046,7 @@ mod tests {
         assert!((computed.score(today()) - 0.655747).abs() < EPSILON);
         assert_eq!(computed.best_streaks(1)[0].length(), 20);
 
-        habit.set_day(ago(5), 2.0);
+        habit.marks.insert(ago(5), Mark::Reps(2));
         let computed = habit.compute(today());
         assert_eq!(computed.status(ago(5)), Status::Slipped(2));
         assert!(
@@ -1793,92 +2078,6 @@ mod tests {
         let computed = habit.compute(today());
         assert_eq!(computed.status(ago(1)), Status::Clean);
         assert_eq!(computed.total(), 1.0);
-    }
-
-    fn measured(target_type: TargetType) -> Habit {
-        let mut habit = Habit::new("m", "Run");
-        habit.kind = Kind::Measurable;
-        habit.target = 2.0;
-        habit.target_type = target_type;
-        habit.unit = "miles".into();
-        habit
-    }
-
-    // Loop's NumericalAtLeastScoreListTest and NumericalAtMostScoreListTest.
-    #[test]
-    fn measurable_scores_match_loop() {
-        let mut habit = measured(TargetType::AtLeast);
-        for days in 0..20 {
-            habit.set_day(ago(days), 2.0);
-        }
-        assert_scores(
-            &habit,
-            &[
-                0.655747, 0.636894, 0.617008, 0.596033, 0.573910, 0.550574, 0.525961, 0.500000,
-                0.472617, 0.443734, 0.413270, 0.381137, 0.347244, 0.311495, 0.273788, 0.234017,
-                0.192067, 0.147820, 0.101149, 0.051922, 0.0, 0.0, 0.0,
-            ],
-        );
-
-        let mut habit = measured(TargetType::AtMost);
-        habit.set_day(ago(20), 1.0);
-        for days in 0..20 {
-            habit.set_day(ago(days), 5.0);
-        }
-        assert_scores(
-            &habit,
-            &[
-                0.344253, 0.363106, 0.382992, 0.403967, 0.426090, 0.449426, 0.474039, 0.500000,
-                0.527383, 0.556266, 0.586730, 0.618863, 0.652756, 0.688505, 0.726212, 0.765983,
-                0.807933, 0.852180, 0.898851, 0.948078, 1.0, 0.0, 0.0,
-            ],
-        );
-    }
-
-    #[test]
-    fn a_measurable_target_is_met_across_its_whole_period() {
-        // 2015-01-25 is a Sunday, the last day of its week.
-        let mut habit = measured(TargetType::AtLeast);
-        habit.target = 10.0;
-        habit.frequency = Frequency::Interval { times: 1, days: 7 };
-        habit.set_day(ago(6), 4.0);
-        habit.set_day(ago(1), 6.0);
-        let computed = habit.compute(today());
-        assert_eq!(
-            computed.status(ago(1)),
-            Status::Measured {
-                amount: 6000,
-                met: true
-            }
-        );
-        assert_eq!(
-            computed.status(ago(3)),
-            Status::Measured {
-                amount: 0,
-                met: true
-            },
-            "every day of a week that met it counts"
-        );
-        assert_eq!(computed.total(), 10.0);
-        assert_eq!(habit.goal_label(), "At least 10 miles per week");
-
-        // A skipped day lowers the week's target by a day's share.
-        habit.set_day(ago(1), 3.0);
-        assert!(!habit.compute(today()).status(ago(1)).completed());
-        for days in [2, 3, 4, 5] {
-            habit.marks.insert(ago(days), Mark::Skip);
-        }
-        assert!(habit.compute(today()).status(ago(1)).completed());
-    }
-
-    #[test]
-    fn a_measurable_target_of_zero_stays_finite() {
-        let mut habit = measured(TargetType::AtMost);
-        habit.target = 0.0;
-        habit.set_day(ago(1), 1.0);
-        assert!(habit.compute(today()).score(today()).is_finite());
-        habit.target_type = TargetType::AtLeast;
-        assert!(habit.compute(today()).score(today()).is_finite());
     }
 
     #[test]
@@ -1947,6 +2146,173 @@ mod tests {
     }
 
     #[test]
+    fn resisting_a_no_habit_is_recorded_without_changing_the_score() {
+        let today = today();
+        let mut plain = Habit::new("a", "Smoke");
+        plain.kind = Kind::No;
+        plain.created = Some(today - Duration::days(10));
+        let mut resisted = plain.clone();
+        resisted.set_resisted(today, 2);
+        assert_eq!(resisted.resisted_on(today), 2);
+        let (plain, resisted) = (plain.compute(today), resisted.compute(today));
+        assert_eq!(resisted.status(today), Status::Clean);
+        assert_eq!(resisted.score(today), plain.score(today));
+        assert_eq!(resisted.total(), plain.total());
+    }
+
+    #[test]
+    fn resisting_says_a_day_was_clean_even_where_nothing_else_is_known() {
+        let today = today();
+        let mut habit = Habit::new("a", "Smoke");
+        habit.kind = Kind::No;
+        habit.question_marks = true;
+        habit.created = Some(today);
+        let yesterday = today - Duration::days(1);
+        assert_eq!(habit.compute(today).status(yesterday), Status::Unknown);
+        habit.set_resisted(yesterday, 1);
+        assert_eq!(habit.compute(today).status(yesterday), Status::Clean);
+        assert_eq!(habit.compute(today).first_day(), yesterday);
+        habit.set_resisted(yesterday, 0);
+        assert!(habit.resisted.is_empty());
+        assert_eq!(habit.compute(today).status(yesterday), Status::Unknown);
+    }
+
+    #[test]
+    fn a_slip_and_a_resisted_count_do_not_overwrite_each_other() {
+        let today = today();
+        let mut habit = Habit::new("a", "Smoke");
+        habit.kind = Kind::No;
+        habit.set_resisted(today, 3);
+        habit.marks.insert(today, Mark::Reps(1));
+        assert_eq!(habit.compute(today).status(today), Status::Slipped(1));
+        assert_eq!(habit.resisted_on(today), 3);
+        habit.marks.remove(&today);
+        assert_eq!(habit.compute(today).status(today), Status::Clean);
+        assert_eq!(habit.resisted_on(today), 3);
+    }
+
+    fn sectioned() -> Library {
+        let mut library = Library::default();
+        for (id, section) in [
+            ("a", None),
+            ("b", Some("x")),
+            ("c", Some("y")),
+            ("d", Some("x")),
+            ("e", None),
+            ("f", Some("gone")),
+        ] {
+            let mut habit = Habit::new(id, id);
+            habit.section = section.map(str::to_owned);
+            library.habits.push(habit);
+        }
+        for id in ["y", "x", "empty"] {
+            library.sections.push(Section {
+                id: id.to_owned(),
+                name: id.to_owned(),
+                collapsed: false,
+            });
+        }
+        library
+    }
+
+    fn layout(library: &Library) -> Vec<(Option<String>, Vec<String>)> {
+        library
+            .grouped(library.habits.iter().collect())
+            .into_iter()
+            .map(|(section, habits)| {
+                (
+                    section.map(|section| section.id.clone()),
+                    habits.iter().map(|habit| habit.id.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn group(id: Option<&str>, habits: &[&str]) -> (Option<String>, Vec<String>) {
+        (
+            id.map(str::to_owned),
+            habits.iter().map(|habit| (*habit).to_owned()).collect(),
+        )
+    }
+
+    #[test]
+    fn habits_are_grouped_in_section_order_with_the_rest_first() {
+        assert_eq!(
+            layout(&sectioned()),
+            [
+                group(None, &["a", "e", "f"]),
+                group(Some("y"), &["c"]),
+                group(Some("x"), &["b", "d"]),
+                group(Some("empty"), &[]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_section_with_every_habit_filtered_out_is_left_out() {
+        let library = sectioned();
+        let visible = library.habits.iter().filter(|habit| habit.id != "c");
+        let groups = library.grouped(visible.collect());
+        let names: Vec<_> = groups
+            .iter()
+            .map(|(section, _)| section.map(|section| section.id.as_str()))
+            .collect();
+        assert_eq!(names, [None, Some("x"), Some("empty")]);
+    }
+
+    #[test]
+    fn moving_a_habit_onto_another_takes_it_into_that_section() {
+        let mut library = sectioned();
+        library.move_habit("a", "c");
+        assert_eq!(library.habit("a").unwrap().section.as_deref(), Some("y"));
+        library.move_habit("a", "e");
+        assert_eq!(library.habit("a").unwrap().section, None);
+    }
+
+    #[test]
+    fn moving_a_habit_to_a_section_puts_it_at_the_top() {
+        let mut library = sectioned();
+        library.move_to_section("a", "x");
+        assert_eq!(layout(&library)[2], group(Some("x"), &["a", "b", "d"]),);
+        library.move_to_section("d", "x");
+        assert_eq!(layout(&library)[2], group(Some("x"), &["d", "a", "b"]),);
+        library.move_to_section("b", "empty");
+        assert_eq!(layout(&library)[3], group(Some("empty"), &["b"]));
+    }
+
+    #[test]
+    fn deleting_a_section_keeps_its_habits() {
+        let mut library = sectioned();
+        library.remove_section("x");
+        assert_eq!(library.habits.len(), 6);
+        assert_eq!(library.habit("b").unwrap().section, None);
+        assert_eq!(library.sections.len(), 2);
+    }
+
+    #[test]
+    fn sections_shift_within_the_list_and_stop_at_its_ends() {
+        let mut library = sectioned();
+        let order = |library: &Library| -> Vec<String> {
+            library.sections.iter().map(|s| s.id.clone()).collect()
+        };
+        library.shift_section("y", true);
+        assert_eq!(order(&library), ["y", "x", "empty"]);
+        library.shift_section("y", false);
+        assert_eq!(order(&library), ["x", "y", "empty"]);
+        library.shift_section("empty", false);
+        assert_eq!(order(&library), ["x", "y", "empty"]);
+    }
+
+    #[test]
+    fn a_file_from_before_sections_still_loads() {
+        let json = r#"{"habits":[{"id":"a","name":"Run"}]}"#;
+        let library: Library = serde_json::from_str(json).unwrap();
+        assert!(library.sections.is_empty());
+        assert_eq!(library.habits[0].section, None);
+        assert!(library.habits[0].resisted.is_empty());
+    }
+
+    #[test]
     fn archived_and_completed_habits_can_be_hidden() {
         let mut library = Library::default();
         let mut archived = Habit::new("archived", "Archived");
@@ -2001,7 +2367,7 @@ mod tests {
         let mut habit = habit(Frequency::DAILY);
         habit.name = "Read, a lot / daily".into();
         check(&mut habit, 0, 3);
-        let bytes = export_archive(&[&habit], today());
+        let bytes = export_archive(&[&habit], &[], today());
         let text = String::from_utf8_lossy(&bytes);
         assert!(bytes.starts_with(b"PK\x03\x04"));
         for name in [
@@ -2022,39 +2388,236 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_answer_records_the_day_for_each_kind_of_habit() {
-        let day = NaiveDate::from_ymd_opt(2026, 3, 4).unwrap();
+    fn a_day_entry_reads_back_what_was_saved_for_either_kind() {
+        let day = today();
+        for kind in [Kind::Yes, Kind::No] {
+            let mut habit = Habit::new("h", "Run");
+            habit.kind = kind;
+            let entry = DayEntry {
+                outcome: Outcome::Done,
+                times: 2,
+                resisted: if kind == Kind::No { 3 } else { 0 },
+                value: Some(1.5),
+            };
+            habit.set_entry(day, entry);
+            assert_eq!(habit.entry(day), entry);
+            habit.set_entry(
+                day,
+                DayEntry {
+                    outcome: Outcome::NotDone,
+                    times: 0,
+                    resisted: 0,
+                    value: None,
+                },
+            );
+            assert!(habit.marks.is_empty() && habit.values.is_empty());
+            assert_eq!(habit.entry(day).outcome, Outcome::NotDone);
+        }
+    }
 
-        let mut yes = Habit::new("y", "Read");
-        assert!(yes.asks_yes_or_no());
-        yes.answer(day, true);
-        assert_eq!(yes.marks[&day], Mark::Yes);
-        yes.answer(day, false);
-        assert_eq!(yes.marks[&day], Mark::No);
-        // Saying yes again does not lose how many times it was done.
-        yes.marks.insert(day, Mark::Reps(3));
-        yes.answer(day, true);
-        assert_eq!(yes.marks[&day], Mark::Reps(3));
+    #[test]
+    fn question_marks_keep_not_done_apart_from_no_answer() {
+        let day = today();
+        let mut habit = Habit::new("h", "Run");
+        habit.question_marks = true;
+        assert_eq!(habit.entry(day).outcome, Outcome::Unanswered);
+        let mut entry = habit.entry(day);
+        entry.outcome = Outcome::NotDone;
+        habit.set_entry(day, entry);
+        assert_eq!(habit.entry(day).outcome, Outcome::NotDone);
+        entry.outcome = Outcome::Unanswered;
+        habit.set_entry(day, entry);
+        assert!(habit.marks.is_empty());
+    }
 
-        // On a "No" habit a yes is a slip, and a no is a clean day.
-        let mut no = Habit::new("n", "Smoke");
-        no.kind = Kind::No;
-        no.question_marks = true;
-        assert!(no.asks_yes_or_no());
-        no.answer(day, true);
-        assert_eq!(no.compute(day).status(day), Status::Slipped(1));
-        no.answer(day, false);
-        assert_eq!(no.compute(day).status(day), Status::Clean);
+    #[test]
+    fn a_value_never_changes_the_score_on_either_kind() {
+        for kind in [Kind::Yes, Kind::No] {
+            let mut plain = Habit::new("h", "Run");
+            plain.kind = kind;
+            plain.created = Some(ago(10));
+            plain.marks.insert(ago(3), Mark::Reps(1));
+            let mut measured = plain.clone();
+            measured.measure = Some(Measure {
+                unit: "miles".into(),
+                target: Some(2.0),
+                days: 1,
+            });
+            measured.set_value(ago(3), Some(5.0));
+            measured.set_value(ago(1), Some(1.0));
+            let (plain, measured) = (plain.compute(today()), measured.compute(today()));
+            assert_eq!(plain.score(today()), measured.score(today()));
+            assert_eq!(plain.status(ago(1)), measured.status(ago(1)));
+            assert_eq!(plain.total(), measured.total());
+        }
+    }
 
-        // Amounts and counts cannot be answered with a yes or a no.
-        let mut amount = Habit::new("m", "Run");
-        amount.kind = Kind::Measurable;
-        assert!(!amount.asks_yes_or_no());
-        amount.answer(day, true);
-        assert!(amount.marks.is_empty());
-        let mut twice = Habit::new("t", "Brush");
-        twice.frequency = Frequency::TimesPerDay { times: 2 };
-        assert!(!twice.asks_yes_or_no());
+    #[test]
+    fn a_target_reads_by_kind_and_period() {
+        let mut measure = Measure {
+            unit: "miles".into(),
+            target: Some(2.5),
+            days: 7,
+        };
+        assert_eq!(measure.label(Kind::Yes), "At least 2.5 miles per week");
+        assert_eq!(measure.label(Kind::No), "At most 2.5 miles per week");
+        measure.target = None;
+        assert_eq!(measure.label(Kind::Yes), "Tracking miles");
+        measure.unit.clear();
+        assert_eq!(measure.label(Kind::No), "Tracking a value");
+    }
+
+    #[test]
+    fn values_add_up_over_the_targets_period_and_keep_gaps() {
+        // 2015-01-25 is a Sunday, the last day of its week.
+        let mut habit = Habit::new("h", "Run");
+        habit.measure = Some(Measure {
+            unit: "miles".into(),
+            target: Some(10.0),
+            days: 7,
+        });
+        habit.set_value(ago(0), Some(4.0));
+        habit.set_value(ago(6), Some(6.0));
+        habit.set_value(ago(14), Some(1.5));
+        let series = value_series(&habit, Weekday::Mon, today());
+        let week = NaiveDate::from_ymd_opt(2015, 1, 19).unwrap();
+        assert_eq!(
+            series,
+            [
+                (week, 10.0),
+                (week - Duration::days(7), 0.0),
+                (week - Duration::days(14), 1.5),
+            ]
+        );
+        assert!(value_series(&Habit::new("e", "E"), Weekday::Mon, today()).is_empty());
+    }
+
+    #[test]
+    fn a_value_before_any_other_record_is_still_reached() {
+        let mut habit = Habit::new("h", "Run");
+        habit.set_value(ago(5), Some(1.0));
+        assert_eq!(habit.compute(today()).first_day(), ago(5));
+    }
+
+    fn old_habit(rest: &str) -> Habit {
+        serde_json::from_str(&format!(r#"{{"id":"a","name":"Run",{rest}}}"#)).unwrap()
+    }
+
+    #[test]
+    fn an_old_at_least_measurable_habit_becomes_did_it() {
+        let habit = old_habit(
+            r#"
+            "kind":"measurable","unit":"miles","target":2.0,"target_type":"at_least",
+            "frequency":{"interval":{"times":1,"days":1}},
+            "marks":{
+                "2015-01-20":{"amount":2500},
+                "2015-01-21":{"amount":1000},
+                "2015-01-22":{"amount":0},
+                "2015-01-23":"skip"
+            }"#,
+        );
+        assert_eq!(habit.kind, Kind::Yes);
+        let measure = habit.measure.clone().unwrap();
+        assert_eq!(
+            (measure.unit.as_str(), measure.target, measure.days),
+            ("miles", Some(2.0), 1)
+        );
+        let day = |n| NaiveDate::from_ymd_opt(2015, 1, n).unwrap();
+        assert_eq!(habit.value_on(day(20)), Some(2.5), "every amount is kept");
+        assert_eq!(habit.value_on(day(21)), Some(1.0));
+        assert_eq!(habit.value_on(day(22)), Some(0.0));
+        assert_eq!(habit.marks.get(&day(20)), Some(&Mark::Yes), "met");
+        assert_eq!(habit.marks.get(&day(21)), None, "short of the target");
+        assert_eq!(habit.marks.get(&day(22)), None);
+        assert_eq!(habit.marks.get(&day(23)), Some(&Mark::Skip));
+    }
+
+    #[test]
+    fn an_old_at_most_measurable_habit_becomes_avoided_it() {
+        let habit = old_habit(
+            r#"
+            "kind":"measurable","unit":"cigarettes","target":7.0,"target_type":"at_most",
+            "frequency":{"interval":{"times":1,"days":7}},
+            "marks":{"2015-01-20":{"amount":1000},"2015-01-21":{"amount":3000}}"#,
+        );
+        assert_eq!(habit.kind, Kind::No);
+        assert_eq!(habit.frequency, Frequency::DAILY);
+        assert_eq!(habit.measure.as_ref().unwrap().days, 7);
+        let day = |n| NaiveDate::from_ymd_opt(2015, 1, n).unwrap();
+        assert_eq!(habit.marks.get(&day(20)), None, "within a day's share");
+        assert_eq!(habit.marks.get(&day(21)), Some(&Mark::Reps(1)));
+        assert_eq!(habit.value_on(day(21)), Some(3.0));
+    }
+
+    #[test]
+    fn a_week_long_target_counts_any_amount_as_doing_it() {
+        let habit = old_habit(
+            r#"
+            "kind":"measurable","target":20.0,
+            "frequency":{"interval":{"times":1,"days":7}},
+            "marks":{"2015-01-20":{"amount":1000}}"#,
+        );
+        let day = NaiveDate::from_ymd_opt(2015, 1, 20).unwrap();
+        assert_eq!(habit.marks.get(&day), Some(&Mark::Yes));
+    }
+
+    #[test]
+    fn a_saved_habit_with_a_measure_reads_back_the_same() {
+        let mut habit = Habit::new("h", "Run");
+        habit.kind = Kind::No;
+        habit.measure = Some(Measure {
+            unit: "miles".into(),
+            target: Some(2.0),
+            days: 7,
+        });
+        habit.set_value(today(), Some(1.25));
+        habit.set_resisted(today(), 2);
+        habit.section = Some("s".into());
+        let json = serde_json::to_string(&habit).unwrap();
+        assert!(!json.contains("target_type") && !json.contains("\"unit\":\"\",\"target\":0"));
+        assert_eq!(serde_json::from_str::<Habit>(&json).unwrap(), habit);
+    }
+
+    #[test]
+    fn export_carries_sections_targets_values_and_times_resisted() {
+        let mut run = Habit::new("r", "Run");
+        run.section = Some("s".into());
+        run.measure = Some(Measure {
+            unit: "miles".into(),
+            target: Some(2.0),
+            days: 7,
+        });
+        run.set_value(today(), Some(1.125));
+        let mut smoke = Habit::new("n", "Smoke");
+        smoke.kind = Kind::No;
+        smoke.created = Some(today());
+        smoke.set_resisted(today(), 4);
+        let plain = Habit::new("p", "Plain");
+        let sections = [Section {
+            id: "s".into(),
+            name: "Morning".into(),
+            collapsed: false,
+        }];
+        let bytes = export_archive(&[&run, &smoke, &plain], &sections, today());
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("Position,Name,Type,Section,Unit,Target Type,Target Value,Target Days")
+        );
+        assert!(text.contains("001,Run,DID_IT,Morning,miles,AT_LEAST,2,7,"));
+        assert!(text.contains("002,Smoke,AVOIDED_IT,,,,,,"));
+        assert!(text.contains("Date,Status,Times,Resisted,Value"));
+        assert!(text.contains("2015-01-25,UNKNOWN,0,0,1.125"), "{text}");
+        assert!(text.contains("2015-01-25,CLEAN,0,4,"), "{text}");
+        assert!(text.contains("Values.csv") && text.contains("Date,Run\n2015-01-25,1.125"));
+        assert!(text.contains("Resisted.csv") && text.contains("Date,Smoke\n2015-01-25,4"));
+    }
+
+    #[test]
+    fn export_leaves_out_values_and_resisted_when_there_are_none() {
+        let plain = Habit::new("p", "Plain");
+        let bytes = export_archive(&[&plain], &[], today());
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("Values.csv") && !text.contains("Resisted.csv"));
     }
 
     #[test]
