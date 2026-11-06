@@ -216,7 +216,7 @@ pub(super) fn search_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element
         .height(Length::Shrink),
     )
     .max_height(
-        (state.main_size.height - header_offset(metrics) - metrics.padding * 2.0).max(120.0),
+        (state.main_size.height - header_offset(state, metrics) - metrics.padding * 2.0).max(120.0),
     )
     .max_width(POPUP_WIDTH)
     .padding(metrics.padding)
@@ -224,7 +224,7 @@ pub(super) fn search_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element
     .style(crate::ui::controls::surface);
 
     let aligned = column![
-        Space::new().height(header_offset(metrics)),
+        Space::new().height(header_offset(state, metrics)),
         container(iced::widget::opaque(card))
             .padding(metrics.padding)
             .width(Fill)

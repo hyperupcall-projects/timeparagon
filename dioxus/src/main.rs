@@ -11,6 +11,7 @@ mod day;
 mod editor;
 mod habits;
 mod notes;
+mod reminders;
 mod scratch;
 mod search;
 mod style;
@@ -287,6 +288,15 @@ fn App() -> Element {
             signed_in.set(true);
             connect_error.set(None);
         }
+    });
+
+    // Re-plan reminders from the cache the effect above just wrote, whenever
+    // a day loads or the settings change. Planning reads the database, so it
+    // runs on a worker thread.
+    #[cfg(target_os = "android")]
+    use_effect(move || {
+        let _ = data.read();
+        reminders::republish(&config.read());
     });
 
     // Pull again on the same cadence as the iced app, and roll the view over
@@ -960,6 +970,7 @@ fn App() -> Element {
                                 }
                             }
                         }
+                        reminders::ReminderSection { config }
                         h3 { class: "settings-heading", "Google" }
                         form {
                             class: "client-form settings-form",

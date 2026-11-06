@@ -213,6 +213,41 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
     }
 }
 
+/// Every kind of reminder can be switched, timed, given a sound and tested
+/// at every width, and the section collapses to one switch while reminders
+/// are off.
+#[test]
+fn the_reminder_settings_are_usable_at_every_width() {
+    let mut off = state();
+    off.screen = Screen::Settings;
+    let mut ui = render(&off, Size::new(200.0, 400.0));
+    assert!(ui.find("Reminders").is_ok());
+    assert!(ui.find("Time Blocks").is_err());
+
+    for width in WIDTHS {
+        let mut on = state();
+        on.screen = Screen::Settings;
+        on.config.reminders.enabled = true;
+        let mut ui = render(&on, Size::new(width, 400.0));
+        for label in [
+            "Events",
+            "Tasks",
+            "Time Blocks",
+            "Habits",
+            "Sleep",
+            "Travel",
+            "Otherwise remind",
+            "Before it starts",
+            "Before leaving",
+            "Before bedtime",
+            "Sound",
+            "Test",
+        ] {
+            assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
+        }
+    }
+}
+
 /// The compact theme picker is a button that cycles, because a dropdown
 /// overlay has nowhere to go at this width.
 #[test]
@@ -396,12 +431,13 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 
-    // The day in view sits in the title bar between the month picker and the menu.
+    // The month picker already shows the date, so no separate day heading takes
+    // a line above the controls.
     let today = timeslay::calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
     let heading = timeslay::calendar::day_heading(state.calendar.day, today);
     assert!(
-        ui.find(heading.as_str()).is_ok(),
-        "the day in view is missing from the title bar"
+        ui.find(heading.as_str()).is_err(),
+        "the redundant day heading is still in the title bar"
     );
 
     let _ = ui.click("Oct. 1 ▾")?;

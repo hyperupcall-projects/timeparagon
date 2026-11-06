@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The reminder tones are rendered into res/raw at build time (see
+     scripts/build-android.sh) and only referenced by URI at run time, so
+     resource shrinking must not remove them. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/timeslay_tone_*" />

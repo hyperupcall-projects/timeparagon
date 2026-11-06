@@ -9,6 +9,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- The widget's background sync waits for a network. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Reminders: posting them, waking for them on time, and re-arming them
+         after a reboot. USE_EXACT_ALARM is granted to calendar apps on
+         Android 13+; SCHEDULE_EXACT_ALARM covers Android 12. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application android:hasCode="true" android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
@@ -50,5 +59,24 @@
             android:exported="false"
             android:process=":widget"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- Reminders. Sources in android/kotlin/dev/timeslay/day/reminders. -->
+        <receiver android:name="dev.timeslay.day.reminders.ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="dev.timeslay.day.reminders.SYNC" />
+                <action android:name="dev.timeslay.day.reminders.TEST" />
+                <action android:name="dev.timeslay.day.reminders.DEVICE_INFO" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <activity android:name="dev.timeslay.day.reminders.PermissionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

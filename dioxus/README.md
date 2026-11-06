@@ -11,6 +11,8 @@ sheets over it:
 - Joining meetings and answering invitations.
 - Todos, the notepad, brain dumps and projects, shared through Turso.
 - The habit tracker.
+- Reminders for events, tasks, time blocks, habits, sleep and travel, with a
+  sound per kind (see [docs/reminders.md](../docs/reminders.md)).
 
 Habits, notes, todos, the notepad, brain dumps, projects and work sessions sync
 through `https://dragonfruit.tail30229e.ts.net:8210`. Each device must have

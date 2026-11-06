@@ -1324,7 +1324,7 @@ fn form_page<'a>(state: &'a State, form: &'a Form, metrics: &Metrics) -> Element
         toggle(
             form.question_marks,
             "Show question mark for missing data",
-            "Days with nothing recorded show a question mark rather than a cross, and each day's choices add \"Not sure\" to return it to having no data.",
+            "Days with nothing recorded show a question mark rather than a cross, and on a habit to do, each day's choices add \"Not sure\" to return it to having no data.",
             FormAction::QuestionMarks,
         ),
         column![
@@ -1409,7 +1409,8 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     if habit.skip_days {
         choices.push(("Skipped", Outcome::Skipped));
     }
-    if habit.question_marks {
+    // A habit to avoid is answered by its logs, so it has no "Not sure".
+    if habit.question_marks && habit.kind == Kind::Yes {
         choices.push(("Not sure", Outcome::Unanswered));
     }
     let mut outcomes = row![].spacing(4);
@@ -1444,23 +1445,34 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     .spacing(metrics.spacing)
     .width(Fill);
 
-    if dialog.outcome == Outcome::Done {
-        let goal = habit.frequency.per_day();
-        let label = match habit.kind {
-            Kind::Yes if goal > 1 => format!("Times done, out of {goal}"),
-            Kind::Yes => "Times done".to_owned(),
-            Kind::No => "Times slipped".to_owned(),
-        };
-        body = body.push(stepper(label, dialog.times, 1, Action::StepTimes, metrics));
-    }
     if habit.kind == Kind::No {
-        body = body.push(stepper(
-            "Thought about it, didn't do it".to_owned(),
-            dialog.resisted,
-            0,
-            Action::StepResisted,
+        let format = state.config.appearance.time_format;
+        body = body.push(day_log(
+            "Avoided it",
+            "Thought about it, didn't do it",
+            &dialog.thoughts,
+            Action::LogResisted,
+            Action::UnlogResisted,
+            format,
             metrics,
         ));
+        body = body.push(day_log(
+            "Slipped",
+            "Times slipped",
+            &dialog.slips,
+            Action::LogSlip,
+            Action::UnlogSlip,
+            format,
+            metrics,
+        ));
+    } else if dialog.outcome == Outcome::Done {
+        let goal = habit.frequency.per_day();
+        let label = if goal > 1 {
+            format!("Times done, out of {goal}")
+        } else {
+            "Times done".to_owned()
+        };
+        body = body.push(stepper(label, dialog.times, 1, Action::StepTimes, metrics));
     }
     if let Some(measure) = &habit.measure {
         let unit = if measure.unit.is_empty() {
@@ -1511,6 +1523,64 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
         .max_width(340)
         .style(crate::ui::controls::surface);
     overlay(card.into(), msg(Action::CloseDay))
+}
+
+/// One of a habit to avoid's logs in the day dialog: a heading with its count,
+/// a button that logs an entry at the current time, and each entry with the
+/// time it was logged and an X to remove it.
+#[allow(clippy::too_many_arguments)]
+fn day_log<'a>(
+    title: &'static str,
+    add: &'static str,
+    entries: &[Option<chrono::NaiveTime>],
+    on_add: Action,
+    on_remove: fn(usize) -> Action,
+    format: crate::calendar::time_format::TimeFormat,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let mut log = column![
+        row![
+            text(title).size(metrics.label()).width(Fill),
+            text(entries.len().to_string())
+                .size(metrics.label())
+                .style(medium),
+        ]
+        .align_y(Alignment::Center),
+        crate::ui::controls::quiet_button(
+            text(format!("+ {add}"))
+                .size(metrics.label() - 1.0)
+                .width(Fill),
+        )
+        .width(Fill)
+        .padding([4, 8])
+        .on_press(msg(on_add)),
+    ]
+    .spacing(4);
+    for (index, entry) in entries.iter().enumerate() {
+        let when = match entry {
+            Some(time) => crate::calendar::time_format::clock(*time, format),
+            None => "No time recorded".to_owned(),
+        };
+        log = log.push(
+            row![
+                text(when)
+                    .size(metrics.label() - 1.0)
+                    .style(medium)
+                    .width(Fill),
+                button(text("×").size(metrics.label()).center().width(Fill))
+                    .padding([0, 0])
+                    .width(24)
+                    .style(crate::ui::controls::ghost)
+                    .on_press(msg(on_remove(index))),
+            ]
+            .padding(iced::Padding {
+                left: 8.0,
+                ..iced::Padding::ZERO
+            })
+            .align_y(Alignment::Center),
+        );
+    }
+    log.into()
 }
 
 /// A count with buttons to change it, which stops at `least`.
@@ -1978,14 +2048,78 @@ mod tests {
             "Avoided it",
             "Slipped",
             "Skipped",
-            "Not sure",
-            "Times slipped",
-            "Thought about it, didn't do it",
+            "+ Times slipped",
+            "+ Thought about it, didn't do it",
             "Value in cigarettes",
             "Target: At most 5 cigarettes per day",
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
+        assert!(ui.find("Not sure").is_err(), "the logs answer it");
+    }
+
+    #[test]
+    fn the_popup_logs_each_slip_and_urge_with_its_time() {
+        use chrono::{NaiveTime, TimeZone};
+        let mut state = state();
+        add(&mut state, "h", "Smoke");
+        let today = state.habits.today();
+        let habit = state.habits.library.habit_mut("h").unwrap();
+        habit.kind = Kind::No;
+        habit.created = Some(today);
+        // A count from before times were kept.
+        habit.resisted.insert(today, 1);
+        state.habits.recompute();
+        let at = |hour, minute| {
+            chrono::Local
+                .from_local_datetime(&today.and_hms_opt(hour, minute, 7).unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let time = |hour, minute| Some(NaiveTime::from_hms_opt(hour, minute, 7).unwrap());
+
+        act(&mut state, Action::OpenDay("h".into(), today));
+        {
+            let _clock = crate::clock::freeze(at(9, 30));
+            act(&mut state, Action::LogResisted);
+        }
+        {
+            let _clock = crate::clock::freeze(at(14, 5));
+            act(&mut state, Action::LogSlip);
+            act(&mut state, Action::LogSlip);
+        }
+        let dialog = state.habits.day_dialog.as_ref().unwrap();
+        assert_eq!(dialog.outcome, Outcome::Done, "a slip answers it");
+        assert_eq!(dialog.thoughts, vec![None, time(9, 30)]);
+        assert_eq!(dialog.slips, vec![time(14, 5), time(14, 5)]);
+        assert!(dialog_ui(&state).find("No time recorded").is_ok());
+
+        act(&mut state, Action::UnlogSlip(0));
+        act(&mut state, Action::SaveDay);
+        let habit = state.habits.library.habit("h").unwrap();
+        assert_eq!(
+            state.habits.computed("h").unwrap().status(today),
+            Status::Slipped(1)
+        );
+        assert_eq!(habit.slips_on(today), vec![time(14, 5)]);
+        assert_eq!(habit.resisted_log_on(today), vec![None, time(9, 30)]);
+
+        act(&mut state, Action::OpenDay("h".into(), today));
+        act(&mut state, Action::UnlogSlip(0));
+        assert_eq!(
+            state.habits.day_dialog.as_ref().unwrap().outcome,
+            Outcome::NotDone,
+            "with no slips left it was avoided"
+        );
+        act(&mut state, Action::UnlogResisted(0));
+        act(&mut state, Action::SaveDay);
+        let habit = state.habits.library.habit("h").unwrap();
+        assert_eq!(
+            state.habits.computed("h").unwrap().status(today),
+            Status::Clean
+        );
+        assert!(habit.slips_on(today).is_empty());
+        assert_eq!(habit.resisted_log_on(today), vec![time(9, 30)]);
     }
 
     #[test]

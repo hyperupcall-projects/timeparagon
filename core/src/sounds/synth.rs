@@ -1,4 +1,4 @@
-//! The built-in alarm sounds.
+//! The built-in alarm and reminder sounds.
 //!
 //! These are generated rather than shipped as files, which keeps the repo free
 //! of binary assets and sidesteps sample licensing entirely. Each one is a
@@ -214,6 +214,177 @@ pub fn soft_pulse() -> Pcm {
     to_stereo(swell(1.4, 528.0))
 }
 
+/// A single clean, bright strike: the classic "you have a message".
+pub fn ding() -> Pcm {
+    to_stereo(struck(0.9, &tuned(1318.5, 1.0, 4.5)))
+}
+
+/// Two descending notes, like a doorbell.
+pub fn ding_dong() -> Pcm {
+    to_stereo(notes(
+        1.6,
+        &[
+            (0.0, tuned(784.0, 1.0, 2.6)),
+            (0.35, tuned(622.3, 1.0, 2.2)),
+        ],
+    ))
+}
+
+/// A quick upward arpeggio that sounds like something is starting.
+pub fn rise() -> Pcm {
+    to_stereo(notes(
+        1.2,
+        &[
+            (0.0, tuned(523.3, 0.8, 5.0)),
+            (0.11, tuned(659.3, 0.85, 5.0)),
+            (0.22, tuned(784.0, 0.9, 4.5)),
+            (0.33, tuned(1046.5, 1.0, 3.5)),
+        ],
+    ))
+}
+
+/// The same notes falling, for winding down.
+pub fn fall() -> Pcm {
+    to_stereo(notes(
+        1.3,
+        &[
+            (0.0, tuned(1046.5, 1.0, 4.5)),
+            (0.13, tuned(784.0, 0.9, 4.5)),
+            (0.26, tuned(659.3, 0.85, 4.0)),
+            (0.39, tuned(523.3, 0.8, 3.0)),
+        ],
+    ))
+}
+
+/// A thumb piano's soft, woody pluck, played twice.
+pub fn kalimba() -> Pcm {
+    let pluck = |frequency: f32| {
+        vec![
+            Partial {
+                frequency,
+                amplitude: 1.0,
+                decay: 5.5,
+            },
+            // Kalimba tines ring with a strong, quickly fading overtone
+            // near the sixth harmonic, which gives them their "plink".
+            Partial {
+                frequency: frequency * 5.9,
+                amplitude: 0.25,
+                decay: 22.0,
+            },
+        ]
+    };
+    to_stereo(notes(1.0, &[(0.0, pluck(698.5)), (0.16, pluck(880.0))]))
+}
+
+/// Inharmonic and very high, like tapping a wine glass.
+pub fn glass() -> Pcm {
+    to_stereo(struck(
+        1.6,
+        &[
+            Partial {
+                frequency: 1760.0,
+                amplitude: 1.0,
+                decay: 2.4,
+            },
+            Partial {
+                frequency: 2780.0,
+                amplitude: 0.45,
+                decay: 3.3,
+            },
+            Partial {
+                frequency: 4690.0,
+                amplitude: 0.2,
+                decay: 4.8,
+            },
+        ],
+    ))
+}
+
+/// Two dry wooden knocks, the least musical choice.
+pub fn knock() -> Pcm {
+    let wood = || {
+        vec![
+            Partial {
+                frequency: 820.0,
+                amplitude: 1.0,
+                decay: 38.0,
+            },
+            Partial {
+                frequency: 2150.0,
+                amplitude: 0.5,
+                decay: 55.0,
+            },
+        ]
+    };
+    to_stereo(notes(0.45, &[(0.0, wood()), (0.17, wood())]))
+}
+
+/// A short upward sweep, like a bubble popping.
+pub fn bubble() -> Pcm {
+    let duration = 0.28;
+    let frames = (duration * SAMPLE_RATE as f32) as usize;
+    let mut buffer = vec![0.0; frames];
+    let mut phase = 0.0_f32;
+
+    for (index, sample) in buffer.iter_mut().enumerate() {
+        let t = index as f32 / SAMPLE_RATE as f32;
+        let progress = t / duration;
+        // Exponential sweep from 400 Hz up to 1600 Hz.
+        let frequency = 400.0 * 4.0_f32.powf(progress);
+        phase += TAU * frequency / SAMPLE_RATE as f32;
+        let envelope = attack(t, 0.01) * (-9.0 * t).exp();
+        *sample = envelope * phase.sin();
+    }
+
+    to_stereo(finish(buffer, duration))
+}
+
+/// A tuned note: a fundamental with a quieter octave and twelfth.
+fn tuned(frequency: f32, amplitude: f32, decay: f32) -> Vec<Partial> {
+    vec![
+        Partial {
+            frequency,
+            amplitude,
+            decay,
+        },
+        Partial {
+            frequency: frequency * 2.0,
+            amplitude: amplitude * 0.35,
+            decay: decay * 1.4,
+        },
+        Partial {
+            frequency: frequency * 3.0,
+            amplitude: amplitude * 0.12,
+            decay: decay * 1.9,
+        },
+    ]
+}
+
+/// Struck notes laid out in time, each starting at its offset in seconds.
+fn notes(duration: f32, notes: &[(f32, Vec<Partial>)]) -> Vec<f32> {
+    let frames = (duration * SAMPLE_RATE as f32) as usize;
+    let mut buffer = vec![0.0; frames];
+
+    for (offset, partials) in notes {
+        let start = (offset * SAMPLE_RATE as f32) as usize;
+        for (index, sample) in buffer.iter_mut().enumerate().skip(start) {
+            let t = (index - start) as f32 / SAMPLE_RATE as f32;
+            let value: f32 = partials
+                .iter()
+                .map(|partial| {
+                    partial.amplitude
+                        * (-partial.decay * t).exp()
+                        * (TAU * partial.frequency * t).sin()
+                })
+                .sum();
+            *sample += value * attack(t, STRIKE_ATTACK);
+        }
+    }
+
+    finish(buffer, duration)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,9 +394,16 @@ mod tests {
             .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
     }
 
+    fn all() -> Vec<Pcm> {
+        super::super::Tone::ALL
+            .into_iter()
+            .map(super::super::Tone::render)
+            .collect()
+    }
+
     #[test]
     fn every_tone_produces_interleaved_stereo_audio() {
-        for pcm in [chime(), bell(), beep(), marimba(), soft_pulse()] {
+        for pcm in all() {
             assert!(!pcm.is_empty());
             assert_eq!(pcm.len() % CHANNELS, 0);
         }
@@ -233,7 +411,7 @@ mod tests {
 
     #[test]
     fn every_tone_is_normalized_and_never_clips() {
-        for pcm in [chime(), bell(), beep(), marimba(), soft_pulse()] {
+        for pcm in all() {
             let peak = peak(&pcm);
 
             assert!(peak <= 1.0, "peak {peak} would clip");
@@ -247,8 +425,9 @@ mod tests {
     #[test]
     fn every_tone_starts_and_ends_at_silence() {
         // A waveform that starts or stops abruptly clicks through the speakers.
-        for pcm in [chime(), bell(), beep(), marimba(), soft_pulse()] {
+        for pcm in all() {
             assert_eq!(pcm[0], 0.0);
+            assert_eq!(pcm[1], 0.0);
             assert!(pcm[pcm.len() - 1].abs() < 1e-3);
         }
     }

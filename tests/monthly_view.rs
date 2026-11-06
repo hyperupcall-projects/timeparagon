@@ -184,7 +184,8 @@ fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
             Size::new(400.0, 900.0),
             timeslay::ui::view(&state),
         );
-        assert!(panel.find(day.format("%a %b %-d").to_string()).is_ok());
+        let month_button = format!("{} ▾", timeslay::calendar::month_day_label(day));
+        assert!(panel.find(month_button).is_ok());
     }
 }
 

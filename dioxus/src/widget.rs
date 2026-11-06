@@ -246,7 +246,30 @@ fn refresh() -> bool {
     let model = day::build_model(&snapshot, &config.calendar);
     let travel = day::travel_boxes(&model, &config.travel);
     write(&model, &travel, &config.calendar, snapshot.fetched_at);
+    if config.reminders.any_enabled() {
+        refresh_reminders(&config, snapshot, today);
+    }
     true
+}
+
+/// Caches today and tomorrow, so reminders are planned from fresh events even
+/// when the app has not been opened, then re-plans them.
+#[cfg(target_os = "android")]
+fn refresh_reminders(
+    config: &timeslay_core::config::Config,
+    today_snapshot: calendar::Snapshot,
+    today: NaiveDate,
+) {
+    let mut store = calendar::Store::new(config.calendar.day_start_hour());
+    store.cache_days_in(timeslay_core::task_db::path());
+    store.cache_fetched_snapshot(today_snapshot, &[today]);
+    // Early reminders for tomorrow are due before the next morning's sync.
+    if let Some(tomorrow) = today.succ_opt()
+        && let Ok(snapshot) = day::load_day(tomorrow, &config.calendar)
+    {
+        store.cache_fetched_snapshot(snapshot, &[tomorrow]);
+    }
+    crate::reminders::publish(config);
 }
 
 /// `WidgetRefreshService.nativeRefresh`. The service runs in its own `:widget`

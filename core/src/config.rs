@@ -29,6 +29,7 @@ pub struct Config {
     pub notepad: NotepadText,
     pub todos: crate::todos::TodoList,
     pub brain_dump: crate::brain_dump::Dumps,
+    pub reminders: crate::reminders::ReminderSettings,
 }
 
 /// The part of `[notepad]` the Dioxus app edits. Its font size is the desktop's.
@@ -663,6 +664,30 @@ fn save_travel_show_at(path: &std::path::Path, show: bool) -> io::Result<()> {
     })
 }
 
+/// Replaces the `[reminders]` table, leaving the rest of the file alone.
+pub fn save_reminders(settings: &crate::reminders::ReminderSettings) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_reminders_at(&path, settings)
+}
+
+fn save_reminders_at(
+    path: &std::path::Path,
+    settings: &crate::reminders::ReminderSettings,
+) -> io::Result<()> {
+    let value = toml::Value::try_from(settings)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let toml::Value::Table(replacement) = value else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "reminder settings are not a table",
+        ));
+    };
+    edit_table(path, "reminders", |table| {
+        *table = replacement;
+        Ok(())
+    })
+}
+
 /// Saves a place Mapbox found and returns its id, reusing one already saved.
 pub fn save_found_place(found: &crate::places::Found) -> io::Result<u64> {
     let path = config_path().ok_or_else(no_config_directory)?;
@@ -971,6 +996,34 @@ mod tests {
         assert!(saved.travel.show);
         assert_eq!(saved.travel.api_key, "pk");
         assert_eq!(saved.travel.routes.len(), 1);
+    }
+
+    #[test]
+    fn saving_reminders_replaces_only_their_table() {
+        use crate::reminders::{ReminderSettings, Sound};
+        use crate::sounds::Tone;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[window]\nwidth = 800\n\n[reminders]\nenabled = false\nstale = 1\n",
+        )
+        .unwrap();
+        let mut settings = ReminderSettings {
+            enabled: true,
+            ..ReminderSettings::default()
+        };
+        settings.travel.sound = Sound::Tone { tone: Tone::Bell };
+
+        save_reminders_at(&path, &settings).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        let table: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(table["window"]["width"].as_integer(), Some(800));
+        assert!(table["reminders"].get("stale").is_none());
+        let saved: Config = toml::from_str(&text).unwrap();
+        assert_eq!(saved.reminders, settings);
     }
 
     #[test]

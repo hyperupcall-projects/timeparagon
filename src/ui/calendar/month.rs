@@ -436,6 +436,10 @@ pub(super) fn month_overlay<'a>(
         ),
         text(calendar::month_heading(month))
             .size(metrics.label() + 1.0)
+            .font(Font {
+                weight: Weight::Bold,
+                ..Font::DEFAULT
+            })
             .width(Fill)
             .center(),
         nav_button(
@@ -450,6 +454,10 @@ pub(super) fn month_overlay<'a>(
     let weekdays = row(first_day.initials().map(|label| {
         text(label)
             .size(metrics.label() - 1.0)
+            .font(Font {
+                weight: Weight::Bold,
+                ..Font::DEFAULT
+            })
             .width(Fill)
             .center()
             .style(text::secondary)
@@ -494,7 +502,7 @@ pub(super) fn month_overlay<'a>(
 
     let aligned = column![
         // Keep the header row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(header_offset(metrics)),
+        iced::widget::Space::new().height(header_offset(state, metrics)),
         container(iced::widget::opaque(card))
             .padding(metrics.padding)
             .width(Fill),

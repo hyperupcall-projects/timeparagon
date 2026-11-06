@@ -11,72 +11,15 @@
 mod backend;
 
 pub mod decode;
-pub mod synth;
+pub use timeslay_core::sounds::synth;
 
-use std::fmt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 
-/// Everything is rendered at this rate; PipeWire resamples if the sink
-/// disagrees.
-pub const SAMPLE_RATE: u32 = 48_000;
-
-/// Interleaved stereo.
-pub const CHANNELS: usize = 2;
-
-/// A rendered sound: interleaved stereo `f32` frames at [`SAMPLE_RATE`].
-///
-/// Shared rather than copied because the realtime callback holds onto it
-/// while the rest of the app carries on.
-pub type Pcm = Arc<[f32]>;
-
-/// One of the tones we generate ourselves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Tone {
-    #[default]
-    Chime,
-    Bell,
-    Beep,
-    Marimba,
-    SoftPulse,
-}
-
-impl Tone {
-    pub const ALL: [Self; 5] = [
-        Self::Chime,
-        Self::Bell,
-        Self::Beep,
-        Self::Marimba,
-        Self::SoftPulse,
-    ];
-
-    pub fn render(self) -> Pcm {
-        match self {
-            Self::Chime => synth::chime(),
-            Self::Bell => synth::bell(),
-            Self::Beep => synth::beep(),
-            Self::Marimba => synth::marimba(),
-            Self::SoftPulse => synth::soft_pulse(),
-        }
-    }
-}
-
-impl fmt::Display for Tone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Chime => "Chime",
-            Self::Bell => "Bell",
-            Self::Beep => "Beep",
-            Self::Marimba => "Marimba",
-            Self::SoftPulse => "Soft Pulse",
-        })
-    }
-}
+pub use timeslay_core::sounds::{CHANNELS, Pcm, SAMPLE_RATE, Tone};
 
 /// A request to play something.
 pub struct Play {
@@ -338,25 +281,6 @@ mod tests {
         for tone in Tone::ALL {
             assert!(!tone.render().is_empty(), "{tone} rendered nothing");
         }
-    }
-
-    #[test]
-    fn tone_names_round_trip_through_serde() {
-        #[derive(Serialize, Deserialize)]
-        struct Wrapper {
-            tone: Tone,
-        }
-
-        for tone in Tone::ALL {
-            let text = toml::to_string(&Wrapper { tone }).unwrap();
-            let parsed: Wrapper = toml::from_str(&text).unwrap();
-
-            assert_eq!(parsed.tone, tone);
-        }
-
-        // The names in the config file are snake_case, not the display names.
-        let parsed: Wrapper = toml::from_str("tone = \"soft_pulse\"").unwrap();
-        assert_eq!(parsed.tone, Tone::SoftPulse);
     }
 
     #[test]
