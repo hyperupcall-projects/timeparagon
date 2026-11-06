@@ -803,7 +803,10 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
         state.view_menu_open = false;
     }
     let mut ui = render(&state, Size::new(180.0, 240.0));
-    let month = format!("{} ▾", timeslay::calendar::month_day_label(state.calendar.day));
+    let month = format!(
+        "{} ▾",
+        timeslay::calendar::month_day_label(state.calendar.day)
+    );
     let month = ui.find(month)?.bounds();
     assert!(month.y + month.height < 240.0, "month button {month:?}");
     drop(ui);
