@@ -68,10 +68,10 @@ fn expand(path: &Path, cells: &Cells) -> Option<Value> {
         Cell::Object => {
             let mut fields = serde_json::Map::new();
             for child in children(path, cells) {
-                if let Some(Part::Field(key)) = child.last() {
-                    if let Some(value) = expand(&child, cells) {
-                        fields.insert(key.clone(), value);
-                    }
+                if let Some(Part::Field(key)) = child.last()
+                    && let Some(value) = expand(&child, cells)
+                {
+                    fields.insert(key.clone(), value);
                 }
             }
             Some(Value::Object(fields))
@@ -83,18 +83,18 @@ fn expand(path: &Path, cells: &Cells) -> Option<Value> {
             for id in order {
                 let mut child = path.clone();
                 child.push(Part::Item(id.clone()));
-                if seen.insert(child.clone()) {
-                    if let Some(value) = expand(&child, cells) {
-                        items.push(value);
-                    }
+                if seen.insert(child.clone())
+                    && let Some(value) = expand(&child, cells)
+                {
+                    items.push(value);
                 }
             }
             // Concurrent additions absent from the winning order still exist.
             for child in children {
-                if seen.insert(child.clone()) {
-                    if let Some(value) = expand(&child, cells) {
-                        items.push(value);
-                    }
+                if seen.insert(child.clone())
+                    && let Some(value) = expand(&child, cells)
+                {
+                    items.push(value);
                 }
             }
             Some(Value::Array(items))

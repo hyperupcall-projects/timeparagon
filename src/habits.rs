@@ -849,11 +849,10 @@ impl Store {
             return;
         };
         if let Ok(Some(library)) = crate::task_db::read_document(path, crate::task_db::keys::HABITS)
+            && library != self.library
         {
-            if library != self.library {
-                self.library = library;
-                self.recompute();
-            }
+            self.library = library;
+            self.recompute();
         }
     }
 

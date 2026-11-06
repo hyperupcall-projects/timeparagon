@@ -168,7 +168,7 @@ pub fn store(database: &Path, table: &mut toml::Table, sections: &[&str]) -> io:
     let mut changed = false;
     for (key, desired) in &values {
         let value = crate::database_sync::projection::prepare(path, &tx, key, desired)?;
-        if document(&tx, &key).map_err(other)? == value {
+        if document(&tx, key).map_err(other)? == value {
             continue;
         }
         changed = true;

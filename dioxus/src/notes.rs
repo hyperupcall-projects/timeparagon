@@ -56,10 +56,9 @@ impl NotesStore {
         if let Ok(Some(library)) = timeslay_core::task_db::read_document::<Library>(
             &path,
             timeslay_core::task_db::keys::NOTES,
-        ) {
-            if library != *self.library.peek() {
-                self.library.set(library);
-            }
+        ) && library != *self.library.peek()
+        {
+            self.library.set(library);
         }
     }
     fn save_local(mut self) {

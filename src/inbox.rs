@@ -706,9 +706,7 @@ fn prepare_create(state: &mut State) -> Option<(crate::config::CalendarSettings,
     }
     let deadline = state.timeblocking.deadline.clone();
     let due = state.timeblocking.date.clone();
-    let Some(draft) = state.inbox.draft.as_mut() else {
-        return None;
-    };
+    let draft = state.inbox.draft.as_mut()?;
     draft.deadline = deadline;
     draft.due = due;
     if draft.saving || draft.fetching {

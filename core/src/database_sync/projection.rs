@@ -14,10 +14,10 @@ use std::{
 type Seen = BTreeMap<(PathBuf, String), Option<String>>;
 static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
 pub(crate) fn remember(path: &Path, key: &str, value: Option<String>) {
-    if shared(key) {
-        if let Ok(mut seen) = SEEN.get_or_init(Default::default).lock() {
-            seen.insert((path.to_owned(), key.into()), value);
-        }
+    if shared(key)
+        && let Ok(mut seen) = SEEN.get_or_init(Default::default).lock()
+    {
+        seen.insert((path.to_owned(), key.into()), value);
     }
 }
 pub(crate) fn prepare(

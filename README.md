@@ -110,6 +110,7 @@ Of course, there's also week, 2-week, and month views:
 - Stores data in Google Calendar, Tasks and Contacts, and syncs app-specific data through Turso.
 	- Uses local database as cache to keep UI performant/responsive.
 - **Track data:** (TODO)
+	- Journaling (voice to text)
 	- Project allocation
 	- Deep deep work/Distractions
 	- locations been

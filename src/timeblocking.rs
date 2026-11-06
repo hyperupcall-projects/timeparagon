@@ -1766,7 +1766,7 @@ pub(crate) fn access(settings: &CalendarSettings) -> Result<String, String> {
     #[cfg(test)]
     {
         let _ = settings;
-        return Err("Google access is disabled in tests".into());
+        Err("Google access is disabled in tests".into())
     }
     #[cfg(not(test))]
     access_google(settings)

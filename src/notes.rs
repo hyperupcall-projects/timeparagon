@@ -85,18 +85,17 @@ impl Store {
         };
         if let Ok(Some(library)) =
             crate::task_db::read_document::<Library>(path, crate::task_db::keys::NOTES)
+            && library != self.library
         {
-            if library != self.library {
-                self.library = library;
-                if self
-                    .open
-                    .as_ref()
-                    .is_some_and(|id| self.library.note(id).is_none())
-                {
-                    self.close();
-                } else if self.open.is_some() {
-                    self.load_editor();
-                }
+            self.library = library;
+            if self
+                .open
+                .as_ref()
+                .is_some_and(|id| self.library.note(id).is_none())
+            {
+                self.close();
+            } else if self.open.is_some() {
+                self.load_editor();
             }
         }
     }
