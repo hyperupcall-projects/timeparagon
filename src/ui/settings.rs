@@ -32,25 +32,51 @@ impl std::fmt::Display for CalendarOption {
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct NumberOption {
+    value: u32,
+    label: String,
+}
+
+impl std::fmt::Display for NumberOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Show every value in a dropdown, including in narrow panels.
+fn number_dropdown<'a>(
+    range: std::ops::RangeInclusive<u32>,
+    selected: u32,
+    label: impl Fn(u32) -> String,
+    on_select: impl Fn(u32) -> Message + 'a,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let options: Vec<_> = range
+        .map(|value| NumberOption {
+            value,
+            label: label(value),
+        })
+        .collect();
+    let selected = options
+        .iter()
+        .find(|option| option.value == selected)
+        .cloned();
+    super::controls::pick_list(options, selected, move |option| on_select(option.value))
+        .text_size(metrics.label())
+        .width(Fill)
+        .into()
+}
+
 fn week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = &state.config.calendar;
-    column![
-        choice(
-            "Days shown",
-            config::WeekRange::ALL.to_vec(),
-            Some(settings.week_range()),
-            |range| Message::Settings(SettingsMessage::CalendarWeekRangeChanged(range)),
-            metrics,
-        ),
-        field(
-            format!("Weekly day width: {} px", settings.weekly_day_width()),
-            crate::ui::controls::slider(100..=400, settings.weekly_day_width(), |v0| {
-                Message::Settings(SettingsMessage::CalendarWeeklyWidthChanged(v0))
-            },)
-            .into(),
-            metrics,
-        ),
-    ]
+    column![choice(
+        "Days shown",
+        config::WeekRange::ALL.to_vec(),
+        Some(settings.week_range()),
+        |range| Message::Settings(SettingsMessage::CalendarWeekRangeChanged(range)),
+        metrics,
+    ),]
     .spacing(metrics.spacing)
     .width(Fill)
     .into()
@@ -246,12 +272,19 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                     settings.day_start_hour(),
                     state.config.appearance.time_format,
                 ),
-                crate::ui::controls::slider(
+                number_dropdown(
                     0..=config::CalendarSettings::MAX_DAY_END_HOUR,
                     settings.day_start_hour(),
+                    |hour| {
+                        if hour == 0 {
+                            "Midnight".to_owned()
+                        } else {
+                            calendar::time_format::hour(hour, state.config.appearance.time_format)
+                        }
+                    },
                     |v0| Message::Settings(SettingsMessage::CalendarDayEndChanged(v0)),
-                )
-                .into(),
+                    metrics,
+                ),
                 metrics,
             ),
         ]
@@ -578,28 +611,9 @@ fn layout_number<'a>(
         .as_ref()
         .filter(|(field, _)| *field == kind)
         .map_or_else(|| format!("{value:.0}"), |(_, input)| input.clone());
-    let decrement = crate::ui::controls::quiet_button(
-        text(format!("-{step:.0}"))
-            .size(metrics.label())
-            .center()
-            .width(Fill),
-    )
-    .padding([4, 4])
-    .width(38)
-    .on_press_maybe((value > min).then(|| kind.changed((value - step).max(min))));
-    let increment = crate::ui::controls::quiet_button(
-        text(format!("+{step:.0}"))
-            .size(metrics.label())
-            .center()
-            .width(Fill),
-    )
-    .padding([4, 4])
-    .width(38)
-    .on_press_maybe((value < max).then(|| kind.changed((value + step).min(max))));
     let input = crate::ui::controls::text_input("", &shown)
         .id(format!("layout-{kind:?}"))
         .size(metrics.label())
-        .width(Fill)
         .on_input(move |input| {
             Message::Settings(SettingsMessage::ViewLayoutInputChanged(kind, input))
         })
@@ -608,10 +622,12 @@ fn layout_number<'a>(
         ));
     field(
         label,
-        row![decrement, input, increment]
-            .spacing(3)
-            .align_y(Center)
-            .into(),
+        crate::ui::controls::stepper(
+            input,
+            metrics.label(),
+            (value < max).then(|| kind.changed((value + step).min(max))),
+            (value > min).then(|| kind.changed((value - step).max(min))),
+        ),
         metrics,
     )
 }
@@ -753,10 +769,13 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     column![
         field(
             format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
-            crate::ui::controls::slider(6..=12, settings.sleep_goal_hours(), |v0| {
-                Message::Settings(SettingsMessage::SleepGoalChanged(v0))
-            })
-            .into(),
+            number_dropdown(
+                6..=12,
+                settings.sleep_goal_hours(),
+                |hours| format!("{hours} hours"),
+                |v0| Message::Settings(SettingsMessage::SleepGoalChanged(v0)),
+                metrics,
+            ),
             metrics,
         ),
         field(
@@ -764,10 +783,13 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 "Sleep day starts at {}",
                 calendar::time_format::hour(settings.sleep_day_start_hour(), time_format)
             ),
-            crate::ui::controls::slider(0..=6, settings.sleep_day_start_hour(), |v0| {
-                Message::Settings(SettingsMessage::SleepDayStartChanged(v0))
-            })
-            .into(),
+            number_dropdown(
+                0..=6,
+                settings.sleep_day_start_hour(),
+                |hour| calendar::time_format::hour(hour, time_format),
+                |v0| Message::Settings(SettingsMessage::SleepDayStartChanged(v0)),
+                metrics,
+            ),
             metrics,
         ),
         field(
@@ -775,10 +797,13 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 "Latest wake-up: {}",
                 calendar::time_format::hour(settings.latest_wakeup_hour(), time_format)
             ),
-            crate::ui::controls::slider(4..=14, settings.latest_wakeup_hour(), |v0| {
-                Message::Settings(SettingsMessage::LatestWakeupChanged(v0))
-            })
-            .into(),
+            number_dropdown(
+                4..=14,
+                settings.latest_wakeup_hour(),
+                |hour| calendar::time_format::hour(hour, time_format),
+                |v0| Message::Settings(SettingsMessage::LatestWakeupChanged(v0)),
+                metrics,
+            ),
             metrics,
         ),
     ]
@@ -1414,7 +1439,7 @@ mod tests {
                         "number must remain editable at {width}px"
                     );
                     assert!(input.x >= 0.0 && input.x + input.width <= width);
-                    ui.click(format!("{delta:+.0}")).unwrap();
+                    ui.click(if delta > 0.0 { "+" } else { "−" }).unwrap();
                     for message in ui.into_messages() {
                         let _ = app::update(&mut state, message);
                     }
@@ -1422,7 +1447,7 @@ mod tests {
                 }
             }
         }
-        for (value, label) in [(0.0, "-1"), (30.0, "+1")] {
+        for (value, label) in [(0.0, "−"), (30.0, "+")] {
             state.config.views.margin = value;
             let size = iced::Size::new(180.0, 100.0);
             let mut ui = Simulator::with_size(

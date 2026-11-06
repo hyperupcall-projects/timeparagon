@@ -410,11 +410,9 @@ fn loading_a_calendar_habit_keeps_the_selected_occurrence_and_sync_source() {
     );
 }
 
-/// The week and month overview stays open across the panel's tabs and has a
-/// details pane of its own, so a new habit is edited there rather than in a
-/// second window.
+/// Leaving Plan for Habits closes the overview and uses the habit editor.
 #[test]
-fn new_habit_with_the_overview_open_is_edited_inside_the_overview() {
+fn leaving_plan_for_habits_uses_the_habit_editor() {
     use timeslay::{app::Screen, habits};
     for open_overview in [
         Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
@@ -426,7 +424,7 @@ fn new_habit_with_the_overview_open_is_edited_inside_the_overview() {
             &mut state,
             Message::Navigation(NavigationMessage::ScreenSelected(Screen::Habits)),
         );
-        assert!(state.range_view_active());
+        assert!(!state.range_view_active());
 
         state
             .habits
@@ -442,7 +440,7 @@ fn new_habit_with_the_overview_open_is_edited_inside_the_overview() {
             state.calendar.open_event.as_deref(),
             Some(habits::NEW_HABIT_ID)
         );
-        assert!(!state.details_pane_open);
+        assert!(state.details_pane_open);
         let mut ui = iced_test::simulator::Simulator::with_size(
             iced::Settings::default(),
             Size::new(1216.0, 900.0),

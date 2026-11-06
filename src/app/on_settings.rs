@@ -537,10 +537,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             state.config.calendar.set_week_range(range);
             Task::batch([queue_save(state), show_cached_calendar(state)])
         }
-        SettingsMessage::CalendarWeeklyWidthChanged(width) => {
-            state.config.calendar.weekly_day_width = width.clamp(100, 400);
-            queue_save(state)
-        }
         SettingsMessage::DefaultCalendarSelected(id) => {
             state.config.calendar.default_calendar = if id.is_empty() { None } else { Some(id) };
             queue_save(state)

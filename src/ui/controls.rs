@@ -1043,6 +1043,106 @@ pub fn text_input<'a, M: Clone + 'a>(
     iced::widget::text_input(placeholder, value).style(input_style)
 }
 
+/// Width of the `+`/`−` column on the right of a [`stepper`].
+const STEPPER_BUTTONS_WIDTH: f32 = 26.0;
+
+/// A number field with a stacked `+` (top, green) and `−` (bottom, red) on
+/// its right edge, all inside one field outline. `None` disables a button.
+pub fn stepper<'a, M: Clone + 'a>(
+    input: iced::widget::text_input::TextInput<'a, M, Theme, iced::Renderer>,
+    size: f32,
+    on_increment: Option<M>,
+    on_decrement: Option<M>,
+) -> Element<'a, M> {
+    let step = |glyph: &'static str, up: bool, on_press: Option<M>| {
+        button(text(glyph).size(size).center().width(Fill).height(Fill))
+            .padding(0)
+            .width(Fill)
+            .height(Fill)
+            .style(stepper_button(up))
+            .on_press_maybe(on_press)
+    };
+    let buttons = column![
+        step("+", true, on_increment),
+        step("−", false, on_decrement),
+    ]
+    .spacing(1)
+    .width(STEPPER_BUTTONS_WIDTH)
+    .height(Fill);
+    container(
+        row![input.style(bare_input_style).width(Fill), buttons]
+            .height(iced::Shrink)
+            .align_y(iced::Center),
+    )
+    .padding(1)
+    .style(stepper_frame)
+    .into()
+}
+
+fn stepper_frame(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(card_color(theme).color.into()),
+        border: field_border(theme, false),
+        ..Default::default()
+    }
+}
+
+/// The input inside a [`stepper`]: the frame draws its outline instead.
+fn bare_input_style(
+    theme: &Theme,
+    status: iced::widget::text_input::Status,
+) -> iced::widget::text_input::Style {
+    let mut style = input_style(theme, status);
+    style.background = Color::TRANSPARENT.into();
+    style.border = Border::default();
+    style
+}
+
+fn stepper_button(up: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let palette = theme.extended_palette();
+        let (weak, base, strong) = if up {
+            let s = palette.success;
+            (s.weak.color, s.base.color, s.strong.color)
+        } else {
+            let d = palette.danger;
+            (d.weak.color, d.base.color, d.strong.color)
+        };
+        let background = match status {
+            button::Status::Active => weak,
+            button::Status::Hovered => iced::theme::palette::mix(weak, base, 0.25),
+            button::Status::Pressed => iced::theme::palette::mix(weak, base, 0.45),
+            button::Status::Disabled => palette.background.base.color,
+        };
+        let text_color = match status {
+            button::Status::Disabled => palette.secondary.base.color.scale_alpha(0.6),
+            _ => strong,
+        };
+        // Only the outer corners follow the frame's rounding.
+        let corner = (RADIUS_CONTROL - 1.0).max(0.0);
+        let radius = if up {
+            iced::border::Radius {
+                top_right: corner,
+                ..Default::default()
+            }
+        } else {
+            iced::border::Radius {
+                bottom_right: corner,
+                ..Default::default()
+            }
+        };
+        button::Style {
+            background: Some(background.into()),
+            text_color,
+            border: Border {
+                radius,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
 pub fn text_editor<'a, M: Clone + 'a>(
     content: &'a iced::widget::text_editor::Content<iced::Renderer>,
 ) -> iced::widget::text_editor::TextEditor<

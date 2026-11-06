@@ -557,7 +557,6 @@ pub enum SettingsMessage {
     SleepSaveRequested,
     SleepSaved(Result<calendar::Event, String>),
     CalendarWeekRangeChanged(config::WeekRange),
-    CalendarWeeklyWidthChanged(u32),
 
     /// The calendar new events are created on was changed.
     DefaultCalendarSelected(String),
