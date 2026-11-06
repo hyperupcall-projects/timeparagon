@@ -66,6 +66,8 @@ pub enum Job {
         end: DateTime<Local>,
         recurrence: Vec<String>,
         projects: Vec<u64>,
+        #[serde(default)]
+        all_day: bool,
         options: Option<event_options::EventOptions>,
         meeting: Option<meeting::Form>,
     },
@@ -546,6 +548,7 @@ fn execute(job: Job) -> Result<Option<(String, String, String)>, String> {
             end,
             recurrence,
             projects,
+            all_day,
             options,
             meeting,
         } => {
@@ -561,6 +564,7 @@ fn execute(job: Job) -> Result<Option<(String, String, String)>, String> {
                 end,
                 &recurrence,
                 &projects,
+                all_day,
                 options.as_ref(),
                 meeting.as_ref(),
             );
@@ -837,6 +841,31 @@ mod tests {
         db.connection()
             .query_row("SELECT count(*) FROM google_operations", [], |r| r.get(0))
             .unwrap()
+    }
+    #[test]
+    fn queued_creation_keeps_all_day_and_loads_older_timed_jobs() {
+        let event = super::super::sample_snapshot().events.remove(0);
+        let job = Job::Create {
+            id: event.id,
+            calendar: event.calendar_id,
+            title: event.title,
+            description: String::new(),
+            color: None,
+            start: event.start,
+            end: event.end,
+            recurrence: vec![],
+            projects: vec![],
+            all_day: true,
+            options: None,
+            meeting: None,
+        };
+        let mut value = serde_json::to_value(job).unwrap();
+        let restored: Job = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(restored, Job::Create { all_day: true, .. }));
+
+        value["Create"].as_object_mut().unwrap().remove("all_day");
+        let legacy: Job = serde_json::from_value(value).unwrap();
+        assert!(matches!(legacy, Job::Create { all_day: false, .. }));
     }
     #[test]
     fn restart_and_stale_google_data_preserve_the_latest_local_edit() {

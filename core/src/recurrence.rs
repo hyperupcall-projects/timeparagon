@@ -501,6 +501,17 @@ impl Rule {
     /// Builds the recurrence array the editor describes. The clock time is
     /// used for skipped and extra dates.
     pub fn lines_at(&self, anchor: NaiveDate, start: NaiveTime) -> Result<Vec<String>, String> {
+        self.lines(anchor, Some(start))
+    }
+
+    /// The lines for an all-day event: its end, extra days and skipped days
+    /// are dates rather than instants, as RFC 5545 requires when the event
+    /// itself starts on a date.
+    pub fn all_day_lines_at(&self, anchor: NaiveDate) -> Result<Vec<String>, String> {
+        self.lines(anchor, None)
+    }
+
+    fn lines(&self, anchor: NaiveDate, start: Option<NaiveTime>) -> Result<Vec<String>, String> {
         if self.repeat == RepeatMode::Custom {
             return Ok(self.custom.clone().unwrap_or_default());
         }
@@ -554,7 +565,11 @@ impl Rule {
                     if until < anchor {
                         return Err("The repeat cannot end before it starts".to_owned());
                     }
-                    rule.push_str(&format!(";UNTIL={}", until_utc(until)));
+                    let until = match start {
+                        Some(_) => until_utc(until),
+                        None => until.format("%Y%m%d").to_string(),
+                    };
+                    rule.push_str(&format!(";UNTIL={until}"));
                 }
                 EndKind::After => {
                     let count = self.count_value()?;
@@ -565,19 +580,15 @@ impl Rule {
             lines.push(format!("RRULE:{rule}"));
         }
 
+        let date_line = |name: &str, day: &NaiveDate| match start {
+            Some(start) => format!("{name}:{}{}", day.format("%Y%m%d"), start.format("%H%M%S")),
+            None => format!("{name};VALUE=DATE:{}", day.format("%Y%m%d")),
+        };
         for day in &self.extra {
-            lines.push(format!(
-                "RDATE:{}{}",
-                day.format("%Y%m%d"),
-                start.format("%H%M%S")
-            ));
+            lines.push(date_line("RDATE", day));
         }
         for day in &self.skips {
-            lines.push(format!(
-                "EXDATE:{}{}",
-                day.format("%Y%m%d"),
-                start.format("%H%M%S")
-            ));
+            lines.push(date_line("EXDATE", day));
         }
         Ok(lines)
     }
