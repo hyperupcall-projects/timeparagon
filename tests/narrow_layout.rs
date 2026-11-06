@@ -1880,6 +1880,46 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
 }
 
 #[test]
+fn searching_available_tasks_also_finds_habits_to_record() -> Result<(), Error> {
+    use timeslay::timeblocking::Action;
+    let mut state = timeblocking_state();
+    state
+        .habits
+        .library
+        .habits
+        .push(timeslay_core::habits::Habit::new("h-stretch", "Stretch"));
+    let mut archived = timeslay_core::habits::Habit::new("h-old", "Stretch old");
+    archived.archived = true;
+    state.habits.library.habits.push(archived);
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::Plan("standup".into())),
+    );
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Stretch").is_err());
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::TimeBlocking(Action::AvailableQuery("stret".into())),
+    );
+    let day = state.calendar.event("standup").unwrap().start.date_naive();
+    let mut ui = render(&state, Size::new(900.0, 1000.0));
+    assert!(ui.find("Stretch").is_ok());
+    assert!(ui.find("Stretch old").is_err());
+    assert!(ui.find("No matching tasks").is_err());
+    let record = ui.find("Record")?;
+    ui.point_at(record.bounds().center());
+    ui.simulate(iced_test::simulator::click());
+    assert!(ui.into_messages().any(|message| matches!(
+        message,
+        Message::Habits(timeslay::habits::Action::OpenDay(id, on))
+            if id == "h-stretch" && on == day
+    )));
+    Ok(())
+}
+
+#[test]
 fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
