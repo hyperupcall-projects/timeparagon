@@ -61,7 +61,33 @@ pub fn save_database_sync_url(url: &str) -> io::Result<()> {
     save_database_sync_url_at(&path, url)
 }
 
+/// Checks a sync server URL the way the sync client will read it. A blank URL
+/// is valid: it disables sync.
+pub fn validate_database_sync_url(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Ok(());
+    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return Err("The sync URL must start with https://, http://, libsql:// or turso://".into());
+    };
+    if !["https", "http", "libsql", "turso"].contains(&scheme.to_ascii_lowercase().as_str()) {
+        return Err(format!(
+            "Unsupported sync URL scheme \"{scheme}://\"; use https://, http://, libsql:// or turso://"
+        ));
+    }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if host.is_empty() {
+        return Err("The sync URL is missing a server name".into());
+    }
+    if url.chars().any(char::is_whitespace) {
+        return Err("The sync URL cannot contain spaces".into());
+    }
+    Ok(())
+}
+
 fn save_database_sync_url_at(path: &std::path::Path, url: &str) -> io::Result<()> {
+    validate_database_sync_url(url).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     edit_table(path, "database_sync", |table| {
         table.insert("url".into(), url.trim().into());
         Ok(())
@@ -930,6 +956,35 @@ mod tests {
         assert_eq!(table["window"]["width"].as_integer(), Some(321));
         save_database_sync_url_at(&path, "  ").unwrap();
         assert!(Config::load_from(&path, None).database_sync.url.is_empty());
+    }
+
+    #[test]
+    fn invalid_sync_urls_are_rejected_and_not_saved() {
+        for url in [
+            "",
+            "https://sync.example.com",
+            "libsql://db.turso.io",
+            "http://10.0.0.2:8080/",
+        ] {
+            assert_eq!(validate_database_sync_url(url), Ok(()), "{url}");
+        }
+        for url in [
+            "sync.example.com",
+            "ftp://example.com",
+            "https://",
+            "https://a b.com",
+        ] {
+            assert!(validate_database_sync_url(url).is_err(), "{url}");
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        save_database_sync_url_at(&path, "https://sync.example.com").unwrap();
+        let error = save_database_sync_url_at(&path, "sync.example.com").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            Config::load_from(&path, None).database_sync.url,
+            "https://sync.example.com"
+        );
     }
 
     #[test]
