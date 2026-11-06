@@ -285,7 +285,7 @@ fn metadata_rows<'a>(
         let value = timestamp
             .map(|time| {
                 let local = time.with_timezone(&Local);
-                if state.config.appearance.time_format == TimeFormat::Compact {
+                if state.config.appearance.time_format.is_compact() {
                     return format!(
                         "{} {} {}",
                         local.format("%Y-%m-%d"),

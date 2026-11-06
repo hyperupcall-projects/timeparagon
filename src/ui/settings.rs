@@ -1548,7 +1548,7 @@ mod tests {
                 preferences(&state, &Metrics::of(size)),
             );
             if width < 200.0 {
-                ui.click("Compact Time").unwrap();
+                ui.click("Compact 2").unwrap();
                 assert!(ui.into_messages().any(|message| matches!(
                     message,
                     Message::Settings(SettingsMessage::TimeFormatSelected(TimeFormat::TwelveHour))
@@ -1566,9 +1566,7 @@ mod tests {
                 ]);
                 assert!(ui.into_messages().any(|message| matches!(
                     message,
-                    Message::Settings(SettingsMessage::TimeFormatSelected(
-                        TimeFormat::TwentyFourHour
-                    ))
+                    Message::Settings(SettingsMessage::TimeFormatSelected(TimeFormat::Compact))
                 )));
             }
         }

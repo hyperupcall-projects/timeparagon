@@ -183,9 +183,8 @@ fn habit_occurrence<'a>(
     container(
         column![
             text(format!(
-                "Scheduled {} – {}",
-                calendar::time_format::clock(event.start, format),
-                calendar::time_format::clock(event.end, format)
+                "Scheduled {}",
+                calendar::time_format::range(event.start, event.end, format)
             ))
             .size(metrics.label() - 1.0),
             text(completed).size(metrics.label() - 1.0),
