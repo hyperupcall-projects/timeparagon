@@ -1387,7 +1387,8 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
 
 fn detail_pane_visible(state: &State) -> bool {
     (state.calendar.open_event.is_some()
-        || state.calendar.draft.as_ref().is_some_and(|d| d.editor_open))
+        || (state.inbox.draft.is_none()
+            && state.calendar.draft.as_ref().is_some_and(|d| d.editor_open)))
         && shows_details(state.screen)
         && !state.range_view_active()
 }
