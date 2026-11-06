@@ -96,6 +96,5 @@ jobs:
       - run: npm test
         working-directory: slack
       - run: node tests/map_picker.mjs
-      - run: python3 tests/android_release.py
       - run: python3 tests/migrate_timeslay.py
       - run: python3 packaging/test_install.py

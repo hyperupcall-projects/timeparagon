@@ -265,7 +265,9 @@ fn the_compact_theme_picker_cycles_on_press() -> Result<(), Error> {
         state.screen = Screen::Settings;
         state.config.appearance.theme = selected.to_owned();
 
-        let mut ui = render(&state, Size::new(200.0, 400.0));
+        // Tall enough that the theme row is on screen without scrolling; the
+        // breakpoint only depends on the width.
+        let mut ui = render(&state, Size::new(200.0, 700.0));
         let _ = ui.click(shown)?;
         let messages: Vec<Message> = ui.into_messages().collect();
 

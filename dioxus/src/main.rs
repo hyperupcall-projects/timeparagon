@@ -2182,7 +2182,7 @@ mod sheet_tests {
         }
         assert_offers(
             &render(app),
-            &["Search notes", ">New<", "Trip plan", "Syncing"],
+            &["Search notes", ">New<", "Trip plan", "Refresh"],
         );
     }
 

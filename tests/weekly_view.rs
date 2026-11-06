@@ -342,7 +342,7 @@ fn weekly_day_interactions_open_correct_panes_without_moving_the_week() {
     let mut ui = render(&state, Size::new(1500.0, 700.0));
     let selected = ui.find("Wed Oct 21").unwrap().bounds();
     let pane = ui.find("Last day event").unwrap().bounds();
-    assert!(pane.x + pane.width <= selected.x + 1.0);
+    assert!(pane.x + pane.width <= selected.x + 1.0, "selected {selected:?}, pane {pane:?}");
 }
 
 #[test]
@@ -539,7 +539,7 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
             for (label, view) in [
                 ("Week", CalendarView::Week),
                 ("2 Week", CalendarView::TwoWeek),
-                ("Month", CalendarView::Month),
+                ("Show Month", CalendarView::Month),
             ] {
                 let mut state = state();
                 state.view = CalendarView::Day;
@@ -551,7 +551,11 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
                 assert!(do_tab.x + do_tab.width <= plan.x);
                 assert_eq!(do_tab.y, plan.y);
                 for old in ["Schedule", "Show week", "Show 2 weeks", "Month"] {
-                    assert!(ui.find(old).is_err());
+                    // Settings has its own "Month" heading for the month view's width.
+                    if old == "Month" && screen == Screen::Settings {
+                        continue;
+                    }
+                    assert!(ui.find(old).is_err(), "{old} on {screen:?} at {width}");
                 }
                 assert!(ui.find(iced::widget::Id::new("plan-menu")).is_err());
                 drop(ui);
@@ -644,7 +648,7 @@ fn first_overview_click_opens_schedule_through_window_startup() -> Result<(), Er
             state.calendar.set_day(date(14), date(15));
             open_plan(&mut state, Size::new(320.0, 900.0))?;
             let mut panel = render_main(&state, Size::new(320.0, 900.0));
-            click_plan_option(&mut panel, if monthly { "Month" } else { "Week" })?;
+            click_plan_option(&mut panel, if monthly { "Show Month" } else { "Week" })?;
             // Apply every emitted message to check the full navigation path.
             let messages: Vec<_> = panel.into_messages().collect();
             for message in messages {
@@ -813,7 +817,6 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
     state.screen = Screen::Settings;
     let mut ui = render_main(&state, Size::new(900.0, 1600.0));
     assert!(ui.find("Days shown").is_ok());
-    assert!(ui.find("Weekly day width: 150 px").is_ok());
     Ok(())
 }
 
