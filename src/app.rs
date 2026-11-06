@@ -66,7 +66,9 @@ pub enum CalendarView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanTab {
     Schedule,
-    Tasks,
+    Overdue,
+    Inbox,
+    Backlog,
 }
 
 /// The two month pickers: the day panel's and the range overview's. Each opens,
@@ -474,6 +476,7 @@ pub enum Message {
 pub enum NavigationMessage {
     ScreenSelected(Screen),
     PlanTabSelected(PlanTab),
+    PlanDaySelected,
     ViewMenuToggled,
     MoreMenuToggled,
 }
