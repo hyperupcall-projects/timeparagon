@@ -766,12 +766,14 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     bar_card(
         column![
             bar,
-            container(subtabs).padding(Padding {
-                left: metrics.padding,
-                right: metrics.padding,
-                top: TASKS_ROW_GAP,
-                bottom: 0.0,
-            }),
+            container(subtabs)
+                .id(if planning { "plan-tabs" } else { "tasks-tabs" })
+                .padding(Padding {
+                    left: metrics.padding,
+                    right: metrics.padding,
+                    top: TASKS_ROW_GAP,
+                    bottom: 0.0,
+                }),
         ]
         .width(Fill)
         .into(),
