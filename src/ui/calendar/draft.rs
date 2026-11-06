@@ -25,45 +25,63 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         .size(metrics.label() + 2.0)
         .width(Fill);
 
-    let when = column![
+    let date_field = |value: &str, change: fn(String) -> EventDraftMessage| {
+        container(super::super::controls::date(
+            state.config.appearance.time_format,
+            value,
+            false,
+            false,
+            true,
+            metrics.label(),
+            move |v0| Message::EventDraft(change(v0)),
+        ))
+        .width(Fill)
+    };
+    let mut when = column![
+        crate::ui::controls::checkbox(draft.all_day)
+            .label("All day")
+            .text_size(metrics.label())
+            .on_toggle(|v0| Message::EventDraft(EventDraftMessage::EventDraftAllDayToggled(v0))),
+        // The end date is the last day covered, so a single day reads the
+        // same on both sides.
         row![
-            super::super::controls::date(
-                state.config.appearance.time_format,
-                &draft.date_text,
-                false,
-                false,
-                true,
-                metrics.label(),
-                |v0| Message::EventDraft(EventDraftMessage::EventDraftDateChanged(v0))
-            )
-            .width(Fill),
-        ]
-        .spacing(6.0)
-        .align_y(Alignment::Center),
-        row![
-            container(super::super::controls::time(
-                state.config.appearance.time_format,
-                &draft.start_text,
-                true,
-                metrics.label(),
-                |v0| Message::EventDraft(EventDraftMessage::EventDraftStartChanged(v0))
-            ))
-            .width(Fill),
+            date_field(&draft.date_text, EventDraftMessage::EventDraftDateChanged),
             text("–").size(metrics.label()),
-            container(super::super::controls::time(
-                state.config.appearance.time_format,
-                &draft.end_text,
-                true,
-                metrics.label(),
-                |v0| Message::EventDraft(EventDraftMessage::EventDraftEndChanged(v0))
-            ))
-            .width(Fill),
+            date_field(
+                &draft.end_date_text,
+                EventDraftMessage::EventDraftEndDateChanged
+            ),
         ]
         .spacing(6.0)
         .align_y(Alignment::Center),
     ]
     .spacing(4.0)
     .width(Fill);
+    if !draft.all_day {
+        when = when.push(
+            row![
+                container(super::super::controls::time(
+                    state.config.appearance.time_format,
+                    &draft.start_text,
+                    true,
+                    metrics.label(),
+                    |v0| Message::EventDraft(EventDraftMessage::EventDraftStartChanged(v0))
+                ))
+                .width(Fill),
+                text("–").size(metrics.label()),
+                container(super::super::controls::time(
+                    state.config.appearance.time_format,
+                    &draft.end_text,
+                    true,
+                    metrics.label(),
+                    |v0| Message::EventDraft(EventDraftMessage::EventDraftEndChanged(v0))
+                ))
+                .width(Fill),
+            ]
+            .spacing(6.0)
+            .align_y(Alignment::Center),
+        );
+    }
 
     let mut description = column![
         text("Description")

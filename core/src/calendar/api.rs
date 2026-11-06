@@ -1914,7 +1914,7 @@ fn split_recurrence(
 /// Creates a timed event on Google and returns its id.
 ///
 /// Only the fields the add-event popup collects are sent: the title, an
-/// optional description, and the two times. Blocking: call it from
+/// optional description, and the two times, as dates when `all_day`. Blocking: call it from
 /// the app's `blocking::run`.
 #[allow(clippy::too_many_arguments)]
 pub fn insert_event(
@@ -1927,15 +1927,13 @@ pub fn insert_event(
     end: DateTime<Local>,
     recurrence: &[String],
     projects: &[u64],
+    all_day: bool,
     options: Option<&super::event_options::EventOptions>,
     meeting: Option<&super::meeting::Form>,
 ) -> Result<Inserted, GoogleError> {
     let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
-    let mut body = serde_json::json!({
-        "summary": title,
-        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
-        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
-    });
+    let mut body = serde_json::json!({ "summary": title });
+    write_times(&mut body, start, end, all_day);
     if let Some(options) = options {
         options.write(&mut body)?;
     }
@@ -1990,6 +1988,23 @@ pub fn insert_event(
         link: details.link,
         meeting: details.meeting,
     })
+}
+
+/// Writes an event's `start` and `end`: dates for an all-day event, with
+/// Google's exclusive end, or instants for a timed one.
+fn write_times(
+    body: &mut serde_json::Value,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+    all_day: bool,
+) {
+    if all_day {
+        body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
+        body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
+    } else {
+        body["start"] = serde_json::json!({ "dateTime": start.with_timezone(&Utc).to_rfc3339() });
+        body["end"] = serde_json::json!({ "dateTime": end.with_timezone(&Utc).to_rfc3339() });
+    }
 }
 
 /// What Google reports about an event it has just created.
