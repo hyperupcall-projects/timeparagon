@@ -949,12 +949,14 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut body = column![
         text(block.title.clone()).size(18),
         super::calendar::event_source(state, block, metrics),
-        text(format!(
-            "{} · {}–{}",
-            block.start.format("%a, %b %-d"),
-            crate::calendar::time_format::clock(block.start, state.config.appearance.time_format),
-            crate::calendar::time_format::clock(block.end, state.config.appearance.time_format)
-        ))
+        text({
+            let (start, end) = crate::calendar::time_format::range_parts(
+                block.start,
+                block.end,
+                state.config.appearance.time_format,
+            );
+            format!("{} · {start}–{end}", block.start.format("%a, %b %-d"))
+        })
         .size(metrics.label())
         .style(text::secondary),
         actions,

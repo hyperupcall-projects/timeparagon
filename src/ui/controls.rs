@@ -236,15 +236,13 @@ pub fn time<'a>(
     .text_size(size)
     .padding([7, 8])
     .width(Fill);
-    let compact = time_format == TimeFormat::Compact;
+    let compact = time_format.is_compact();
     let periods = if compact { ["a", "p"] } else { ["AM", "PM"] };
-    let mut fields = row![
-        hours,
-        text(if compact { "." } else { ":" }).size(size),
-        minutes
-    ]
-    .spacing(3)
-    .align_y(iced::Center);
+    let mut fields = row![hours];
+    if time_format != TimeFormat::Compact2 {
+        fields = fields.push(text(":").size(size));
+    }
+    let mut fields = fields.push(minutes).spacing(3).align_y(iced::Center);
     if !time_format.is_24_hour() {
         fields = fields.push(
             pick_list(

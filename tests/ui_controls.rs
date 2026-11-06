@@ -211,7 +211,7 @@ fn compact_picker_displays_short_periods_and_preserves_stored_time() {
         Size::new(320.0, 700.0),
         iced::widget::container(control).width(300),
     );
-    assert!(form.find(".").is_ok());
+    assert!(form.find(":").is_ok());
     form.point_at(iced::Point::new(260.0, 15.0));
     form.simulate([
         iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(
