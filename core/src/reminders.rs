@@ -733,6 +733,7 @@ mod tests {
             place_id: String::new(),
             lat: 0.0,
             lng: 0.0,
+            favorite: false,
         };
         let mut places = PlaceSettings {
             home: Some(1),

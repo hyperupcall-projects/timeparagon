@@ -1513,6 +1513,7 @@ pub fn save_found_place(found: &Found) -> Result<Place, String> {
         place_id: found.place_id.clone(),
         lat: found.lat,
         lng: found.lng,
+        favorite: false,
     })
 }
 
@@ -2208,6 +2209,7 @@ mod tests {
             place_id: String::new(),
             lat: 0.0,
             lng: 0.0,
+            favorite: false,
         };
         PlaceSettings {
             home: Some(1),

@@ -322,31 +322,56 @@ pub(super) fn location_control<'a>(
     }
 }
 
-fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Element<'a, Message> {
-    let search = button(
-        text(if picker.searching {
-            "Searching…"
+fn picker_view<'a>(
+    state: &'a State,
+    picker: &'a Picker,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let mut input = crate::ui::controls::text_input(
+        if picker.recents {
+            "Search saved places"
         } else {
-            "Search"
-        })
-        .size(metrics.label())
-        .center(),
+            "Search for a place"
+        },
+        &picker.query,
     )
-    .style(crate::ui::controls::primary);
-    let search = if picker.searching || picker.query.trim().is_empty() {
-        search
-    } else {
-        search.on_press(msg(Action::Search))
-    };
+    .id(iced::widget::Id::new(PICKER_INPUT))
+    .on_input(|query| msg(Action::Query(query)))
+    .size(metrics.label())
+    .width(Fill);
 
-    let mut input = crate::ui::controls::text_input("Search for a place", &picker.query)
-        .id(iced::widget::Id::new(PICKER_INPUT))
-        .on_input(|query| msg(Action::Query(query)))
-        .size(metrics.label())
-        .width(Fill);
-    if !picker.searching && !picker.query.trim().is_empty() {
-        input = input.on_submit(msg(Action::Search));
-    }
+    let search_row: Element<'a, Message> = if picker.recents {
+        // The saved places are filtered as you type; Enter takes the first.
+        if let Some(first) =
+            travel::saved_matches(&state.config.travel.places, &picker.query).first()
+        {
+            input = input.on_submit(msg(Action::ChooseSaved(first.id)));
+        }
+        input.into()
+    } else {
+        let search = button(
+            text(if picker.searching {
+                "Searching…"
+            } else {
+                "Search"
+            })
+            .size(metrics.label())
+            .center(),
+        )
+        .style(crate::ui::controls::primary);
+        let search = if picker.searching || picker.query.trim().is_empty() {
+            search
+        } else {
+            search.on_press(msg(Action::Search))
+        };
+        if !picker.searching && !picker.query.trim().is_empty() {
+            input = input.on_submit(msg(Action::Search));
+        }
+        row![input, search]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+    };
 
     let map_button = button(text("Choose on map").size(metrics.label()))
         .on_press_maybe(
@@ -357,13 +382,50 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
                 .map(|_| msg(Action::Map(travel::map::Action::Open))),
         )
         .style(crate::ui::controls::secondary);
-    let mut content = column![
-        row![input, search].spacing(6).align_y(Alignment::Center),
-        map_button
-    ]
-    .spacing(6)
-    .width(Fill);
+    let recents_button = button(
+        text(if picker.recents {
+            "Search Mapbox"
+        } else {
+            "Search recents"
+        })
+        .size(metrics.label()),
+    )
+    .on_press(msg(Action::Recents))
+    .style(if picker.recents {
+        crate::ui::controls::primary
+    } else {
+        crate::ui::controls::secondary
+    });
+    // Two buttons side by side need more than a 200px window has to give.
+    let modes: Element<'a, Message> = if metrics.breakpoint.is_compact() {
+        column![map_button, recents_button].spacing(6).into()
+    } else {
+        row![map_button, recents_button].spacing(6).into()
+    };
 
+    let mut content = column![search_row, modes].spacing(6).width(Fill);
+
+    if picker.recents {
+        content = content.push(saved_places(state, picker, metrics));
+    } else {
+        content = mapbox_results(state, picker, content, metrics);
+    }
+
+    content
+        .push(
+            button(text("Cancel").size(metrics.label()))
+                .on_press(msg(Action::ClosePicker))
+                .style(crate::ui::controls::ghost),
+        )
+        .into()
+}
+
+fn mapbox_results<'a>(
+    state: &State,
+    picker: &'a Picker,
+    mut content: iced::widget::Column<'a, Message>,
+    metrics: &Metrics,
+) -> iced::widget::Column<'a, Message> {
     if let Some(error) = &picker.error {
         content = content.push(text(error).size(metrics.label()).style(text::danger));
     } else if state.config.travel.key().is_none() {
@@ -397,14 +459,62 @@ fn picker_view<'a>(state: &State, picker: &'a Picker, metrics: &Metrics) -> Elem
                 .style(crate::ui::controls::secondary),
         );
     }
-
     content
-        .push(
-            button(text("Cancel").size(metrics.label()))
-                .on_press(msg(Action::ClosePicker))
-                .style(crate::ui::controls::ghost),
+}
+
+/// The places already saved, matched against the query here rather than by
+/// Mapbox: favorites first, then the most recently saved. Each has a star
+/// that marks it a favorite or takes that away.
+fn saved_places<'a>(state: &'a State, picker: &Picker, metrics: &Metrics) -> Element<'a, Message> {
+    let matches = travel::saved_matches(&state.config.travel.places, &picker.query);
+    let mut list = column![].spacing(6).width(Fill);
+
+    if matches.is_empty() {
+        list = list.push(
+            text(if state.config.travel.places.is_empty() {
+                "No saved places yet. Places you choose are saved here."
+            } else {
+                "No saved places match"
+            })
+            .size(metrics.label())
+            .style(text::secondary),
+        );
+    }
+
+    for place in matches {
+        let mut label = column![text(&place.name).size(metrics.label())]
+            .spacing(1)
+            .width(Fill);
+        if !place.address.is_empty() && place.address != place.name {
+            label = label.push(text(&place.address).size(metrics.label() - 1.0));
+        }
+        let choose = button(label)
+            .width(Fill)
+            .padding([4, 6])
+            .on_press(msg(Action::ChooseSaved(place.id)))
+            .style(crate::ui::controls::secondary);
+        let star = iced::widget::tooltip(
+            button(
+                text(if place.favorite { "★" } else { "☆" })
+                    .size(metrics.label() + 3.0)
+                    .center(),
+            )
+            .padding([2, 6])
+            .on_press(msg(Action::Favorite(place.id)))
+            .style(crate::ui::controls::ghost),
+            text(if place.favorite {
+                "Unfavorite"
+            } else {
+                "Favorite"
+            })
+            .size(12),
+            iced::widget::tooltip::Position::Left,
         )
-        .into()
+        .style(crate::ui::controls::surface);
+        list = list.push(row![choose, star].spacing(4).align_y(Alignment::Center));
+    }
+
+    list.into()
 }
 
 // ---------------------------------------------------------------------------

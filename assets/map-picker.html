@@ -20,6 +20,9 @@ function publish(selected=null,error=null){
   document.title='timeslay-map:'+JSON.stringify({session:config.session,selected,error});
 }
 function fail(message){ status.textContent=message; publish(null,message); }
+// Tell the app once this page has painted, so it stops covering the browser
+// (which may still hold the previous visit's frame until then).
+requestAnimationFrame(()=>requestAnimationFrame(()=>{ if(!document.title.startsWith('timeslay-map:')) publish(); }));
 function loadScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('Could not load the map. Check your connection and try again.'));document.head.append(s);});}
 function place(feature){
   if(!feature) return null;

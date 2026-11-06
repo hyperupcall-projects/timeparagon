@@ -946,6 +946,13 @@ impl State {
             && (self.habits.selected.is_some() || self.habits.form.is_some())
     }
 
+    /// The map picker is shown in the floating window at the right of the
+    /// panel, never in the panel itself. The dock has no such window, so
+    /// there it covers the dock instead.
+    pub fn map_in_editor_window(&self) -> bool {
+        self.travel.map.active && !self.task_creation_window && self.main_window.is_some()
+    }
+
     pub fn floating_editors(&self) -> bool {
         !self.task_creation_window
             && (self.people_panel_open()
@@ -1307,6 +1314,13 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
         }
     } else {
         0.0
+    };
+    // The map opens in this window even when nothing else would have it open,
+    // as when Home is chosen from the settings.
+    let width = if width == 0.0 && state.map_in_editor_window() {
+        state.config.views.detail_width()
+    } else {
+        width
     };
     if width == 0.0 {
         return state

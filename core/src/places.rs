@@ -207,6 +207,9 @@ pub struct Place {
     pub place_id: String,
     pub lat: f64,
     pub lng: f64,
+    /// Starred, so it comes first when choosing among saved places.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
 }
 
 /// A place Mapbox found, before it is saved.
@@ -322,8 +325,26 @@ pub fn add_place(
         place_id: place_id.to_owned(),
         lat,
         lng,
+        favorite: false,
     });
     id
+}
+
+/// The saved places that match `query`, without asking Mapbox: favorites
+/// first, then the most recently saved (ids are the time a place was saved).
+/// Every word of the query must appear in the title or the address, in any
+/// case; an empty query matches every place.
+pub fn saved_matches<'a>(places: &'a [Place], query: &str) -> Vec<&'a Place> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut found: Vec<&Place> = places
+        .iter()
+        .filter(|place| {
+            let haystack = format!("{} {}", place.name, place.address).to_lowercase();
+            words.iter().all(|word| haystack.contains(word.as_str()))
+        })
+        .collect();
+    found.sort_by_key(|place| (!place.favorite, std::cmp::Reverse(place.id)));
+    found
 }
 
 /// How a place reads in an event's location: its title and then its address.
@@ -497,6 +518,22 @@ pub fn get(url: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn saved_matches_puts_favorites_then_recent_first() {
+        let mut places = vec![
+            place(1, "Cafe", "1 Main St"),
+            place(2, "Library", "5 Oak Ave"),
+            place(3, "Main Office", "9 Pine Rd"),
+        ];
+        let ids = |found: Vec<&Place>| found.iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids(saved_matches(&places, "")), vec![3, 2, 1]);
+        assert_eq!(ids(saved_matches(&places, "main")), vec![3, 1]);
+        assert_eq!(ids(saved_matches(&places, "MAIN st")), vec![1]);
+        assert!(saved_matches(&places, "zoo").is_empty());
+        places[0].favorite = true;
+        assert_eq!(ids(saved_matches(&places, "")), vec![1, 3, 2]);
+    }
+
     fn place(id: u64, name: &str, address: &str) -> Place {
         Place {
             id,
@@ -505,6 +542,7 @@ mod tests {
             place_id: format!("mapbox-{id}"),
             lat: 1.0,
             lng: 2.0,
+            favorite: false,
         }
     }
 

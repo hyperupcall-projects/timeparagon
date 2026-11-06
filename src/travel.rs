@@ -30,7 +30,7 @@ use timeslay_core::places::get;
 use timeslay_core::places::search_url;
 pub use timeslay_core::places::{
     Found, Hop, Leg, Route, START_OF_DAY, Stop, distance_label, duration_label, location_text,
-    parse_places, route_label, search_places,
+    parse_places, route_label, saved_matches, search_places,
 };
 
 const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
@@ -56,6 +56,8 @@ pub struct Picker {
     /// Whether a search has finished, so "no results" is not shown before one.
     pub searched: bool,
     pub error: Option<String>,
+    /// Whether the query searches the saved places rather than Mapbox.
+    pub recents: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +142,12 @@ pub enum Action {
     Searched(u64, Result<Vec<Found>, String>),
     /// Use the search result at this position.
     Choose(usize),
+    /// Switch between searching Mapbox and searching the saved places.
+    Recents,
+    /// Use this saved place.
+    ChooseSaved(u64),
+    /// Star or unstar this saved place.
+    Favorite(u64),
     /// Forget where the target is.
     Clear(PickTarget),
 
@@ -203,6 +211,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 searching: false,
                 searched: false,
                 error: None,
+                recents: false,
             });
             iced::widget::operation::focus(iced::widget::Id::new(PICKER_INPUT))
         }
@@ -244,6 +253,40 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
 
         Action::Choose(index) => choose(state, index),
+
+        Action::Recents => {
+            if let Some(picker) = &mut state.travel.picker {
+                picker.recents = !picker.recents;
+                picker.error = None;
+            }
+            iced::widget::operation::focus(iced::widget::Id::new(PICKER_INPUT))
+        }
+
+        Action::ChooseSaved(id) => {
+            if state.config.travel.place(id).is_none() {
+                return Task::none();
+            }
+            let Some(picker) = state.travel.picker.take() else {
+                return Task::none();
+            };
+            let save = queue_save(state);
+            let assigned = assign(state, &picker.target, Some(id));
+            Task::batch([save, assigned])
+        }
+
+        Action::Favorite(id) => {
+            let Some(place) = state
+                .config
+                .travel
+                .places
+                .iter_mut()
+                .find(|place| place.id == id)
+            else {
+                return Task::none();
+            };
+            place.favorite = !place.favorite;
+            queue_save(state)
+        }
 
         Action::Clear(target) => assign(state, &target, None),
 
@@ -1443,6 +1486,29 @@ mod tests {
             1,
             "one place, chosen twice"
         );
+    }
+
+    #[test]
+    fn a_saved_place_can_be_starred_and_chosen_without_mapbox() {
+        let mut state = state();
+        let id = state
+            .config
+            .travel
+            .add_place("Cafe", "1 Main St", "mapbox-cafe", 1.0, 2.0);
+
+        let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
+        let _ = update(&mut state, Action::Recents);
+        assert!(state.travel.picker.as_ref().unwrap().recents);
+
+        let _ = update(&mut state, Action::Favorite(id));
+        assert!(state.config.travel.place(id).unwrap().favorite);
+        let _ = update(&mut state, Action::Favorite(id));
+        assert!(!state.config.travel.place(id).unwrap().favorite);
+
+        let _ = update(&mut state, Action::ChooseSaved(id));
+        assert!(state.travel.picker.is_none());
+        assert_eq!(state.config.travel.home, Some(id));
+        assert_eq!(state.travel.serial, 0, "Mapbox was never asked");
     }
 
     #[test]
