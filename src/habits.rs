@@ -1006,7 +1006,7 @@ impl Store {
         for series in &self.series {
             if let Some(id) = &series.habit_id {
                 if self.library.habit(id).is_none() {
-                    let mut habit = Habit::new(id.clone(), series.title.clone());
+                    let mut habit = Habit::new(id.clone(), series.title.trim().to_owned());
                     habit.frequency = series.frequency();
                     self.library.habits.push(habit);
                     changed = true;
@@ -1020,7 +1020,7 @@ impl Store {
                 Some(habit) => habit.id.clone(),
                 None => {
                     let id = new_id();
-                    let mut habit = Habit::new(id.clone(), series.title.clone());
+                    let mut habit = Habit::new(id.clone(), series.title.trim().to_owned());
                     habit.frequency = series.frequency();
                     self.library.habits.push(habit);
                     id
@@ -1543,14 +1543,16 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::ShowOnCalendar(id) => {
             // The month takes the window, so the page gives way until it closes.
             state.habits.selected = None;
-            state.habits.calendar_habit = Some(id);
             state.calendar.open_event = None;
             state.calendar.detail_event = None;
             state.calendar.edit_draft = None;
-            crate::app::update(
+            let task = crate::app::update(
                 state,
                 Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
-            )
+            );
+            // Set afterwards: switching to the calendar screen clears the filter.
+            state.habits.calendar_habit = Some(id);
+            task
         }
         Action::CloseCalendar => {
             state.habits.selected = state.habits.calendar_habit.take();
@@ -2171,9 +2173,11 @@ fn refresh(state: &mut State) -> Task<Message> {
 
 fn sort_series(series: &mut [Series]) {
     series.sort_by(|left, right| {
+        // Trimmed like `Library::named`, so events sharing a habit sit together.
         left.title
+            .trim()
             .to_lowercase()
-            .cmp(&right.title.to_lowercase())
+            .cmp(&right.title.trim().to_lowercase())
             .then(left.start.cmp(&right.start))
     });
 }

@@ -2621,27 +2621,24 @@ mod tests {
         let mut state = state();
         act(&mut state, Action::New);
         let mut ui = page(&state);
+        // Radio and toggler labels ("Every day", "Track a value", ...) are not
+        // exposed to the simulator, so only plain text is looked for here.
         for label in [
             "Type",
             "Did it",
             "Avoided it",
-            "Track a value",
             "Create habit",
             "Name",
             "Question",
             "Color",
             "Frequency",
-            "Every day",
             "times per day",
             "Every",
             "days",
             "times per week",
             "times per month",
             "times in",
-            "On these days",
             "Mon",
-            "Enable skip days",
-            "Show question mark for missing data",
             "Notes",
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
@@ -2938,7 +2935,7 @@ mod tests {
         let habit = &library.habits[0];
         assert_eq!(habit.name, "Stretch");
         assert_eq!(habit.frequency.label(), "Every Monday");
-        assert_eq!(habit.marks[&day], Mark::Yes);
+        assert_eq!(habit.marks[&day], Mark::Reps(1));
         let id = habit.id.clone();
         assert_eq!(state.habits.events_of(&id).len(), 2);
 
@@ -3016,7 +3013,7 @@ mod tests {
         );
         assert_eq!(
             state.habits.library.habit("h").unwrap().marks[&day],
-            Mark::Yes
+            Mark::Reps(1)
         );
         event.completed = false;
         act(

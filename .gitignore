@@ -8,3 +8,4 @@
 *.keystore
 
 /.migration-backups/
+trace*.txt
