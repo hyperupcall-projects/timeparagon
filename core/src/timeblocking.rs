@@ -122,7 +122,7 @@ impl Priority {
 }
 
 /// Completed and ignored tasks both count as completed in Google Tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TaskStatus {
     Active,
     Completed,

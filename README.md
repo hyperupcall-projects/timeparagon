@@ -129,6 +129,9 @@ Of course, there's also week, 2-week, and month views:
 - Local-first approach; each device has own SQLite database, synced with [Turso](https://turso.tech), which is ran on a separate server.
 	- SQLite database contains cache of calendar, task, and other cloud data, and also app-specific data like habit information.
 - Uses Google to back calendar, tasks, and contact data.
+- Calendar and task edits commit locally with a durable `google_operations` queue row before the UI reports success. A background worker retries Google writes and removes each row only after success; newer queued values take precedence over refreshes.
+	- “Saving…” indicates outstanding Google operations. **More → Operations** shows their changes, attempts, and errors.
+	- Visited calendar months and full task records remain in local database tables for offline access. The Google queue and caches are device-local; Turso continues to replicate app-specific shared data.
 
 ## Terminology
 

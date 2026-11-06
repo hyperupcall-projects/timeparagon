@@ -340,6 +340,32 @@ pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<
     if event.end <= event.start {
         return Err("Wake-up time must be after sleep start".into());
     }
+    if !super::operations::replaying() {
+        if new {
+            event.calendar_id = settings
+                .app_calendar
+                .clone()
+                .ok_or("Sync Google once to discover the TimeSlay calendar")?;
+            event.id = event_id(
+                event
+                    .details
+                    .sleep
+                    .as_ref()
+                    .ok_or("Missing sleep metadata")?
+                    .wake_date,
+            );
+        }
+        super::operations::enqueue(
+            super::operations::Job::Sleep {
+                event: event.clone(),
+                new,
+            },
+            Some(&event),
+            &event.calendar_id,
+            &event.id,
+        )?;
+        return Ok(event);
+    }
     let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
     let tokens = oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)?;
     if new {

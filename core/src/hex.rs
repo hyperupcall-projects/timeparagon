@@ -150,3 +150,19 @@ mod tests {
         assert_eq!(color.to_string(), "#FF000000");
     }
 }
+
+/// Serde adapter for event colors.
+pub(crate) mod serde_color {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        color: &iced_core::Color,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&HexColor(*color), s)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<iced_core::Color, D::Error> {
+        Ok(<HexColor as serde::Deserialize>::deserialize(d)?.0)
+    }
+}

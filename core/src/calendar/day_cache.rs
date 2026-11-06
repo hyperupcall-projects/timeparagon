@@ -88,7 +88,7 @@ pub fn save_sync_state(
 
 /// One event as the cache row holds it.
 #[derive(Serialize, Deserialize)]
-struct SavedEvent {
+pub(super) struct SavedEvent {
     id: String,
     calendar_id: String,
     title: String,
@@ -157,6 +157,7 @@ fn month_text(connection: &rusqlite::Connection, month: &str) -> rusqlite::Resul
 /// overlapping `day`'s window (set by `day_end_hour`) are returned, along
 /// with tasks, whose backlog is shared across all views.
 pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Event>> {
+    let database_path = database;
     let mut database = match open(database) {
         Ok(database) => database,
         Err(error) => {
@@ -166,7 +167,14 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
     };
     let month = month_key(day);
     let text = match month_text(database.connection(), &month) {
-        Ok(text) => text?,
+        Ok(Some(text)) => text,
+        Ok(None) => {
+            let has_local:bool=database.connection().query_row("SELECT EXISTS(SELECT 1 FROM google_entities) OR EXISTS(SELECT 1 FROM google_task_records)",[],|r|r.get(0)).unwrap_or(false);
+            if !has_local {
+                return None;
+            }
+            "{\"events\":[]}".into()
+        }
         Err(error) => {
             log::warn!("cached events for {month} could not be read: {error}");
             return None;
@@ -175,7 +183,7 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
 
     match serde_json::from_str::<SavedMonth>(&text) {
         Ok(saved) => {
-            let events: Vec<Event> = saved
+            let mut events: Vec<Event> = saved
                 .events
                 .into_iter()
                 .map(Event::from)
@@ -197,6 +205,21 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
                 })
                 .filter(|event| super::event_on_day(event, day, day_end_hour))
                 .collect();
+            if let Ok(mut statement) = database
+                .connection()
+                .prepare("SELECT event FROM google_task_records")
+            {
+                if let Ok(rows) = statement.query_map([], |r| r.get::<_, String>(0)) {
+                    for row in rows.flatten() {
+                        if let Ok(task) = serde_json::from_str::<Event>(&row) {
+                            events.retain(|e| e.id != task.id);
+                            events.push(task);
+                        }
+                    }
+                }
+            }
+            let _ = super::operations::overlay(database_path, &mut events, None);
+            events.retain(|e| super::event_on_day(e, day, day_end_hour));
             Some(events)
         }
         Err(error) => {
@@ -336,22 +359,6 @@ pub(crate) fn parse_month(name: &str) -> Option<NaiveDate> {
         return None;
     }
     NaiveDate::from_ymd_opt(year, month, 1)
-}
-
-/// Takes one month out of the cache. Nothing to do when it is not there.
-pub fn remove(database: &Path, day: NaiveDate) {
-    let removed = open(database).and_then(|mut database| {
-        database
-            .connection()
-            .execute(
-                "DELETE FROM calendar_months WHERE month=?1",
-                [month_key(day)],
-            )
-            .map_err(io::Error::other)
-    });
-    if let Err(error) = removed {
-        log::warn!("could not remove cached month: {error}");
-    }
 }
 
 /// Empties the cache, so every month has to be fetched again. The sync state

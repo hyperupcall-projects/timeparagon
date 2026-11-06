@@ -1707,21 +1707,14 @@ fn create_and_assign(
     blocks: Vec<Event>,
     related: Vec<Event>,
 ) -> Result<Vec<Event>, String> {
-    let token = access(&settings)?;
-    let (_, list_id) = calendar::scheduled::destinations(
-        &token,
-        settings.app_calendar.as_deref(),
-        settings.time_block_list.as_deref(),
+    let task = timeslay_core::task_edit::create_inbox_task(
+        &settings,
+        "",
+        &title,
+        "",
+        Some(start.date_naive()),
+        None,
     )?;
-    let created_at = crate::clock::utc_now();
-    let created = calendar::api::insert_task(&token, &list_id, &title)?;
-    let mut task = new_todo_event(&list_id, &created, start);
-    let mut database = crate::task_db::open()?;
-    let mut data = database.import(&task)?;
-    data.metadata.created_at = Some(created_at);
-    database.save(&task, &data)?;
-    calendar::task_metadata::save(&token, &task, &data)?;
-    task.details.task_data = Some(data);
     save_and_reflow(
         task,
         settings,
@@ -1732,6 +1725,7 @@ fn create_and_assign(
     )
 }
 
+#[cfg(test)]
 fn new_todo_event(
     list_id: &str,
     created: &calendar::api::CreatedTask,

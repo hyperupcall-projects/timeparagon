@@ -24,7 +24,7 @@ pub const WEEKDAYS: [Weekday; 7] = [
 /// The recurrence array exactly as Google stores it. The lines are kept in
 /// order and are never interpreted by the app beyond validating them before a
 /// write, so a rule Google accepts can be round-tripped untouched.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Recurrence {
     lines: Vec<String>,
 }
@@ -83,7 +83,7 @@ fn normalize_line(line: &str) -> Option<String> {
 }
 
 /// How a repeating item repeats, in the words the editor offers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RepeatMode {
     Never,
     Daily,
@@ -131,7 +131,7 @@ impl RepeatMode {
 }
 
 /// How a monthly repeat picks its day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MonthlyMode {
     Day,
     NthWeekday,
@@ -139,7 +139,7 @@ pub enum MonthlyMode {
 }
 
 /// When the series stops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EndKind {
     Never,
     OnDate,
@@ -167,7 +167,7 @@ pub enum Action {
 /// It belongs to an anchor date, the day the series starts. The weekday and
 /// month-day defaults are seeded from that date, so a weekly series begins on
 /// the day it is created without the user having to tick anything.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rule {
     pub repeat: RepeatMode,
     /// "1" in "every 1 week".

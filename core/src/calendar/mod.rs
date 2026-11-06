@@ -12,6 +12,7 @@ pub mod layout;
 pub mod meeting;
 pub mod notes;
 pub mod oauth;
+pub mod operations;
 pub mod projects;
 pub mod scheduled;
 pub mod search;
@@ -93,7 +94,7 @@ impl Calendar {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub id: String,
     pub calendar_id: String,
@@ -101,6 +102,7 @@ pub struct Event {
     pub start: DateTime<Local>,
     pub end: DateTime<Local>,
     pub all_day: bool,
+    #[serde(with = "crate::hex::serde_color")]
     pub color: Color,
     /// A finished Google Task, including its retained calendar representation.
     pub completed: bool,
@@ -322,14 +324,14 @@ impl Draft {
 /// It carries the event's id so the update knows which event to patch, and
 /// starts from the event's current values so the user only changes what they
 /// want to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SaveScope {
     Current,
     CurrentAndFuture,
     All,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditDraft {
     /// Video call, guests and their permissions.
     pub meeting: meeting::Form,
@@ -650,39 +652,6 @@ fn days_to_drop(days: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -
     }
 }
 
-/// The months that should leave the on-disk cache while `current` is in view.
-///
-/// The current month, the month before it and the month after it are never
-/// dropped, and the [`EXTRA_CACHED_DAYS`] closest months beyond that
-/// window survive too. Everything further out goes, furthest first.
-fn months_to_drop(
-    months: impl IntoIterator<Item = NaiveDate>,
-    current: NaiveDate,
-) -> Vec<NaiveDate> {
-    let current_month = first_of_month(current);
-    let current_index = current_month.year() * 12 + current_month.month() as i32;
-
-    let mut far: Vec<NaiveDate> = months
-        .into_iter()
-        .filter(|month| {
-            let m = first_of_month(*month);
-            let index = m.year() * 12 + m.month() as i32;
-            i64::from((index - current_index).abs()) > ALWAYS_KEPT_DISTANCE
-        })
-        .collect();
-
-    far.sort_by_key(|month| {
-        let m = first_of_month(*month);
-        let index = m.year() * 12 + m.month() as i32;
-        (index - current_index).abs()
-    });
-    if far.len() <= EXTRA_CACHED_DAYS {
-        Vec::new()
-    } else {
-        far.split_off(EXTRA_CACHED_DAYS)
-    }
-}
-
 /// A task list's color: the user's choice if there is one, otherwise Google's
 /// blue.
 fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
@@ -962,14 +931,7 @@ impl Store {
         }
     }
 
-    /// Keeps the caches from growing without bound, dropping the days furthest
-    /// from the one in view first. The day in view, the day before it and the
-    /// day after it are kept, along with [`EXTRA_CACHED_DAYS`] further days.
-    ///
-    /// The days in memory are trimmed day by day. The months on disk are
-    /// trimmed month by month: the current month, its neighbours, and
-    /// [`EXTRA_CACHED_DAYS`] further months survive; everything further out
-    /// goes.
+    /// Bound memory use while retaining every visited month on disk.
     fn trim_cache(&mut self) {
         let current = self.day;
 
@@ -981,13 +943,6 @@ impl Store {
             current,
         ) {
             self.cache.remove(&day);
-        }
-
-        let Some(database) = self.day_cache.as_ref() else {
-            return;
-        };
-        for month in months_to_drop(day_cache::days(database), current) {
-            day_cache::remove(database, month);
         }
     }
 
@@ -1132,7 +1087,40 @@ impl Store {
         }
     }
 
-    pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
+    /// Refresh loaded views from committed local rows without waiting for Google.
+    pub fn apply_local_operations(&mut self) -> Result<(), String> {
+        let Some(path) = &self.day_cache else {
+            return Ok(());
+        };
+        operations::overlay(path, &mut self.events, None)?;
+        self.events
+            .retain(|e| event_on_day(e, self.day, self.day_end_hour));
+        for (day, events) in &mut self.cache {
+            operations::overlay(path, events, None)?;
+            events.retain(|e| event_on_day(e, *day, self.day_end_hour));
+        }
+        if let Some(event) = &mut self.detail_event {
+            let id = event.id.clone();
+            let mut detail = vec![event.clone()];
+            operations::overlay(path, &mut detail, None)?;
+            if let Some(updated) = detail.into_iter().find(|e| e.id == id) {
+                *event = updated;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn apply_snapshot(&mut self, mut snapshot: Snapshot) {
+        if let Some(path) = &self.day_cache {
+            if let Err(e) =
+                operations::overlay(path, &mut snapshot.events, Some(snapshot.fetched_at))
+            {
+                log::warn!("{e}");
+            }
+        }
+        snapshot
+            .events
+            .retain(|e| event_on_day(e, snapshot.day, self.day_end_hour));
         self.calendars = snapshot.calendars;
         self.events = snapshot.events;
         self.day = snapshot.day;
@@ -1172,6 +1160,13 @@ impl Store {
     /// Install a range fetch as ordinary per-day snapshots, retaining all tasks
     /// on each day just as a day fetch does.
     pub fn apply_week_snapshot(&mut self, mut snapshot: Snapshot, days: &[NaiveDate]) {
+        if let Some(path) = &self.day_cache {
+            if let Err(e) =
+                operations::overlay(path, &mut snapshot.events, Some(snapshot.fetched_at))
+            {
+                log::warn!("{e}");
+            }
+        }
         self.visible_days.extend_from_slice(days);
         self.visible_days.sort_unstable();
         self.visible_days.dedup();
@@ -2031,6 +2026,60 @@ pub fn create_habit(
     color_id: Option<&str>,
     habit_id: &str,
 ) -> Result<api::HabitEvent, String> {
+    if !operations::replaying() {
+        let id = operations::new_id()?;
+        let recurrence = draft.recurrence_lines()?;
+        let calendar = if draft.calendar_id.is_empty() {
+            crate::config::Config::load()
+                .calendar
+                .app_calendar
+                .ok_or("Sync Google once to discover the TimeSlay calendar")?
+        } else {
+            draft.calendar_id.clone()
+        };
+        let event = Event {
+            id: id.clone(),
+            calendar_id: calendar.clone(),
+            title: draft.title.clone(),
+            start: draft.start,
+            end: draft.end,
+            all_day: draft.all_day,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details {
+                description: draft.description.clone(),
+                habit: true,
+                recurrence: recurrence.clone(),
+                projects: draft.projects.ids.clone(),
+                labels: draft.labels.clone(),
+                options: draft.options.clone(),
+                ..Default::default()
+            },
+        };
+        operations::enqueue(
+            operations::Job::CreateHabit {
+                id: id.clone(),
+                draft: draft.clone(),
+                color: color_id.map(str::to_owned),
+                habit: habit_id.into(),
+            },
+            Some(&event),
+            &calendar,
+            &id,
+        )?;
+        return Ok(api::HabitEvent {
+            id,
+            calendar_id: calendar,
+            title: draft.title.clone(),
+            notes: draft.description.clone(),
+            start: draft.start,
+            end: draft.end,
+            recurrence,
+            color_id: color_id.map(str::to_owned),
+            habit_id: Some(habit_id.into()),
+        });
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2062,6 +2111,17 @@ pub fn delete_habit(
     calendar_id: &str,
     event_id: &str,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        return delete_event_scope(
+            client_id,
+            client_secret,
+            calendar_id,
+            event_id,
+            SaveScope::All,
+            false,
+        );
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2081,6 +2141,11 @@ pub fn set_task_completed(
     event_id: &str,
     completed: bool,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        let task = operations::cached_event(calendar_id, event_id)?.ok_or("Task is not cached")?;
+        return set_linked_task_completed(client_id, client_secret, &task, completed);
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2120,6 +2185,23 @@ pub fn set_linked_task_status(
     task: &Event,
     status: crate::timeblocking::TaskStatus,
 ) -> Result<Event, String> {
+    if !operations::replaying() {
+        let mut event = task.clone();
+        let mut db = crate::task_db::open()?;
+        event.details.task_data = Some(db.import(task)?);
+        crate::timeblocking::apply_status(&mut event, status);
+        operations::enqueue(
+            operations::Job::Status {
+                task: task.clone(),
+                status,
+            },
+            Some(&event),
+            &task.calendar_id,
+            &task.id,
+        )?;
+        return Ok(event);
+    }
+
     let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
     let mut database = crate::task_db::open()?;
@@ -2138,6 +2220,11 @@ fn save_task_status(
 ) -> Result<Event, String> {
     let mut previous = task.clone();
     previous.details.task_data = Some(database.import(task)?);
+    previous.details.scheduled = previous
+        .details
+        .task_data
+        .as_ref()
+        .and_then(|d| d.metadata.schedule.clone());
     let mut updated = previous.clone();
     crate::timeblocking::apply_status(&mut updated, status);
     if let Err(error) = write(&updated)
@@ -2189,6 +2276,19 @@ pub fn delete_task(
     task: &Event,
     app_calendar: Option<&str>,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        operations::enqueue(
+            operations::Job::DeleteTask {
+                task: task.clone(),
+                calendar: app_calendar.map(str::to_owned),
+            },
+            None,
+            &task.calendar_id,
+            &task.id,
+        )?;
+        return Ok(());
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2207,7 +2307,11 @@ pub fn delete_task(
         _ => (chip_list, chip_task),
     };
 
-    api::delete_task(&tokens.access_token, list_id, task_id).map_err(describe_task_write_error)?;
+    match api::delete_task(&tokens.access_token, list_id, task_id) {
+        Ok(()) => {}
+        Err(e) if e.status == Some(404) => {}
+        Err(e) => return Err(describe_task_write_error(e)),
+    }
 
     let mut calendars = Vec::new();
     if let Some(link) = &task.details.scheduled {
@@ -2242,6 +2346,18 @@ pub fn set_habit_completed(
     client_secret: &str,
     event: &Event,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        operations::enqueue(
+            operations::Job::HabitCompleted {
+                event: event.clone(),
+            },
+            Some(event),
+            &event.calendar_id,
+            &event.id,
+        )?;
+        return Ok(());
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2256,6 +2372,23 @@ pub fn set_event_location(
     event_id: &str,
     location: &str,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        let mut event =
+            operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
+        event.details.location = location.into();
+        operations::enqueue(
+            operations::Job::Location {
+                calendar: calendar_id.into(),
+                id: event_id.into(),
+                location: location.into(),
+            },
+            Some(&event),
+            calendar_id,
+            event_id,
+        )?;
+        return Ok(());
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2285,6 +2418,26 @@ pub fn set_event_time(
     end: DateTime<Local>,
     notify: bool,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        let mut event =
+            operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
+        event.start = start;
+        event.end = end;
+        operations::enqueue(
+            operations::Job::Time {
+                calendar: calendar_id.into(),
+                id: event_id.into(),
+                start,
+                end,
+                notify,
+            },
+            Some(&event),
+            calendar_id,
+            event_id,
+        )?;
+        return Ok(());
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2327,6 +2480,49 @@ pub fn create_event(
     options: Option<&event_options::EventOptions>,
     meeting: Option<&meeting::Form>,
 ) -> Result<api::Inserted, String> {
+    if !operations::replaying() {
+        let id = operations::new_id()?;
+        let event = Event {
+            id: id.clone(),
+            calendar_id: calendar_id.into(),
+            title: title.into(),
+            start,
+            end,
+            all_day: false,
+            color: colors::DEFAULT_EVENT,
+            completed: false,
+            details: Details {
+                description: description.into(),
+                recurrence: recurrence.to_vec(),
+                projects: projects.to_vec(),
+                options: options.cloned().unwrap_or_default(),
+                ..Default::default()
+            },
+        };
+        operations::enqueue(
+            operations::Job::Create {
+                id: id.clone(),
+                calendar: calendar_id.into(),
+                title: title.into(),
+                description: description.into(),
+                color: color_id.map(str::to_owned),
+                start,
+                end,
+                recurrence: recurrence.to_vec(),
+                projects: projects.to_vec(),
+                options: options.cloned(),
+                meeting: meeting.cloned(),
+            },
+            Some(&event),
+            calendar_id,
+            &id,
+        )?;
+        return Ok(api::Inserted {
+            id,
+            ..Default::default()
+        });
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2367,6 +2563,26 @@ pub fn create_time_block(
     end: DateTime<Local>,
     projects: &[u64],
 ) -> Result<(String, String), String> {
+    if !operations::replaying() {
+        let calendar =
+            known_calendar.ok_or("Sync Google once to discover the TimeSlay calendar")?;
+        let inserted = create_event(
+            client_id,
+            client_secret,
+            calendar,
+            title,
+            description,
+            color_id,
+            start,
+            end,
+            &[],
+            projects,
+            None,
+            None,
+        )?;
+        return Ok((inserted.id, calendar.into()));
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2413,6 +2629,39 @@ pub fn update_event(
     labels: &[String],
     options: Option<&event_options::EventOptions>,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        let original =
+            operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
+        let mut draft = EditDraft::from_event(&original);
+        draft.title = title.into();
+        draft.description = description.into();
+        draft.start = start;
+        draft.end = end;
+        draft.projects.ids = projects.to_vec();
+        draft.all_day = all_day;
+        draft.labels = labels.to_vec();
+        if let Some(options) = options {
+            draft.options = options.clone();
+        }
+        if let Some(recurrence) = recurrence {
+            draft.rule = crate::recurrence::Rule::from_recurrence(
+                start.date_naive(),
+                &crate::recurrence::Recurrence::from_lines(recurrence),
+            );
+            draft.recurrence_changed = true;
+        }
+        return save_event_scope(
+            client_id,
+            client_secret,
+            &original,
+            &draft,
+            SaveScope::Current,
+            description,
+            color_id,
+        )
+        .map(|_| ());
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2445,6 +2694,38 @@ pub fn save_event_scope(
     description: &str,
     color_id: Option<&str>,
 ) -> Result<api::Saved, String> {
+    if !operations::replaying() {
+        let mut event = original.clone();
+        event.title = draft.title.clone();
+        event.calendar_id = draft.calendar_id.clone();
+        event.start = draft.start;
+        event.end = draft.end;
+        event.all_day = draft.all_day;
+        event.details.description = description.into();
+        event.details.options = draft.options.clone();
+        event.details.projects = draft.projects.ids.clone();
+        event.details.labels = draft.labels.clone();
+        if draft.recurrence_changed {
+            event.details.recurrence = draft.recurrence_lines()?;
+        }
+        operations::enqueue(
+            operations::Job::Edit {
+                original: original.clone(),
+                draft: draft.clone(),
+                scope,
+                description: description.into(),
+                color: color_id.map(str::to_owned),
+            },
+            Some(&event),
+            &original.calendar_id,
+            &original.id,
+        )?;
+        return Ok(api::Saved {
+            link: original.details.link.clone(),
+            zoom_needed: false,
+        });
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2481,6 +2762,23 @@ pub fn reply_to_event(
     email: &str,
     response: meeting::Response,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        let mut event =
+            operations::cached_event(calendar_id, event_id)?.ok_or("Invitation is not cached")?;
+        event.details.attendance.set_own_response(response);
+        operations::enqueue(
+            operations::Job::Reply {
+                event: event.clone(),
+                email: email.into(),
+                response,
+            },
+            Some(&event),
+            calendar_id,
+            event_id,
+        )?;
+        return Ok(());
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2498,6 +2796,17 @@ pub fn delete_event(
     calendar_id: &str,
     event_id: &str,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        return delete_event_scope(
+            client_id,
+            client_secret,
+            calendar_id,
+            event_id,
+            SaveScope::Current,
+            false,
+        );
+    }
+
     let tokens =
         oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
@@ -2515,10 +2824,28 @@ pub fn delete_event_scope(
     scope: SaveScope,
     notify: bool,
 ) -> Result<(), String> {
+    if !operations::replaying() {
+        operations::enqueue(
+            operations::Job::Delete {
+                calendar: calendar_id.into(),
+                id: event_id.into(),
+                scope,
+                notify,
+            },
+            None,
+            calendar_id,
+            event_id,
+        )?;
+        return Ok(());
+    }
+
     let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
     let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::delete_event_scope(&tokens.access_token, calendar_id, event_id, scope, notify)
-        .map_err(describe_event_write_error)
+    match api::delete_event_scope(&tokens.access_token, calendar_id, event_id, scope, notify) {
+        Ok(()) => Ok(()),
+        Err(error) if error.status == Some(404) => Ok(()),
+        Err(error) => Err(describe_event_write_error(error)),
+    }
 }
 
 pub fn day_heading(day: NaiveDate, today: NaiveDate) -> String {
@@ -3770,12 +4097,12 @@ mod tests {
 
     /// The months on disk are trimmed by the same rule as the memory cache.
     #[test]
-    fn months_far_from_the_one_in_view_leave_the_cache_directory() {
+    fn visited_months_remain_on_disk_after_distant_navigation() {
         let scratch = day_cache::Scratch::new("pruning");
         let directory = scratch.path().to_path_buf();
         let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
 
-        for offset in -20..=20 {
+        for offset in -600..=600 {
             let day = today + chrono::Duration::days(i64::from(offset));
             day_cache::save(&directory, day, &[], 0).unwrap();
         }
@@ -3786,7 +4113,10 @@ mod tests {
         let left = day_cache::days(&directory);
         // September and October are the current month and its neighbour;
         // nothing reaches November.
-        assert_eq!(left.len(), 2, "the current month and its neighbour");
+        assert!(
+            left.len() > 30,
+            "all visited months remain available offline"
+        );
         let september = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
         let october = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         assert!(left.contains(&september), "september should stay on disk");

@@ -213,6 +213,9 @@ fn App() -> Element {
     let mut show_agenda = use_signal(|| false);
     let mut show_scratch = use_signal(|| false);
     let mut show_more = use_signal(|| false);
+    let mut show_operations = use_signal(|| false);
+    let mut google_operations = use_signal(|| Vec::<calendar::operations::Operation>::new());
+    calendar::operations::start();
     let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
     let task_filter = use_signal(|| TaskFilter::All);
     let search_state = use_signal(Search::default);
@@ -343,6 +346,9 @@ fn App() -> Element {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
             database_sync_status.set(timeslay_core::database_sync::status());
+            if let Ok(rows) = calendar::operations::list() {
+                google_operations.set(rows);
+            }
             notes_store.reload_shared();
             let generation = (
                 config_watch::generation(),
@@ -419,7 +425,7 @@ fn App() -> Element {
         _ => None,
     };
     let requested_day = current_day();
-    let snapshot = match resource.as_ref() {
+    let mut snapshot = match resource.as_ref() {
         // A resource keeps the previous value while its next fetch is running.
         // Never paint yesterday's events under today's heading.
         Some(Ok(snapshot)) if snapshot.day == requested_day => Some(snapshot.clone()),
@@ -429,6 +435,13 @@ fn App() -> Element {
             .filter(|snapshot| snapshot.day == requested_day),
     };
     drop(resource);
+    if let (Some(snapshot), Some(path)) = (&mut snapshot, timeslay_core::task_db::path()) {
+        if let Err(error) =
+            calendar::operations::overlay(&path, &mut snapshot.events, Some(snapshot.fetched_at))
+        {
+            eprintln!("Could not load local edits: {error}");
+        }
+    }
 
     let model = snapshot
         .as_ref()
@@ -480,6 +493,7 @@ fn App() -> Element {
         }
         div { class: "day-header",
             h1 { class: "day-title", "{heading}" }
+            if !google_operations().is_empty() {span { class: "hint", role: "status", "Saving…" }}
             div { class: "day-controls",
                 {month_picker(selected_day, today, settings.first_day_of_week, month_open, month_shown, day_nav)}
                 button {
@@ -839,6 +853,7 @@ fn App() -> Element {
                         }
                     }
                     div { class: "modal-body more-body",
+                        button { class: "btn", onclick: move |_| {show_more.set(false);show_operations.set(true);}, "Operations" }
                         p { class: "hint", "{database_sync_status}" }
                         button {
                             class: "btn",
@@ -1233,6 +1248,26 @@ fn App() -> Element {
             {search_sheet}
             {scratch_sheet}
             {more_sheet}
+            if show_operations() {
+                div { class: "modal-backdrop", onclick: move |_| show_operations.set(false),
+                    div { class: "modal", onclick: move |event| event.stop_propagation(),
+                        div { class: "modal-head", h2 { class: "modal-title", "Operations" }
+                            button { class: "btn", onclick: move |_| show_operations.set(false), "Close" }
+                        }
+                        div { class: "modal-body",
+                            if google_operations().is_empty() {p { "All changes saved to Google." }}
+                            for operation in google_operations() {
+                                div { key: "{operation.id}",
+                                    p { "#{operation.id} · {operation.kind} · {operation.created_at}" }
+                                    p { "{operation.entity} · Attempts: {operation.attempts}" }
+                                    if let Some(error)=operation.error {p { "{error}" }} else {p { "Waiting for Google" }}
+                                    pre { "{operation.payload}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             {settings_modal}
             {calendars_modal}
         }
