@@ -1238,7 +1238,7 @@ model = "granite"
         ui.click("Model debug").unwrap();
     }
     #[test]
-    fn debug_popup_uses_editor_host_with_main_and_dock_fallbacks() {
+    fn debug_popup_stays_with_creation_in_the_main_window_and_dock() {
         use iced::{Size, window};
         use iced_test::{Simulator, core::Settings as UiSettings};
         let mut state = State::blank();
@@ -1249,7 +1249,7 @@ model = "granite"
         let editor = window::Id::unique();
         state.main_window = Some(main);
         state.editor_window = Some(editor);
-        for (id, visible) in [(main, false), (editor, true)] {
+        for (id, visible) in [(main, true), (editor, false)] {
             let mut ui = Simulator::with_size(
                 UiSettings::default(),
                 Size::new(480.0, 900.0),

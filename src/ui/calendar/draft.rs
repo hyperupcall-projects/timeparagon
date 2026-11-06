@@ -4,18 +4,30 @@ use super::*;
 use iced::widget::column;
 
 /// The complete creation form, shown in the details pane after choosing a type.
-pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(draft) = state.calendar.draft.as_ref() else {
         return iced::widget::Space::new().width(0.0).height(0.0).into();
     };
 
+    let sidebar = state.inbox.draft.is_some();
+    let cancel = if sidebar {
+        Message::Inbox(crate::inbox::Action::Cancel)
+    } else {
+        Message::EventDraft(EventDraftMessage::EventDraftCancelled)
+    };
+    let name = match draft.kind {
+        calendar::DraftKind::TimeBlock => "New time block",
+        calendar::DraftKind::Habit => "New habit",
+        calendar::DraftKind::Sleep => "New sleep",
+        _ => "New event",
+    };
     let header = row![
-        text("New event").size(metrics.label() + 1.0).width(Fill),
+        text(name).size(metrics.label() + 1.0).width(Fill),
         button(text("✕").size(metrics.label()).center())
             .width(Length::Fixed(metrics.icon_button()))
             .height(Length::Fixed(metrics.icon_button()))
             .padding(0.0)
-            .on_press(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
+            .on_press_maybe((!draft.saving).then_some(cancel.clone()))
             .style(crate::ui::controls::secondary),
     ]
     .align_y(Alignment::Center);
@@ -57,6 +69,22 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     ]
     .spacing(4.0)
     .width(Fill);
+    if sidebar && draft.kind != calendar::DraftKind::Event {
+        // Time blocks, habits and sleep always have clock times.
+        when = column![
+            row![
+                date_field(&draft.date_text, EventDraftMessage::EventDraftDateChanged),
+                text("–").size(metrics.label()),
+                date_field(
+                    &draft.end_date_text,
+                    EventDraftMessage::EventDraftEndDateChanged
+                ),
+            ]
+            .spacing(6)
+        ]
+        .spacing(4)
+        .width(Fill);
+    }
     if !draft.all_day {
         when = when.push(
             row![
@@ -110,30 +138,52 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     let actions = row![
         Space::new().width(Fill),
         button(text("Cancel").size(metrics.label()).center())
-            .on_press(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
+            .on_press_maybe((!draft.saving).then_some(cancel))
             .style(crate::ui::controls::secondary),
-        button(text("Save").size(metrics.label()).center())
-            .on_press(Message::EventDraft(
-                EventDraftMessage::EventDraftSaveRequested
-            ))
-            .style(crate::ui::controls::primary),
+        button(
+            text(if draft.saving {
+                "Adding…"
+            } else if sidebar {
+                "Add"
+            } else {
+                "Save"
+            })
+            .size(metrics.label())
+            .center()
+        )
+        .on_press_maybe((!draft.saving).then_some(if sidebar {
+            Message::Inbox(crate::inbox::Action::Create)
+        } else {
+            Message::EventDraft(EventDraftMessage::EventDraftSaveRequested)
+        }))
+        .style(crate::ui::controls::primary),
     ]
     .spacing(metrics.spacing)
     .align_y(Alignment::Center);
 
-    let fields = column![
-        title,
-        when,
-        draft_calendar_picker(state, metrics),
-        event_projects(state, &draft.projects, metrics, |v0| Message::EventDraft(
-            EventDraftMessage::EventDraftProjects(v0)
-        )),
-        description,
-    ]
+    let calendar: Element<'a, Message> = if !sidebar || draft.kind == calendar::DraftKind::Event {
+        draft_calendar_picker(state, metrics)
+    } else {
+        Space::new().into()
+    };
+    let fields = if sidebar && draft.kind == calendar::DraftKind::Sleep {
+        column![text("Bedtime and wake-up").size(metrics.label()), when]
+    } else {
+        column![
+            title,
+            when,
+            calendar,
+            event_projects(state, &draft.projects, metrics, |v0| Message::EventDraft(
+                EventDraftMessage::EventDraftProjects(v0)
+            )),
+            description,
+        ]
+    }
     .spacing(metrics.spacing)
     .width(Fill);
     // A time block is the user's own time, with nobody to invite.
-    let fields = if draft.kind == calendar::DraftKind::TimeBlock
+    let fields = if (sidebar && draft.kind != calendar::DraftKind::Event)
+        || draft.kind == calendar::DraftKind::TimeBlock
         || state.config.calendar.app_calendar.as_deref() == Some(draft.calendar_id.as_str())
     {
         fields
@@ -146,23 +196,38 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
             |v0| Message::EventDraft(EventDraftMessage::EventDraftMeeting(v0)),
         ))
     };
-    let fields = fields.push(
-        column![
-            super::super::recurrence::editor(
-                &draft.rule,
-                draft.start.date_naive(),
-                state.config.calendar.first_day_of_week,
-                metrics,
-                false,
-                |v0| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v0)),
-            ),
-            event_options(&draft.options, metrics, |v0| Message::EventDraft(
-                EventDraftMessage::EventDraftOptions(v0)
-            )),
-        ]
-        .spacing(metrics.spacing)
-        .width(Fill),
-    );
+    let fields = if !sidebar
+        || matches!(
+            draft.kind,
+            calendar::DraftKind::Event | calendar::DraftKind::Habit
+        ) {
+        fields.push(
+            column![
+                super::super::recurrence::editor(
+                    &draft.rule,
+                    draft.start.date_naive(),
+                    state.config.calendar.first_day_of_week,
+                    metrics,
+                    false,
+                    |v0| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v0)),
+                ),
+                event_options(&draft.options, metrics, |v0| Message::EventDraft(
+                    EventDraftMessage::EventDraftOptions(v0)
+                )),
+            ]
+            .spacing(metrics.spacing)
+            .width(Fill),
+        )
+    } else {
+        fields
+    };
+    let mut fields = fields;
+    if let Some(error) = &state.calendar.error {
+        fields = fields.push(text(error).style(text::danger));
+    }
+    if let Some(error) = state.inbox.draft.as_ref().and_then(|d| d.error.as_ref()) {
+        fields = fields.push(text(error).style(text::danger));
+    }
 
     container(
         column![
@@ -177,7 +242,13 @@ pub(super) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     .padding(metrics.padding)
     .width(Fill)
     .height(Fill)
-    .style(crate::ui::controls::surface)
+    .style(move |theme| {
+        if sidebar {
+            container::Style::default()
+        } else {
+            crate::ui::controls::surface(theme)
+        }
+    })
     .into()
 }
 

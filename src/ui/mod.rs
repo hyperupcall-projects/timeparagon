@@ -78,7 +78,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
             }
             let metrics = Metrics::of(size);
             let mut layers = vec![panes.height(Fill).into()];
-            push_dialogs(&mut layers, state, &metrics);
+            push_editor_dialogs(&mut layers, state, &metrics);
             return container(iced::widget::stack(layers))
                 .width(Fill)
                 .height(Fill)
@@ -116,7 +116,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
                         .into()
                 };
             let mut layers = vec![body];
-            push_dialogs(&mut layers, state, &metrics);
+            push_editor_dialogs(&mut layers, state, &metrics);
             if let Some((task, pointer)) = range_drag_ghost(state) {
                 layers.push(drag_ghost(state, task, &metrics, pointer, size));
             }
@@ -138,7 +138,8 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
             panes = panes.push(container(timeblocking::panel(state, &metrics)).width(width));
         }
         if state.calendar.open_event.is_some()
-            || state.calendar.draft.as_ref().is_some_and(|d| d.editor_open)
+            || (state.inbox.draft.is_none()
+                && state.calendar.draft.as_ref().is_some_and(|d| d.editor_open))
         {
             let block = if state.timeblocking.block.is_some() {
                 state.config.views.time_block_width()
@@ -160,7 +161,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         }
         let metrics = Metrics::of(size);
         let mut layers = vec![panes.height(Fill).into()];
-        push_dialogs(&mut layers, state, &metrics);
+        push_editor_dialogs(&mut layers, state, &metrics);
         container(iced::widget::stack(layers))
             .width(Fill)
             .height(Fill)
@@ -170,9 +171,19 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
     task_drop::host(window_frame(state, content.into(), "editor-body"))
 }
 
-/// All application dialogs share a single host: the floating editor when it
-/// exists, otherwise the main view. Keep this list shared so new dialogs cannot
-/// accidentally be rendered in both windows.
+/// New-task dialogs belong to the main sidebar even while a planning window
+/// is open. Keep the form's auxiliary dialogs (pickers, estimates, etc.) with it.
+fn push_editor_dialogs<'a>(
+    layers: &mut Vec<Element<'a, Message>>,
+    state: &'a State,
+    metrics: &Metrics,
+) {
+    if state.inbox.draft.is_none() {
+        push_dialogs(layers, state, metrics);
+    }
+}
+
+/// Keep the dialog list shared so each host renders the same supporting dialogs.
 fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, metrics: &Metrics) {
     // A task opened from the focus view must not end up underneath it.
     if state.timeblocking.focus.is_some()
@@ -269,6 +280,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
             return iced::widget::stack(layers).into();
         }
 
+        if state.sidebar.is_some() && state.inbox.draft.is_some() {
+            // Task creation replaces the whole sidebar, including navigation
+            // and the add-task footer. Supporting dialogs stay above the form.
+            let mut layers = Vec::new();
+            push_dialogs(&mut layers, state, &metrics);
+            return iced::widget::stack(layers).into();
+        }
+
         let main_metrics = metrics;
         let nav_width = size.width;
         let nav_metrics = Metrics::of(size);
@@ -317,7 +336,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                             .padding(0)
                             .style(crate::ui::controls::secondary)
                             .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
-                        text("Add task").size(12),
+                        text("Create new item").size(12),
                         tooltip::Position::Top,
                     )
                     .style(crate::ui::controls::surface),
@@ -337,8 +356,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
             layers.push(more_menu(state, &nav_metrics));
         }
         // Shared state is visible to both windows, but dialogs have one owner.
-        // Fall back to the main view when there is no floating editor.
-        if state.editor_window.is_none() {
+        // New-task creation stays in the sidebar, including its supporting dialogs.
+        if state.editor_window.is_none() || state.inbox.draft.is_some() {
             push_dialogs(&mut layers, state, &metrics);
         } else if state.timeblocking.focus.is_some() && state.details_pane_open {
             // The floating editor is showing a task beside the focus view.

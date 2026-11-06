@@ -4,6 +4,8 @@
 //! inbox until it is triaged, which here means being given a day: scheduling
 //! it, timeblocking it, or finishing it all take it out of the inbox, as does
 //! moving it to another list (the closest thing Google Tasks has to a project).
+mod creation;
+
 use chrono::{Duration, Local, NaiveDate};
 use iced::Task;
 use iced::widget::{Id, operation};
@@ -25,6 +27,9 @@ const MAX_TITLE_CHARS: usize = 1024;
 #[derive(Default)]
 pub struct Inbox {
     pub voice: crate::voice::Session,
+    /// Inactive creation forms, retained while another type is selected.
+    pub(crate) entry_drafts: Vec<calendar::Draft>,
+    previous_calendar_draft: Option<calendar::Draft>,
     /// The new-task popup, while it is open.
     pub draft: Option<Draft>,
     /// The task whose day chooser is open.
@@ -49,6 +54,8 @@ pub struct Inbox {
 /// A task being written in the popup.
 #[derive(Debug, Clone, Default)]
 pub struct Draft {
+    /// None is the default Task tab.
+    pub kind: Option<calendar::DraftKind>,
     pub title: String,
     pub event: Option<Event>,
     pub deadline: String,
@@ -92,6 +99,7 @@ pub enum Action {
     OverdueSort(InboxSort),
     /// Open the new-task popup.
     NewTask,
+    KindSelected(calendar::DraftKind),
     Cancel,
     Title(String),
     SyntaxHelp(bool),
@@ -289,6 +297,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::NewTask => {
             state.inbox.error = None;
             if state.inbox.draft.is_none() {
+                state.inbox.previous_calendar_draft = state.calendar.draft.take();
                 state.inbox.workspace = Some(Box::new(std::mem::take(&mut state.timeblocking)));
                 state.inbox.draft = Some(Draft {
                     event: Some(blank_event()),
@@ -299,6 +308,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             operation::focus(Id::new(TITLE_FIELD))
         }
+        Action::KindSelected(kind) => creation::select(state, kind),
         Action::Cancel => {
             // A task being saved cannot be taken back, so keep its popup up
             // to show whether the save worked.
@@ -376,7 +386,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             fetched(state, lookup, result);
             Task::none()
         }
-        Action::Create => create(state),
+        Action::Create => {
+            if state.inbox.draft.as_ref().and_then(|d| d.kind).is_some() {
+                creation::create(state)
+            } else {
+                create(state)
+            }
+        }
         Action::Created(result) => created(state, result),
         Action::ChooseDay(id) => {
             state.inbox.error = None;
@@ -462,6 +478,8 @@ fn blank_event() -> Event {
 
 fn close_draft(state: &mut State) {
     state.inbox.voice.cancel();
+    state.calendar.draft = state.inbox.previous_calendar_draft.take();
+    state.inbox.entry_drafts.clear();
     state.inbox.draft = None;
     state.travel.picker = None;
     state.picker = None;
@@ -817,16 +835,23 @@ fn create_event_with_metadata(
 fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
     match result {
         Ok(event) => {
-            state.inbox.created_list = Some(event.calendar_id.clone());
+            if event.is_task() {
+                state.inbox.created_list = Some(event.calendar_id.clone());
+            }
             close_draft(state);
             state.timeblocking.revision += 1;
             state.calendar.events.retain(|other| other.id != event.id);
-            state.calendar.replace_cached_task(&event.id, &event);
+            if event.is_task() {
+                state.calendar.replace_cached_task(&event.id, &event);
+            }
             state.calendar.add_event(event);
             // Brings the Inbox list itself, if this made it, into the app.
             Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
         }
         Err(error) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.saving = false;
+            }
             if let Some(draft) = state.inbox.draft.as_mut() {
                 draft.saving = false;
                 draft.error = Some(error);

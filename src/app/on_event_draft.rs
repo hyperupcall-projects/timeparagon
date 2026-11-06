@@ -18,6 +18,10 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             })
         }
         EventDraftMessage::EventDraftStarted { start, end } => {
+            // The sidebar owns the active creation draft until Add or Cancel.
+            if state.inbox.draft.is_some() {
+                return Task::none();
+            }
             let Some(calendar_id) = state.calendar.default_calendar_id(&state.config.calendar)
             else {
                 state.calendar.error =

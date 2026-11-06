@@ -2091,6 +2091,11 @@ pub fn habit_for_new_event(state: &mut State, title: &str) -> (String, Task<Mess
     if let Some(id) = chosen {
         return (id, Task::none());
     }
+    habit_for_title(state, title)
+}
+
+/// Find or create a habit by name for a new calendar entry.
+pub(crate) fn habit_for_title(state: &mut State, title: &str) -> (String, Task<Message>) {
     if let Some(habit) = state.habits.library.named(title) {
         return (habit.id.clone(), Task::none());
     }

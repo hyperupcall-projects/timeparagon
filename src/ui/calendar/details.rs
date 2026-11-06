@@ -9,7 +9,7 @@ use iced::widget::column;
 /// column of its own rather than over the calendar, so the day grid and the
 /// backlog both keep their full width.
 pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    if state.calendar.draft.as_ref().is_some_and(|d| d.editor_open) {
+    if state.inbox.draft.is_none() && state.calendar.draft.as_ref().is_some_and(|d| d.editor_open) {
         return draft_editor(state, metrics);
     }
     let Some(event) = state

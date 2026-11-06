@@ -1,4 +1,4 @@
-//! The Inbox tab: tasks waiting to be triaged, and the popup that adds one.
+//! The Inbox tab: tasks waiting to be triaged, and the form that adds one.
 
 use crate::calendar::time_format::TimeFormat;
 use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
@@ -716,6 +716,45 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     let Some(draft) = &state.inbox.draft else {
         return Space::new().into();
     };
+    if state.sidebar.is_some() && !state.task_creation_window {
+        let kind = draft.kind.unwrap_or(calendar::DraftKind::Task);
+        let type_button = |label: &'static str, value: calendar::DraftKind| {
+            let mut control = button(text(label).size(metrics.label()).center())
+                .width(Fill)
+                .style(crate::ui::controls::nav(kind == value));
+            if !draft.saving && !draft.fetching && !state.inbox.voice.active() {
+                control = control.on_press(msg(Action::KindSelected(value)));
+            }
+            control
+        };
+        let types = column![
+            row![
+                type_button("Task", calendar::DraftKind::Task),
+                type_button("Event", calendar::DraftKind::Event),
+                type_button("Time Block", calendar::DraftKind::TimeBlock)
+            ]
+            .spacing(4),
+            row![
+                type_button("Habit", calendar::DraftKind::Habit),
+                type_button("Sleep", calendar::DraftKind::Sleep)
+            ]
+            .spacing(4),
+        ]
+        .spacing(4);
+        let content = if kind == calendar::DraftKind::Task {
+            container(crate::ui::controls::scrollable(form(state, draft, metrics)).height(Fill))
+                .padding(16)
+                .width(Fill)
+                .height(Fill)
+                .into()
+        } else {
+            super::calendar::draft_editor(state, metrics)
+        };
+        return column![container(types).padding([8, 16]), content]
+            .width(Fill)
+            .height(Fill)
+            .into();
+    }
     let card = container(crate::ui::controls::scrollable(
         container(form(state, draft, metrics)).padding(iced::Padding {
             right: 14.0,
@@ -723,18 +762,19 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         }),
     ))
     .padding(16)
-    .width(Fill)
-    .max_width(if state.task_creation_window { 440 } else { 420 })
-    .max_height(
-        (metrics.size.height
-            - if state.task_creation_window {
-                0.0
-            } else {
-                32.0
-            })
-        .max(80.0),
-    )
-    .style(crate::ui::controls::surface);
+    .width(Fill);
+    let card = card
+        .max_width(if state.task_creation_window { 440 } else { 420 })
+        .max_height(
+            (metrics.size.height
+                - if state.task_creation_window {
+                    0.0
+                } else {
+                    32.0
+                })
+            .max(80.0),
+        )
+        .style(crate::ui::controls::surface);
     if state.task_creation_window {
         let viewport_height = metrics.size.height;
         let bounds = move |size: iced::Size| {
@@ -1171,6 +1211,109 @@ mod tests {
             "Cancel",
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
+        }
+    }
+
+    #[test]
+    fn new_tasks_stay_in_the_sidebar_with_every_planning_window_open() {
+        use crate::app::{CalendarView, Sidebar};
+
+        for (view, screen) in [
+            (CalendarView::Day, crate::app::Screen::Calendar),
+            (CalendarView::Day, crate::app::Screen::Inbox),
+            (CalendarView::Week, crate::app::Screen::Inbox),
+            (CalendarView::TwoWeek, crate::app::Screen::Inbox),
+            (CalendarView::Month, crate::app::Screen::Inbox),
+        ] {
+            let mut state = state_with_task("");
+            state.screen = screen;
+            state.sidebar = Some(Sidebar {
+                width: 400.0,
+                side: crate::panel::Side::Left,
+            });
+            state.view = view;
+            state.main_window = Some(iced::window::Id::unique());
+            state.editor_window = Some(iced::window::Id::unique());
+
+            let mut ui = simulator(&state, 400.0);
+            ui.click("+").unwrap();
+            let message = ui
+                .into_messages()
+                .find(|message| matches!(message, Message::Inbox(Action::NewTask)))
+                .expect("the bottom plus opens a task");
+            let _ = crate::app::update(&mut state, message);
+
+            let mut main = simulator(&state, 400.0);
+            assert!(main.find("New task").is_ok(), "{view:?}");
+            assert!(main.find("Cancel").is_ok(), "{view:?}");
+            for hidden in ["Do", "Plan Day", "Settings", "+", "Reply to Sam"] {
+                assert!(
+                    main.find(hidden).is_err(),
+                    "{hidden} must be replaced by the form"
+                );
+            }
+            let mut editor = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                Size::new(900.0, 700.0),
+                crate::ui::editor_window(&state),
+            );
+            assert!(editor.find("New task").is_err(), "{view:?}");
+            drop(main);
+            drop(editor);
+
+            let _ = crate::app::update(&mut state, Message::Inbox(Action::Cancel));
+            let mut main = simulator(&state, 400.0);
+            assert!(main.find("Do").is_ok());
+            assert!(main.find("+").is_ok());
+        }
+    }
+
+    #[test]
+    fn the_sidebar_selector_opens_every_creation_form_without_saving() {
+        use crate::app::{CalendarView, Sidebar};
+        for (label, heading, kind) in [
+            ("Event", "New event", calendar::DraftKind::Event),
+            (
+                "Time Block",
+                "New time block",
+                calendar::DraftKind::TimeBlock,
+            ),
+            ("Habit", "New habit", calendar::DraftKind::Habit),
+            ("Sleep", "New sleep", calendar::DraftKind::Sleep),
+        ] {
+            let mut state = state_with_task("");
+            state.sidebar = Some(Sidebar {
+                width: 400.0,
+                side: crate::panel::Side::Left,
+            });
+            state.view = CalendarView::Week;
+            state.editor_window = Some(iced::window::Id::unique());
+            let _ = crate::app::update(&mut state, msg(Action::NewTask));
+            let mut ui = simulator(&state, 400.0);
+            ui.click(label).unwrap();
+            let message = ui
+                .into_messages()
+                .find(|message| {
+                    matches!(message,
+                        Message::Inbox(Action::KindSelected(value)) if *value == kind
+                    )
+                })
+                .expect("the type selector switches the draft");
+            let _ = crate::app::update(&mut state, message);
+            assert!(!state.inbox.draft.as_ref().unwrap().saving);
+            let mut ui = simulator(&state, 400.0);
+            assert!(ui.find(heading).is_ok(), "{label}");
+            assert!(ui.find("Add").is_ok(), "{label}");
+            assert!(ui.find("Do").is_err());
+            let mut editor = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                Size::new(900.0, 700.0),
+                crate::ui::editor_window(&state),
+            );
+            assert!(
+                editor.find(heading).is_err(),
+                "{label} stays in the sidebar"
+            );
         }
     }
 
