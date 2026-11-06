@@ -231,11 +231,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             } else {
                 draft.description.clone()
             };
-            let color_id = if is_block {
-                calendar::colors::event_id(state.config.calendar.time_block_color())
-            } else {
-                None
-            };
+            let color_id = None;
             let Some(original) = state.calendar.event(&draft.id).cloned() else {
                 return Task::none();
             };

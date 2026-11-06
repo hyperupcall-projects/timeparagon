@@ -27,8 +27,9 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 
             state.calendar.error = None;
             state.calendar.begin_draft(calendar_id, start, end);
+            state.draft_kind_focus = None;
             state.calendar.day = calendar::day_at(start, state.config.calendar.day_start_hour());
-            Task::none()
+            iced::widget::operation::focus("calendar-draft-title")
         }
         EventDraftMessage::EventDraftProjects(action) => {
             if let calendar::projects::Action::Add(id) = &action
@@ -47,7 +48,42 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             }
             Task::none()
         }
+        EventDraftMessage::EventDraftCycleKind {
+            reverse,
+            title_focused,
+        } => {
+            if !state
+                .calendar
+                .draft
+                .as_ref()
+                .is_some_and(|draft| !draft.editor_open)
+            {
+                return Task::none();
+            }
+            let kinds = [
+                calendar::DraftKind::Event,
+                calendar::DraftKind::TimeBlock,
+                calendar::DraftKind::Task,
+                calendar::DraftKind::Habit,
+            ];
+            let current = if title_focused {
+                None
+            } else {
+                state.draft_kind_focus
+            };
+            let index =
+                current.and_then(|kind| kinds.iter().position(|candidate| *candidate == kind));
+            let next = match index {
+                Some(index) if reverse => (index + kinds.len() - 1) % kinds.len(),
+                Some(index) => (index + 1) % kinds.len(),
+                None if reverse => kinds.len() - 1,
+                None => 0,
+            };
+            state.draft_kind_focus = Some(kinds[next]);
+            iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus())
+        }
         EventDraftMessage::EventDraftTitleChanged(title) => {
+            state.draft_kind_focus = None;
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.title = title;
             }
@@ -138,8 +174,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             let Some(draft) = state.calendar.draft.take() else {
                 return Task::none();
             };
-            let color_id =
-                calendar::colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
+            let color_id = None;
             let habit = crate::habits::Draft::for_calendar_with_rule(
                 draft.start,
                 draft.end,
@@ -206,6 +241,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             Task::none()
         }
         EventDraftMessage::EventDraftCancelled => {
+            state.draft_kind_focus = None;
             state.calendar.draft = None;
             Task::none()
         }
@@ -249,11 +285,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             } else {
                 draft.description.clone()
             };
-            let color_id = if is_block {
-                calendar::colors::event_id(state.config.calendar.time_block_color())
-            } else {
-                None
-            };
+            let color_id = None;
             let recurrence = match draft.recurrence_lines() {
                 Ok(lines) => lines,
                 Err(error) => {

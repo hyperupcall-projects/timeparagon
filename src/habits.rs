@@ -1504,7 +1504,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 return Task::none();
             };
             let day = crate::clock::now().date_naive();
-            let color_id = colors::event_id(state.config.calendar.habit_color()).map(str::to_owned);
+            let color_id = None;
             let mut draft = Draft::new(day, color_id);
             draft.title = habit.name.clone();
             let task = open_new(state, draft);

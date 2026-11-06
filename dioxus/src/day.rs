@@ -310,7 +310,7 @@ pub fn create_time_block(new: &NewEvent, settings: &CalendarSettings) -> Result<
         settings.app_calendar.as_deref(),
         new.title.trim(),
         &calendar::event_description(&new.description, "Time Block", &[]),
-        calendar::colors::event_id(settings.time_block_color()),
+        None,
         start,
         end,
         &[],
@@ -1482,9 +1482,7 @@ pub fn save_event(
     } else {
         draft.description.clone()
     };
-    let color_id = labelled_block
-        .then(|| calendar::colors::event_id(settings.time_block_color()))
-        .flatten();
+    let color_id = None;
     calendar::save_event_scope(
         &settings.client_id,
         &settings.client_secret,
