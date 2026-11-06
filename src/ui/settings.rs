@@ -128,7 +128,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             super::travel::settings_section(state, metrics),
             metrics
         ),
-        section("Voice input", crate::voice::settings(state), metrics),
+        section("AI", crate::voice::settings(state), metrics),
         section(
             "Account integrations",
             integrations(state, metrics),

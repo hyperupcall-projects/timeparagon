@@ -1,4 +1,4 @@
-//! Credentials: the Google sign-in and the Gmail accounts' tokens.
+//! Credentials: Google sign-in, Gmail accounts, and the OpenRouter API token.
 //!
 //! They are kept out of the database, in `$XDG_STATE_HOME/timeslay/secrets.json`,
 //! readable by this user only. Each kind is one key of a JSON object. Android
@@ -13,6 +13,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
 pub mod keys {
+    pub const OPENROUTER_TOKEN: &str = "openrouter_token";
     pub const GOOGLE_TOKENS: &str = "google_tokens";
     pub const GMAIL_ACCOUNTS: &str = "gmail_accounts";
 }
@@ -154,6 +155,16 @@ mod tests {
         let path = directory.path().join("state").join("secrets.json");
         write(&path, keys::GOOGLE_TOKENS, &"google").unwrap();
         write(&path, keys::GMAIL_ACCOUNTS, &"gmail").unwrap();
+        write(&path, keys::OPENROUTER_TOKEN, &"openrouter").unwrap();
+        assert_eq!(
+            read::<String>(&path, keys::OPENROUTER_TOKEN)
+                .unwrap()
+                .as_deref(),
+            Some("openrouter")
+        );
+        remove(&path, keys::OPENROUTER_TOKEN).unwrap();
+        assert_eq!(read::<String>(&path, keys::OPENROUTER_TOKEN).unwrap(), None);
+
         remove(&path, keys::GOOGLE_TOKENS).unwrap();
         assert_eq!(read::<String>(&path, keys::GOOGLE_TOKENS).unwrap(), None);
         assert_eq!(

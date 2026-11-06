@@ -41,6 +41,7 @@ Of course, there's also week, 2-week, and month views:
 - **Manage your time:**
 	- **Events**
 		- Tracks the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
+		- Create events from pictures (TODO).
 		- Shows dedicated buttons for joining Zoom and Google Meet meetings.
 		- Create Zoom and Google Meet meetings and invite attendees.
 		- Send replies to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop).
@@ -75,6 +76,7 @@ Of course, there's also week, 2-week, and month views:
 		- _Automatically project tasks from a non-temporal, grouped and ordered list of tasks to the day's available time blocks (TODO)._
 		- "Do immediately" etc. No need to categorize other than project.
 	- Handle long-running or multi-step/subtasks (TODO).
+		- Plan to do one task, but turns out, I have to do something smaller, and defer the original task. Easily do that.
 		- Tasks that may be done over multiple days/time blocks (TODO).
 		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
 		- But, also keep track of subtasks (TODO)?
