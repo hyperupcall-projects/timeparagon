@@ -25,6 +25,9 @@ pub struct Workspace {
     target: Option<PickTarget>,
     pub selected: Option<Found>,
     error: Option<String>,
+    /// Whether this session's page has painted. Until it has, the browser
+    /// may still hold the last frame of the previous visit, so it is covered.
+    ready: bool,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -66,6 +69,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             map.target = Some(target);
             map.selected = None;
             map.error = None;
+            map.ready = false;
             if map.browser.is_none() {
                 match Cef::try_new() {
                     Ok(engine) => {
@@ -126,6 +130,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             if map.active
                 && let Some(message) = bridge_message(&title, map.session)
             {
+                map.ready = true;
                 map.selected = message.selected;
                 map.error = message.error;
             }
@@ -139,6 +144,7 @@ fn close(map: &mut Workspace) -> Task<Message> {
     map.selected = None;
     map.target = None;
     map.error = None;
+    map.ready = false;
     map.browser.as_mut().map_or_else(Task::none, |browser| {
         browser.update(WebAction::CloseCurrentView)
     })
@@ -205,8 +211,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill);
     if let Some(browser) = &map.browser {
+        // The browser stays in the tree while covered, so it is sized to the
+        // window before its first frame is shown.
+        let mut layers = vec![browser.view().map(|action| msg(Action::Browser(action)))];
+        if !map.ready && map.error.is_none() {
+            layers.push(
+                container(text("Loading map…").size(14))
+                    .center(Fill)
+                    .style(crate::ui::controls::surface)
+                    .into(),
+            );
+        }
         content = content.push(
-            container(browser.view().map(|action| msg(Action::Browser(action))))
+            container(iced::widget::stack(layers))
                 .width(Fill)
                 .height(Fill),
         );

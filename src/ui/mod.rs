@@ -218,7 +218,10 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
 
 pub fn view(state: &State) -> Element<'_, Message> {
     let content = responsive(move |size| {
-        if state.travel.map.active {
+        // When the map belongs to the floating window the panel keeps showing
+        // what it was: drawing the map in both would make the windows fight
+        // over the browser's size and show each other's frames.
+        if state.travel.map.active && !state.map_in_editor_window() {
             let map = crate::travel::map::view(state);
             if state.task_creation_window {
                 // The dock normally accepts input only over its bottom-aligned

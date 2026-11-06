@@ -304,8 +304,11 @@ preserves credentials; `--purge` removes them.
 
 ## Embedded location map
 
-Every location search offers **Choose on map**. It opens Mapbox GL JS in
-`iced_webview_v2` using Chromium (CEF). Search suggestions fly to a place;
+Every location search offers **Choose on map** and **Search recents**. Search
+recents filters the places already saved, without calling Mapbox; favorites
+(★) come first, then the most recently saved. Choose on map opens Mapbox GL JS
+in the floating window at the right of the panel, using `iced_webview_v2` with
+Chromium (CEF). Search suggestions fly to a place;
 clicking the map resolves a nearby address or named feature. **Confirm** becomes
 available after a valid place is selected. **Back to search** or Escape cancels
 without changing the field. Home is the initial map center and search bias;

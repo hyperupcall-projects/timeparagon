@@ -454,3 +454,66 @@ fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> 
     }
     Ok(())
 }
+
+/// With a panel open the map belongs to the floating window at its right:
+/// the panel keeps what it was showing.
+#[test]
+fn map_picker_is_shown_only_in_the_floating_window() {
+    let (mut state, ..) = state();
+    state.screen = Screen::Settings;
+    state.main_window = Some(iced::window::Id::unique());
+    let _ = app::update(
+        &mut state,
+        Message::Travel(Action::OpenPicker(PickTarget::Home)),
+    );
+    state.travel.map.active = true;
+    assert!(state.map_in_editor_window());
+
+    let mut panel = render(&state, Size::new(420.0, 900.0));
+    assert!(panel.find("Confirm").is_err(), "not in the panel");
+    let mut editor = at(Size::new(420.0, 900.0), timeslay::ui::editor_window(&state));
+    assert!(editor.find("Confirm").is_ok(), "in the floating window");
+}
+
+/// Search recents lists the saved places without Mapbox, filters them as
+/// you type, and each can be chosen or starred.
+#[test]
+fn search_recents_lists_saved_places_with_stars() -> Result<(), Error> {
+    for width in WIDTHS {
+        let (mut state, _, office, _) = state();
+        state.screen = Screen::Settings;
+        let _ = app::update(
+            &mut state,
+            Message::Travel(Action::OpenPicker(PickTarget::Home)),
+        );
+        let mut ui = render(&state, Size::new(width, 5200.0));
+        let _ = ui.click("Search recents")?;
+        assert!(
+            messages(ui)
+                .iter()
+                .any(|m| matches!(m, Message::Travel(Action::Recents))),
+            "at {width}px"
+        );
+
+        let _ = app::update(&mut state, Message::Travel(Action::Recents));
+        let _ = app::update(&mut state, Message::Travel(Action::Query("market".into())));
+        let mut ui = render(&state, Size::new(width, 5200.0));
+        assert!(ui.find("500 Market St").is_ok(), "at {width}px");
+        assert!(ui.find("66 Mint St").is_err(), "filtered at {width}px");
+        let _ = ui.click("☆")?;
+        assert!(
+            messages(ui)
+                .iter()
+                .any(|m| matches!(m, Message::Travel(Action::Favorite(id)) if *id == office))
+        );
+
+        let mut ui = render(&state, Size::new(width, 5200.0));
+        let _ = ui.click("500 Market St")?;
+        assert!(
+            messages(ui)
+                .iter()
+                .any(|m| matches!(m, Message::Travel(Action::ChooseSaved(id)) if *id == office))
+        );
+    }
+    Ok(())
+}
