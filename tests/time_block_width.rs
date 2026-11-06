@@ -86,10 +86,14 @@ fn every_details_destination_uses_an_independent_editor() {
                 let main = state.main_window.unwrap();
                 let result = actions(app::update(&mut state, opening(event)));
                 let editor = state.editor_window.unwrap();
-                let width = if event == "standup" {
+                let width = (if event == "standup" {
                     state.config.views.time_block_width()
                 } else {
                     state.config.views.detail_width()
+                }) + if state.day_plan_active() {
+                    state.calendar_width()
+                } else {
+                    0.0
                 };
                 assert!(matches!(result.as_slice(), [Geometry::Open(id, settings)]
                     if *id == editor && settings.size.width == width && !settings.decorations));
@@ -181,7 +185,7 @@ fn configured_editor_widths_apply_live_and_survive_restart() {
             Message::Settings(SettingsMessage::TimeBlockWidthChanged(240.0)),
         ));
         assert!(
-            matches!(result.as_slice(), [Geometry::Resize(id, size)] if *id == editor && size.width == 240.0)
+            matches!(result.as_slice(), [Geometry::Resize(id, size)] if *id == editor && size.width == 240.0 + state.calendar_width())
         );
         let mut config = state.config.clone();
         config.views.time_block_width = 220.0;
@@ -190,7 +194,7 @@ fn configured_editor_widths_apply_live_and_survive_restart() {
             Message::System(SystemMessage::ConfigReloaded(config)),
         ));
         assert!(
-            matches!(result.as_slice(), [Geometry::Resize(id, size)] if *id == editor && size.width == 220.0)
+            matches!(result.as_slice(), [Geometry::Resize(id, size)] if *id == editor && size.width == 220.0 + state.calendar_width())
         );
         assert_eq!(state.main_size, original);
         let config: Config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();

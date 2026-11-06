@@ -449,6 +449,32 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
 }
 
 #[test]
+fn plan_day_shows_calendar_beside_each_task_list() -> Result<(), Error> {
+    for screen in [Screen::Overdue, Screen::Inbox, Screen::Backlog] {
+        let mut state = state();
+        state.screen = screen;
+        let _ = app::update(
+            &mut state,
+            Message::Navigation(NavigationMessage::PlanDaySelected),
+        );
+        assert!(state.day_plan_active());
+        assert_eq!(state.screen, screen);
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            Size::new(420.0, 900.0),
+            timeslay::ui::editor_window(&state),
+        );
+        ui.find("Set Alarm")?;
+        ui.find("Menu")?;
+        ui.find(format!(
+            "{} ▾",
+            calendar::month_day_label(state.calendar.day)
+        ))?;
+    }
+    Ok(())
+}
+
+#[test]
 fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
     use timeslay::app::CalendarView;
     for width in [180.0, 260.0, 420.0, 900.0] {
@@ -703,7 +729,7 @@ fn plan_day_subtabs_keep_the_day_and_have_no_schedule() -> Result<(), Error> {
 }
 
 #[test]
-fn top_level_navigation_leaves_plan_and_closes_the_overview() {
+fn top_level_navigation_leaves_the_range_and_keeps_only_day_planning_open() {
     for screen in [
         Screen::Calendar,
         Screen::Inbox,
@@ -732,7 +758,7 @@ fn top_level_navigation_leaves_plan_and_closes_the_overview() {
         );
         assert_eq!(state.screen, screen);
         assert!(!state.range_view_active());
-        assert!(state.editor_window.is_none());
+        assert_eq!(state.editor_window.is_some(), state.day_plan_active());
     }
 }
 

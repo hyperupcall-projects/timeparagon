@@ -378,11 +378,6 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             state.calendar.error = Some(error);
             Task::none()
         }
-        CalendarMessage::CalendarTick
-            if state.screen == Screen::Overdue && !state.range_view_active() =>
-        {
-            Task::none()
-        }
         CalendarMessage::CalendarTick => refresh_day(state),
         CalendarMessage::CalendarZoomed { factor, anchor } => {
             let before = state.calendar.hour_height;
