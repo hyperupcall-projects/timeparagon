@@ -1,6 +1,6 @@
 [package]
 name = "timeslay-migrate"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2024"
 description = "One-off moves of old TimeSlay data, run by hand"
 license = "MPL-2.0"
