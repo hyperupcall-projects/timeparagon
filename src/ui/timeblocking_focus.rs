@@ -63,13 +63,10 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             .align_y(iced::Center),
             row![
                 text(format!(
-                    "{} · {} – {}",
+                    "{} · {}",
                     block.start.format("%a, %b %-d"),
-                    crate::calendar::time_format::clock(
+                    crate::calendar::time_format::range(
                         block.start,
-                        state.config.appearance.time_format
-                    ),
-                    crate::calendar::time_format::clock(
                         block.end,
                         state.config.appearance.time_format
                     )
