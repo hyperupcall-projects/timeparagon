@@ -1037,7 +1037,19 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .filter(|event| query.is_empty() || event.title.to_lowercase().contains(&query))
         .filter(|event| all_tasks || tb::on_today(event))
         .collect();
-    if available.is_empty() && !query.is_empty() {
+    // Habits are searchable too, so one can be recorded for the block's day.
+    let habits: Vec<_> = if query.is_empty() {
+        Vec::new()
+    } else {
+        state
+            .habits
+            .library
+            .habits
+            .iter()
+            .filter(|habit| !habit.archived && habit.name.to_lowercase().contains(&query))
+            .collect()
+    };
+    if available.is_empty() && habits.is_empty() && !query.is_empty() {
         body = body.push(text("No matching tasks").style(text::secondary));
     } else if available.is_empty() && !all_tasks {
         body = body.push(text("No tasks for today").style(text::secondary));
@@ -1053,6 +1065,40 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         } else {
             body = body.push(row![task_row(state, task, metrics, false), add]);
         }
+    }
+    if !habits.is_empty() {
+        body = body.push(text("Habits").size(metrics.label()).style(text::secondary));
+    }
+    let block_day = block.start.date_naive();
+    for habit in habits {
+        let swatch = container(iced::widget::Space::new().width(10).height(10)).style(
+            move |theme: &iced::Theme| container::Style {
+                background: Some(
+                    timeslay_core::habits::palette_color(
+                        habit.color,
+                        theme.extended_palette().is_dark,
+                    )
+                    .into(),
+                ),
+                border: iced::Border {
+                    radius: 5.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let record = crate::ui::controls::quiet_button("Record").on_press(Message::Habits(
+            crate::habits::Action::OpenDay(habit.id.clone(), block_day),
+        ));
+        body = body.push(
+            row![
+                swatch,
+                text(habit.name.clone()).size(metrics.label()).width(Fill),
+                record
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        );
     }
     // A release anywhere on the panel assigns the dragged task, including on the
     // plus box. A release on a task row is captured first and reorders instead.
