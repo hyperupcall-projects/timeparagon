@@ -127,6 +127,11 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
                 .into();
         }
         let mut panes = row![];
+        if state.day_plan_active() {
+            let width = state.calendar_width().min(size.width);
+            let metrics = Metrics::of(Size::new(width, size.height));
+            panes = panes.push(container(calendar::view(state, &metrics)).width(width));
+        }
         if state.timeblocking.block.is_some() {
             let width = state.config.views.time_block_width().min(size.width);
             let metrics = Metrics::of(Size::new(width, size.height));
@@ -140,11 +145,16 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
             } else {
                 0.0
             };
-            let width = state
-                .config
-                .views
-                .detail_width()
-                .min((size.width - block).max(1.0));
+            let width = state.config.views.detail_width().min(
+                (size.width
+                    - block
+                    - if state.day_plan_active() {
+                        state.calendar_width()
+                    } else {
+                        0.0
+                    })
+                .max(1.0),
+            );
             let metrics = Metrics::of(Size::new(width, size.height));
             panes = panes.push(container(calendar::details_pane(state, &metrics)).width(width));
         }

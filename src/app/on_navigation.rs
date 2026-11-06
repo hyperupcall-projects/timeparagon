@@ -26,7 +26,15 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
                 Screen::Overdue | Screen::Inbox | Screen::Backlog => state.screen,
                 _ => Screen::Overdue,
             };
-            Task::batch([close, select_screen(state, screen)])
+            Task::batch([
+                close,
+                select_screen(state, screen),
+                show_cached_calendar(state),
+                ui::calendar::scroll_to_now(
+                    state.calendar.hour_height,
+                    state.config.calendar.day_end_minutes(),
+                ),
+            ])
         }
         NavigationMessage::ViewMenuToggled => {
             state.view_menu_open = !state.view_menu_open;

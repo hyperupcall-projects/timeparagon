@@ -673,6 +673,37 @@ fn day_width_changes_keep_fixed_panel_constraints_with_a_range_open() {
 }
 
 #[test]
+fn plan_day_floats_and_returns_to_do_without_resizing_the_panel() {
+    let mut state = State::blank();
+    let main = window::Id::unique();
+    state.main_window = Some(main);
+    state.main_size = Size::new(328.0, 900.0);
+    let actions = geometry_actions(update(
+        &mut state,
+        Message::Navigation(NavigationMessage::PlanDaySelected),
+    ));
+    assert!(
+        matches!(actions.as_slice(), [GeometryAction::Open(settings)]
+        if !settings.decorations && settings.size.width == state.calendar_width())
+    );
+    let floating = state.editor_window.expect("day calendar window");
+    assert_ne!(floating, main);
+    assert_eq!(state.main_size, Size::new(328.0, 900.0));
+    let _ = update(
+        &mut state,
+        Message::Navigation(NavigationMessage::PlanTabSelected(PlanTab::Inbox)),
+    );
+    assert_eq!(state.editor_window, Some(floating));
+    let _ = update(
+        &mut state,
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
+    );
+    assert!(!state.day_plan_active());
+    assert!(state.editor_window.is_none());
+    assert_eq!(state.main_size, Size::new(328.0, 900.0));
+}
+
+#[test]
 fn range_views_float_without_resizing_the_day_panel() {
     for monthly in [false, true] {
         let mut state = State::blank();
@@ -1044,8 +1075,15 @@ fn editors_leave_the_main_window_geometry_unchanged_on_every_destination() {
                     keyboard::Modifiers::default(),
                 )
                 .unwrap();
-                assert!(geometry_actions(update(&mut state, escape)).is_empty());
-                assert!(state.editor_window.is_none());
+                let actions = geometry_actions(update(&mut state, escape));
+                if state.day_plan_active() {
+                    assert!(matches!(actions.as_slice(), [GeometryAction::Resize(size)]
+                        if size.width == state.calendar_width()));
+                    assert_eq!(state.editor_window, Some(editor));
+                } else {
+                    assert!(actions.is_empty());
+                    assert!(state.editor_window.is_none());
+                }
                 assert!(state.calendar.open_event.is_none());
                 assert!(state.timeblocking.block.is_none());
                 // A delayed opened notification cannot replace the main window.

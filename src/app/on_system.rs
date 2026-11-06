@@ -16,6 +16,11 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
                         state.calendar.hour_height,
                         state.config.calendar.day_end_minutes(),
                     )
+                } else if state.day_plan_active() {
+                    ui::calendar::scroll_to_now(
+                        state.calendar.hour_height,
+                        state.config.calendar.day_end_minutes(),
+                    )
                 } else {
                     Task::none()
                 }
@@ -331,7 +336,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
                 // Overview visibility belongs to its toggle, even if the
                 // compositor closes the floating surface. Reconciliation
                 // recreates it while the panel is visible.
-                if state.range_view_active() {
+                if state.range_view_active() || state.day_plan_active() {
                     return Task::none();
                 }
                 state.calendar.open_event = None;

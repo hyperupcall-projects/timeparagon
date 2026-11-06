@@ -1010,6 +1010,16 @@ impl State {
         self.view != CalendarView::Day
     }
 
+    /// Day planning keeps the task list in the panel and the calendar beside it.
+    pub fn day_plan_active(&self) -> bool {
+        !self.task_creation_window
+            && self.view == CalendarView::Day
+            && matches!(
+                self.screen,
+                Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+            )
+    }
+
     pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
         match self.view {
             CalendarView::Month => {
@@ -1321,7 +1331,11 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
     {
         state.weekly_window_width()
     } else if visible {
-        (if state.timeblocking.block.is_some() {
+        (if state.day_plan_active() {
+            state.calendar_width()
+        } else {
+            0.0
+        }) + (if state.timeblocking.block.is_some() {
             state.config.views.time_block_width()
         } else {
             0.0
@@ -1610,7 +1624,10 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
 
     // Refresh the calendar needle and the Overdue list as time passes.
-    if state.range_view_active() || matches!(state.screen, Screen::Calendar | Screen::Overdue) {
+    if state.range_view_active()
+        || state.day_plan_active()
+        || matches!(state.screen, Screen::Calendar | Screen::Overdue)
+    {
         subscriptions.push(
             iced::time::every(NEEDLE_TICK)
                 .map(|_| Message::Calendar(CalendarMessage::CalendarTick)),
@@ -1980,7 +1997,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
     if modifiers.command() {
         // A range view stands in for whichever screen is selected, so the grid
         // is on show in those as well as on the Calendar screen itself.
-        let grid_showing = state.range_view_active() || state.screen == Screen::Calendar;
+        let grid_showing = state.range_view_active()
+            || state.day_plan_active()
+            || state.screen == Screen::Calendar;
         let zoom = |factor| {
             Some(Message::Calendar(CalendarMessage::CalendarZoomed {
                 factor,
