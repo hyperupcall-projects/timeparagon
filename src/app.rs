@@ -772,6 +772,11 @@ pub enum EventDraftMessage {
     EventDraftStartChanged(String),
     /// The end field was edited, as `HH:MM`.
     EventDraftEndChanged(String),
+    /// The end date field was edited, as `YYYY-MM-DD`: the last day an
+    /// all-day event covers, or the day a timed one ends.
+    EventDraftEndDateChanged(String),
+    /// The new event was switched between all-day and timed.
+    EventDraftAllDayToggled(bool),
     /// The new entry's kind was switched between an event and a time block.
     EventDraftKindSelected(calendar::DraftKind),
     /// A change was made in the new event's shared repeat controls.
@@ -808,6 +813,8 @@ pub enum EventEditMessage {
     EventEditStartChanged(String),
     /// The edited event's end field was edited, as `HH:MM`.
     EventEditEndChanged(String),
+    /// The edited event was switched between all-day and timed.
+    EventEditAllDayToggled(bool),
     /// A change was made in the edited event's shared repeat controls.
     EventEditRecurrence(crate::recurrence::Action),
     /// A calendar was chosen for the edited event, staged until Save.

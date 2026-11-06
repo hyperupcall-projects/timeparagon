@@ -60,6 +60,8 @@ pub fn CreateSheet(
     let mut on_day = use_signal(|| false);
     let mut description = use_signal(String::new);
     let mut date = use_signal(|| day.to_string());
+    let mut end_date = use_signal(|| day.to_string());
+    let mut all_day = use_signal(|| false);
     let mut start = use_signal(move || start);
     let mut end = use_signal(move || end);
     let mut calendar_id = use_signal(move || default_calendar.unwrap_or_default());
@@ -100,12 +102,16 @@ pub fn CreateSheet(
         }
         let settings = settings.clone();
         let projects = projects.clone();
+        // A time block is always timed.
+        let chosen_all_day = kind() == Kind::Event && all_day();
         let new = NewEvent {
             title: title(),
             description: description(),
             date: date(),
+            end_date: end_date(),
             start: start(),
             end: end(),
+            all_day: chosen_all_day,
         };
         let target = calendar_id();
         let chosen = kind();
@@ -196,27 +202,55 @@ pub fn CreateSheet(
                                 }
                             }
                         }
-                        input {
-                            class: "client-input",
-                            r#type: "date",
-                            aria_label: "Date",
-                            value: "{date}",
-                            oninput: move |event| date.set(event.value()),
+                        if kind() == Kind::Event {
+                            label { class: "sheet-check",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: all_day(),
+                                    onchange: move |event: FormEvent| all_day.set(event.checked()),
+                                }
+                                "All day"
+                            }
                         }
                         div { class: "sheet-row",
                             input {
                                 class: "client-input",
-                                r#type: "time",
-                                aria_label: "Start",
-                                value: "{start}",
-                                oninput: move |event| start.set(event.value()),
+                                r#type: "date",
+                                aria_label: "Start date",
+                                value: "{date}",
+                                oninput: move |event| {
+                                    let value = event.value();
+                                    // Keep the end from falling before the start.
+                                    if end_date() < value {
+                                        end_date.set(value.clone());
+                                    }
+                                    date.set(value);
+                                },
                             }
                             input {
                                 class: "client-input",
-                                r#type: "time",
-                                aria_label: "End",
-                                value: "{end}",
-                                oninput: move |event| end.set(event.value()),
+                                r#type: "date",
+                                aria_label: "End date",
+                                value: "{end_date}",
+                                oninput: move |event| end_date.set(event.value()),
+                            }
+                        }
+                        if !(kind() == Kind::Event && all_day()) {
+                            div { class: "sheet-row",
+                                input {
+                                    class: "client-input",
+                                    r#type: "time",
+                                    aria_label: "Start",
+                                    value: "{start}",
+                                    oninput: move |event| start.set(event.value()),
+                                }
+                                input {
+                                    class: "client-input",
+                                    r#type: "time",
+                                    aria_label: "End",
+                                    value: "{end}",
+                                    oninput: move |event| end.set(event.value()),
+                                }
                             }
                         }
                         textarea {
