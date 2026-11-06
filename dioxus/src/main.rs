@@ -199,6 +199,11 @@ fn App() -> Element {
     let mut settings_id = use_signal(String::new);
     let mut settings_secret = use_signal(String::new);
     let mut settings_error = use_signal(|| None::<String>);
+    // What is typed in the sync URL field, kept apart from the saved config so
+    // re-renders (the sync status poll, say) never overwrite it mid-edit.
+    let mut sync_url_input = use_signal(String::new);
+    let mut sync_url_error = use_signal(|| None::<String>);
+    let mut sync_url_saved = use_signal(|| false);
     let mut show_calendars = use_signal(|| false);
     let mut show_habits = use_signal(|| false);
     let mut show_tracker = use_signal(|| false);
@@ -857,6 +862,9 @@ fn App() -> Element {
                                 settings_id.set(config.peek().calendar.client_id.clone());
                                 settings_secret.set(String::new());
                                 settings_error.set(None);
+                                sync_url_input.set(config.peek().database_sync.url.clone());
+                                sync_url_error.set(None);
+                                sync_url_saved.set(false);
                                 show_more.set(false);
                                 show_settings.set(true);
                             },
@@ -972,20 +980,51 @@ fn App() -> Element {
                         }
                         h3 { class: "settings-heading", "Database sync" }
                         label { r#for: "settings-sync-url", "Sync server URL (blank disables sync)" }
-                        input {
-                            id: "settings-sync-url",
-                            class: "client-input",
-                            placeholder: "https://sync.example.com",
-                            value: "{config().database_sync.url}",
-                            onchange: move |event: FormEvent| {
-                                match timeslay_core::config::save_database_sync_url(&event.value()) {
+                        form {
+                            class: "client-form settings-form",
+                            onsubmit: move |event| {
+                                event.prevent_default();
+                                sync_url_saved.set(false);
+                                match timeslay_core::config::save_database_sync_url(&sync_url_input()) {
                                     Ok(()) => {
-                                        config.set(day::load_config());
-                                        settings_error.set(None);
+                                        let saved = day::load_config();
+                                        sync_url_input.set(saved.database_sync.url.clone());
+                                        config.set(saved);
+                                        sync_url_error.set(None);
+                                        sync_url_saved.set(true);
                                     }
-                                    Err(error) => settings_error.set(Some(error.to_string())),
+                                    Err(error) => sync_url_error.set(Some(error.to_string())),
                                 }
                             },
+                            input {
+                                id: "settings-sync-url",
+                                class: "client-input",
+                                r#type: "url",
+                                inputmode: "url",
+                                autocomplete: "off",
+                                autocapitalize: "off",
+                                spellcheck: "false",
+                                placeholder: "https://sync.example.com",
+                                value: "{sync_url_input}",
+                                oninput: move |event| {
+                                    sync_url_input.set(event.value());
+                                    sync_url_error.set(None);
+                                    sync_url_saved.set(false);
+                                },
+                            }
+                            if let Some(message) = sync_url_error() {
+                                p { class: "error-text", "{message}" }
+                            } else if sync_url_saved() {
+                                p { class: "hint", "Saved." }
+                            }
+                            div { class: "state-actions",
+                                button {
+                                    class: "btn primary",
+                                    r#type: "submit",
+                                    disabled: sync_url_input().trim() == config().database_sync.url.trim(),
+                                    "Save sync URL"
+                                }
+                            }
                         }
                         p { class: "hint", "{database_sync_status}" }
                         reminders::ReminderSection { config }
