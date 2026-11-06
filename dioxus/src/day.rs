@@ -399,7 +399,7 @@ pub fn set_first_day_of_week(first_day: FirstDayOfWeek) -> Result<Config, String
 }
 
 /// Switches one source on or off and returns the config as it now reads. This
-/// starts from the file, so it cannot undo a change that just arrived from Drive.
+/// starts from the file, so it cannot undo a change made by another process.
 pub fn set_source_enabled(
     calendars: &[calendar::Calendar],
     id: &str,
@@ -417,8 +417,6 @@ pub fn set_source_enabled(
 /// Blocking: this waits for Google's localhost redirect.
 pub fn connect_google(settings: &CalendarSettings) -> Result<(), String> {
     calendar::connect(settings.client_id.clone(), settings.client_secret.clone())?;
-    // Signing in is what lets the config sync reach Google Drive.
-    timeslay_core::config_sync::poke();
     Ok(())
 }
 

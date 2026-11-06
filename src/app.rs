@@ -137,7 +137,7 @@ pub enum Screen {
     Notepad,
     /// One brain dump page per day, with search across all of them.
     BrainDump,
-    /// Markdown documents kept in Google Drive's app folder.
+    /// Markdown documents stored locally and synced through Turso.
     Notes,
     /// Contacts from every signed-in Google account, and their directories.
     People,
@@ -1171,9 +1171,8 @@ fn boot_state() -> State {
     let mut state = State::new(Config::load(), Catalog::load());
     state.config_error = Config::load_problem();
 
-    // Follow the config in Google Drive's app folder. This is also not part of
-    // `State::new`: a hand-built test state must not touch the network.
-    crate::config_sync::start();
+    // Start sync only for the running app; hand-built test states stay offline.
+    crate::database_sync::start();
 
     // Days are kept under the XDG cache directory as well as in memory, so a
     // restart opens on what the last run saw rather than an empty grid. This

@@ -12,7 +12,7 @@ pub mod brain_dump;
 pub mod calendar;
 pub mod clock;
 pub mod config;
-pub mod config_sync;
+pub mod config_watch;
 pub mod database_migration;
 pub mod database_sync;
 pub mod fsutil;

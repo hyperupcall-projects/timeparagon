@@ -954,7 +954,7 @@ fn with_shared(contents: &str, database: Option<&Path>) -> String {
 /// Watch the directory, not the inode: editors and our own saves replace the
 /// file by renaming a temporary file. The native watcher does no idle polling.
 /// The database is watched too, for shared data that another process or the
-/// Drive sync changed.
+/// Turso sync changed.
 pub fn watch() -> iced::Subscription<Config> {
     iced::Subscription::run(config_changes)
 }
@@ -1062,8 +1062,7 @@ fn config_changes_at(
 
 /// A config that does not parse may be one typo away from all of the user's
 /// settings and notes, while what is in memory is only defaults. Keeping the
-/// file also keeps it out of the Drive sync, which leaves unparseable files alone
-/// but would treat a fresh save of the defaults as the newest config.
+/// file prevents a save of the defaults from destroying recoverable settings.
 fn check_replaceable(path: &Path) -> io::Result<()> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,

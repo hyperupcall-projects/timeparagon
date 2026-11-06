@@ -33,7 +33,7 @@ TimeSlay integrates with a lot of tools:
 
 - Google Cloud Account
 	- Required.
-	- For Google Calendar, Tasks, Drive, and Gmail functionality.
+	- For Google Calendar, Tasks, Contacts, and Gmail functionality.
 - [Mapbox account](https://mapbox.com)
 	- Recommended.
 	- To set locations of events and calculate travel times.

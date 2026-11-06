@@ -23,16 +23,13 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // the day grid can drag an event's time. Tasks is read/write so the details
 // card can tick a task off. A token minted before events were writable lacks
 // the `calendar.events` scope, so a write is refused until the user reconnects.
-// Drive's `drive.appdata` is limited to the app's own hidden folder; it is how
-// the config follows the user between devices (see `config_sync`) and where
-// notes are stored (see `notes`), and it cannot see any of the user's other Drive files.
 // Gmail is read-only: a link pasted into a new task is read for its subject, and
 // the mail is never changed. Tokens minted before that scope was asked for get
 // a "Reconnect Google" message from the Gmail integration.
 // Contacts is read/write so the People screen can edit them, and the directory
 // is read-only: a Workspace domain's people can be searched but not changed.
 // Tokens minted before these were asked for get a "Reconnect" button there.
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/contacts https://www.googleapis.com/auth/directory.readonly";
+const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendars https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/contacts https://www.googleapis.com/auth/directory.readonly";
 
 /// What an extra Google account is asked for. Calendar and Tasks stay with the
 /// main Google account; these accounts are read for a message's subject, and

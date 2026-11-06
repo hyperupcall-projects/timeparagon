@@ -816,7 +816,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let connected = state.calendar.is_signed_in();
 
     let mut section = column![
-    text("Create a Desktop OAuth client in Google Cloud; enable the Calendar API, Tasks API, Drive API, and the Gmail API. Allow http://127.0.0.1 as a redirect.")
+    text("Create a Desktop OAuth client in Google Cloud; enable the Calendar API, Tasks API, and the Gmail API. Allow http://127.0.0.1 as a redirect.")
         .size((metrics.label() - 1.0).max(10.0))
         .style(text::secondary),
         field(

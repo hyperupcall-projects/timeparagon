@@ -33,7 +33,7 @@ Only one process per device opens the Turso replica. The desktop dock, panel
 and Android widget service continue using SQLite; journal triggers capture
 changes from every process. Alarms, credentials, theme, calendar/contacts/route
 caches and fetch timestamps stay local. Google Calendar and Tasks remain their
-own sources of truth. Settings in `config.toml` continue to use Drive.
+own sources of truth. Settings in `config.toml` stay local to each device.
 
 These stay on the desktop: the dock and panel, global shortcuts, alarms and the
 Pomodoro timer (neither runs in the background here yet), voice input, People,
@@ -148,42 +148,24 @@ its private storage (`config.toml`, readable only by the app):
 ```
 
 After **Save and connect**, sign in with Google in the browser. The rest of the
-config (calendars, task lists) arrives from Google Drive after sign-in, if you
-have configured it in the iced app.
+config (calendars, task lists) is local to this device. Configure it here or
+copy the settings from the iced app.
 
 The app sets `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` to
 its Android internal storage before starting, so the shared data layer uses
 the same relative layout as it does on desktop.
 
-### Config sync through Google Drive
+### Settings and data sync
 
-Both apps keep `config.toml` in step through Google Drive's hidden **app data
-folder** (the `drive.appdata` scope). The folder is private to the app: it does
-not appear in Drive and the app cannot see any of your other files. The sync is
-`core/src/config_sync.rs`, shared by the iced app and this one.
+Turso is required for shared data sync, including notes, habits, todos and
+projects. `config.toml` stays local to each device. Both apps watch it and
+reload local edits; they do not upload or download settings through Google
+Drive, and Google sign-in does not request Drive access.
 
-- `config.toml` is watched; an edit is uploaded a couple of seconds after it
-  settles. Drive is polled every 30 seconds, and a newer copy replaces the
-  local file (the iced app and the day view both reload it).
-- If only one side changed since the last sync, that side wins. If both did,
-  or on the first sync after launch, the **newest timestamp wins**: the file's
-  modification time against Drive's `modifiedTime`. An upload stamps the Drive
-  copy with the local time and a download stamps the local file with Drive's,
-  so syncing does not make either side look newer.
-- An **empty** config (missing, blank, or only comments) never replaces
-  another one, and a config that does not parse is neither uploaded nor
-  overwritten.
-- Shared user data now uses Turso; the older `shared-data.json` transport is
-  disabled in normal builds so it cannot overwrite the database. Existing
-  Drive files are left in place. Upgrade both devices before editing shared data.
-- A config file stamped with the epoch is treated as a placeholder, so a config
-  already in Drive replaces it.
-
-Google Drive must be enabled for the OAuth client's Cloud project, and the
-token needs the Drive permission. Existing sign-ins predate it: disconnect and
-**Connect Google** once on each device. The day view's header shows the sync
-state. Every device must use the same OAuth client ID, since an app data
-folder belongs to one client.
+To remove a previously granted Drive permission, revoke the app's access in
+[Google Account connections](https://myaccount.google.com/connections), then
+connect Google again in the updated app on each device. Changing the requested
+scopes does not revoke existing tokens.
 
 ### Mobile layout
 
@@ -263,8 +245,7 @@ clean tree, because the manifest names the widget's resources.
 - Only the Dioxus crate enables the desktop/mobile renderers; the root
   workspace defaults to the iced package (`default-members = ["."]`).
 - The **☰** button opens the Calendars sheet, which switches Google calendars,
-  task lists and TimeSlay event kinds on or off. It saves to the shared
-  `[calendar]` settings, so the choice syncs to your other devices through
-  Google Drive. Tasks inside a time block's popup stay visible.
+  task lists and TimeSlay event kinds on or off. It saves to this device's
+  `[calendar]` settings. Tasks inside a time block's popup stay visible.
 - The ⚙ button only edits the Google client ID and secret. Other settings live
   in the iced application; this crate reloads the same config when it changes.

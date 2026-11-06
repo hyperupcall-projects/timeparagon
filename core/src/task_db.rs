@@ -66,7 +66,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
-        if crate::database_sync::enabled() && path != Path::new(":memory:") {
+        if path != Path::new(":memory:") {
             let enrolled = db
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_control'",
@@ -346,13 +346,14 @@ mod tests {
         event
     }
     #[test]
-    fn sequential_persistent_ids_and_migration_preserve_metadata_and_history() {
+    fn persistent_ids_and_migration_preserve_metadata_and_history() {
         let path = path("migration");
         let mut db = Database::open(&path).unwrap();
         let mut original = event("old");
         original.details.description = "Human notes\ntt-timeblocking: {\"minutes\":45,\"block\":\"work/block\",\"order\":9}\nttid: 12345678-1234-4234-8234-123456789abc".into();
         let mut data = db.import(&original).unwrap();
-        assert_eq!(data.id, 100);
+        assert!(data.id >= 100);
+        let original_id = data.id;
         assert_eq!(data.metadata.minutes, 45);
         assert_eq!(
             data.legacy_key.as_deref(),
@@ -367,15 +368,25 @@ mod tests {
         let mut db = Database::open(&path).unwrap();
         assert_eq!(db.import(&moved).unwrap(), data);
         assert_eq!(db.import(&original).unwrap(), data); // stale notes cannot overwrite local edits
-        assert_eq!(db.import(&event("another")).unwrap().id, 101);
-        // A failed transaction must not consume or publish an ID.
+        let another_id = db.import(&event("another")).unwrap().id;
+        assert_ne!(another_id, original_id);
+        // A rolled-back transaction must not publish a task.
         {
             let tx =
                 db.0.transaction_with_behavior(TransactionBehavior::Immediate)
                     .unwrap();
-            tx.execute("UPDATE counter SET next_id=5000", []).unwrap();
+            tx.execute("INSERT INTO tasks VALUES(5000,'{}',NULL)", [])
+                .unwrap();
         }
-        assert_eq!(db.import(&event("after-rollback")).unwrap().id, 102);
+        assert_eq!(
+            db.0.query_row("SELECT count(*) FROM tasks WHERE id=5000", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        let after_rollback = db.import(&event("after-rollback")).unwrap().id;
+        assert_ne!(after_rollback, original_id);
+        assert_ne!(after_rollback, another_id);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
     #[test]
@@ -452,7 +463,7 @@ mod tests {
         }
     }
     #[test]
-    fn concurrent_processes_get_unique_consecutive_ids_and_one_shared_mapping() {
+    fn concurrent_processes_get_unique_ids_and_one_shared_mapping() {
         let path = path("concurrent");
         let children: Vec<_> = (0..4)
             .map(|worker| {
@@ -478,12 +489,12 @@ mod tests {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .unwrap();
-        assert_eq!((count, min, max), (81, 100, 180));
-        assert_eq!(
-            db.0.query_row("SELECT next_id FROM counter", [], |r| r.get::<_, i64>(0))
-                .unwrap(),
-            181
-        );
+        assert_eq!(count, 81);
+        assert!(min >= 100 && max < (1_i64 << 62));
+        let aliases: i64 =
+            db.0.query_row("SELECT count(*) FROM task_aliases", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(aliases, 81, "all processes reuse the same shared task");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

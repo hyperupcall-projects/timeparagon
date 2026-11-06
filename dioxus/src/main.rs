@@ -24,7 +24,7 @@ use timeslay_core::calendar::search::Search;
 use timeslay_core::calendar::time_format::{self, TimeFormat};
 use timeslay_core::calendar::{self, Event};
 use timeslay_core::config::CalendarSettings;
-use timeslay_core::config_sync;
+use timeslay_core::config_watch;
 use timeslay_core::theme as look;
 use timeslay_core::timeblocking as tb;
 
@@ -52,7 +52,8 @@ return false;
 
 #[cfg(not(target_os = "android"))]
 fn main() {
-    config_sync::start();
+    config_watch::start();
+    timeslay_core::database_sync::start();
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
             dioxus::desktop::Config::new()
@@ -83,7 +84,8 @@ fn window_background() -> (u8, u8, u8, u8) {
 #[cfg(target_os = "android")]
 fn main() {
     prepare_android_storage();
-    config_sync::start();
+    config_watch::start();
+    timeslay_core::database_sync::start();
     dioxus::launch(App);
 }
 
@@ -169,8 +171,7 @@ fn java_file_path(
 
 #[component]
 fn App() -> Element {
-    // The config can change under the view: an edit in the iced app, or a copy
-    // from another device through Google Drive.
+    // Local settings can change under the view when the iced app saves them.
     let mut config = use_signal(day::load_config);
     let settings = config.read().calendar.clone();
     let config_hint = timeslay_core::config::config_path()
@@ -214,11 +215,6 @@ fn App() -> Element {
     let notes_store = use_context_provider(notes::NotesStore::new);
     let note_opening = use_signal(|| None::<String>);
     use_context_provider(|| notes::NoteOpening(note_opening));
-    use_hook(move || {
-        if day::signed_in() {
-            notes_store.sync(config.peek().calendar.clone());
-        }
-    });
     let mut calendars_error = use_signal(|| None::<String>);
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
@@ -316,9 +312,6 @@ fn App() -> Element {
             if last_refresh.elapsed() >= config.peek().calendar.sync_every() {
                 last_refresh = tokio::time::Instant::now();
                 revision.set(revision() + 1);
-                if day::signed_in() {
-                    notes_store.sync(config.peek().calendar.clone());
-                }
             }
         }
     });
@@ -328,7 +321,7 @@ fn App() -> Element {
     // window size, say) does not trigger a re-render.
     use_future(move || async move {
         let mut seen = (
-            config_sync::generation(),
+            config_watch::generation(),
             timeslay_core::database_sync::generation(),
         );
         loop {
@@ -337,7 +330,7 @@ fn App() -> Element {
             database_sync_status.set(timeslay_core::database_sync::status());
             notes_store.reload_shared();
             let generation = (
-                config_sync::generation(),
+                config_watch::generation(),
                 timeslay_core::database_sync::generation(),
             );
             if generation != seen {
@@ -1261,7 +1254,7 @@ fn month_picker(
     mut shown: Signal<NaiveDate>,
     nav: DayNav,
 ) -> Element {
-    let label = format!("{} ▾", calendar::month_short(selected.month()));
+    let label = format!("{} ▾", calendar::month_day_label(selected));
     let month = shown();
     let days = if open() {
         calendar::month_grid(month, first_day)
@@ -1335,7 +1328,7 @@ fn month_picker(
     rsx! {
         div { class: "month-anchor",
             button {
-                class: if open() { "btn primary" } else { "btn" },
+                class: if selected == today { "btn today" } else if open() { "btn primary" } else { "btn" },
                 aria_expanded: open().to_string(),
                 onclick: move |_| {
                     if !open() {
