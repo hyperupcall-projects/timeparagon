@@ -935,10 +935,9 @@ fn event_row<'a>(state: &'a State, series: &'a Series, metrics: &Metrics) -> Ele
         .spacing(6)
         .align_y(Alignment::Center),
         text(format!(
-            "{} · {} – {}",
+            "{} · {}",
             series.recurrence_label(),
-            crate::calendar::time_format::clock(series.start, format),
-            crate::calendar::time_format::clock(series.end, format),
+            crate::calendar::time_format::range(series.start, series.end, format),
         ))
         .size(metrics.label() - 1.0)
         .style(text::secondary),
