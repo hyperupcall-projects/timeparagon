@@ -340,6 +340,7 @@ pub struct State {
 
     /// The alarms set on the calendar, and the state of setting them.
     pub alarms: alarms::Alarms,
+    pub reminders: crate::reminders::Reminders,
 
     pub screen: Screen,
     pub view: CalendarView,
@@ -448,6 +449,7 @@ pub enum Message {
     Accounts(crate::integrations::accounts::Action),
     People(crate::people::Action),
     Alarms(alarms::Action),
+    Reminders(crate::reminders::Action),
     Projects(crate::projects::Action),
     Travel(crate::travel::Action),
     Habits(crate::habits::Action),
@@ -848,6 +850,7 @@ impl State {
             now: Instant::now(),
             sidebar: None,
             alarms: alarms::Alarms::default(),
+            reminders: crate::reminders::Reminders::default(),
             screen: Screen::Calendar,
             view: CalendarView::default(),
             view_menu_open: false,
@@ -1099,6 +1102,7 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
     });
 
     state.panel_config = Some(panel.clone());
+    state.reminders.active = true;
 
     let (tx, rx) = mpsc::channel();
     state.panel_command_rx = Some(rx);
@@ -1125,12 +1129,14 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
         PANEL_FILL,
     );
     let (_id, open) = window::open(sidebar_settings(&panel, &state.config.views));
+    let device_sounds = crate::reminders::load_device_sounds(&state);
 
     (
         state,
         Task::batch([
             open.map(|v0| Message::System(SystemMessage::WindowOpened(v0))),
             system_theme_task(),
+            device_sounds,
         ]),
     )
 }
@@ -1391,6 +1397,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::Accounts(action) => crate::integrations::accounts::update(state, action),
         Message::People(action) => crate::people::update(state, action),
         Message::Alarms(action) => alarms::update(state, action),
+        Message::Reminders(action) => crate::reminders::update(state, action),
         Message::Projects(action) => crate::projects::update(state, action),
         Message::Travel(action) => crate::travel::update(state, action),
         Message::Habits(action) => crate::habits::update(state, action),
@@ -1559,6 +1566,14 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         subscriptions.push(
             iced::time::every(Duration::from_secs(1))
                 .map(|_| Message::Alarms(alarms::Action::Poll)),
+        );
+    }
+    // Reminders read the day cache on a worker thread every poll. With them
+    // switched off nothing is polled at all.
+    if crate::reminders::needs_poll(state) {
+        subscriptions.push(
+            iced::time::every(crate::reminders::POLL_INTERVAL)
+                .map(|_| Message::Reminders(crate::reminders::Action::Poll)),
         );
     }
     if alarms::needs_flush(&state.alarms) {

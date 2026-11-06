@@ -311,6 +311,14 @@ rm -f "$android_main"/res/mipmap-*/ic_launcher.png
 # earlier build for another ABI would be packaged too.
 rm -rf "$android_main/jniLibs"
 
+# --- Reminder sounds -------------------------------------------------------
+# Notification channels play sounds by URI, so the tones the app synthesizes are
+# rendered to res/raw here instead of being kept in the repository. This runs
+# on the build machine, not for the Android target.
+rm -f "$android_main"/res/raw/timeslay_tone_*.wav
+(cd "$repo_root" && cargo run --quiet --package timeslay-core --example render_sounds -- \
+    "$android_main/res/raw" >/dev/null) || fail "could not render the reminder sounds"
+
 # --- Build -----------------------------------------------------------------
 cd "$repo_root"
 if [ "$profile" = release ]; then

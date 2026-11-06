@@ -1225,6 +1225,42 @@ textarea {
     margin: 4px 0 0;
 }
 
+.reminder-category {
+    display: flex;
+    flex-direction: column;
+}
+
+/* A category's options hang under its switch, indented past the swatch. */
+.reminder-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0 0 10px 26px;
+}
+
+.reminder-subrow {
+    min-height: 34px;
+    font-size: 14px;
+}
+
+.reminder-sound {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.reminder-sound .client-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.reminder-blocked {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+}
+
 /* ---------------------------------------------------------------- editors */
 
 .editor-backdrop {

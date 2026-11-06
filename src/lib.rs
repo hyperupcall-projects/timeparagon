@@ -35,6 +35,7 @@ pub mod notify;
 pub mod panel;
 pub mod people;
 pub mod projects;
+pub mod reminders;
 pub mod theme;
 pub mod travel;
 pub mod ui;

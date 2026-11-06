@@ -22,6 +22,7 @@ pub mod notes;
 pub mod people;
 pub mod projects;
 pub mod recurrence;
+pub mod reminders;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;

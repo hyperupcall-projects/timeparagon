@@ -3,13 +3,14 @@
 use super::*;
 use iced::widget::column;
 
-/// The top of the calendar: the month picker, the day in view and the way
-/// into the calendar menu.
+/// The top of the calendar: the month picker and the way into the calendar
+/// menu.
 ///
-/// The day sits between the month picker and the menu, and takes whatever room
-/// is left over, so the whole date is readable even when the text is large.
-/// The settings are reached through the menu rather than from here, because a
-/// narrow window has room for one button beside the day and not for two.
+/// In a range view the heading sits between the month picker and the menu and
+/// takes whatever room is left over, so the whole range is readable even when
+/// the text is large. The settings are reached through the menu rather than
+/// from here, because a narrow window has room for one button beside the
+/// heading and not for two.
 pub(super) fn header<'a>(
     state: &'a State,
     metrics: &Metrics,
@@ -21,7 +22,7 @@ pub(super) fn header<'a>(
     } else {
         state.calendar.day
     };
-    let heading = if weekly {
+    let heading = weekly.then(|| {
         let days = state.config.calendar.week_dates(day);
         let format = if metrics.breakpoint.is_compact() {
             "%-m/%-d"
@@ -33,9 +34,7 @@ pub(super) fn header<'a>(
             days.first().unwrap().format(format),
             days.last().unwrap().format(format)
         )
-    } else {
-        calendar::day_heading(day, today)
-    };
+    });
 
     let month_open = if weekly {
         state.overview_month_open
@@ -82,15 +81,15 @@ pub(super) fn header<'a>(
 
     let search = search_button(state, metrics);
 
-    let heading = text(heading)
-        .size(metrics.label() + 3.0)
-        .font(Font {
-            weight: Weight::Bold,
-            ..Font::DEFAULT
-        })
-        .center()
-        .width(Fill);
-    let day: Element<'a, Message> = if weekly {
+    let day: Option<Element<'a, Message>> = heading.map(|heading| {
+        let heading = text(heading)
+            .size(metrics.label() + 3.0)
+            .font(Font {
+                weight: Weight::Bold,
+                ..Font::DEFAULT
+            })
+            .center()
+            .width(Fill);
         row![
             nav_button(
                 "◀",
@@ -112,14 +111,47 @@ pub(super) fn header<'a>(
         .align_y(Alignment::Center)
         .width(Fill)
         .into()
-    } else {
-        heading.into()
-    };
+    });
 
-    match header_lines(metrics) {
-        // Narrower still, the four buttons do not fit on a line of their own.
-        3 => column![
-            day,
+    if let Some(day) = day {
+        return match header_lines(metrics, true) {
+            // Narrower still, the four buttons do not fit on a line of their own.
+            3 => column![
+                day,
+                row![month, Space::new().width(Fill), set_alarm]
+                    .spacing(metrics.spacing)
+                    .align_y(Alignment::Center),
+                row![Space::new().width(Fill), search, menu]
+                    .spacing(metrics.spacing)
+                    .align_y(Alignment::Center),
+            ]
+            .spacing(metrics.spacing)
+            .into(),
+            // The month picker, Set Alarm, Search, Menu and the date do not fit
+            // side by side at a narrow width, so the date gets a line to itself
+            // and is never squeezed into a few letters per row.
+            2 => column![
+                day,
+                row![month, Space::new().width(Fill), set_alarm, search, menu]
+                    .spacing(metrics.spacing)
+                    .align_y(Alignment::Center),
+            ]
+            .spacing(metrics.spacing)
+            .into(),
+            _ => row![month, day, set_alarm, search, menu]
+                .spacing(metrics.spacing)
+                .align_y(Alignment::Center)
+                .into(),
+        };
+    }
+
+    if metrics.size.width >= TWO_LINE_HEADER {
+        row![month, Space::new().width(Fill), set_alarm, search, menu]
+            .spacing(metrics.spacing)
+            .align_y(Alignment::Center)
+            .into()
+    } else {
+        column![
             row![month, Space::new().width(Fill), set_alarm]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
@@ -128,22 +160,7 @@ pub(super) fn header<'a>(
                 .align_y(Alignment::Center),
         ]
         .spacing(metrics.spacing)
-        .into(),
-        // The month picker, Set Alarm, Search, Menu and the date do not fit side
-        // by side at a narrow width, so the date gets a line to itself and is
-        // never squeezed into a few letters per row.
-        2 => column![
-            day,
-            row![month, Space::new().width(Fill), set_alarm, search, menu]
-                .spacing(metrics.spacing)
-                .align_y(Alignment::Center),
-        ]
-        .spacing(metrics.spacing)
-        .into(),
-        _ => row![month, day, set_alarm, search, menu]
-            .spacing(metrics.spacing)
-            .align_y(Alignment::Center)
-            .into(),
+        .into()
     }
 }
 
@@ -153,10 +170,13 @@ pub(super) const SINGLE_LINE_HEADER: f32 = 540.0;
 /// The narrowest a calendar can be and still hold all four buttons on one line.
 pub(super) const TWO_LINE_HEADER: f32 = 320.0;
 
-/// How many lines the header takes: one from [`SINGLE_LINE_HEADER`], the date on
-/// its own line above that of [`TWO_LINE_HEADER`], and the buttons split in two
-/// below it.
-pub(super) fn header_lines(metrics: &Metrics) -> u8 {
+/// How many lines the header takes. A range view has a date heading that needs
+/// its own line in narrow windows; the day view has no heading, so it only
+/// splits its buttons below [`TWO_LINE_HEADER`].
+pub(super) fn header_lines(metrics: &Metrics, weekly: bool) -> u8 {
+    if !weekly {
+        return if metrics.size.width >= TWO_LINE_HEADER { 1 } else { 2 };
+    }
     if metrics.size.width >= SINGLE_LINE_HEADER {
         1
     } else if metrics.size.width >= TWO_LINE_HEADER {
@@ -183,8 +203,8 @@ pub(super) fn nav_button<'a>(
 
 /// The vertical space the header row takes, so an overlay can start below
 /// it rather than over it.
-pub(super) fn header_offset(metrics: &Metrics) -> f32 {
-    let lines = f32::from(header_lines(metrics));
+pub(super) fn header_offset(state: &State, metrics: &Metrics) -> f32 {
+    let lines = f32::from(header_lines(metrics, state.range_view_active()));
 
     metrics.padding + (metrics.icon_button() + metrics.spacing) * lines
 }

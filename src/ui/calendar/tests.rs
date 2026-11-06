@@ -2142,7 +2142,7 @@ fn clicking_a_popups_background_keeps_it_open_but_clicking_outside_closes_it() {
     state.main_size = Size::new(900.0, 800.0);
     let metrics = Metrics::of(state.main_size);
     // In each card's own padding, clear of every control.
-    let top = header_offset(&metrics) + metrics.padding + 2.0;
+    let top = header_offset(&state, &metrics) + metrics.padding + 2.0;
     let search_inside = iced::Point::new(metrics.size.width - metrics.padding - 2.0, top);
     let menu_inside = iced::Point::new(metrics.padding + 2.0, top);
     let outside = iced::Point::new(5.0, metrics.size.height - 5.0);

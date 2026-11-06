@@ -25,6 +25,7 @@ Android app releases are built and published in CI. It is recommended to use [Ob
 
 - [Notes](docs/notes.md)
 - [Voice input](docs/voice-input.md)
+- [Reminders](docs/reminders.md)
 
 
 ## External APIs and Services

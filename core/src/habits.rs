@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{Datelike, Duration, Months, NaiveDate, Weekday};
+use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime, Timelike, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// The Google extended property naming the habit an event belongs to.
@@ -329,6 +329,40 @@ pub struct DayEntry {
     pub value: Option<f64>,
 }
 
+/// When each slip and each resisted urge of a day was logged, on a "No" habit.
+/// The counts in `marks` and `resisted` stay the record; these only say when.
+/// Counts from before times were kept have fewer times than entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayLog {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slipped: Vec<NaiveTime>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resisted: Vec<NaiveTime>,
+}
+
+impl DayLog {
+    fn is_empty(&self) -> bool {
+        self.slipped.is_empty() && self.resisted.is_empty()
+    }
+}
+
+/// A day's `count` entries, untimed ones first and then the latest `count`
+/// times in order.
+fn log_entries(count: u32, times: &[NaiveTime]) -> Vec<Option<NaiveTime>> {
+    let count = count as usize;
+    let mut times = times.to_vec();
+    times.sort();
+    let timed = times.len().min(count);
+    let mut entries = vec![None; count - timed];
+    entries.extend(times[times.len() - timed..].iter().copied().map(Some));
+    entries
+}
+
+/// A time of day to the second, for logging something as it happens.
+pub fn log_time(time: NaiveTime) -> NaiveTime {
+    time.with_nanosecond(0).unwrap_or(time)
+}
+
 /// One habit: its goal, its settings and everything recorded for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(from = "StoredHabit")]
@@ -364,6 +398,9 @@ pub struct Habit {
     /// done. It is kept apart from `marks` so that it never changes the score.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resisted: BTreeMap<NaiveDate, u32>,
+    /// On a "No" habit: when each slip and resisted urge was logged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub log: BTreeMap<NaiveDate, DayLog>,
     /// The [`Section`] it is listed under, by id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
@@ -410,6 +447,8 @@ struct StoredHabit {
     marks: BTreeMap<NaiveDate, StoredMark>,
     #[serde(default)]
     resisted: BTreeMap<NaiveDate, u32>,
+    #[serde(default)]
+    log: BTreeMap<NaiveDate, DayLog>,
     #[serde(default)]
     section: Option<String>,
     #[serde(default)]
@@ -503,6 +542,7 @@ impl From<StoredHabit> for Habit {
             icons: stored.icons,
             marks,
             resisted: stored.resisted,
+            log: stored.log,
             section: stored.section,
             measure: if measurable {
                 Some(Measure {
@@ -535,6 +575,7 @@ impl Habit {
             icons: Icons::Symbols,
             marks: BTreeMap::new(),
             resisted: BTreeMap::new(),
+            log: BTreeMap::new(),
             section: None,
             measure: None,
             values: BTreeMap::new(),
@@ -578,6 +619,37 @@ impl Habit {
             self.resisted.remove(&day);
         } else {
             self.resisted.insert(day, times);
+        }
+    }
+
+    /// Each slip of a day, with when it was logged if that is known.
+    pub fn slips_on(&self, day: NaiveDate) -> Vec<Option<NaiveTime>> {
+        let times = self.log.get(&day).map_or(&[][..], |log| &log.slipped[..]);
+        log_entries(self.times_on(day), times)
+    }
+
+    /// Each time it was resisted on a day, with when it was logged if known.
+    pub fn resisted_log_on(&self, day: NaiveDate) -> Vec<Option<NaiveTime>> {
+        let times = self.log.get(&day).map_or(&[][..], |log| &log.resisted[..]);
+        log_entries(self.resisted_on(day), times)
+    }
+
+    /// Records when a day's slips and resisted urges were logged. The counts
+    /// are set by [`Habit::set_entry`]; entries without a time are left out.
+    pub fn set_log(
+        &mut self,
+        day: NaiveDate,
+        slipped: &[Option<NaiveTime>],
+        resisted: &[Option<NaiveTime>],
+    ) {
+        let log = DayLog {
+            slipped: slipped.iter().flatten().copied().collect(),
+            resisted: resisted.iter().flatten().copied().collect(),
+        };
+        if log.is_empty() {
+            self.log.remove(&day);
+        } else {
+            self.log.insert(day, log);
         }
     }
 

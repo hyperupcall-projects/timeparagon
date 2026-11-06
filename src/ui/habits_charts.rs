@@ -284,25 +284,43 @@ impl canvas::Program<Message> for DayMark {
             });
         };
         // Doing it again is worth noting, however little it changes the score.
-        if self.times > 1 && matches!(self.status, Status::Yes | Status::Slipped(_)) {
-            small(
-                &mut frame,
-                format!("×{}", self.times),
-                13.0,
-                if matches!(self.status, Status::Yes) {
-                    color
-                } else {
-                    slip_color(dark)
-                },
-                9.0,
-            );
+        if self.times > 1 && self.status == Status::Yes {
+            small(&mut frame, format!("×{}", self.times), 13.0, color, 9.0);
         }
         if let Some(value) = self.value {
             small(&mut frame, habits::format_amount(value), -16.0, color, 9.0);
         }
-        // As is holding back, however little it changes the score.
-        if self.resisted > 0 && self.status == Status::Clean {
-            small(&mut frame, format!("+{}", self.resisted), 13.0, color, 9.0);
+        // As is holding back, however little it changes the score. A day that
+        // slipped shows its slips beside however many times it held back.
+        match self.status {
+            Status::Clean if self.resisted > 0 => {
+                small(&mut frame, format!("+{}", self.resisted), 13.0, color, 9.0);
+            }
+            Status::Slipped(slips) => {
+                let slips = slips.max(self.times);
+                let slip = slip_color(dark);
+                if self.resisted > 0 {
+                    let good = Point::new(center.x - 8.0, center.y + 13.0);
+                    let bad = Point::new(center.x + 8.0, center.y + 13.0);
+                    for (content, position, tint) in [
+                        (format!("+{}", self.resisted), good, color),
+                        (format!("+{slips}"), bad, slip),
+                    ] {
+                        frame.fill_text(Text {
+                            content,
+                            position,
+                            color: tint,
+                            size: iced::Pixels(9.0),
+                            align_x: iced::alignment::Horizontal::Center.into(),
+                            align_y: iced::alignment::Vertical::Center,
+                            ..Text::default()
+                        });
+                    }
+                } else {
+                    small(&mut frame, format!("+{slips}"), 13.0, slip, 9.0);
+                }
+            }
+            _ => {}
         }
         if self.icons == Icons::Faces
             && let Some((face, tint)) = self.face(color, quiet, dark)

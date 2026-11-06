@@ -88,6 +88,11 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let content = column![
         section("Preferences", preferences(state, metrics), metrics),
         section(
+            "Reminders",
+            super::reminders::settings_section(state, metrics),
+            metrics
+        ),
+        section(
             "Database sync",
             text(crate::database_sync::status())
                 .size(metrics.label())
