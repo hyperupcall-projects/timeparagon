@@ -1,7 +1,7 @@
 # Notes
 
 Notes are Markdown documents listed under **More → Notes**. They are separate
-from the notepad behind the **Note** tab, which is one page in the config file.
+from the notepad behind the **Note** tab.
 They replace the old Google Keep integration, which has been removed.
 
 ## Storage
@@ -9,8 +9,8 @@ They replace the old Google Keep integration, which has been removed.
 - Notes save automatically to `<data dir>/timeslay.sqlite3` and work offline.
 - Turso synchronizes them through the private Tailscale server alongside habits
   and scratch data. Both devices must be connected to Tailscale to exchange edits.
-- The upgrade retains existing local notes and their links. Normal builds no
-  longer upload/download notes through Drive; older Drive files are left intact.
+- Existing local notes and their links are retained. The app no longer accesses
+  Drive; files previously stored there are left intact.
 - Fields merge independently, and every version is retained in the sync journal
   for recovery if two devices edit the same text. Export versions with the
   `database_history` example in `timeslay-core`.
@@ -47,23 +47,17 @@ Notes connect to events, time blocks, tasks and habits.
 ## Colors
 
 Each note has one of 8 light pastel backgrounds: Butter (the default), Peach,
-Rose, Lilac, Lavender, Sky, Aqua or Mint. There is no "no color" option, and an
-unknown color read from Drive falls back to the default. Text on a note is
-always dark, on every theme.
+Rose, Lilac, Lavender, Sky, Aqua or Mint. There is no "no color" option. Text on
+a note is always dark, on every theme.
 
 ## Deleting and conflicts
 
-- Deleting a note asks for confirmation, then permanently deletes the Drive file.
-- If two devices change the same note, Drive's version stays and the local edits
-  become a separate "Title (conflict)" note, so no text is lost.
-- If a note is deleted on another device while it has unsynced edits here, those
-  edits are uploaded as a new file.
-
-## Limitations
-
-- Notes are desktop only. The Android app has no Notes screen.
-- Sync is covered by tests against a fake Drive. It has not yet been exercised
-  against real Google Drive.
+- Deleting a note asks for confirmation, then removes it from the local library.
+  The database journal replicates that deletion to other devices.
+- Fields merge independently across devices. Conflicting text revisions remain
+  in the sync journal and can be exported with the `database_history` example.
+- Notes are available in both the desktop and Android apps. Saving and sync do
+  not depend on Google sign-in.
 
 ## Upgrading from Google Keep
 

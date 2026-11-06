@@ -2555,6 +2555,13 @@ pub fn month_short(month: u32) -> &'static str {
     }
 }
 
+/// A compact date for calendar navigation, e.g. "Nov. 5" or "May 5".
+pub fn month_day_label(day: NaiveDate) -> String {
+    let month = month_short(day.month());
+    let period = if day.month() == 5 { "" } else { "." };
+    format!("{month}{period} {}", day.day())
+}
+
 fn month_long(month: u32) -> &'static str {
     match month {
         1 => "January",

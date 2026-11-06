@@ -162,6 +162,18 @@ textarea {
     opacity: 0.45;
 }
 
+.month-anchor .btn.today {
+    background: color-mix(in srgb, var(--card), var(--accent) 6%);
+}
+
+.month-anchor .btn.today:hover {
+    background: color-mix(in srgb, var(--hover), var(--accent) 10%);
+}
+
+.month-anchor .btn.today:active {
+    background: color-mix(in srgb, var(--pressed), var(--accent) 14%);
+}
+
 .btn.danger {
     background: var(--danger);
     border-color: var(--danger-edge);

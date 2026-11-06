@@ -1,6 +1,6 @@
 //! Todos, the notepad's text, brain dumps, projects and work sessions: data the
 //! user writes, kept in the local database and shared between devices through
-//! Google Drive by [`crate::config_sync`].
+//! Turso by [`crate::database_sync`].
 //!
 //! Older builds kept these as tables in `config.toml`. The configs still carry
 //! them in memory, so the apps use them as before. Loading puts them into the
@@ -204,61 +204,12 @@ pub fn save_section(database: &Path, section: &str, value: &impl Serialize) -> i
     store(database, &mut table, &[section])
 }
 
-/// Every section as one JSON object, with when it last changed: what is
-/// synced. The keys are sorted, so the same data always reads the same.
-pub(crate) fn bundle(database: &Path) -> io::Result<(String, i64)> {
-    let mut database = Database::open(database).map_err(other)?;
-    let connection = database.connection();
-    let mut fields = serde_json::Map::new();
-    for section in SECTIONS {
-        if let Some(text) = document(connection, &key(section)).map_err(other)? {
-            let value = serde_json::from_str(&text)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            fields.insert(section.to_owned(), value);
-        }
-    }
-    let modified = document(connection, MODIFIED)
-        .map_err(other)?
-        .and_then(|text| text.parse().ok())
-        .unwrap_or(0);
-    let sorted: std::collections::BTreeMap<_, _> = fields.into_iter().collect();
-    Ok((serde_json::to_string(&sorted).map_err(other)?, modified))
-}
-
-/// Replaces every section with those in `text`, a [`bundle`] from elsewhere.
-pub(crate) fn replace(database: &Path, text: &str, modified_ms: i64) -> io::Result<()> {
-    let mut fields: serde_json::Map<String, Value> = serde_json::from_str(text)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let mut database = Database::open(database).map_err(other)?;
-    let tx = database
-        .connection()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(other)?;
-    for section in SECTIONS {
-        match fields.remove(section).filter(|value| !blank(value)) {
-            Some(value) => tx.execute(
-                "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                params![key(section), value.to_string()],
-            ),
-            None => tx.execute("DELETE FROM documents WHERE key=?1", [key(section)]),
-        }
-        .map_err(other)?;
-    }
-    tx.execute(
-        "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        params![MODIFIED, modified_ms.to_string()],
-    )
-    .map_err(other)?;
-    tx.commit().map_err(other)
-}
-
 /// Moves sections that `config.toml` still holds into the database: those an
-/// older build wrote, or that a device running one synced here. Where both have
-/// a section and they differ, the newer wins, as in the sync: the file's
+/// older build wrote. Where both have
+/// a section and they differ, the newer wins: the file's
 /// modification time against when the shared data last changed. A section with
 /// nothing in it never replaces one with something. The file keeps its
-/// modification time, so the config sync does not mistake the move for a newer
-/// config.
+/// modification time so the migration does not look like a settings edit.
 pub(crate) fn adopt(config: &Path, database: &Path) -> io::Result<()> {
     let holds_sections = |text: &str| {
         toml::from_str::<toml::Table>(text).is_ok_and(|mut table| {
@@ -348,6 +299,26 @@ mod tests {
         (directory, path)
     }
 
+    /// Inspect migrated sections and their timestamp without a sync transport.
+    fn snapshot(path: &Path) -> io::Result<(String, i64)> {
+        let mut db = Database::open(path).map_err(other)?;
+        let connection = db.connection();
+        let mut fields = std::collections::BTreeMap::new();
+        for section in SECTIONS {
+            if let Some(text) = document(connection, &key(section)).map_err(other)? {
+                fields.insert(
+                    section,
+                    serde_json::from_str::<Value>(&text).map_err(other)?,
+                );
+            }
+        }
+        let modified = document(connection, MODIFIED)
+            .map_err(other)?
+            .and_then(|text| text.parse().ok())
+            .unwrap_or(0);
+        Ok((serde_json::to_string(&fields).map_err(other)?, modified))
+    }
+
     fn table(text: &str) -> toml::Table {
         toml::from_str(text).unwrap()
     }
@@ -375,12 +346,12 @@ mod tests {
     fn an_empty_section_is_not_stored_and_only_changes_move_the_clock() {
         let (_directory, path) = database();
         save_section(&path, "todos", &crate::todos::TodoList::default()).unwrap();
-        assert_eq!(bundle(&path).unwrap(), ("{}".to_owned(), 0));
+        assert_eq!(snapshot(&path).unwrap(), ("{}".to_owned(), 0));
 
         let mut todos = crate::todos::TodoList::default();
         todos.add("a");
         save_section(&path, "todos", &todos).unwrap();
-        let (text, first) = bundle(&path).unwrap();
+        let (text, first) = snapshot(&path).unwrap();
         assert!(text.contains("\"todos\""));
         assert!(first > 0);
 
@@ -391,30 +362,10 @@ mod tests {
             .unwrap();
         save_section(&path, "todos", &todos).unwrap();
         assert_eq!(
-            bundle(&path).unwrap().1,
+            snapshot(&path).unwrap().1,
             1,
             "saving the same data is not a change"
         );
-    }
-
-    #[test]
-    fn a_bundle_replaces_every_section() {
-        let (_directory, path) = database();
-        save_section(
-            &path,
-            "brain_dump",
-            &toml::toml! { entries = [{ date = "2026-11-05", text = "x" }] },
-        )
-        .unwrap();
-        replace(
-            &path,
-            r#"{"projects":{"items":[{"id":1,"name":"Work"}]}}"#,
-            42,
-        )
-        .unwrap();
-        let (text, modified) = bundle(&path).unwrap();
-        assert_eq!(text, r#"{"projects":{"items":[{"id":1,"name":"Work"}]}}"#);
-        assert_eq!(modified, 42);
     }
 
     #[test]
@@ -443,7 +394,7 @@ mod tests {
             table("[calendar]\nsync_minutes = 5\n\n[notepad]\nfont_size = 90\n")
         );
         assert_eq!(fs::metadata(&config).unwrap().modified().unwrap(), stamp);
-        let (text, modified) = bundle(&path).unwrap();
+        let (text, modified) = snapshot(&path).unwrap();
         assert_eq!(
             text,
             r#"{"notepad":{"text":"milk"},"projects":{"items":[{"id":1,"name":"Work"}]}}"#
@@ -464,18 +415,20 @@ mod tests {
                 .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
                 .unwrap();
         };
-        replace(
-            &path,
-            r#"{"notepad":{"text":"database"}}"#,
-            2_000_000_000_000,
-        )
-        .unwrap();
+        save_section(&path, "notepad", &toml::toml! { text = "database" }).unwrap();
+        let mut db = Database::open(&path).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE documents SET value='2000000000000' WHERE key=?1",
+                [MODIFIED],
+            )
+            .unwrap();
 
         fs::write(&config, "[notepad]\ntext = \"older\"\n").unwrap();
         stamp(1_000_000_000);
         adopt(&config, &path).unwrap();
         assert_eq!(
-            bundle(&path).unwrap().0,
+            snapshot(&path).unwrap().0,
             r#"{"notepad":{"text":"database"}}"#
         );
         assert!(!fs::read_to_string(&config).unwrap().contains("older"));
@@ -488,7 +441,7 @@ mod tests {
         stamp(3_000_000_000);
         adopt(&config, &path).unwrap();
         assert_eq!(
-            bundle(&path).unwrap(),
+            snapshot(&path).unwrap(),
             (
                 r#"{"notepad":{"text":"newer"}}"#.to_owned(),
                 3_000_000_000_000

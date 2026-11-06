@@ -43,7 +43,7 @@ pub(super) fn header<'a>(
         state.calendar.month_open
     };
     let month = button(
-        text(format!("{} ▾", calendar::month_short(day.month())))
+        text(format!("{} ▾", calendar::month_day_label(day)))
             .size(metrics.label())
             .center(),
     )
@@ -54,7 +54,9 @@ pub(super) fn header<'a>(
             MonthPicker::Panel
         },
     )))
-    .style(if month_open {
+    .style(if day == today {
+        crate::ui::controls::subtle_primary
+    } else if month_open {
         crate::ui::controls::primary
     } else {
         crate::ui::controls::secondary

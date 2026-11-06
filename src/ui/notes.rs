@@ -97,7 +97,7 @@ fn list_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let size = metrics.label();
 
     let mut refresh = crate::ui::controls::quiet_button(text("Refresh").size(size));
-    if !store.syncing() {
+    if !store.saving() {
         refresh = refresh.on_press(msg(Action::Refresh));
     }
     let actions = row![
@@ -111,7 +111,7 @@ fn list_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let mut body = column![
         super::controls::page_heading(
             "Notes",
-            "Markdown documents kept in Google Drive",
+            "Markdown notes synced across your devices",
             Some(notes.len()),
             metrics,
         ),
@@ -285,7 +285,7 @@ fn editor_page<'a>(state: &'a State, note: &'a Note, metrics: &Metrics) -> Eleme
     footer = footer.push(if store.confirm_delete {
         Element::from(
             column![
-                text("Delete this note from Google Drive? This cannot be undone.").size(size),
+                text("Delete this note from all devices?").size(size),
                 row![
                     crate::ui::controls::quiet_button(text("Cancel").size(size))
                         .on_press(msg(Action::DeleteCancelled)),

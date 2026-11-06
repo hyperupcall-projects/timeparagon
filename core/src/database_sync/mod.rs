@@ -23,9 +23,6 @@ static STARTED: OnceLock<()> = OnceLock::new();
 static STATUS: Mutex<String> = Mutex::new(String::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-pub fn enabled() -> bool {
-    cfg!(feature = "turso-sync") && !cfg!(test)
-}
 pub fn generation() -> u64 {
     crate::task_db::path()
         .and_then(|path| {
@@ -237,9 +234,6 @@ pub fn history(path: &Path) -> io::Result<Vec<Edit>> {
 }
 
 pub fn start() {
-    if !enabled() {
-        return;
-    }
     STARTED.get_or_init(|| {
         set_status("Database sync starting…".into());
         if let Err(e) = std::thread::Builder::new()
@@ -251,47 +245,43 @@ pub fn start() {
     });
 }
 fn run() {
-    #[cfg(feature = "turso-sync")]
-    {
-        let Some(path) = crate::task_db::path() else {
-            set_status("Database sync: no data directory".into());
-            return;
-        };
-        let parent = path.parent().expect("database directory");
-        let lock_path = parent.join("timeslay-sync.owner");
-        loop {
-            let attempt = (|| -> io::Result<()> {
-                let lock = fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(&lock_path)?;
-                crate::fsutil::make_private(&lock_path)?;
-                // Unlike fsutil::locked, failure must never permit two owners.
-                if let Err(error) = lock.try_lock() {
-                    set_status("Database sync running in another TimeSlay process".into());
-                    return Err(other(error));
-                }
-                set_status("Database sync connecting…".into());
-                enroll(&path)?;
-                let _ = rustls::crypto::ring::default_provider().install_default();
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                runtime.block_on(transport(&path))?;
-                drop(lock);
-                Ok(())
-            })();
-            if let Err(e) = attempt {
-                if status() != "Database sync running in another TimeSlay process" {
-                    set_status(format!("Database sync waiting; local data saved: {e}"));
-                }
+    let Some(path) = crate::task_db::path() else {
+        set_status("Database sync: no data directory".into());
+        return;
+    };
+    let parent = path.parent().expect("database directory");
+    let lock_path = parent.join("timeslay-sync.owner");
+    loop {
+        let attempt = (|| -> io::Result<()> {
+            let lock = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&lock_path)?;
+            crate::fsutil::make_private(&lock_path)?;
+            // Unlike fsutil::locked, failure must never permit two owners.
+            if let Err(error) = lock.try_lock() {
+                set_status("Database sync running in another TimeSlay process".into());
+                return Err(other(error));
             }
-            std::thread::sleep(Duration::from_secs(5));
+            set_status("Database sync connecting…".into());
+            enroll(&path)?;
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(transport(&path))?;
+            drop(lock);
+            Ok(())
+        })();
+        if let Err(e) = attempt {
+            if status() != "Database sync running in another TimeSlay process" {
+                set_status(format!("Database sync waiting; local data saved: {e}"));
+            }
         }
+        std::thread::sleep(Duration::from_secs(5));
     }
 }
-#[cfg(feature = "turso-sync")]
 async fn transport(path: &Path) -> io::Result<()> {
     let url = std::env::var("TIMESLAY_SYNC_URL").unwrap_or_else(|_| DEFAULT_URL.into());
     let replica_directory = path

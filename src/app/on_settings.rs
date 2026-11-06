@@ -394,8 +394,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
                 .map(|v0| Message::Settings(SettingsMessage::GoogleConnected(v0)))
         }
         SettingsMessage::GoogleConnected(Ok(_tokens)) => {
-            // Signing in is what makes config sync possible.
-            crate::config_sync::poke();
             state.calendar.connection = Connection::SignedIn;
             state.calendar.sync = SyncState::Idle;
             state.calendar.error = None;

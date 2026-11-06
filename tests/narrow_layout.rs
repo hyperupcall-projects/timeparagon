@@ -392,7 +392,7 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
         );
     }
 
-    for label in ["Oct ▾", "Menu"] {
+    for label in ["Oct. 1 ▾", "Menu"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 
@@ -404,7 +404,7 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
         "the day in view is missing from the title bar"
     );
 
-    let _ = ui.click("Oct ▾")?;
+    let _ = ui.click("Oct. 1 ▾")?;
 
     let messages: Vec<Message> = ui.into_messages().collect();
 

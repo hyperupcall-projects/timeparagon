@@ -1,4 +1,4 @@
-//! Notes: Markdown documents kept in Google Drive's app folder.
+//! Notes: Markdown documents stored locally and synced through Turso.
 //!
 //! The documents and how they sync are in `timeslay_core::notes`, the same as
 //! on the desktop. This is the phone's screen for them, and the section that
@@ -17,23 +17,18 @@ use timeslay_core::timeblocking as tb;
 
 /// How long typing must pause before the local copy is written.
 const SAVE_AFTER: Duration = Duration::from_millis(400);
-/// How much longer before the note goes to Drive. Each upload is a whole file.
-const UPLOAD_AFTER: Duration = Duration::from_millis(2600);
 const MAX_CANDIDATES: usize = 8;
 
 /// The note an editor asked to open, shared through context.
 #[derive(Clone, Copy)]
 pub struct NoteOpening(pub Signal<Option<String>>);
 
-/// The notes on this device, and whether they are on their way to Drive.
+/// The notes on this device and their pending local saves.
 #[derive(Clone, Copy, PartialEq)]
 pub struct NotesStore {
     pub library: Signal<Library>,
-    pub syncing: Signal<bool>,
     pub error: Signal<Option<String>>,
-    /// Something asked for a sync while one was running.
-    again: Signal<bool>,
-    /// Counts edits, so only the last of a burst of typing starts a sync.
+    /// Counts edits, so only the last of a burst of typing starts a save.
     edits: Signal<u64>,
     saved_edits: Signal<u64>,
 }
@@ -45,16 +40,14 @@ impl NotesStore {
             .unwrap_or_default();
         Self {
             library: Signal::new(library),
-            syncing: Signal::new(false),
             error: Signal::new(None),
-            again: Signal::new(false),
             edits: Signal::new(0),
             saved_edits: Signal::new(0),
         }
     }
 
     pub fn reload_shared(mut self) {
-        if *self.edits.peek() != *self.saved_edits.peek() || *self.syncing.peek() {
+        if *self.edits.peek() != *self.saved_edits.peek() {
             return;
         }
         let Some(path) = timeslay_core::task_db::path() else {
@@ -77,60 +70,34 @@ impl NotesStore {
             let mut message = self.error;
             message.set(Some(format!("Could not save notes: {error}")));
         } else {
+            self.error.set(None);
             self.saved_edits.set(*self.edits.peek());
         }
     }
 
-    /// Records an edit: saved shortly, and uploaded once typing has stopped.
-    pub fn touched(mut self, settings: CalendarSettings) {
+    /// Saves after typing pauses. The database journal handles replication.
+    pub fn touched(mut self) {
         let edit = *self.edits.peek() + 1;
         self.edits.set(edit);
-        // Not tied to the sheet: closing it must not lose the save or the upload.
+        // Closing the sheet must not cancel the local save.
         spawn_forever(async move {
             tokio::time::sleep(SAVE_AFTER).await;
-            if *self.edits.peek() != edit {
-                return;
-            }
-            self.save_local();
-            tokio::time::sleep(UPLOAD_AFTER).await;
             if *self.edits.peek() == edit {
-                self.sync(settings);
+                self.save_local();
             }
         });
     }
 
-    /// Brings the library and Drive into step, in the background.
-    pub fn sync(mut self, settings: CalendarSettings) {
-        if *self.syncing.peek() {
-            self.again.set(true);
-            return;
+    pub fn refresh(self) {
+        if *self.edits.peek() != *self.saved_edits.peek() {
+            self.save_local();
+        } else {
+            self.reload_shared();
         }
-        self.syncing.set(true);
-        let library = self.library.peek().clone();
-        let retry = settings.clone();
-        spawn_forever(async move {
-            let outcome = tokio::task::spawn_blocking(move || {
-                notes::sync(&library, &settings.client_id, &settings.client_secret)
-            })
-            .await;
-            self.syncing.set(false);
-            match outcome {
-                Ok(outcome) => {
-                    self.library.write().apply(outcome.changes);
-                    self.save_local();
-                    self.error.set(outcome.error);
-                }
-                Err(error) => self.error.set(Some(format!("The sync stopped: {error}"))),
-            }
-            if *self.again.peek() {
-                self.again.set(false);
-                self.sync(retry);
-            }
-        });
     }
 
     /// Puts a note away. An untouched new note is not worth keeping.
-    fn close(mut self, id: &str, settings: CalendarSettings) {
+    fn close(mut self, id: &str) {
         let blank = self
             .library
             .peek()
@@ -140,9 +107,6 @@ impl NotesStore {
             self.library.write().delete(id);
         }
         self.save_local();
-        if self.library.peek().has_unsynced() {
-            self.sync(settings);
-        }
     }
 }
 
@@ -220,11 +184,7 @@ pub fn NotesSheet(
     let mut open = use_signal(move || initial);
     let library = store.library;
 
-    let sync_settings = settings.clone();
-    use_hook(move || store.sync(sync_settings));
-
     if let Some(id) = open().filter(|id| library.read().note(id).is_some()) {
-        let leave_settings = settings.clone();
         return rsx! {
             NoteEditor {
                 key: "{id}",
@@ -234,7 +194,7 @@ pub fn NotesSheet(
                 events,
                 on_follow,
                 on_back: move |()| {
-                    store.close(&id, leave_settings.clone());
+                    store.close(&id);
                     let mut opening = opening;
                     opening.set(None);
                     open.set(None);
@@ -252,7 +212,6 @@ pub fn NotesSheet(
             let style = pastel_css(note.color);
             let title = note.display_title().to_owned();
             let preview = markdown::plain(&note.body, 120);
-            let unsynced = note.dirty;
             rsx! {
                 button {
                     key: "{note.id}",
@@ -263,15 +222,11 @@ pub fn NotesSheet(
                     if !preview.is_empty() {
                         span { class: "note-card-preview", "{preview}" }
                     }
-                    if unsynced {
-                        span { class: "note-card-state", "Not on Drive yet" }
-                    }
                 }
             }
         })
         .collect();
     let empty = rows.is_empty();
-    let refresh_settings = settings.clone();
 
     rsx! {
         div { class: "modal-backdrop editor-backdrop",
@@ -316,9 +271,8 @@ pub fn NotesSheet(
                     div { class: "note-cards", {rows.into_iter()} }
                     button {
                         class: "btn",
-                        disabled: (store.syncing)(),
-                        onclick: move |_| store.sync(refresh_settings.clone()),
-                        if (store.syncing)() { "Syncing…" } else { "Sync now" }
+                        onclick: move |_| store.refresh(),
+                        "Refresh"
                     }
                 }
             }
@@ -348,7 +302,6 @@ fn NoteEditor(
 
     let swatches = Pastel::ALL.into_iter().map(|color| {
         let id = id.clone();
-        let settings = settings.clone();
         let (red, green, blue) = color.rgb();
         let chosen = color == note.color;
         rsx! {
@@ -361,7 +314,7 @@ fn NoteEditor(
                 aria_pressed: chosen.to_string(),
                 onclick: move |_| {
                     library.write().edit(&id, |note| note.color = color);
-                    store.touched(settings.clone());
+                    store.touched();
                 },
             }
         }
@@ -369,7 +322,6 @@ fn NoteEditor(
 
     let connections = note.links.iter().map(|link| {
         let id = id.clone();
-        let settings = settings.clone();
         let target = link.clone();
         let followed = link.clone();
         let label = link_label(link);
@@ -385,7 +337,7 @@ fn NoteEditor(
                     class: "btn small",
                     onclick: move |_| {
                         library.write().disconnect(&id, &target);
-                        store.touched(settings.clone());
+                        store.touched();
                     },
                     "Remove"
                 }
@@ -395,7 +347,6 @@ fn NoteEditor(
 
     let offers = found.into_iter().map(|link| {
         let id = id.clone();
-        let settings = settings.clone();
         let label = link_label(&link);
         let key = format!("{:?}-{}", link.kind, link.id);
         rsx! {
@@ -405,7 +356,7 @@ fn NoteEditor(
                 onclick: move |_| {
                     library.write().connect(&id, link.clone());
                     connect_query.set(String::new());
-                    store.touched(settings.clone());
+                    store.touched();
                 },
                 span { class: "editor-item-name", "{label}" }
             }
@@ -413,11 +364,8 @@ fn NoteEditor(
     });
 
     let title_id = id.clone();
-    let title_settings = settings.clone();
     let body_id = id.clone();
-    let body_settings = settings.clone();
     let delete_id = id.clone();
-    let delete_settings = settings.clone();
 
     rsx! {
         div { class: "modal-backdrop editor-backdrop",
@@ -455,7 +403,7 @@ fn NoteEditor(
                             value: "{note.title}",
                             oninput: move |event| {
                                 library.write().edit(&title_id, |note| note.title = event.value());
-                                store.touched(title_settings.clone());
+                                store.touched();
                             },
                         }
                         if viewing() {
@@ -468,7 +416,7 @@ fn NoteEditor(
                                 value: "{note.body}",
                                 oninput: move |event| {
                                     library.write().edit(&body_id, |note| note.body = event.value());
-                                    store.touched(body_settings.clone());
+                                    store.touched();
                                 },
                             }
                         }
@@ -486,13 +434,13 @@ fn NoteEditor(
                     }
                     {offers}
                     if confirm_delete() {
-                        p { class: "hint", "Delete this note permanently, here and on Google Drive?" }
+                        p { class: "hint", "Delete this note from all devices?" }
                         div { class: "sheet-row",
                             button {
                                 class: "btn danger",
                                 onclick: move |_| {
                                     library.write().delete(&delete_id);
-                                    store.touched(delete_settings.clone());
+                                    store.touched();
                                     on_back.call(());
                                 },
                                 "Delete"
@@ -611,7 +559,7 @@ fn inline(key: usize, run: Inline) -> Element {
 
 /// The Notes section of an editor: what is connected to this item.
 #[component]
-pub fn LinkedNotes(target: Link, settings: CalendarSettings) -> Element {
+pub fn LinkedNotes(target: Link) -> Element {
     let Some(NoteOpening(mut opening)) = try_use_context::<NoteOpening>() else {
         return rsx! {};
     };
@@ -647,7 +595,7 @@ pub fn LinkedNotes(target: Link, settings: CalendarSettings) -> Element {
                 class: "btn small",
                 onclick: move |_| {
                     let id = library.write().create("", vec![new_target.clone()]);
-                    store.touched(settings.clone());
+                    store.touched();
                     opening.set(Some(id));
                 },
                 "New note"

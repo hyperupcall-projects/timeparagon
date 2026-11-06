@@ -90,12 +90,12 @@ Of course, there's also week, 2-week, and month views:
 - Notes (TODO)
 	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
-	- Notes can be stored locally to be used with [Obsidian](https://obsidian.md), [Syncthing](https://syncthing.net), or other tools, or in Google Drive.
+	- Notes are stored in the local database and synced through Turso.
 - Autolaunchers
 	- Save configure presets for launching and positioning application windows (TODO).
-- Goals (TODO)
+- Set goals (TODO)
 	- Track long-term goals (year, decade).
-- Objectives (TODO)
+- Set objectives (TODO)
 	- Implement your goals in a SMART way.
 	- Tasks, certain amount of time per project. (TODO)
 	- Day, week, month, quarter, year. (TODO)
@@ -104,16 +104,11 @@ Of course, there's also week, 2-week, and month views:
 	- View as list, kanban, or calendar (TODO).
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
-- Notes.
-	- Markdown documents stored in Google Drive's hidden app folder, listed under More → Notes.
-	- Connect them to events, time blocks, tasks, and habits. A note on a habit shows on every event series connected to it.
-	- Edit and View tabs, with basic Markdown: headings, bullet, numbered and check lists, bold, italics, strikethrough, quotes, code, and links.
-	- Give each note its own light pastel background.
-- People.
+- Remember people:
 	- Browse and edit contacts from Google accounts and Google workspace directories.
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
-- Stores data in Google Calendar, Tasks, Contacts and Drive to get cross-device syncing for free.
+- Stores data in Google Calendar, Tasks and Contacts, and syncs app-specific data through Turso.
 	- Uses local database as cache to keep UI performant/responsive.
 - Activity Tracking & Statistics
 	- Project allocation
@@ -121,6 +116,13 @@ Of course, there's also week, 2-week, and month views:
 	- locations been
 	- Location and exercise
 	- Food?
+
+## Architecture
+
+- Desktop app uses [Iced](https://iced.rs) for GUI and mobile app mostly uses [Dioxus](https://dioxuslabs.com).
+- Local-first approach; each device has own SQLite database, synced with [Turso](https://turso.tech), which is ran on a separate server.
+	- SQLite database contains cache of calendar, task, and other cloud data, and also app-specific data like habit information.
+- Uses Google to back calendar, tasks, and contact data.
 
 ## Terminology
 

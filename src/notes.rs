@@ -1,23 +1,19 @@
-//! The Notes screen: Markdown documents kept in Google Drive's app folder.
+//! The Notes screen: Markdown documents stored locally and synced through Turso.
 //!
 //! The documents themselves and how they sync are in `timeslay_core::notes`.
 //! This is what the app is in the middle of doing with them. It is unrelated
 //! to the notepad, which is the single page behind the "Note" tab.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use iced::Task;
 use iced::widget::text_editor;
-use timeslay_core::notes::{self, Library, Link, LinkKind, Outcome, Pastel};
+use timeslay_core::notes::{self, Library, Link, LinkKind, Pastel};
 
 use crate::app::{EventMessage, Message, NavigationMessage, Screen, State};
 use crate::blocking;
 use crate::calendar::Event;
 
-/// How long typing must pause before the note goes to Google Drive. Each save
-/// is a whole file, so this is much longer than the local save's debounce.
-const UPLOAD_AFTER: Duration = Duration::from_secs(3);
 /// How far either side of the day in view to look for things to connect.
 const SEARCH_DAYS: i64 = 30;
 /// How many matches to offer when connecting a note.
@@ -52,13 +48,9 @@ pub struct Store {
     pub confirm_delete: bool,
     /// Where the back button goes when a note was opened from elsewhere.
     return_to: Option<Screen>,
-    syncing: bool,
-    /// Something asked for a sync while one was running.
-    sync_again: bool,
+    saving: bool,
     /// The cached copy on disk is behind.
     cache_stale: bool,
-    /// The last edit Google Drive has not been asked to take.
-    edited_at: Option<Instant>,
     pub error: Option<String>,
 }
 
@@ -76,10 +68,8 @@ impl Default for Store {
             connect_query: String::new(),
             confirm_delete: false,
             return_to: None,
-            syncing: false,
-            sync_again: false,
+            saving: false,
             cache_stale: false,
-            edited_at: None,
             error: None,
         }
     }
@@ -87,7 +77,7 @@ impl Default for Store {
 
 impl Store {
     pub fn reload_shared(&mut self) {
-        if self.cache_stale || self.edited_at.is_some() || self.syncing {
+        if self.cache_stale || self.saving {
             return;
         }
         let Some(path) = &self.cache_path else {
@@ -111,7 +101,7 @@ impl Store {
         }
     }
 
-    /// Loads the cached notes and allows syncing.
+    /// Loads the notes and enables local saves.
     pub fn go_live(&mut self, cache_path: Option<PathBuf>) {
         self.live = true;
         if let Some(path) = &cache_path {
@@ -120,13 +110,13 @@ impl Store {
         self.cache_path = cache_path;
     }
 
-    pub fn syncing(&self) -> bool {
-        self.syncing
+    pub fn saving(&self) -> bool {
+        self.saving
     }
 
     /// Whether the debounce timer has anything to do.
     pub fn wants_tick(&self) -> bool {
-        self.live && (self.cache_stale || self.edited_at.is_some())
+        self.live && self.cache_stale && !self.saving
     }
 
     pub fn open_note(&self) -> Option<&notes::Note> {
@@ -135,7 +125,6 @@ impl Store {
 
     fn touched(&mut self) {
         self.cache_stale = true;
-        self.edited_at = Some(Instant::now());
     }
 
     fn load_editor(&mut self) {
@@ -161,11 +150,10 @@ impl Store {
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    /// Sync now.
+    /// Reload the local database copy.
     Refresh,
-    Synced(Result<Outcome, String>),
     Saved(Result<(), String>),
-    /// The debounce timer for saving and uploading.
+    /// The timer for saving local edits.
     Tick,
     New,
     /// A new note connected to something, from that thing's details.
@@ -191,23 +179,17 @@ pub enum Action {
     DeleteConfirmed,
 }
 
-/// Syncs with Google Drive in the background, unless that is already happening.
+/// Saves pending edits or reloads changes delivered by the Turso worker.
 pub fn refresh(state: &mut State) -> Task<Message> {
-    let store = &mut state.notes;
-    if !store.live {
+    if !state.notes.live {
         return Task::none();
     }
-    store.edited_at = None;
-    if store.syncing {
-        store.sync_again = true;
-        return Task::none();
+    if state.notes.cache_stale {
+        save_cache(&mut state.notes)
+    } else {
+        state.notes.reload_shared();
+        Task::none()
     }
-    store.syncing = true;
-    let library = store.library.clone();
-    let settings = &state.config.calendar;
-    let (client_id, client_secret) = (settings.client_id.clone(), settings.client_secret.clone());
-    blocking::run(move || Ok(notes::sync(&library, &client_id, &client_secret)))
-        .map(|outcome| Message::Notes(Action::Synced(outcome)))
 }
 
 /// Called when the app moves to another screen.
@@ -215,18 +197,18 @@ pub fn leave(state: &mut State) -> Task<Message> {
     state.notes.return_to = None;
     state.notes.color_menu = None;
     state.notes.close();
-    if state.notes.library.has_unsynced() {
-        refresh(state)
-    } else {
-        Task::none()
-    }
+    save_cache(&mut state.notes)
 }
 
 fn save_cache(store: &mut Store) -> Task<Message> {
-    store.cache_stale = false;
+    if !store.live || !store.cache_stale || store.saving {
+        return Task::none();
+    }
     let Some(path) = store.cache_path.clone() else {
         return Task::none();
     };
+    store.cache_stale = false;
+    store.saving = true;
     let library = store.library.clone();
     blocking::run(move || library.save(&path).map_err(|error| error.to_string()))
         .map(|result| Message::Notes(Action::Saved(result)))
@@ -275,75 +257,30 @@ pub fn title_input_id() -> iced::widget::Id {
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
         Action::Refresh => refresh(state),
-        Action::Synced(result) => {
-            let store = &mut state.notes;
-            store.syncing = false;
-            let outcome = result.unwrap_or_else(|error| Outcome {
-                changes: Vec::new(),
-                error: Some(error),
-            });
-            let failed = outcome.error.is_some();
-            store.error = outcome.error;
-            store.library.apply(outcome.changes);
-            store.cache_stale = true;
-
-            // Another device may have changed or removed the open note.
-            if let Some(id) = store.open.clone() {
-                match store.library.note(&id) {
-                    None => store.close(),
-                    Some(note)
-                        if !note.dirty
-                            && note.body.trim_end() != store.editor.text().trim_end() =>
-                    {
-                        store.load_editor();
-                    }
-                    Some(_) => {}
+        Action::Saved(result) => {
+            state.notes.saving = false;
+            match result {
+                Ok(()) => {
+                    state.notes.error = None;
+                    save_cache(&mut state.notes)
+                }
+                Err(error) => {
+                    state.notes.cache_stale = true;
+                    state.notes.error = Some(format!("Could not save notes: {error}"));
+                    Task::none()
                 }
             }
-            let again = std::mem::take(&mut store.sync_again);
-            if !failed && again {
-                return refresh(state);
-            }
-            if !failed && store.library.has_unsynced() && store.edited_at.is_none() {
-                store.edited_at = Some(Instant::now());
-            }
-            Task::none()
         }
-        Action::Saved(result) => {
-            if let Err(error) = result {
-                log::warn!("could not cache notes: {error}");
-            }
-            Task::none()
-        }
-        Action::Tick => {
-            let save = if state.notes.cache_stale {
-                save_cache(&mut state.notes)
-            } else {
-                Task::none()
-            };
-            let due = state
-                .notes
-                .edited_at
-                .is_some_and(|edited| edited.elapsed() >= UPLOAD_AFTER);
-            if due {
-                Task::batch([save, refresh(state)])
-            } else {
-                save
-            }
-        }
+        Action::Tick => save_cache(&mut state.notes),
         Action::New => start_note(state, Vec::new()),
         Action::NewFor(link) => start_note(state, vec![link]),
         Action::Open(id) => open(state, id),
         Action::Back => {
             state.notes.close();
-            let upload = if state.notes.library.has_unsynced() {
-                refresh(state)
-            } else {
-                Task::none()
-            };
+            let save = save_cache(&mut state.notes);
             match state.notes.return_to.take() {
-                Some(screen) => Task::batch([upload, go_to(screen)]),
-                None => upload,
+                Some(screen) => Task::batch([save, go_to(screen)]),
+                None => save,
             }
         }
         Action::ShowTab(tab) => {
@@ -429,10 +366,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             }
             state.notes.confirm_delete = false;
             state.notes.cache_stale = true;
-            let upload = refresh(state);
+            let save = refresh(state);
             match state.notes.return_to.take() {
-                Some(screen) => Task::batch([upload, go_to(screen)]),
-                None => upload,
+                Some(screen) => Task::batch([save, go_to(screen)]),
+                None => save,
             }
         }
     }
@@ -609,7 +546,7 @@ mod tests {
         let note = state.notes.library.note(&id).unwrap();
         assert_eq!(note.title, "Plans");
         assert!(note.body.starts_with('x'));
-        assert!(note.dirty);
+        assert!(state.notes.cache_stale);
 
         act(&mut state, Action::Back);
         act(&mut state, Action::Open(id));
@@ -738,16 +675,15 @@ mod tests {
     }
 
     #[test]
-    fn a_color_can_only_be_a_pastel_and_marks_the_note_for_upload() {
+    fn a_color_can_only_be_a_pastel_and_schedules_a_save() {
         let mut state = state();
         let id = state.notes.library.create("A", Vec::new());
-        state.notes.library.notes[0].dirty = false;
         act(&mut state, Action::ColorMenuToggled(id.clone()));
         assert_eq!(state.notes.color_menu.as_deref(), Some(id.as_str()));
         act(&mut state, Action::ColorChosen(id.clone(), Pastel::Mint));
         let note = state.notes.library.note(&id).unwrap();
         assert_eq!(note.color, Pastel::Mint);
-        assert!(note.dirty);
+        assert!(state.notes.cache_stale);
         assert!(state.notes.color_menu.is_none());
     }
 
@@ -769,53 +705,35 @@ mod tests {
 
     #[test]
     fn a_change_from_another_device_reaches_an_unedited_open_note() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("notes.sqlite3");
         let mut state = state();
         state.screen = Screen::Notes;
-        let id = state.notes.library.create("A", Vec::new());
-        state
-            .notes
-            .library
-            .edit(&id, |note| note.body = "old".into());
-        state.notes.library.notes[0].dirty = false;
+        let mut library = Library::default();
+        let id = library.create("A", Vec::new());
+        library.edit(&id, |note| note.body = "old".into());
+        library.save(&path).unwrap();
+        state.notes.go_live(Some(path.clone()));
         act(&mut state, Action::Open(id.clone()));
 
-        let mut newer = state.notes.library.note(&id).unwrap().clone();
-        newer.body = "new".into();
-        act(
-            &mut state,
-            Action::Synced(Ok(Outcome {
-                changes: vec![notes::Change::Incoming(newer)],
-                error: None,
-            })),
-        );
+        library.edit(&id, |note| note.body = "new".into());
+        library.save(&path).unwrap();
+        state.notes.reload_shared();
         assert_eq!(state.notes.editor.text().trim_end(), "new");
 
-        let revision = state.notes.library.note(&id).unwrap().revision;
-        act(
-            &mut state,
-            Action::Synced(Ok(Outcome {
-                changes: vec![notes::Change::Gone {
-                    id: id.clone(),
-                    revision,
-                }],
-                error: None,
-            })),
-        );
+        library.delete(&id);
+        library.save(&path).unwrap();
+        state.notes.reload_shared();
         assert!(state.notes.open.is_none());
     }
 
     #[test]
-    fn a_failed_sync_is_reported_and_the_notes_stay() {
+    fn a_failed_save_is_reported_and_keeps_notes_pending() {
         let mut state = state();
         state.notes.library.create("A", Vec::new());
-        act(
-            &mut state,
-            Action::Synced(Ok(Outcome {
-                changes: Vec::new(),
-                error: Some("offline".into()),
-            })),
-        );
-        assert_eq!(state.notes.error.as_deref(), Some("offline"));
+        act(&mut state, Action::Saved(Err("disk full".into())));
+        assert!(state.notes.error.as_deref().unwrap().contains("disk full"));
+        assert!(state.notes.cache_stale);
         assert_eq!(state.notes.library.notes.len(), 1);
     }
 }

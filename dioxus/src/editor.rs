@@ -505,7 +505,7 @@ fn TaskEditor(
                 },
             }
             if let Some(target) = crate::notes::target_of(&event, &context.settings) {
-                crate::notes::LinkedNotes { target, settings: context.settings.clone() }
+                crate::notes::LinkedNotes { target }
             }
             div { class: "editor-actions",
                 if untriaged {
@@ -1089,7 +1089,7 @@ fn EventEditor(
                 on_saved,
             }
             if let Some(target) = crate::notes::target_of(&source_event, &context.settings) {
-                crate::notes::LinkedNotes { target, settings: context.settings.clone() }
+                crate::notes::LinkedNotes { target }
             }
             if !organizer.is_empty() {
                 Field { label: "Organizer", p { class: "editor-value", "{organizer}" } }
