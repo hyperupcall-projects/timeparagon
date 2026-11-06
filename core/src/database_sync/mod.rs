@@ -45,11 +45,11 @@ pub fn status() -> String {
         .unwrap_or_else(|_| "Database sync unavailable".into())
 }
 fn set_status(message: String) {
-    if let Ok(mut status) = STATUS.lock() {
-        if *status != message {
-            log::info!("{message}");
-            *status = message;
-        }
+    if let Ok(mut status) = STATUS.lock()
+        && *status != message
+    {
+        log::info!("{message}");
+        *status = message;
     }
 }
 fn other(e: impl std::fmt::Display) -> io::Error {
@@ -282,10 +282,10 @@ fn run() {
             drop(lock);
             Ok(())
         })();
-        if let Err(e) = attempt {
-            if status() != "Database sync running in another TimeSlay process" {
-                set_status(format!("Database sync waiting; local data saved: {e}"));
-            }
+        if let Err(e) = attempt
+            && status() != "Database sync running in another TimeSlay process"
+        {
+            set_status(format!("Database sync waiting; local data saved: {e}"));
         }
         std::thread::sleep(Duration::from_secs(5));
     }
@@ -393,7 +393,7 @@ mod tests {
             after: Some(r#"{"habits":[{"id":"b"}]}"#.into()),
             clock: 2,
         };
-        apply(&path, &[foreign.clone()], &local).unwrap();
+        apply(&path, std::slice::from_ref(&foreign), &local).unwrap();
         apply(&path, &[foreign], &local).unwrap();
         assert_eq!(history(&path).unwrap().len(), 3);
         let data: serde_json::Value = crate::task_db::read_document(&path, "habits")
