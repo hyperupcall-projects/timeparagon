@@ -2253,9 +2253,17 @@ mod tests {
         draft.rule.until = "2026-12-31".into();
         draft.rule.skips = vec![date("2026-11-11")];
         let lines = draft.recurrence_lines().unwrap();
+        let (rule, until) = lines[0].split_once(";UNTIL=").unwrap();
+        assert_eq!(rule, "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE");
+        // UNTIL is UTC, but the selected end date means the end of the local day.
+        // Its UTC representation depends on the machine's time zone.
+        let until = chrono::NaiveDateTime::parse_from_str(until, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc()
+            .with_timezone(&Local);
         assert_eq!(
-            lines[0],
-            "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;UNTIL=20270101T075959Z"
+            until.naive_local(),
+            date("2026-12-31").and_hms_opt(23, 59, 59).unwrap()
         );
         assert_eq!(lines[1], "EXDATE:20261111090000");
         assert!(draft.repeat_summary().contains("until December 31"));
