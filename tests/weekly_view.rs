@@ -467,9 +467,10 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
             Screen::Settings,
         ] {
             for (label, view) in [
+                ("Day", CalendarView::Day),
                 ("Week", CalendarView::Week),
-                ("2 Week", CalendarView::TwoWeek),
-                ("Show Month", CalendarView::Month),
+                ("2 Weeks", CalendarView::TwoWeek),
+                ("Month", CalendarView::Month),
             ] {
                 let mut state = state();
                 state.view = CalendarView::Day;
@@ -477,7 +478,7 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
                 let size = Size::new(width, 900.0);
                 let mut ui = render_main(&state, size);
                 let do_tab = ui.find("Do")?.bounds();
-                let plan = ui.find("Plan")?.bounds();
+                let plan = ui.find("Plan Day")?.bounds();
                 assert!(do_tab.x + do_tab.width <= plan.x);
                 assert_eq!(do_tab.y, plan.y);
                 for old in ["Schedule", "Show week", "Show 2 weeks", "Month"] {
@@ -498,14 +499,23 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
                 for message in messages {
                     let _ = app::update(&mut state, message);
                 }
-                assert_eq!(state.screen, Screen::Calendar);
+                let expected_screen = if view == CalendarView::Day {
+                    match screen {
+                        Screen::Overdue | Screen::Inbox | Screen::Backlog => screen,
+                        _ => Screen::Overdue,
+                    }
+                } else {
+                    Screen::Calendar
+                };
+                assert_eq!(state.screen, expected_screen);
                 assert_eq!(state.view, view);
                 assert!(!state.view_menu_open);
                 let mut panel = render_main(&state, size);
                 let selected = panel.find(timeslay::ui::plan_view_label(&state))?.bounds();
                 assert!(selected.x + selected.width <= width);
                 assert!(panel.find("Plan").is_err());
-                assert!(panel.find("Schedule").is_ok());
+                assert_eq!(panel.find("Schedule").is_ok(), view != CalendarView::Day);
+                assert!(panel.find("Tasks").is_err());
                 drop(panel);
                 open_plan(&mut state, size)?;
                 let mut ui = render_main(&state, size);
@@ -514,7 +524,15 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
                 for message in messages {
                     let _ = app::update(&mut state, message);
                 }
-                assert_eq!(state.screen, Screen::Calendar);
+                let expected_screen = if view == CalendarView::Day {
+                    match screen {
+                        Screen::Overdue | Screen::Inbox | Screen::Backlog => screen,
+                        _ => Screen::Overdue,
+                    }
+                } else {
+                    Screen::Calendar
+                };
+                assert_eq!(state.screen, expected_screen);
                 assert_eq!(state.view, view);
                 assert!(!state.view_menu_open);
             }
@@ -578,7 +596,7 @@ fn first_overview_click_opens_schedule_through_window_startup() -> Result<(), Er
             state.calendar.set_day(date(14), date(15));
             open_plan(&mut state, Size::new(320.0, 900.0))?;
             let mut panel = render_main(&state, Size::new(320.0, 900.0));
-            click_plan_option(&mut panel, if monthly { "Show Month" } else { "Week" })?;
+            click_plan_option(&mut panel, if monthly { "Month" } else { "Week" })?;
             // Apply every emitted message to check the full navigation path.
             let messages: Vec<_> = panel.into_messages().collect();
             for message in messages {
@@ -604,7 +622,7 @@ fn first_overview_click_opens_schedule_through_window_startup() -> Result<(), Er
 }
 
 #[test]
-fn plan_schedule_and_tasks_tabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
+fn plan_subtabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
     for width in [180.0, 260.0, 420.0, 900.0] {
         for view in [
             timeslay::app::CalendarView::Week,
@@ -622,7 +640,9 @@ fn plan_schedule_and_tasks_tabs_keep_the_overview_and_selected_day() -> Result<(
             let anchor = state.week_anchor;
             let size = Size::new(width, 900.0);
             for (label, tab, screen) in [
-                ("Tasks", PlanTab::Tasks, Screen::Inbox),
+                ("Overdue", PlanTab::Overdue, Screen::Overdue),
+                ("Inbox", PlanTab::Inbox, Screen::Inbox),
+                ("Backlog", PlanTab::Backlog, Screen::Backlog),
                 ("Schedule", PlanTab::Schedule, Screen::Calendar),
             ] {
                 let mut panel = render_main(&state, size);
@@ -640,18 +660,43 @@ fn plan_schedule_and_tasks_tabs_keep_the_overview_and_selected_day() -> Result<(
                 assert_eq!(state.week_anchor, anchor);
                 assert_eq!(state.calendar.day, date(16));
                 let mut panel = render_main(&state, size);
-                assert!(
-                    panel
-                        .find(if screen == Screen::Inbox {
-                            "Inbox"
-                        } else {
-                            "Oct. 16 ▾"
-                        })
-                        .is_ok()
-                );
-                assert!(panel.find("Backlog").is_err());
-                assert!(panel.find("Overdue").is_err());
+                for label in ["Schedule", "Overdue", "Inbox", "Backlog"] {
+                    assert!(panel.find(label).is_ok());
+                }
+                assert!(panel.find("Tasks").is_err());
             }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn plan_day_subtabs_keep_the_day_and_have_no_schedule() -> Result<(), Error> {
+    for width in [180.0, 260.0, 420.0, 900.0] {
+        let mut state = state();
+        state.view = timeslay::app::CalendarView::Week;
+        let day = state.calendar.day;
+        let _ = app::update(
+            &mut state,
+            Message::Navigation(NavigationMessage::PlanDaySelected),
+        );
+        let size = Size::new(width, 900.0);
+        for (label, screen) in [
+            ("Inbox", Screen::Inbox),
+            ("Backlog", Screen::Backlog),
+            ("Overdue", Screen::Overdue),
+        ] {
+            let mut panel = render_main(&state, size);
+            assert!(panel.find("Plan Day").is_ok());
+            assert!(panel.find("Schedule").is_err());
+            assert!(panel.find("Tasks").is_err());
+            click_in(&mut panel, "plan-tabs", label)?;
+            for message in panel.into_messages() {
+                let _ = app::update(&mut state, message);
+            }
+            assert_eq!(state.screen, screen);
+            assert_eq!(state.view, timeslay::app::CalendarView::Day);
+            assert_eq!(state.calendar.day, day);
         }
     }
     Ok(())

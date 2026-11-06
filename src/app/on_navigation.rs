@@ -5,16 +5,28 @@ use super::*;
 pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Message> {
     match message {
         NavigationMessage::PlanTabSelected(tab) => {
-            if !state.range_view_active() {
+            if tab == PlanTab::Schedule && !state.range_view_active() {
                 return Task::none();
             }
             select_screen(
                 state,
                 match tab {
                     PlanTab::Schedule => Screen::Calendar,
-                    PlanTab::Tasks => Screen::Inbox,
+                    PlanTab::Overdue => Screen::Overdue,
+                    PlanTab::Inbox => Screen::Inbox,
+                    PlanTab::Backlog => Screen::Backlog,
                 },
             )
+        }
+        NavigationMessage::PlanDaySelected => {
+            let was_planning = state.range_view_active();
+            state.view = CalendarView::Day;
+            let close = range_view_transition(state, was_planning, Task::none());
+            let screen = match state.screen {
+                Screen::Overdue | Screen::Inbox | Screen::Backlog => state.screen,
+                _ => Screen::Overdue,
+            };
+            Task::batch([close, select_screen(state, screen)])
         }
         NavigationMessage::ViewMenuToggled => {
             state.view_menu_open = !state.view_menu_open;
@@ -53,7 +65,12 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
     state.calendar.menu_open = false;
     state.calendar.search.open = false;
     // Each task list opens its own selection in the details pane.
-    let tasks_screen = |screen| matches!(screen, Screen::Overdue | Screen::Inbox | Screen::Triaged);
+    let tasks_screen = |screen| {
+        matches!(
+            screen,
+            Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+        )
+    };
     if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {
         state.calendar.open_event = None;
         state.inbox.picker = None;
