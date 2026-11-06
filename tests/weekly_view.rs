@@ -88,6 +88,33 @@ fn render_main(state: &State, size: Size) -> Simulator<'_, Message> {
     )
 }
 
+fn open_plan(state: &mut State, size: Size) -> Result<(), Error> {
+    let mut ui = render_main(state, size);
+    ui.click("Plan")?;
+    let messages: Vec<_> = ui.into_messages().collect();
+    for message in messages {
+        let _ = app::update(state, message);
+    }
+    assert!(state.view_menu_open);
+    Ok(())
+}
+
+/// Scope common labels such as Week to the popup, away from page content.
+fn click_plan_option(
+    ui: &mut Simulator<'_, Message>,
+    label: &str,
+) -> Result<iced::Rectangle, Error> {
+    use iced_test::selector::{Candidate, Target};
+    let menu = ui.find(iced::widget::Id::new("plan-menu"))?.bounds();
+    let item = ui.click(move |candidate: Candidate<'_>| match &candidate {
+        Candidate::Text {
+            content, bounds, ..
+        } if *content == label && menu.contains(bounds.center()) => Some(Target::from(candidate)),
+        _ => None,
+    })?;
+    Ok(item.bounds())
+}
+
 #[test]
 fn week_range_shows_seven_from_today_or_eight_from_yesterday() {
     let eight = calendar::week_dates(date(15), 8);
@@ -485,7 +512,8 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
 }
 
 #[test]
-fn overview_buttons_toggle_from_every_screen() -> Result<(), Error> {
+fn plan_menu_toggles_overviews_from_every_screen() -> Result<(), Error> {
+    use timeslay::app::CalendarView;
     for width in [180.0, 260.0, 420.0, 900.0] {
         for screen in [
             Screen::Calendar,
@@ -501,51 +529,47 @@ fn overview_buttons_toggle_from_every_screen() -> Result<(), Error> {
             Screen::BrainDump,
             Screen::Settings,
         ] {
-            for monthly in [false, true] {
+            for (label, view) in [
+                ("Week", CalendarView::Week),
+                ("2 Week", CalendarView::TwoWeek),
+                ("Show Month", CalendarView::Month),
+            ] {
                 let mut state = state();
-                state.view = timeslay::app::CalendarView::Day;
+                state.view = CalendarView::Day;
                 state.screen = screen;
-                let show = if monthly { "Show month" } else { "Show week" };
-                let hide = if monthly { "Hide month" } else { "Hide week" };
-                let mut ui = render_main(&state, Size::new(width, 900.0));
-                let week = ui.find("Show week")?.bounds();
-                let month = ui.find("Show month")?.bounds();
-                let schedule = ui.find("Schedule")?.bounds();
-                assert_eq!(week.height, 22.0);
-                assert_eq!(month.height, 22.0);
-                assert_eq!(week.y, month.y);
-                assert!((week.width - month.width).abs() < 0.5);
-                assert!(week.x + week.width <= month.x);
-                assert!(month.x + month.width <= width);
-                assert!(week.y + week.height <= schedule.y);
-                ui.click(show)?;
-                let message = ui
-                    .into_messages()
-                    .find(|m| {
-                        matches!(
-                            m,
-                            Message::Calendar(CalendarMessage::CalendarModeSelected(true))
-                                | Message::Calendar(CalendarMessage::CalendarMonthViewSelected)
-                        )
-                    })
-                    .unwrap();
-                let _ = app::update(&mut state, message);
+                let size = Size::new(width, 900.0);
+                let mut ui = render_main(&state, size);
+                let do_tab = ui.find("Do")?.bounds();
+                let plan = ui.find("Plan")?.bounds();
+                assert!(do_tab.x + do_tab.width <= plan.x);
+                assert_eq!(do_tab.y, plan.y);
+                for old in ["Schedule", "Show week", "Show 2 weeks", "Show month"] {
+                    assert!(ui.find(old).is_err());
+                }
+                assert!(ui.find(iced::widget::Id::new("plan-menu")).is_err());
+                drop(ui);
+                open_plan(&mut state, size)?;
+                let mut ui = render_main(&state, size);
+                let item = click_plan_option(&mut ui, label)?;
+                assert!(item.x >= 0.0 && item.x + item.width <= width);
+                assert!(item.y > plan.y + plan.height);
+                let messages: Vec<_> = ui.into_messages().collect();
+                for message in messages {
+                    let _ = app::update(&mut state, message);
+                }
                 assert_eq!(state.screen, screen);
-                assert_eq!(state.monthly(), monthly);
-                assert_eq!(state.weekly(), !monthly);
-                let mut ui = render_main(&state, Size::new(width, 900.0));
-                ui.click(hide)?;
-                let message = ui
-                    .into_messages()
-                    .find(|m| {
-                        matches!(
-                            m,
-                            Message::Calendar(CalendarMessage::CalendarModeSelected(false))
-                        )
-                    })
-                    .unwrap();
-                let _ = app::update(&mut state, message);
-                assert!(!state.weekly() && !state.monthly());
+                assert_eq!(state.view, view);
+                assert!(!state.view_menu_open);
+                open_plan(&mut state, size)?;
+                let mut ui = render_main(&state, size);
+                click_plan_option(&mut ui, label)?;
+                let messages: Vec<_> = ui.into_messages().collect();
+                for message in messages {
+                    let _ = app::update(&mut state, message);
+                }
+                assert_eq!(state.screen, screen);
+                assert_eq!(state.view, CalendarView::Day);
+                assert!(!state.view_menu_open);
             }
         }
     }
@@ -553,7 +577,7 @@ fn overview_buttons_toggle_from_every_screen() -> Result<(), Error> {
 }
 
 #[test]
-fn schedule_opens_day_panel_without_hiding_the_overview() -> Result<(), Error> {
+fn do_opens_day_panel_without_hiding_the_overview() -> Result<(), Error> {
     for monthly in [false, true] {
         let mut state = state();
         state.view = if monthly {
@@ -562,7 +586,7 @@ fn schedule_opens_day_panel_without_hiding_the_overview() -> Result<(), Error> {
             timeslay::app::CalendarView::Week
         };
         let mut ui = render_main(&state, Size::new(180.0, 700.0));
-        ui.click("Schedule")?;
+        ui.click("Do")?;
         let message = ui
             .into_messages()
             .find(|m| {
@@ -607,8 +631,9 @@ fn first_overview_click_preserves_the_sidebar_through_window_startup() -> Result
             state.timeblocking.available_query = "keep my filter".into();
             state.timeblocking.available_all = true;
             state.timeblocking.available_planned = true;
+            open_plan(&mut state, Size::new(320.0, 900.0))?;
             let mut panel = render_main(&state, Size::new(320.0, 900.0));
-            panel.click(if monthly { "Show month" } else { "Show week" })?;
+            click_plan_option(&mut panel, if monthly { "Show Month" } else { "Week" })?;
             // Apply every emitted message so an accidental navigation cannot
             // be hidden by filtering the simulator's output.
             let messages: Vec<_> = panel.into_messages().collect();
@@ -676,11 +701,7 @@ fn overview_stays_open_across_all_panel_tabs() -> Result<(), Error> {
             assert_eq!(state.weekly(), !monthly);
             assert_eq!(state.monthly(), monthly);
             let mut panel = render_main(&state, Size::new(260.0, 900.0));
-            assert!(
-                panel
-                    .find(if monthly { "Hide month" } else { "Hide week" })
-                    .is_ok()
-            );
+            assert!(panel.find("Plan").is_ok());
             drop(panel);
             let mut overview = Simulator::with_size(
                 Settings::default(),
@@ -694,8 +715,9 @@ fn overview_stays_open_across_all_panel_tabs() -> Result<(), Error> {
             );
             assert!(overview.find("Close view").is_err());
         }
+        open_plan(&mut state, Size::new(260.0, 900.0))?;
         let mut panel = render_main(&state, Size::new(260.0, 900.0));
-        panel.click(if monthly { "Hide month" } else { "Hide week" })?;
+        click_plan_option(&mut panel, if monthly { "Show Month" } else { "Week" })?;
         let hide = panel
             .into_messages()
             .find(|m| {
@@ -745,13 +767,17 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
         let switcher = timeslay::ui::calendar_view_label(&state);
         let weekly = ui.find(switcher)?.bounds();
         assert!(weekly.x >= 0.0 && weekly.x + weekly.width <= width);
-        let hide = ui.find("Hide week")?.bounds();
-        assert!(hide.x >= 0.0 && hide.x + hide.width <= width);
-        let _ = ui.click("Hide week")?;
+        drop(ui);
+        open_plan(&mut state, Size::new(width, 700.0))?;
+        let mut ui = render_main(&state, Size::new(width, 700.0));
+        let week = ui.find("Week")?.bounds();
+        assert!(week.x >= 0.0 && week.x + week.width <= width);
+        let _ = ui.click("Week")?;
         assert!(ui.into_messages().any(|m| matches!(
             m,
             Message::Calendar(CalendarMessage::CalendarModeSelected(false))
         )));
+        state.view_menu_open = false;
     }
     let mut ui = render(&state, Size::new(180.0, 240.0));
     let heading = ui.find("Wed Oct 14")?.bounds();

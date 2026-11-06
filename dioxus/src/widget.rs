@@ -274,6 +274,7 @@ pub extern "system" fn Java_dev_timeslay_day_widget_WidgetRefreshService_nativeR
             }
             std::mem::forget(context);
             crate::prepare_android_storage();
+            timeslay_core::database_sync::start();
         });
         refresh()
     }));

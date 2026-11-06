@@ -108,6 +108,22 @@ fn prepare_android_storage() {
         std::env::set_var("XDG_DATA_HOME", &data);
         std::env::set_var("XDG_STATE_HOME", &state);
         std::env::set_var("XDG_CACHE_HOME", &cache);
+        // The Rust sync client uses rustls-native-certs. Its Unix defaults
+        // probe Termux, so point it at Android's public system trust store.
+        if std::env::var_os("SSL_CERT_DIR").is_none() {
+            let certificates: Vec<_> = [
+                "/apex/com.android.conscrypt/cacerts",
+                "/system/etc/security/cacerts",
+            ]
+            .into_iter()
+            .filter(|path| std::fs::read_dir(path).is_ok())
+            .collect();
+            if !certificates.is_empty() {
+                if let Ok(paths) = std::env::join_paths(certificates) {
+                    std::env::set_var("SSL_CERT_DIR", paths);
+                }
+            }
+        }
     }
 }
 
@@ -190,6 +206,7 @@ fn App() -> Element {
     let mut show_agenda = use_signal(|| false);
     let mut show_scratch = use_signal(|| false);
     let mut show_more = use_signal(|| false);
+    let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
     let task_filter = use_signal(|| TaskFilter::All);
     let search_state = use_signal(Search::default);
     // A note's connection or an agenda row, waiting for its day to load.
@@ -310,11 +327,19 @@ fn App() -> Element {
     // drive this view, so anything else changing (the iced app saving its
     // window size, say) does not trigger a re-render.
     use_future(move || async move {
-        let mut seen = config_sync::generation();
+        let mut seen = (
+            config_sync::generation(),
+            timeslay_core::database_sync::generation(),
+        );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-            let generation = config_sync::generation();
+            database_sync_status.set(timeslay_core::database_sync::status());
+            notes_store.reload_shared();
+            let generation = (
+                config_sync::generation(),
+                timeslay_core::database_sync::generation(),
+            );
             if generation != seen {
                 seen = generation;
                 let reloaded = day::load_config();
@@ -806,6 +831,7 @@ fn App() -> Element {
                         }
                     }
                     div { class: "modal-body more-body",
+                        p { class: "hint", "{database_sync_status}" }
                         button {
                             class: "btn",
                             onclick: move |_| {

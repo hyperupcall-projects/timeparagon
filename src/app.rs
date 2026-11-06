@@ -62,6 +62,13 @@ pub enum CalendarView {
     Month,
 }
 
+/// The sidebar shown beside a planning overview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanTab {
+    Schedule,
+    Tasks,
+}
+
 /// The two month pickers: the day panel's and the range overview's. Each opens,
 /// steps and picks on its own, so using one leaves the other where it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,7 +343,7 @@ pub struct State {
 
     pub screen: Screen,
     pub view: CalendarView,
-    /// Whether the Day/Week/2 Weeks/Month dropdown under the left-hand navigation is open.
+    /// Whether the Plan menu under the left-hand navigation group is open.
     pub view_menu_open: bool,
     /// Whether the More menu under the right-hand navigation group is open.
     pub more_menu_open: bool,
@@ -464,6 +471,7 @@ pub enum Message {
 #[derive(Debug, Clone)]
 pub enum NavigationMessage {
     ScreenSelected(Screen),
+    PlanTabSelected(PlanTab),
     ViewMenuToggled,
     MoreMenuToggled,
 }
@@ -570,6 +578,7 @@ pub enum SystemMessage {
     ConfigSaved(Result<(), String>),
     SaveRequested,
     ConfigReloaded(Config),
+    DatabaseSyncPolled,
     AudioStatusPolled,
 
     /// The system's light/dark tone, for the high contrast system theme.
@@ -1475,6 +1484,8 @@ pub fn title(state: &State, window: window::Id) -> String {
 pub fn subscription(state: &State) -> Subscription<Message> {
     let mut subscriptions = vec![
         crate::travel::map::subscription(state),
+        iced::time::every(std::time::Duration::from_secs(2))
+            .map(|_| Message::System(SystemMessage::DatabaseSyncPolled)),
         config::watch().map(|v0| Message::System(SystemMessage::ConfigReloaded(v0))),
         iced::system::theme_changes()
             .map(|mode| Message::System(SystemMessage::SystemThemeMode(mode))),

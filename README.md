@@ -32,10 +32,10 @@ Of course, there's also week, 2-week, and month views:
 	- Configure widths of dock, panel, and side overlays.
 - Intuitive to use.
 - View your time:
-	- By day, week, 2 weeks, month
+	- By day, week, 2 weeks, or month.
 	- Allow zoom in and zoom out on day/week views.
 	- Apply custom search/filter:
-		- Show only events or tasks that satisfy a search of their title or description
+		- Show only events or tasks that satisfy a search of their title or description.
 		- Filter by time of day, project, label, availability, public visibility, location, and more.
 		- Toggle to only show details of events with only public visibility.
 - Manage your time:

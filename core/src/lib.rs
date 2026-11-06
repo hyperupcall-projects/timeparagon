@@ -13,6 +13,8 @@ pub mod calendar;
 pub mod clock;
 pub mod config;
 pub mod config_sync;
+pub mod database_migration;
+pub mod database_sync;
 pub mod fsutil;
 pub mod habits;
 pub mod hex;

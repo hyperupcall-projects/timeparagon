@@ -35,6 +35,7 @@ pub struct NotesStore {
     again: Signal<bool>,
     /// Counts edits, so only the last of a burst of typing starts a sync.
     edits: Signal<u64>,
+    saved_edits: Signal<u64>,
 }
 
 impl NotesStore {
@@ -48,16 +49,35 @@ impl NotesStore {
             error: Signal::new(None),
             again: Signal::new(false),
             edits: Signal::new(0),
+            saved_edits: Signal::new(0),
         }
     }
 
-    fn save_local(self) {
+    pub fn reload_shared(mut self) {
+        if *self.edits.peek() != *self.saved_edits.peek() || *self.syncing.peek() {
+            return;
+        }
+        let Some(path) = timeslay_core::task_db::path() else {
+            return;
+        };
+        if let Ok(Some(library)) = timeslay_core::task_db::read_document::<Library>(
+            &path,
+            timeslay_core::task_db::keys::NOTES,
+        ) {
+            if library != *self.library.peek() {
+                self.library.set(library);
+            }
+        }
+    }
+    fn save_local(mut self) {
         let Some(path) = timeslay_core::task_db::path() else {
             return;
         };
         if let Err(error) = self.library.peek().save(&path) {
             let mut message = self.error;
             message.set(Some(format!("Could not save notes: {error}")));
+        } else {
+            self.saved_edits.set(*self.edits.peek());
         }
     }
 

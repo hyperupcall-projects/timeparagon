@@ -46,6 +46,7 @@ say() { printf '%s\n' "$*"; }
 
 # --- Stop and disable the service ------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now timeslay-database-sync.service >/dev/null 2>&1 || true
     systemctl --user disable --now timeslay.service >/dev/null 2>&1 || true
     systemctl --user disable --now timeslay-shortcuts.service >/dev/null 2>&1 || true
     systemctl --user disable --now timeslay-slack.service >/dev/null 2>&1 || true
@@ -61,6 +62,8 @@ rm -f "$config_home/systemd/user/timeslay-panel.service"
 rm -f "$data_home/applications/timeslay.desktop"
 rm -f "$data_home/icons/hicolor/512x512/apps/timeslay.png"
 rm -f "$prefix/bin/timeslay"
+rm -f "$prefix/bin/timeslay-database-sync"
+rm -f "$config_home/systemd/user/timeslay-database-sync.service"
 rm -rf "$prefix/lib/timeslay/cef"
 rm -f "$prefix/bin/timeslay-panel"
 rm -f "$prefix/bin/timeslay-dock"

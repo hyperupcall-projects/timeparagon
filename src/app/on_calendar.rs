@@ -22,6 +22,12 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             ])
         }
         CalendarMessage::CalendarModeSelected(weekly) => {
+            let navigation = if weekly {
+                planning_sidebar(state)
+            } else {
+                super::on_navigation::select_screen(state, Screen::Calendar)
+            };
+            state.view_menu_open = false;
             state.habits.calendar_habit = None;
             let was_weekly = state.range_view_active();
             let view = if weekly {
@@ -30,7 +36,6 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 CalendarView::Day
             };
             let changed = state.view != view;
-            // Overview controls must not navigate or reset the sidebar.
             state.week_hover = None;
             state.view = view;
             let close = range_view_transition(state, was_weekly, Task::none());
@@ -45,28 +50,30 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 } else {
                     Task::none()
                 };
-                Task::batch([close, scroll, show_cached_calendar(state)])
+                Task::batch([navigation, close, scroll, show_cached_calendar(state)])
             } else {
-                close
+                Task::batch([navigation, close])
             }
         }
         CalendarMessage::CalendarMonthViewSelected => {
+            let navigation = planning_sidebar(state);
+            state.view_menu_open = false;
             let was_wide = state.range_view_active();
             let changed = !state.monthly();
-            // Overview controls must not navigate or reset the sidebar.
             state.week_hover = None;
             state.view = CalendarView::Month;
             if changed {
                 state.week_anchor = state.calendar.day;
             }
             let resize = range_view_transition(state, was_wide, Task::none());
-            Task::batch([resize, show_cached_calendar(state)])
+            Task::batch([navigation, resize, show_cached_calendar(state)])
         }
         CalendarMessage::CalendarTwoWeekViewSelected => {
+            let navigation = planning_sidebar(state);
+            state.view_menu_open = false;
             state.habits.calendar_habit = None;
             let was_wide = state.range_view_active();
             let changed = !state.two_weekly();
-            // Overview controls must not navigate or reset the sidebar.
             state.week_hover = None;
             state.two_week_more = None;
             state.view = CalendarView::TwoWeek;
@@ -74,7 +81,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 state.week_anchor = state.calendar.day;
             }
             let resize = range_view_transition(state, was_wide, Task::none());
-            Task::batch([resize, show_cached_calendar(state)])
+            Task::batch([navigation, resize, show_cached_calendar(state)])
         }
         CalendarMessage::CalendarTwoWeekMore(day) => {
             state.two_week_more = day;
@@ -520,6 +527,15 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 show_cached_calendar(state),
             ])
         }
+    }
+}
+
+/// Enter Plan on Schedule; switching ranges keeps its current sidebar tab.
+fn planning_sidebar(state: &mut State) -> Task<Message> {
+    if state.range_view_active() {
+        Task::none()
+    } else {
+        super::on_navigation::select_screen(state, Screen::Calendar)
     }
 }
 

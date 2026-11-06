@@ -90,7 +90,7 @@ command -v npm >/dev/null 2>&1 || { echo "install.sh: npm is required for the Sl
 # --- Build -----------------------------------------------------------------
 if [ "$build" -eq 1 ]; then
     say "Building the debug binary..."
-    ( cd "$repo_root" && cargo build )
+    ( cd "$repo_root" && cargo build -p timeslay -p timeslay-core --bin timeslay --example sync_database )
 fi
 
 built=$repo_root/target/debug/timeslay
@@ -120,6 +120,14 @@ cp -aL "$cef_runtime/." "$prefix/lib/timeslay/cef/"
 mkdir -p "$bin_dir"
 install -m 0755 "$built" "$binary"
 say "Installed binary:  $binary"
+sync_binary=$bin_dir/timeslay-database-sync
+sync_built=$repo_root/target/debug/examples/sync_database
+sync_installed=0
+if [ -x "$sync_built" ]; then
+    install -m 0755 "$sync_built" "$sync_binary.new"
+    mv -f "$sync_binary.new" "$sync_binary"
+    sync_installed=1
+fi
 
 # Earlier versions installed separate panel and dock binaries. They are now
 # modes of the one binary (--sidebar, --dock, --daemon).
@@ -198,6 +206,11 @@ sed -e "s|@NODE@|$(unit_value "$node_bin")|g" \
     -e "s|@WORKDIR@|$(unit_path "$slack_dir")|g" \
     "$script_dir/timeslay-slack.service.in" > "$unit_dir/timeslay-slack.service"
 chmod 0644 "$unit_dir/timeslay-slack.service"
+if [ "$sync_installed" -eq 1 ]; then
+    sed "s|@SYNC_BINARY@|$(unit_value "$sync_binary")|g" \
+        "$script_dir/timeslay-database-sync.service.in" > "$unit_dir/timeslay-database-sync.service"
+    chmod 0644 "$unit_dir/timeslay-database-sync.service"
+fi
 say "Installed unit:    $unit_dir/timeslay-slack.service"
 if [ ! -f "$slack_env" ]; then
     say "Slack setup: copy $slack_config/.env.example to $slack_env and fill in the credentials."
@@ -265,6 +278,10 @@ fi
 if [ "$enable" -eq 1 ]; then
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload
+        if [ "$sync_installed" -eq 1 ]; then
+            systemctl --user enable timeslay-database-sync.service
+            systemctl --user restart timeslay-database-sync.service
+        fi
         systemctl --user enable timeslay.service
         systemctl --user enable timeslay-shortcuts.service
         systemctl --user restart timeslay-shortcuts.service

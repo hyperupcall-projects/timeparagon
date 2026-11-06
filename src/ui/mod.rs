@@ -35,7 +35,7 @@ mod weekly_task_list;
 use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text, tooltip};
 use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
 
-use crate::app::{CalendarMessage, NavigationMessage, SystemMessage};
+use crate::app::{CalendarMessage, CalendarView, NavigationMessage, PlanTab, SystemMessage};
 use crate::app::{Message, Screen, State};
 
 use layout::Metrics;
@@ -501,19 +501,34 @@ fn drag_ghost<'a>(
         .into()
 }
 
-/// The six main navigation destinations.
-const TAB_COUNT: usize = 6;
-const TAB_LABELS: [&str; TAB_COUNT] = ["Schedule", "Tasks", "Projects", "Note", "More", "Settings"];
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Schedule", "Tasks", "Proj", "Note", "More", "Set"];
-const TAB_WIDEST_LABELS: [&str; TAB_COUNT] = TAB_LABELS;
-const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] = TAB_SHORT_LABELS;
+/// The seven main navigation items.
+const TAB_COUNT: usize = 7;
+const TAB_LABELS: [&str; TAB_COUNT] = [
+    "Do", "Plan", "Tasks", "Projects", "Note", "More", "Settings",
+];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan", "Tasks", "Proj", "Note", "More", "Set"];
+const TAB_WIDEST_LABELS: [&str; TAB_COUNT] = [
+    "Do", "2 Week", "Tasks", "Projects", "Note", "More", "Settings",
+];
+const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
+    ["Do", "2 Week", "Tasks", "Proj", "Note", "More", "Set"];
 
-/// Shared height for the overview toggles and the bottom add-task button.
+/// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
 
-/// The schedule destination always opens the day view.
+/// The Do destination opens the day panel.
 pub fn calendar_view_label(_state: &State) -> &'static str {
-    "Schedule"
+    "Do"
+}
+
+/// The Plan button names the overview currently selected.
+pub fn plan_view_label(state: &State) -> &'static str {
+    match state.view {
+        CalendarView::Day => "Plan",
+        CalendarView::Week => "Week",
+        CalendarView::TwoWeek => "2 Week",
+        CalendarView::Month => "Month",
+    }
 }
 
 /// The tabs that live inside Tasks, shown beneath the top menu while any of
@@ -566,8 +581,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
             .iter()
             .map(|label| label.chars().count())
             .sum::<usize>();
-        // Six tabs, the gaps within each group, and the two group gaps.
-        let fixed = 12.0 * pad + 3.0 * gap + 2.0 * (gap * 2.0).max(4.0) + 1.0;
+        // Seven tabs, the gaps within each group, and the two group gaps.
+        let fixed = 14.0 * pad + 4.0 * gap + 2.0 * (gap * 2.0).max(4.0) + 1.0;
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_WIDEST_LABELS);
@@ -589,22 +604,25 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Schedule, then Tasks/Projects, then Note/More/Settings.
+/// Do/Plan, then Tasks/Projects, then Note/More/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
 /// While a Tasks screen is open, a second row with the task-list tabs
 /// is placed beneath the menu.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
-    let labels = if fit.short {
+    let mut labels = if fit.short {
         TAB_SHORT_LABELS
     } else {
         TAB_LABELS
     };
-    let tasks_open = matches!(
-        state.screen,
-        Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
-    );
+    labels[1] = plan_view_label(state);
+    let planning = state.range_view_active();
+    let tasks_open = !planning
+        && matches!(
+            state.screen,
+            Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+        );
     let more_active = state.more_menu_open
         || matches!(
             state.screen,
@@ -613,13 +631,20 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
     let view = tab(
         labels[0],
-        state.screen == Screen::Calendar,
+        !planning && state.screen == Screen::Calendar,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
         metrics,
         fit,
     );
-    let tasks = tab(
+    let plan = tab(
         labels[1],
+        state.view_menu_open || state.range_view_active(),
+        Message::Navigation(NavigationMessage::ViewMenuToggled),
+        metrics,
+        fit,
+    );
+    let tasks = tab(
+        labels[2],
         tasks_open,
         match state.screen {
             // Within the section, Tasks keeps the tab that is open.
@@ -638,28 +663,28 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         fit,
     );
     let projects = tab(
-        labels[2],
+        labels[3],
         state.screen == Screen::Projects,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects)),
         metrics,
         fit,
     );
     let note = tab(
-        labels[3],
+        labels[4],
         state.screen == Screen::Notepad,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad)),
         metrics,
         fit,
     );
     let more = tab(
-        labels[4],
+        labels[5],
         more_active,
         Message::Navigation(NavigationMessage::MoreMenuToggled),
         metrics,
         fit,
     );
     let settings = tab(
-        labels[5],
+        labels[6],
         state.screen == Screen::Settings,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings)),
         metrics,
@@ -669,7 +694,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let group_gap = (fit.gap * 2.0).max(4.0);
     let bar = container(
         row![
-            row![view].spacing(fit.gap),
+            row![view, plan].spacing(fit.gap),
             Space::new().width(Fill),
             row![tasks, projects].spacing(fit.gap),
             Space::new().width(Fill),
@@ -686,18 +711,6 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     })
     .width(Fill);
 
-    let overview_button = |label, active, message| {
-        button(text(label).size(metrics.label()).center().width(Fill))
-            .width(Fill)
-            .height(PANEL_ACTION_HEIGHT)
-            .padding(0)
-            .on_press(message)
-            .style(if active {
-                controls::primary
-            } else {
-                controls::secondary
-            })
-    };
     // The whole navigation is one card pinned to the top of the window.
     let bar_card = |content: Element<'a, Message>| -> Element<'a, Message> {
         container(content)
@@ -715,78 +728,44 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             })
             .into()
     };
-    let week_active = state.range_view_active() && state.weekly();
-    let two_week_active = state.two_weekly();
-    let month_active = state.range_view_active() && state.monthly();
-    let overviews = container(
-        row![
-            overview_button(
-                if week_active {
-                    "Hide week"
-                } else {
-                    "Show week"
-                },
-                week_active,
-                Message::Calendar(CalendarMessage::CalendarModeSelected(!week_active)),
-            ),
-            overview_button(
-                if two_week_active {
-                    "Hide 2 weeks"
-                } else {
-                    "Show 2 weeks"
-                },
-                two_week_active,
-                if two_week_active {
-                    Message::Calendar(CalendarMessage::CalendarModeSelected(false))
-                } else {
-                    Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected)
-                },
-            ),
-            overview_button(
-                if month_active {
-                    "Hide month"
-                } else {
-                    "Show month"
-                },
-                month_active,
-                if month_active {
-                    Message::Calendar(CalendarMessage::CalendarModeSelected(false))
-                } else {
-                    Message::Calendar(CalendarMessage::CalendarMonthViewSelected)
-                },
-            ),
-        ]
-        .spacing(metrics.spacing),
-    )
-    .padding(Padding {
-        top: TAB_TOP_MARGIN,
-        left: metrics.padding,
-        right: metrics.padding,
-        bottom: 0.0,
-    })
-    .width(Fill);
-    let navigation = column![overviews, bar].width(Fill);
-    if !tasks_open {
-        return bar_card(navigation.into());
+    if !tasks_open && !planning {
+        return bar_card(bar.into());
     }
 
-    let subtabs = row(TASKS_LABELS
-        .iter()
-        .zip([Screen::Overdue, Screen::Inbox, Screen::Backlog])
-        .map(|(label, screen)| {
+    let subtabs = if planning {
+        row([
+            ("Schedule", PlanTab::Schedule, Screen::Calendar),
+            ("Tasks", PlanTab::Tasks, Screen::Inbox),
+        ]
+        .into_iter()
+        .map(|(label, target, screen)| {
             tab(
                 label,
                 state.screen == screen,
-                Message::Navigation(NavigationMessage::ScreenSelected(screen)),
+                Message::Navigation(NavigationMessage::PlanTabSelected(target)),
                 metrics,
                 fit,
             )
         }))
+    } else {
+        row(TASKS_LABELS
+            .iter()
+            .zip([Screen::Overdue, Screen::Inbox, Screen::Backlog])
+            .map(|(label, screen)| {
+                tab(
+                    label,
+                    state.screen == screen,
+                    Message::Navigation(NavigationMessage::ScreenSelected(screen)),
+                    metrics,
+                    fit,
+                )
+            }))
+    }
     .spacing(fit.gap);
 
     bar_card(
         column![
-            navigation,
+            bar,
             container(subtabs).padding(Padding {
                 left: metrics.padding,
                 right: metrics.padding,
@@ -801,20 +780,16 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
 /// The height `tabs` takes: the menu, plus the Tasks row when it is showing.
 fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
-    let tasks_row = if matches!(
-        state.screen,
-        Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
-    ) {
+    let tasks_row = if state.range_view_active()
+        || matches!(
+            state.screen,
+            Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+        ) {
         TASKS_ROW_GAP + tab_height(metrics)
     } else {
         0.0
     };
-    TAB_TOP_MARGIN
-        + PANEL_ACTION_HEIGHT
-        + TAB_TOP_MARGIN
-        + tab_height(metrics)
-        + tasks_row
-        + TAB_TOP_MARGIN
+    TAB_TOP_MARGIN + tab_height(metrics) + tasks_row + TAB_TOP_MARGIN
 }
 
 fn tab_height(metrics: &Metrics) -> f32 {
@@ -895,32 +870,29 @@ fn view_half_style(active: bool) -> impl Fn(&iced::Theme, button::Status) -> but
     }
 }
 
-/// The calendar view switcher's menu: Day, Week, 2 Weeks and Month, in a card below the
-/// left-hand navigation group.
+/// The Plan menu selects a planning range without toggling it off.
 fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
         .on_press(Message::Navigation(NavigationMessage::ViewMenuToggled));
 
     let mut panel = column![].spacing(2.0).width(Fill);
+    let week_active = state.range_view_active() && state.weekly();
+    let two_week_active = state.two_weekly();
+    let month_active = state.range_view_active() && state.monthly();
     for (label, selected, message) in [
         (
-            "Schedule",
-            state.screen == Screen::Calendar,
-            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
-        ),
-        (
             "Week",
-            state.weekly(),
+            week_active,
             Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
         ),
         (
-            "2 Weeks",
-            state.two_weekly(),
+            "2 Week",
+            two_week_active,
             Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected),
         ),
         (
-            "Month",
-            state.monthly(),
+            "Show Month",
+            month_active,
             Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
         ),
     ] {
@@ -934,6 +906,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let width = (metrics.size.width - metrics.padding * 2.0).clamp(96.0, 180.0);
     let card = container(panel)
+        .id("plan-menu")
         .width(Length::Fixed(width))
         .padding(6.0)
         .style(crate::ui::controls::surface);

@@ -317,3 +317,18 @@ the installed runtime is considerably larger than the TimeSlay binary.
 `install.sh` copies the complete CEF runtime to `PREFIX/lib/timeslay/cef`.
 For a custom build/runtime location, set `CEF_PATH` at build time and
 `TIMESLAY_CEF_DIR` at install/runtime. Mapbox attribution remains visible.
+
+## Database sync
+
+Normal installs also build `core/examples/sync_database`, install it as
+`timeslay-database-sync`, and enable `timeslay-database-sync.service`. It syncs
+SQLite user documents with the Turso server over Tailscale while windows are
+closed. Its replica owner lock is shared with the panel and dock workers, so
+only one process opens the native replica at a time. `--no-enable` installs the
+unit without starting it; uninstall removes the worker and unit but keeps data.
+
+The SQLite journal retains original and superseded versions. Export it with
+`cargo run -p timeslay-core --example database_history -- DATABASE OUTPUT.json`.
+For recovery, keep the journal and the original database. Rebuild a damaged
+native replica from the server and replay pending journal entries; never clone
+native replica metadata between devices. Retain server backups separately.

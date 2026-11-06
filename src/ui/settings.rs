@@ -61,6 +61,13 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // from the same place.
     let content = column![
         section("Preferences", preferences(state, metrics), metrics),
+        section(
+            "Database sync",
+            text(crate::database_sync::status())
+                .size(metrics.label())
+                .into(),
+            metrics
+        ),
         section("Appearance", appearance(state, metrics), metrics),
         section("Dock", dock(state, metrics), metrics),
         section("Side panel", panel(state, metrics), metrics),

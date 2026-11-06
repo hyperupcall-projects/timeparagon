@@ -4,17 +4,36 @@ The mobile application is built around the day view, with the rest of the app in
 sheets over it:
 
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
-- Notes, with Markdown, colors, connections and Google Drive sync.
+- Notes, with Markdown, colors, connections and Turso sync.
 - Search and filters for the day.
 - Week, two-week and month agendas.
 - Overdue and Inbox filters on the Tasks tab.
 - Joining meetings and answering invitations.
-- Todos, the notepad, brain dumps and projects, shared through Google Drive.
+- Todos, the notepad, brain dumps and projects, shared through Turso.
 - The habit tracker.
 
-The habit tracker's data is not synced by anything, so the phone keeps its own
-record, apart from the desktop's. Local data lives in the database in the data
-directory rather than the cache, because Android may empty an app's cache.
+Habits, notes, todos, the notepad, brain dumps, projects and work sessions sync
+through `https://dragonfruit.tail30229e.ts.net:8210`. Each device must have
+Tailscale connected and permission to reach that server. Changes save locally
+when offline and retry automatically. Local data stays in the data directory,
+because Android may empty an app's cache.
+
+On upgrade, existing records are enrolled transactionally in place. No phone
+backup is created. `timeslay.sqlite3` remains the app/widget database, and a
+private `turso/replica.db` stores the native sync replica and its sidecars. Never
+copy a replica or its sync metadata to another device; enroll that device's own
+SQLite database instead. Edits and superseded versions remain in the SQLite
+journal and on the server. Export them with:
+
+```sh
+cargo run -p timeslay-core --example database_history -- /path/to/timeslay.sqlite3 /new/path/history.json
+```
+
+Only one process per device opens the Turso replica. The desktop dock, panel
+and Android widget service continue using SQLite; journal triggers capture
+changes from every process. Alarms, credentials, theme, calendar/contacts/route
+caches and fetch timestamps stay local. Google Calendar and Tasks remain their
+own sources of truth. Settings in `config.toml` continue to use Drive.
 
 These stay on the desktop: the dock and panel, global shortcuts, alarms and the
 Pomodoro timer (neither runs in the background here yet), voice input, People,
@@ -154,11 +173,9 @@ not appear in Drive and the app cannot see any of your other files. The sync is
 - An **empty** config (missing, blank, or only comments) never replaces
   another one, and a config that does not parse is neither uploaded nor
   overwritten.
-- Todos, the notepad's text, brain dumps, projects and work sessions live in
-  the local database rather than `config.toml`, and sync the same way as
-  `shared-data.json` in the same folder. Its "modification time" is when that
-  data last changed. A config from an older build that still holds them gives
-  them up to the database, which keeps its own copy if it has one.
+- Shared user data now uses Turso; the older `shared-data.json` transport is
+  disabled in normal builds so it cannot overwrite the database. Existing
+  Drive files are left in place. Upgrade both devices before editing shared data.
 - A config file stamped with the epoch is treated as a placeholder, so a config
   already in Drive replaces it.
 

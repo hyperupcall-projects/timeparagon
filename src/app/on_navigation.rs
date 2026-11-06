@@ -4,6 +4,18 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Message> {
     match message {
+        NavigationMessage::PlanTabSelected(tab) => {
+            if !state.range_view_active() {
+                return Task::none();
+            }
+            select_screen(
+                state,
+                match tab {
+                    PlanTab::Schedule => Screen::Calendar,
+                    PlanTab::Tasks => Screen::Inbox,
+                },
+            )
+        }
         NavigationMessage::ViewMenuToggled => {
             state.view_menu_open = !state.view_menu_open;
             // Only one dropdown is open at a time.
@@ -20,56 +32,63 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             Task::none()
         }
         NavigationMessage::ScreenSelected(screen) => {
-            state.view_layout_input = None;
-            // Choosing a destination puts the dropdown menus away.
-            state.view_menu_open = false;
-            state.more_menu_open = false;
-            // Alarm setting belongs to the day view, so leaving it ends both.
-            state.alarms.mode = false;
-            state.alarms.editor = None;
-            // Keep the day grid's scroll position when switching screens.
-            state.calendar.menu_open = false;
-            state.calendar.search.open = false;
-            // Each task list opens its own selection in the details pane.
-            let tasks_screen =
-                |screen| matches!(screen, Screen::Overdue | Screen::Inbox | Screen::Triaged);
-            if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {
-                state.calendar.open_event = None;
-                state.inbox.picker = None;
-            }
-            if screen == Screen::Habits {
-                state.calendar.open_event = None;
-                state.habits.confirm_delete = None;
-            } else {
-                state.habits.menu = None;
-                state.habits.section_edit = None;
-            }
-            if screen != Screen::Habits {
-                state.habits.calendar_habit = None;
-            }
-            let left_notes = if state.screen == Screen::Notes && screen != Screen::Notes {
-                crate::notes::leave(state)
-            } else {
-                Task::none()
-            };
-            state.screen = screen;
-            if screen != Screen::BrainDump {
-                state.brain_dump.open = None;
-            }
-            let close = crate::timeblocking::close(state);
-            let close = Task::batch([close, left_notes]);
-            if screen == Screen::Notes {
-                Task::batch([close, crate::notes::refresh(state)])
-            } else if screen == Screen::People {
-                Task::batch([close, crate::people::refresh(state)])
-            } else if screen == Screen::Habits {
-                Task::batch([
-                    close,
-                    Task::done(Message::Habits(crate::habits::Action::Refresh)),
-                ])
-            } else {
-                close
-            }
+            let was_planning = state.range_view_active();
+            state.view = CalendarView::Day;
+            let close = range_view_transition(state, was_planning, Task::none());
+            Task::batch([close, select_screen(state, screen)])
         }
+    }
+}
+
+/// Change sidebar content without changing the planning range.
+pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> {
+    state.view_layout_input = None;
+    // Choosing a destination puts the dropdown menus away.
+    state.view_menu_open = false;
+    state.more_menu_open = false;
+    // Alarm setting belongs to the day view, so leaving it ends both.
+    state.alarms.mode = false;
+    state.alarms.editor = None;
+    // Keep the day grid's scroll position when switching screens.
+    state.calendar.menu_open = false;
+    state.calendar.search.open = false;
+    // Each task list opens its own selection in the details pane.
+    let tasks_screen = |screen| matches!(screen, Screen::Overdue | Screen::Inbox | Screen::Triaged);
+    if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {
+        state.calendar.open_event = None;
+        state.inbox.picker = None;
+    }
+    if screen == Screen::Habits {
+        state.calendar.open_event = None;
+        state.habits.confirm_delete = None;
+    } else {
+        state.habits.menu = None;
+        state.habits.section_edit = None;
+    }
+    if screen != Screen::Habits {
+        state.habits.calendar_habit = None;
+    }
+    let left_notes = if state.screen == Screen::Notes && screen != Screen::Notes {
+        crate::notes::leave(state)
+    } else {
+        Task::none()
+    };
+    state.screen = screen;
+    if screen != Screen::BrainDump {
+        state.brain_dump.open = None;
+    }
+    let close = crate::timeblocking::close(state);
+    let close = Task::batch([close, left_notes]);
+    if screen == Screen::Notes {
+        Task::batch([close, crate::notes::refresh(state)])
+    } else if screen == Screen::People {
+        Task::batch([close, crate::people::refresh(state)])
+    } else if screen == Screen::Habits {
+        Task::batch([
+            close,
+            Task::done(Message::Habits(crate::habits::Action::Refresh)),
+        ])
+    } else {
+        close
     }
 }

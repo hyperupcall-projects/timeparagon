@@ -6,3 +6,5 @@
 /target-android-build.lock
 *.jks
 *.keystore
+
+/.migration-backups/

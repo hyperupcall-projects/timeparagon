@@ -302,6 +302,9 @@ impl Library {
     }
 
     pub fn has_unsynced(&self) -> bool {
+        if crate::database_sync::enabled() {
+            return false;
+        }
         !self.deleted.is_empty() || self.notes.iter().any(|note| note.dirty && !note.is_blank())
     }
 
@@ -542,6 +545,10 @@ pub(crate) fn sync_drive(library: &Library, drive: &impl Drive) -> Outcome {
 
 /// Brings a copy of the library and Google Drive into step.
 pub fn sync(library: &Library, client_id: &str, client_secret: &str) -> Outcome {
+    if crate::database_sync::enabled() {
+        crate::database_sync::start();
+        return Outcome::default();
+    }
     let tokens = oauth::load_tokens()
         .ok_or(Failure::SignedOut)
         .and_then(|tokens| {

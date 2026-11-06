@@ -150,6 +150,15 @@ pub fn TrackerSheet(
     on_close: EventHandler<()>,
 ) -> Element {
     let mut saved = use_signal(|| read(timeslay_core::task_db::path()));
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let loaded = read(timeslay_core::task_db::path());
+            if loaded.error.is_none() && loaded.library != saved.peek().library {
+                saved.set(loaded);
+            }
+        }
+    });
     let mut adding = use_signal(|| false);
     let open = use_signal(|| None::<String>);
 
@@ -178,7 +187,7 @@ pub fn TrackerSheet(
                 div { class: "modal-head",
                     div { class: "modal-titles",
                         h2 { class: "modal-title", "Habits" }
-                        div { class: "modal-sub", "Tracked on this phone only" }
+                        div { class: "modal-sub", "Shared across your devices" }
                     }
                     button {
                         class: "modal-close",
