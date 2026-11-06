@@ -25,6 +25,11 @@ pub struct Settings {
     pub whisper_model: String,
     pub ollama_url: String,
     pub model: String,
+    pub voice_openrouter_model: String,
+    pub image_ollama_url: String,
+    pub image_ollama_model: String,
+    pub image_openrouter_model: String,
+    pub extraction_openrouter_model: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -33,7 +38,47 @@ impl Default for Settings {
             whisper_model: String::new(),
             ollama_url: "http://localhost:11434".into(),
             model: String::new(),
+            voice_openrouter_model: String::new(),
+            image_ollama_url: "http://localhost:11434".into(),
+            image_ollama_model: String::new(),
+            image_openrouter_model: String::new(),
+            extraction_openrouter_model: String::new(),
         }
+    }
+}
+/// Provider tabs are navigation only; they do not change the running pipeline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Provider {
+    #[default]
+    Whisper,
+    Ollama,
+    OpenRouter,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum InputSection {
+    Voice,
+    Image,
+    Extraction,
+}
+/// Keep credentials out of debug representations, including UI messages.
+#[derive(Clone)]
+pub struct Token(String);
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+impl Default for Token {
+    fn default() -> Self {
+        Self(
+            crate::secrets::path()
+                .and_then(|path| {
+                    crate::secrets::read(&path, crate::secrets::keys::OPENROUTER_TOKEN)
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or_default(),
+        )
     }
 }
 #[derive(Debug, Clone)]
@@ -46,9 +91,20 @@ pub enum Action {
     WhisperModel(String),
     Url(String),
     Model(String),
+    ProviderTab(InputSection, Provider),
+    OpenRouterModel(InputSection, String),
+    ImageUrl(String),
+    ImageModel(String),
+    OpenRouterToken(Token),
+    SaveOpenRouterToken,
 }
 #[derive(Default)]
 pub struct Session {
+    voice_tab: Provider,
+    image_tab: Option<Provider>,
+    extraction_tab: Option<Provider>,
+    openrouter_token: Token,
+    token_status: Option<&'static str>,
     rx: Option<mpsc::Receiver<Progress>>,
     stop: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
@@ -143,6 +199,45 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::CopyDebug => return iced::clipboard::write(state.inbox.voice.debug_log.clone()),
+        Action::ProviderTab(section, provider) => {
+            let session = &mut state.inbox.voice;
+            match section {
+                InputSection::Voice => session.voice_tab = provider,
+                InputSection::Image => session.image_tab = Some(provider),
+                InputSection::Extraction => session.extraction_tab = Some(provider),
+            }
+            return Task::none();
+        }
+        Action::OpenRouterToken(token) => {
+            state.inbox.voice.openrouter_token = token;
+            state.inbox.voice.token_status = None;
+            return Task::none();
+        }
+        Action::SaveOpenRouterToken => {
+            let token = state.inbox.voice.openrouter_token.0.trim();
+            let result = crate::secrets::path()
+                .ok_or_else(|| std::io::Error::other("No secrets directory"))
+                .and_then(|path| {
+                    if token.is_empty() {
+                        crate::secrets::remove(&path, crate::secrets::keys::OPENROUTER_TOKEN)
+                    } else {
+                        crate::secrets::write(&path, crate::secrets::keys::OPENROUTER_TOKEN, token)
+                    }
+                });
+            state.inbox.voice.token_status = Some(match result {
+                Ok(()) if token.is_empty() => "Token removed",
+                Ok(()) => "Token saved",
+                Err(_) => "Could not save token. Check the private secrets file and try again.",
+            });
+            return Task::none();
+        }
+        Action::OpenRouterModel(section, model) => match section {
+            InputSection::Voice => state.config.voice.voice_openrouter_model = model,
+            InputSection::Image => state.config.voice.image_openrouter_model = model,
+            InputSection::Extraction => state.config.voice.extraction_openrouter_model = model,
+        },
+        Action::ImageUrl(url) => state.config.voice.image_ollama_url = url,
+        Action::ImageModel(model) => state.config.voice.image_ollama_model = model,
         Action::Binary(v) => state.config.voice.binary = v,
         Action::WhisperModel(v) => state.config.voice.whisper_model = v,
         Action::Url(v) => state.config.voice.ollama_url = v,
@@ -755,28 +850,136 @@ pub fn input<'a>(
     }
     content.into()
 }
+fn provider_tabs<'a>(section: InputSection, selected: Provider) -> iced::Element<'a, Message> {
+    use iced::widget::{button, row, text};
+    let providers: &[Provider] = match section {
+        InputSection::Voice => &[Provider::Whisper, Provider::Ollama, Provider::OpenRouter],
+        _ => &[Provider::Ollama, Provider::OpenRouter],
+    };
+    row(providers.iter().map(|&provider| {
+        let label = match provider {
+            Provider::Whisper => "whisper.cpp",
+            Provider::Ollama => "Ollama",
+            Provider::OpenRouter => "OpenRouter",
+        };
+        button(text(label))
+            .on_press(msg(Action::ProviderTab(section, provider)))
+            .style(if provider == selected {
+                crate::ui::controls::primary
+            } else {
+                crate::ui::controls::secondary
+            })
+            .into()
+    }))
+    .spacing(4)
+    .wrap()
+    .into()
+}
+
 pub fn settings<'a>(state: &'a State) -> iced::Element<'a, Message> {
-    use iced::widget::{column, text};
+    use iced::widget::{button, column, text};
     let settings = &state.config.voice;
     let voice = &state.inbox.voice;
-    let mut content = column![
-        text("whisper.cpp binary (name on PATH or full path)"),
-        crate::ui::controls::text_input("whisper-cli", &settings.binary)
-            .on_input(|s| msg(Action::Binary(s))),
-        text("Whisper model file (ggml .bin)"),
-        crate::ui::controls::text_input("/path/to/ggml-base.bin", &settings.whisper_model)
-            .on_input(|s| msg(Action::WhisperModel(s))),
-        text("Ollama server"),
-        crate::ui::controls::text_input("http://localhost:11434", &settings.ollama_url)
-            .on_input(|s| msg(Action::Url(s))),
-        text("Ollama extraction model"),
-        crate::ui::controls::text_input("", &settings.model).on_input(|s| msg(Action::Model(s))),
+    let heading = |label| {
+        text(label).font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        })
+    };
+    let mut token = column![
+        heading("OpenRouter"),
+        text("API token"),
+        crate::ui::controls::text_input("OpenRouter API token", &voice.openrouter_token.0)
+            .secure(true)
+            .on_input(|s| msg(Action::OpenRouterToken(Token(s))))
+            .on_submit(msg(Action::SaveOpenRouterToken)),
+        button("Save token").on_press(msg(Action::SaveOpenRouterToken)),
+        text("Stored privately on this device. Clear and save to remove.").size(12),
     ]
     .spacing(6);
-    if let Some(error) = &voice.error {
-        content = content.push(text(error).style(text::danger));
+    if let Some(status) = voice.token_status {
+        token = token.push(text(status).size(12));
     }
-    content.push(text("Uses the default microphone via arecord (alsa-utils). Click the microphone again to finish; maximum recording is 2 minutes.").size(12)).into()
+    let mut voice_fields = column![
+        heading("Voice input"),
+        provider_tabs(InputSection::Voice, voice.voice_tab),
+    ]
+    .spacing(6);
+    match voice.voice_tab {
+        Provider::Whisper => {
+            voice_fields = voice_fields.extend([
+                text("whisper.cpp binary (name on PATH or full path)").into(),
+                crate::ui::controls::text_input("whisper-cli", &settings.binary)
+                    .on_input(|s| msg(Action::Binary(s))).into(),
+                text("Whisper model file (ggml .bin)").into(),
+                crate::ui::controls::text_input("/path/to/ggml-base.bin", &settings.whisper_model)
+                    .on_input(|s| msg(Action::WhisperModel(s))).into(),
+                text("Uses the default microphone via arecord (alsa-utils). Click the microphone again to finish; maximum recording is 2 minutes.").size(12).into(),
+            ]);
+        }
+        Provider::Ollama => {}
+        Provider::OpenRouter => {
+            voice_fields = voice_fields.push(text("Model ID")).push(
+                crate::ui::controls::text_input("provider/model", &settings.voice_openrouter_model)
+                    .on_input(|s| msg(Action::OpenRouterModel(InputSection::Voice, s))),
+            );
+        }
+    }
+    if let Some(error) = &voice.error {
+        voice_fields = voice_fields.push(text(error).style(text::danger));
+    }
+    let image_tab = voice.image_tab.unwrap_or(Provider::Ollama);
+    let mut image = column![
+        heading("Image input"),
+        provider_tabs(InputSection::Image, image_tab)
+    ]
+    .spacing(6);
+    if image_tab == Provider::OpenRouter {
+        image = image.push(text("Model ID")).push(
+            crate::ui::controls::text_input("provider/model", &settings.image_openrouter_model)
+                .on_input(|s| msg(Action::OpenRouterModel(InputSection::Image, s))),
+        );
+    } else {
+        image = image.extend([
+            text("Ollama server").into(),
+            crate::ui::controls::text_input("http://localhost:11434", &settings.image_ollama_url)
+                .on_input(|s| msg(Action::ImageUrl(s)))
+                .into(),
+            text("Ollama image model").into(),
+            crate::ui::controls::text_input("", &settings.image_ollama_model)
+                .on_input(|s| msg(Action::ImageModel(s)))
+                .into(),
+        ]);
+    }
+    let extraction_tab = voice.extraction_tab.unwrap_or(Provider::Ollama);
+    let mut extraction = column![
+        heading("Text extraction"),
+        provider_tabs(InputSection::Extraction, extraction_tab)
+    ]
+    .spacing(6);
+    if extraction_tab == Provider::OpenRouter {
+        extraction = extraction.push(text("Model ID")).push(
+            crate::ui::controls::text_input(
+                "provider/model",
+                &settings.extraction_openrouter_model,
+            )
+            .on_input(|s| msg(Action::OpenRouterModel(InputSection::Extraction, s))),
+        );
+    } else {
+        extraction = extraction.extend([
+            text("Ollama server").into(),
+            crate::ui::controls::text_input("http://localhost:11434", &settings.ollama_url)
+                .on_input(|s| msg(Action::Url(s)))
+                .into(),
+            text("Ollama extraction model").into(),
+            crate::ui::controls::text_input("", &settings.model)
+                .on_input(|s| msg(Action::Model(s)))
+                .into(),
+        ]);
+    }
+    column![token, voice_fields, image, extraction]
+        .spacing(16)
+        .into()
 }
 
 struct Microphone;
@@ -821,6 +1024,39 @@ impl iced::widget::canvas::Program<Message> for Microphone {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_extraction_settings_and_new_models_round_trip() {
+        let mut settings: Settings = toml::from_str(
+            r#"binary = "custom-whisper"
+whisper_model = "/models/speech.bin"
+ollama_url = "http://localhost:11434"
+model = "granite"
+"#,
+        )
+        .unwrap();
+        assert_eq!(settings.binary, "custom-whisper");
+        assert_eq!(settings.whisper_model, "/models/speech.bin");
+        assert_eq!(settings.ollama_url, "http://localhost:11434");
+        assert_eq!(settings.model, "granite");
+        settings.voice_openrouter_model = "voice/model".into();
+        settings.image_openrouter_model = "image/model".into();
+        settings.extraction_openrouter_model = "text/model".into();
+        settings.image_ollama_url = "http://image-server:11434".into();
+        settings.image_ollama_model = "vision".into();
+        let encoded = toml::to_string(&settings).unwrap();
+        assert_eq!(toml::from_str::<Settings>(&encoded).unwrap(), settings);
+        assert!(!encoded.contains("token"));
+    }
+
+    #[test]
+    fn token_messages_redact_credentials() {
+        let action = msg(Action::OpenRouterToken(Token("test-private-token".into())));
+        let debug = format!("{action:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("test-private-token"));
+    }
+
     fn context() -> Value {
         json!({"projects":[{"id":1,"name":"Work"}]})
     }
