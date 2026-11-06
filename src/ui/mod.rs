@@ -505,17 +505,14 @@ fn drag_ghost<'a>(
         .into()
 }
 
-/// The seven main navigation items.
-const TAB_COUNT: usize = 7;
-const TAB_LABELS: [&str; TAB_COUNT] = [
-    "Do", "Plan", "Tasks", "Projects", "Note", "More", "Settings",
-];
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan", "Tasks", "Proj", "Note", "More", "Set"];
-const TAB_WIDEST_LABELS: [&str; TAB_COUNT] = [
-    "Do", "2 Week", "Tasks", "Projects", "Note", "More", "Settings",
-];
+/// The six main navigation items.
+const TAB_COUNT: usize = 6;
+const TAB_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Projects", "Note", "More", "Settings"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Proj", "Note", "More", "Set"];
+const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
+    ["Do", "Plan 2 Weeks", "Projects", "Note", "More", "Settings"];
 const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-    ["Do", "2 Week", "Tasks", "Proj", "Note", "More", "Set"];
+    ["Do", "Plan 2 Weeks", "Proj", "Note", "More", "Set"];
 
 /// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
@@ -528,15 +525,14 @@ pub fn calendar_view_label(_state: &State) -> &'static str {
 /// The Plan button names the overview currently selected.
 pub fn plan_view_label(state: &State) -> &'static str {
     match state.view {
-        CalendarView::Day => "Plan",
-        CalendarView::Week => "Week",
-        CalendarView::TwoWeek => "2 Week",
-        CalendarView::Month => "Month",
+        CalendarView::Day => "Plan Day",
+        CalendarView::Week => "Plan Week",
+        CalendarView::TwoWeek => "Plan 2 Weeks",
+        CalendarView::Month => "Plan Month",
     }
 }
 
-/// The tabs that live inside Tasks, shown beneath the top menu while any of
-/// them is open.
+/// Task lists available beneath each planning period.
 pub const TASKS_LABELS: [&str; 3] = ["Overdue", "Inbox", "Backlog"];
 
 /// The destinations kept inside the More menu.
@@ -544,7 +540,7 @@ pub const MORE_LABELS: [&str; 5] = ["Travel", "Habits", "Notes", "People", "Brai
 
 /// A little breathing room between the menu and the top of the window.
 const TAB_TOP_MARGIN: f32 = 6.0;
-/// The gap between the top menu and the Tasks tabs below it.
+/// The gap between the top menu and the planning submenus.
 const TASKS_ROW_GAP: f32 = 2.0;
 
 /// Average glyph width as a fraction of the font size, with some slack.
@@ -585,8 +581,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
             .iter()
             .map(|label| label.chars().count())
             .sum::<usize>();
-        // Seven tabs, the gaps within each group, and the two group gaps.
-        let fixed = 14.0 * pad + 4.0 * gap + 2.0 * (gap * 2.0).max(4.0) + 1.0;
+        // Six tabs, three within-group gaps, and gaps on both sides of each spacer.
+        let fixed = 12.0 * pad + 3.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 1.0;
         ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_WIDEST_LABELS);
@@ -608,11 +604,10 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Do/Plan, then Tasks/Projects, then Note/More/Settings.
+/// Do/Plan, then Projects, then Note/More/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
-/// While a Tasks screen is open, a second row with the task-list tabs
-/// is placed beneath the menu.
+/// Planning destinations show their submenus beneath the main row.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let fit = tab_fit(*metrics);
     let mut labels = if fit.short {
@@ -642,53 +637,34 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     );
     let plan = tab(
         labels[1],
-        state.view_menu_open || state.range_view_active(),
+        state.view_menu_open || planning || tasks_open,
         Message::Navigation(NavigationMessage::ViewMenuToggled),
         metrics,
         fit,
     );
-    let tasks = tab(
-        labels[2],
-        tasks_open,
-        match state.screen {
-            // Within the section, Tasks keeps the tab that is open.
-            Screen::Overdue => {
-                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Overdue))
-            }
-            Screen::Triaged => {
-                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Triaged))
-            }
-            Screen::Backlog => {
-                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Backlog))
-            }
-            _ => Message::Navigation(NavigationMessage::ScreenSelected(Screen::Inbox)),
-        },
-        metrics,
-        fit,
-    );
     let projects = tab(
-        labels[3],
+        labels[2],
         state.screen == Screen::Projects,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects)),
         metrics,
         fit,
     );
     let note = tab(
-        labels[4],
+        labels[3],
         state.screen == Screen::Notepad,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad)),
         metrics,
         fit,
     );
     let more = tab(
-        labels[5],
+        labels[4],
         more_active,
         Message::Navigation(NavigationMessage::MoreMenuToggled),
         metrics,
         fit,
     );
     let settings = tab(
-        labels[6],
+        labels[5],
         state.screen == Screen::Settings,
         Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings)),
         metrics,
@@ -700,7 +676,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         row![
             row![view, plan].spacing(fit.gap),
             Space::new().width(Fill),
-            row![tasks, projects].spacing(fit.gap),
+            projects,
             Space::new().width(Fill),
             row![note, more, settings].spacing(fit.gap),
         ]
@@ -736,55 +712,41 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         return bar_card(bar.into());
     }
 
-    let subtabs = if planning {
-        row([
-            ("Schedule", PlanTab::Schedule, Screen::Calendar),
-            ("Tasks", PlanTab::Tasks, Screen::Inbox),
-        ]
-        .into_iter()
-        .map(|(label, target, screen)| {
-            tab(
-                label,
-                state.screen == screen,
-                Message::Navigation(NavigationMessage::PlanTabSelected(target)),
-                metrics,
-                fit,
-            )
-        }))
-    } else {
-        row(TASKS_LABELS
-            .iter()
-            .zip([Screen::Overdue, Screen::Inbox, Screen::Backlog])
-            .map(|(label, screen)| {
-                tab(
-                    label,
-                    state.screen == screen,
-                    Message::Navigation(NavigationMessage::ScreenSelected(screen)),
-                    metrics,
-                    fit,
-                )
-            }))
-    }
+    let subtabs = row([
+        ("Schedule", PlanTab::Schedule, Screen::Calendar),
+        ("Overdue", PlanTab::Overdue, Screen::Overdue),
+        ("Inbox", PlanTab::Inbox, Screen::Inbox),
+        ("Backlog", PlanTab::Backlog, Screen::Backlog),
+    ]
+    .into_iter()
+    .filter(|(_, target, _)| planning || *target != PlanTab::Schedule)
+    .map(|(label, target, screen)| {
+        tab(
+            label,
+            state.screen == screen,
+            Message::Navigation(NavigationMessage::PlanTabSelected(target)),
+            metrics,
+            fit,
+        )
+    }))
     .spacing(fit.gap);
 
     bar_card(
         column![
             bar,
-            container(subtabs)
-                .id(if planning { "plan-tabs" } else { "tasks-tabs" })
-                .padding(Padding {
-                    left: metrics.padding,
-                    right: metrics.padding,
-                    top: TASKS_ROW_GAP,
-                    bottom: 0.0,
-                }),
+            container(subtabs).id("plan-tabs").padding(Padding {
+                left: metrics.padding,
+                right: metrics.padding,
+                top: TASKS_ROW_GAP,
+                bottom: 0.0,
+            }),
         ]
         .width(Fill)
         .into(),
     )
 }
 
-/// The height `tabs` takes: the menu, plus the Tasks row when it is showing.
+/// The height `tabs` takes, including planning submenus when shown.
 fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
     let tasks_row = if state.range_view_active()
         || matches!(
@@ -887,17 +849,26 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let month_active = state.range_view_active() && state.monthly();
     for (label, selected, message) in [
         (
+            "Day",
+            !state.range_view_active()
+                && matches!(
+                    state.screen,
+                    Screen::Overdue | Screen::Inbox | Screen::Backlog
+                ),
+            Message::Navigation(NavigationMessage::PlanDaySelected),
+        ),
+        (
             "Week",
             week_active,
             Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
         ),
         (
-            "2 Week",
+            "2 Weeks",
             two_week_active,
             Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected),
         ),
         (
-            "Show Month",
+            "Month",
             month_active,
             Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
         ),
