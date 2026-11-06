@@ -2379,3 +2379,54 @@ fn an_invitation_can_be_answered_but_its_guests_cannot_be_managed() {
         Message::Event(EventMessage::EventReply(id, Response::Tentative)) if id == event.id
     )));
 }
+
+#[test]
+fn quick_create_focuses_the_title_before_the_first_keystroke() {
+    use iced::advanced::renderer::Headless;
+    use iced::futures::{StreamExt, executor::block_on};
+    use iced_test::runtime::{Action, UserInterface, task, user_interface};
+
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let start = calendar::at_clock(state.calendar.day, 9, 0);
+    let focus = crate::app::update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftStarted {
+            start,
+            end: start + chrono::Duration::minutes(30),
+        }),
+    );
+    let mut renderer = block_on(<iced::Renderer as Headless>::new(
+        iced::Font::DEFAULT,
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let size = Size::new(800.0, 600.0);
+    let metrics = Metrics::of(size);
+    let mut ui = UserInterface::build(
+        draft_overlay(&state, &metrics),
+        size,
+        user_interface::Cache::default(),
+        &mut renderer,
+    );
+    block_on(async {
+        let mut stream = task::into_stream(focus).expect("title focus task");
+        while let Some(action) = stream.next().await {
+            if let Action::Widget(mut operation) = action {
+                ui.operate(&renderer, operation.as_mut());
+            }
+        }
+    });
+    let mut messages = Vec::new();
+    ui.update(
+        &iced_test::simulator::typewrite("P").collect::<Vec<_>>(),
+        iced::mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut messages,
+    );
+    assert!(messages.iter().any(|message| matches!(message,
+        Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(title)) if title == "P"
+    )));
+}

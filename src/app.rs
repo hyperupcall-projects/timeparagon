@@ -321,6 +321,8 @@ impl Flash {
 
 pub struct State {
     pub picker: Option<crate::ui::controls::Picker>,
+    /// Keyboard choice in the calendar quick-create popup; None means title entry.
+    pub draft_kind_focus: Option<calendar::DraftKind>,
     /// Persistent cursor and selection state for new events, event edits and habits.
     pub task_description: text_editor::Content,
     pub task_creation_window: bool,
@@ -762,6 +764,10 @@ pub enum EventDraftMessage {
     },
     /// The new event's title was edited.
     EventDraftTitleChanged(String),
+    EventDraftCycleKind {
+        reverse: bool,
+        title_focused: bool,
+    },
     EventDraftOptions(calendar::event_options::Action),
     EventDraftProjects(calendar::projects::Action),
     /// The new event's description was edited.
@@ -854,6 +860,7 @@ impl State {
 
         Self {
             picker: None,
+            draft_kind_focus: None,
             task_description: text_editor::Content::new(),
             task_creation_window: false,
             description_popup: None,
@@ -1523,7 +1530,31 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         window::close_events().map(|v0| Message::System(SystemMessage::WindowClosed(v0))),
         window::resize_events()
             .map(|(id, size)| Message::System(SystemMessage::WindowResized(id, size))),
-        keyboard::listen().map(map_key),
+        if state
+            .calendar
+            .draft
+            .as_ref()
+            .is_some_and(|draft| !draft.editor_open)
+        {
+            // Text inputs capture Escape when focused. The popup must still close.
+            iced::event::listen_with(|event, status, _| match event {
+                iced::Event::Keyboard(event)
+                    if status == iced::event::Status::Ignored
+                        || matches!(
+                            event,
+                            keyboard::Event::KeyPressed {
+                                key: Key::Named(keyboard::key::Named::Escape),
+                                ..
+                            }
+                        ) =>
+                {
+                    Some(map_key(event))
+                }
+                _ => None,
+            })
+        } else {
+            keyboard::listen().map(map_key)
+        },
         iced::event::listen_with(|event, status, window| {
             if status == iced::event::Status::Ignored
                 && matches!(
@@ -1700,6 +1731,41 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
             Task::none()
         };
     }
+    if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|draft| !draft.editor_open)
+        && key == Key::Named(keyboard::key::Named::Tab)
+    {
+        return iced::widget::operation::is_focused("calendar-draft-title").map(
+            move |title_focused| {
+                Message::EventDraft(EventDraftMessage::EventDraftCycleKind {
+                    reverse: modifiers.shift(),
+                    title_focused,
+                })
+            },
+        );
+    }
+    if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|draft| !draft.editor_open)
+        && matches!(
+            key.as_ref(),
+            Key::Named(keyboard::key::Named::Enter) | Key::Named(keyboard::key::Named::Space)
+        )
+        && let Some(kind) = state.draft_kind_focus
+    {
+        return iced::widget::operation::is_focused("calendar-draft-title").map(move |focused| {
+            if focused {
+                Message::Ignored
+            } else {
+                Message::EventDraft(EventDraftMessage::EventDraftKindSelected(kind))
+            }
+        });
+    }
     match key_message(state, key, modifiers) {
         Some(message) => Task::done(message),
         None => Task::none(),
@@ -1712,6 +1778,22 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 /// looked at without running anything.
 fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
+    if state
+        .calendar
+        .draft
+        .as_ref()
+        .is_some_and(|draft| !draft.editor_open)
+    {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => {
+                Some(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
+            }
+            Key::Named(Named::Enter) | Key::Named(Named::Space) => state
+                .draft_kind_focus
+                .map(|kind| Message::EventDraft(EventDraftMessage::EventDraftKindSelected(kind))),
+            _ => None,
+        };
+    }
     if state.travel.map.active {
         return match key.as_ref() {
             Key::Named(Named::Escape) => Some(Message::Travel(crate::travel::Action::Map(

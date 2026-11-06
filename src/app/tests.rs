@@ -2349,3 +2349,65 @@ fn dragging_an_event_without_guests_does_not_ask() {
     );
     assert!(state.calendar.pending_move.is_none());
 }
+
+#[test]
+fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
+    let mut state = State::blank();
+    let start = calendar::at_clock(state.calendar.day, 9, 0);
+    state
+        .calendar
+        .begin_draft("primary".into(), start, start + chrono::Duration::hours(1));
+    for expected in [
+        calendar::DraftKind::Event,
+        calendar::DraftKind::TimeBlock,
+        calendar::DraftKind::Task,
+        calendar::DraftKind::Habit,
+        calendar::DraftKind::Event,
+    ] {
+        let _ = update(
+            &mut state,
+            Message::EventDraft(EventDraftMessage::EventDraftCycleKind {
+                reverse: false,
+                title_focused: false,
+            }),
+        );
+        assert_eq!(state.draft_kind_focus, Some(expected));
+        let draft = state.calendar.draft.as_ref().unwrap();
+        assert!(!draft.editor_open && !draft.saving);
+    }
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftCycleKind {
+            reverse: true,
+            title_focused: false,
+        }),
+    );
+    assert_eq!(state.draft_kind_focus, Some(calendar::DraftKind::Habit));
+    assert!(matches!(
+        key_message(
+            &mut state,
+            Key::Named(keyboard::key::Named::Enter),
+            keyboard::Modifiers::default()
+        ),
+        Some(Message::EventDraft(
+            EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::Habit)
+        ))
+    ));
+    // Clicking the title before another Tab restarts the cycle at Event.
+    let _ = update(
+        &mut state,
+        Message::EventDraft(EventDraftMessage::EventDraftCycleKind {
+            reverse: false,
+            title_focused: true,
+        }),
+    );
+    assert_eq!(state.draft_kind_focus, Some(calendar::DraftKind::Event));
+    let escape = key_message(
+        &mut state,
+        Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::default(),
+    )
+    .unwrap();
+    let _ = update(&mut state, escape);
+    assert!(state.calendar.draft.is_none());
+}

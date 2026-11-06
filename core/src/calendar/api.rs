@@ -244,6 +244,11 @@ pub fn fetch_range(
     // Every event TimeSlay writes lives on one calendar. Find it by name, or
     // create it the first time it is missing.
     let app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
+    let color_notice = app_calendar.as_deref().and_then(|id| {
+        reset_app_calendar_colors(access_token, id)
+            .err()
+            .map(|error| format!("Could not reset TimeSlay event colors: {error}"))
+    });
     // Task refresh and independent calendar requests overlap. Bound concurrency
     // so an account with many calendars does not open an unbounded worker pool.
     let _ = disabled;
@@ -269,6 +274,9 @@ pub fn fetch_range(
         Ok(tasks) => tasks,
         Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
     };
+    if let Some(message) = color_notice {
+        append_notice(&mut notice, &message);
+    }
     // Fetch app-owned task blocks independently of the day. This makes a task
     // scheduled on another day/device stay scheduled in Backlog and block views.
     let mut linked_calendars: std::collections::HashSet<String> = task_events
@@ -380,6 +388,65 @@ fn resolve_app_calendar(
             None
         }
     }
+}
+
+/// Repair the entire app calendar once per session, including series masters
+/// and exceptions outside the visible day. Failed repairs retry on the next sync.
+fn reset_app_calendar_colors(access_token: &str, calendar_id: &str) -> Result<(), String> {
+    static RESET: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let mut guard = RESET
+        .lock()
+        .map_err(|_| "Calendar color cleanup unavailable")?;
+    let calendars = guard.get_or_insert_with(Default::default);
+    if calendars.contains(calendar_id) {
+        return Ok(());
+    }
+    reset_calendar_colors_with(calendar_id, |method, url, body| {
+        super::scheduled::request(method, url, access_token, body).map_err(|error| error.message)
+    })?;
+    calendars.insert(calendar_id.to_owned());
+    Ok(())
+}
+
+fn reset_calendar_colors_with(
+    calendar_id: &str,
+    mut request: impl FnMut(&str, &str, Option<&serde_json::Value>) -> Result<serde_json::Value, String>,
+) -> Result<(), String> {
+    let collection = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
+    let mut page_token: Option<String> = None;
+    let mut colored = Vec::new();
+    loop {
+        // Do not expand recurring series: reset their masters and any explicit
+        // exceptions, without creating an override on every occurrence.
+        let mut url = format!("{collection}?singleEvents=false&maxResults=2500");
+        if let Some(token) = &page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(token));
+        }
+        let page = request("GET", &url, None)?;
+        for entry in page["items"].as_array().into_iter().flatten() {
+            if entry["status"].as_str() != Some("cancelled")
+                && entry["colorId"].as_str().is_some()
+                && let Some(id) = entry["id"].as_str()
+            {
+                colored.push(id.to_owned());
+            }
+        }
+        page_token = page["nextPageToken"].as_str().map(str::to_owned);
+        if page_token.is_none() {
+            break;
+        }
+    }
+    // Finish listing before changing events, so pagination sees a stable set.
+    for id in colored {
+        request(
+            "PATCH",
+            &format!("{collection}/{}", urlencoding::encode(&id)),
+            Some(&serde_json::json!({"colorId": null})),
+        )?;
+    }
+    Ok(())
 }
 
 fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
@@ -795,7 +862,7 @@ pub fn habit_body(
     start: DateTime<Local>,
     end: DateTime<Local>,
     recurrence: &[String],
-    color_id: Option<&str>,
+    _color_id: Option<&str>,
 ) -> serde_json::Value {
     let zone = iana_time_zone::get_timezone().ok();
     let time = |when: DateTime<Local>| {
@@ -824,10 +891,7 @@ pub fn habit_body(
     );
     // A missing `colorId` means "the calendar's color". Sending null on an
     // update clears a per-habit color chosen earlier.
-    body["colorId"] = match color_id {
-        Some(color_id) => serde_json::Value::String(color_id.to_owned()),
-        None => serde_json::Value::Null,
-    };
+    body["colorId"] = serde_json::Value::Null;
     body
 }
 
@@ -1567,8 +1631,10 @@ fn event_patch_body(
     body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
         .map_err(|e| e.to_string())?
         .into();
-    if let Some(color_id) = color_id {
-        body["colorId"] = serde_json::Value::String(color_id.to_owned());
+    if color_id.is_some() {
+        // Older queued operations may still carry a local settings color.
+        // Clear that override instead of exporting it to Google.
+        body["colorId"] = serde_json::Value::Null;
     }
     if all_day {
         body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
@@ -1966,8 +2032,10 @@ pub fn insert_event(
     }
     body["description"] = serde_json::Value::String(description.to_owned());
     super::projects::write(&mut body, projects)?;
-    if let Some(color_id) = color_id {
-        body["colorId"] = serde_json::Value::String(color_id.to_owned());
+    if color_id.is_some() {
+        // Older queued operations may still carry a local settings color.
+        // Clear that override instead of exporting it to Google.
+        body["colorId"] = serde_json::Value::Null;
     }
     if !recurrence.is_empty() {
         body["recurrence"] = serde_json::Value::Array(
@@ -2625,6 +2693,80 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 #[cfg(test)]
 mod tests {
     #[test]
+    fn color_cleanup_covers_all_pages_masters_and_exceptions_only_on_app_calendar() {
+        let mut calls = Vec::new();
+        super::reset_calendar_colors_with("app@example.com", |method, url, body| {
+            assert!(url.starts_with(&format!("{}/app%40example.com/events", super::EVENTS)));
+            calls.push((method.to_owned(), url.to_owned()));
+            if method == "GET" {
+                assert!(body.is_none());
+                assert!(url.contains("singleEvents=false"));
+                assert!(!url.contains("timeMin"));
+                if url.contains("pageToken=") {
+                    assert!(url.contains("pageToken=next%2Fpage"));
+                    return Ok(serde_json::json!({"items": [
+                        {"id": "exception", "recurringEventId": "master", "colorId": "8"},
+                        {"id": "deleted", "status": "cancelled", "colorId": "1"}
+                    ]}));
+                }
+                return Ok(serde_json::json!({"nextPageToken": "next/page", "items": [
+                    {"id": "master", "recurrence": ["RRULE:FREQ=DAILY"], "colorId": "3"},
+                    {"id": "plain", "colorId": "9"},
+                    {"id": "default"}
+                ]}));
+            }
+            assert_eq!(body, Some(&serde_json::json!({"colorId": null})));
+            Ok(serde_json::json!({}))
+        })
+        .unwrap();
+        assert_eq!(
+            calls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(),
+            ["GET", "GET", "PATCH", "PATCH", "PATCH"]
+        );
+        assert!(calls[2].1.ends_with("/master"));
+        assert!(calls[3].1.ends_with("/plain"));
+        assert!(calls[4].1.ends_with("/exception"));
+    }
+
+    #[test]
+    fn color_cleanup_reports_write_failures_for_retry() {
+        let result = super::reset_calendar_colors_with("app", |method, _, _| {
+            if method == "GET" {
+                Ok(serde_json::json!({"items": [{"id": "event", "colorId": "3"}]}))
+            } else {
+                Err("write failed".to_owned())
+            }
+        });
+        assert_eq!(result, Err("write failed".to_owned()));
+    }
+
+    #[test]
+    fn queued_event_edits_cannot_restore_a_settings_color() {
+        let event = super::super::sample_snapshot().events.remove(0);
+        for color in [None, Some("5")] {
+            let body = event_patch_body(
+                &event.title,
+                "Notes",
+                color,
+                event.start,
+                event.end,
+                None,
+                &[],
+                false,
+                &[],
+                None,
+            )
+            .unwrap();
+            if color.is_some() {
+                assert_eq!(body.get("colorId"), Some(&serde_json::Value::Null));
+            } else {
+                // Editing an unrelated calendar leaves its Google color alone.
+                assert!(body.get("colorId").is_none());
+            }
+        }
+    }
+
+    #[test]
     fn moving_an_event_names_both_calendars_encoded() {
         assert_eq!(
             super::move_event_url("me@example.com", "abc", "team#x@group.calendar.google.com"),
@@ -3154,7 +3296,7 @@ mod tests {
             body["recurrence"],
             serde_json::json!(["RRULE:FREQ=DAILY", "EXDATE:20261101T090000"])
         );
-        assert_eq!(body["colorId"], "3");
+        assert!(body["colorId"].is_null());
 
         // A PATCH has to say the rule and color are gone; omitting them would
         // leave Google's copy of the habit repeating.

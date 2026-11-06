@@ -18,8 +18,8 @@ pub struct Link {
     pub block: Option<String>,
     #[serde(default)]
     pub order: i64,
-    /// The Google event `colorId` the app last wrote for this task, so the
-    /// event keeps the chosen task color across syncs.
+    /// Legacy event color, retained for reading older task metadata.
+    /// Local settings colors are never written to Google Calendar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_id: Option<String>,
 }
@@ -106,14 +106,12 @@ pub fn content(task: &Event, link: &Link) -> Value {
             "ttKind": "task", "ttTaskList": link.list_id, "ttTask": link.task_id,
             "ttBlock": link.block.as_deref().unwrap_or(""), "ttOrder": link.order.to_string(),
             "ttCompleted": task.completed.to_string(),
-            "ttColor": link.color_id.as_deref().unwrap_or(""),
+            "ttColor": "",
             "ttTaskLink": task.details.link,
             "ttDeadline": super::deadline::read_deadline(&task.details.description).ok().flatten().map(|d| d.value()).unwrap_or_default(),
         }},
     });
-    if let Some(color_id) = &link.color_id {
-        body["colorId"] = json!(color_id);
-    }
+    body["colorId"] = Value::Null;
     body
 }
 
@@ -619,6 +617,20 @@ fn find_or_create(
 mod tests {
     use super::*;
     use crate::timeblocking::{Metadata, task_key};
+
+    #[test]
+    fn legacy_task_colors_are_cleared_in_every_calendar_write() {
+        let task = make_task("one", false);
+        let mut link = Link::new("app-calendar".into(), &task).unwrap();
+        link.color_id = Some("9".into());
+        for body in [
+            content(&task, &link),
+            event_body(&task, &link, task.start, task.end),
+        ] {
+            assert_eq!(body.get("colorId"), Some(&Value::Null));
+            assert_eq!(body["extendedProperties"]["private"]["ttColor"], "");
+        }
+    }
 
     fn make_task(id: &str, completed: bool) -> Event {
         let mut task = super::super::sample_snapshot().events.remove(1);

@@ -123,7 +123,7 @@ fn body(event: &Event) -> Result<Value, String> {
         .as_ref()
         .ok_or("Missing sleep metadata")?;
     Ok(json!({
-        "summary": title(event), "description": description(event), "colorId": "8",
+        "summary": title(event), "description": description(event), "colorId": null,
         "start": {"dateTime": event.start.with_timezone(&Utc).to_rfc3339()},
         "end": {"dateTime": event.end.with_timezone(&Utc).to_rfc3339()},
         "extendedProperties": {"private": {
@@ -616,6 +616,7 @@ mod tests {
         record.estimated_end = false;
         event.details.sleep = Some(record.clone());
         let mut value = body(&event).unwrap();
+        assert_eq!(value.get("colorId"), Some(&Value::Null));
         value["id"] = json!("sleep-id");
         let parsed = api::parse_sleep(value, "app").unwrap();
         assert_eq!(parsed.details.sleep, Some(record));

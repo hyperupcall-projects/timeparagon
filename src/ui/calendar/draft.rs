@@ -191,18 +191,30 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
     // A block is written as soon as its type is chosen, so a failure has to be
     // reported on the popup itself rather than on the details pane it skips.
     let error = state.calendar.error.clone();
+    let focused_kind = state.draft_kind_focus;
     let overlay = responsive(move |size| {
+        let control_height = metrics.label() * 1.3 + 12.0;
         let title = crate::ui::controls::text_input("Add title", &draft.title)
+            .id("calendar-draft-title")
+            .padding(6.0)
             .on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)))
             .size(metrics.label() + 2.0)
             .width(Fill);
         let kind_button = |label: &'static str, kind: calendar::DraftKind| {
             button(text(label).size(metrics.label()).center())
+                .height(control_height)
+                .padding(6.0)
                 .width(Fill)
                 .on_press(Message::EventDraft(
                     EventDraftMessage::EventDraftKindSelected(kind),
                 ))
-                .style(crate::ui::controls::secondary)
+                .style(move |theme, status| {
+                    if focused_kind == Some(kind) {
+                        crate::ui::controls::primary(theme, status)
+                    } else {
+                        crate::ui::controls::secondary(theme, status)
+                    }
+                })
         };
         let kinds: Element<'a, Message> = column![
             row![
@@ -218,6 +230,8 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
             .spacing(6.0)
             .width(Fill),
             button(text("Cancel").size(metrics.label()).center().width(Fill))
+                .height(control_height)
+                .padding(6.0)
                 .width(Fill)
                 .on_press(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
                 .style(crate::ui::controls::secondary),
@@ -235,7 +249,7 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
             );
         }
         let card = mouse_area(
-            container(body)
+            container(crate::ui::controls::scrollable(body).height(Fill))
                 .padding(metrics.padding)
                 .width(Fill)
                 .height(Fill)
@@ -244,8 +258,19 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
         .on_press(Message::Ignored);
 
         let width = 340.0_f32.min((size.width - 16.0).max(1.0));
-        let height =
-            (metrics.label() * 4.0 + if error.is_some() { 150.0 } else { 110.0 }).min(size.height);
+        // Match the input, three button rows, gaps and both padding edges.
+        let height = (2.0 * metrics.padding
+            + (metrics.label() + 2.0) * 1.3
+            + 12.0
+            + 3.0 * control_height
+            + metrics.spacing
+            + 12.0
+            + if error.is_some() {
+                metrics.spacing + 60.0
+            } else {
+                0.0
+            })
+        .min((size.height - 16.0).max(1.0));
         let anchor = CREATE_ANCHOR.with(|a| a.get());
         let root = ROOT_BOUNDS.with(|r| r.get());
         let anchor = Rectangle {
