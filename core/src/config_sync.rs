@@ -1,5 +1,6 @@
-//! Keeps `config.toml`, and the shared data in the local database, in step with
-//! the app's hidden Google Drive folder.
+//! Keeps `config.toml` in step with the hidden Google Drive folder.
+//! Normal builds synchronize database documents through `database_sync`;
+//! the shared-data Drive transport below remains for non-Turso builds.
 //!
 //! Google Drive's `appDataFolder` is a per-app space that does not show up in
 //! the user's Drive, so the config can follow the user from desktop to phone
@@ -94,6 +95,8 @@ static WORKER: OnceLock<Sender<Wake>> = OnceLock::new();
 
 /// Starts the worker once per process. Further calls do nothing.
 pub fn start() {
+    #[cfg(not(test))]
+    crate::database_sync::start();
     WORKER.get_or_init(|| {
         let (sender, receiver) = mpsc::channel();
         let watcher_sender = sender.clone();
@@ -160,9 +163,9 @@ fn run(receiver: mpsc::Receiver<Wake>, sender: Sender<Wake>) {
         path: path.clone(),
         database: crate::task_db::path(),
     };
-    let shared = config_file
-        .database
-        .clone()
+    let shared = (!crate::database_sync::enabled())
+        .then_some(&config_file)
+        .and_then(|config| config.database.clone())
         .map(|database| SharedData { database });
     // Held for as long as the worker lives; dropping them stops the watches.
     let _watcher = watch(&path, sender.clone());

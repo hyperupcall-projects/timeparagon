@@ -63,6 +63,11 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 
             Task::none()
         }
+        SystemMessage::DatabaseSyncPolled => {
+            state.habits.reload_shared();
+            state.notes.reload_shared();
+            Task::none()
+        }
         SystemMessage::ConfigReloaded(config) => {
             // Only a config that parsed gets here, so the file is usable again.
             state.config_error = None;

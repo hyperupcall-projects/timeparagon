@@ -22,6 +22,7 @@ class InstallTest(unittest.TestCase):
             "target/debug/build/cef-dll-sys-fixture/out/cef_linux_x86_64/libcef.so": "chromium-fixture",
             "target/debug/build/cef-dll-sys-fixture/out/cef_linux_x86_64/locales/en-US.pak": "locale-fixture",
             "target/debug/timeslay": "#!/bin/sh\nexit 0\n",
+            "target/debug/examples/sync_database": "#!/bin/sh\nexit 0\n",
             "assets/noto-hourglass-done.png": "fixture",
             "slack/package.json": '{"private":true}',
             "slack/package-lock.json": '{}',
@@ -36,6 +37,7 @@ class InstallTest(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(value)
         (self.repo / "target/debug/timeslay").chmod(0o755)
+        (self.repo / "target/debug/examples/sync_database").chmod(0o755)
         stubs = self.root / "tools"
         stubs.mkdir()
         for name in ("node", "npm", "systemctl", "kwriteconfig6", "qdbus6",
@@ -72,6 +74,11 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((self.prefix / "lib/timeslay/cef/locales/en-US.pak").exists())
         self.assertTrue((self.data / "timeslay/slack/src/app.ts").exists())
         self.assertIn("npm ci --omit=dev", self.log.read_text())
+        self.assertTrue((self.prefix / "bin/timeslay-database-sync").exists())
+        sync_unit = self.config / "systemd/user/timeslay-database-sync.service"
+        self.assertIn("--watch", sync_unit.read_text())
+        self.assertNotIn("@SYNC_BINARY@", sync_unit.read_text())
+        self.assertIn("systemctl --user enable timeslay-database-sync.service", self.log.read_text())
         self.assertIn("systemctl --user enable timeslay-slack.service", self.log.read_text())
         self.assertIn("systemctl --user restart timeslay-slack.service", self.log.read_text())
         installations = self.slack_config / ".slack-installations.json"
@@ -98,6 +105,8 @@ class InstallTest(unittest.TestCase):
         self.run_script("uninstall.sh")
         self.assertFalse((self.prefix / "lib/timeslay/cef").exists())
         self.assertFalse(self.unit.exists())
+        self.assertFalse(sync_unit.exists())
+        self.assertFalse((self.prefix / "bin/timeslay-database-sync").exists())
         self.assertFalse((self.data / "timeslay/slack").exists())
         self.assertEqual(tokens.read_text(), "newer-pair")
         self.assertEqual(installations.read_text(), "newer-workspaces")

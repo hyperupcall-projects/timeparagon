@@ -624,6 +624,19 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn reload_shared(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        if let Ok(Some(library)) = crate::task_db::read_document(path, crate::task_db::keys::HABITS)
+        {
+            if library != self.library {
+                self.library = library;
+                self.recompute();
+            }
+        }
+    }
+
     /// Loads the saved habits. Saved habits that cannot be read are left alone
     /// rather than replaced by an empty list on the next save.
     pub fn keep_in(&mut self, path: Option<PathBuf>) {

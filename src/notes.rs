@@ -86,6 +86,31 @@ impl Default for Store {
 }
 
 impl Store {
+    pub fn reload_shared(&mut self) {
+        if self.cache_stale || self.edited_at.is_some() || self.syncing {
+            return;
+        }
+        let Some(path) = &self.cache_path else {
+            return;
+        };
+        if let Ok(Some(library)) =
+            crate::task_db::read_document::<Library>(path, crate::task_db::keys::NOTES)
+        {
+            if library != self.library {
+                self.library = library;
+                if self
+                    .open
+                    .as_ref()
+                    .is_some_and(|id| self.library.note(id).is_none())
+                {
+                    self.close();
+                } else if self.open.is_some() {
+                    self.load_editor();
+                }
+            }
+        }
+    }
+
     /// Loads the cached notes and allows syncing.
     pub fn go_live(&mut self, cache_path: Option<PathBuf>) {
         self.live = true;

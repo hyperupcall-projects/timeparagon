@@ -66,6 +66,20 @@ impl Database {
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
+        if crate::database_sync::enabled() && path != Path::new(":memory:") {
+            let enrolled = db
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_control'",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .is_some();
+            if !enrolled {
+                crate::database_sync::enroll(path).map_err(|e| e.to_string())?;
+            }
+        }
         Ok(Self(db))
     }
 
@@ -108,10 +122,35 @@ impl Database {
         let data = if let Some(data) = existing {
             data
         } else {
-            let id: i64 =
+            let synced = tx
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_control'",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            let id: i64 = if synced {
+                loop {
+                    let mut bytes = [0u8; 8];
+                    getrandom::fill(&mut bytes).map_err(|_| rusqlite::Error::InvalidQuery)?;
+                    let candidate = (u64::from_le_bytes(bytes) & ((1u64 << 62) - 1)) as i64;
+                    if candidate < 100 {
+                        continue;
+                    }
+                    if !tx
+                        .query_row("SELECT 1 FROM tasks WHERE id=?1", [candidate], |_| Ok(()))
+                        .optional()?
+                        .is_some()
+                    {
+                        break candidate;
+                    }
+                }
+            } else {
                 tx.query_row("SELECT next_id FROM counter WHERE singleton=1", [], |r| {
                     r.get(0)
-                })?;
+                })?
+            };
             // Refuse overflow rather than wrapping or switching to random IDs.
             let next = id.checked_add(1).ok_or(rusqlite::Error::InvalidQuery)?;
             let metadata = legacy_metadata(&event.details.description);
@@ -237,11 +276,15 @@ pub fn read_document<T: DeserializeOwned>(path: &Path, key: &str) -> io::Result<
         })
         .optional()
         .map_err(io::Error::other)?;
-    text.map(|text| {
-        serde_json::from_str(&text)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-    })
-    .transpose()
+    let result = text
+        .as_ref()
+        .map(|text| {
+            serde_json::from_str(text)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        })
+        .transpose()?;
+    crate::database_sync::projection::remember(path, key, text);
+    Ok(result)
 }
 
 pub fn write_document<T: Serialize + ?Sized>(path: &Path, key: &str, value: &T) -> io::Result<()> {
@@ -252,24 +295,32 @@ pub fn write_document<T: Serialize + ?Sized>(path: &Path, key: &str, value: &T) 
 
 /// [`write_document`] for a value that is already serialized.
 pub fn write_document_json(path: &Path, key: &str, json: &str) -> io::Result<()> {
-    Database::open(path)
-        .map_err(io::Error::other)?
-        .0
-        .execute(
-            "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![key, json],
-        )
-        .map(|_| ())
-        .map_err(io::Error::other)
+    change_document(path, key, Some(json.to_owned()))
 }
 
 pub fn remove_document(path: &Path, key: &str) -> io::Result<()> {
-    Database::open(path)
-        .map_err(io::Error::other)?
+    change_document(path, key, None)
+}
+
+fn change_document(path: &Path, key: &str, desired: Option<String>) -> io::Result<()> {
+    let mut database = Database::open(path).map_err(io::Error::other)?;
+    let tx = database
         .0
-        .execute("DELETE FROM documents WHERE key=?1", [key])
-        .map(|_| ())
-        .map_err(io::Error::other)
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(io::Error::other)?;
+    let value = crate::database_sync::projection::prepare(path, &tx, key, &desired)?;
+    match value {
+        Some(value) => {
+            tx.execute("INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value]).map_err(io::Error::other)?;
+        }
+        None => {
+            tx.execute("DELETE FROM documents WHERE key=?1", [key])
+                .map_err(io::Error::other)?;
+        }
+    }
+    tx.commit().map_err(io::Error::other)?;
+    crate::database_sync::projection::remember(path, key, desired);
+    Ok(())
 }
 
 #[cfg(test)]

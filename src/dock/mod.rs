@@ -81,6 +81,7 @@ const TICK: Duration = Duration::from_secs(30);
 
 /// Runs the dock until its surface is closed or it is told to hide.
 pub fn run() -> Result<()> {
+    crate::database_sync::start();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
         .init();
 

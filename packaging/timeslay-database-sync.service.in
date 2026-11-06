@@ -1,0 +1,12 @@
+[Unit]
+Description=TimeSlay database sync through Tailscale
+
+[Service]
+Type=simple
+ExecStart="@SYNC_BINARY@" --watch
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

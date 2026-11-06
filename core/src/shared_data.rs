@@ -135,12 +135,14 @@ fn now_ms() -> i64 {
 /// Puts the saved sections into a config's table, ready to be parsed. A section
 /// the database does not have is left as the table has it.
 pub fn overlay(database: &Path, table: &mut toml::Table) -> io::Result<()> {
+    let path = database;
     let mut database = Database::open(database).map_err(other)?;
     let connection = database.connection();
     for section in SECTIONS {
         if let Some(text) = document(connection, &key(section)).map_err(other)? {
             let value: Value = serde_json::from_str(&text)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            crate::database_sync::projection::remember(path, &key(section), Some(text));
             put(table, section, value);
         }
     }
@@ -157,13 +159,15 @@ pub fn store(database: &Path, table: &mut toml::Table, sections: &[&str]) -> io:
             (key(section), value.map(|value| value.to_string()))
         })
         .collect();
+    let path = database;
     let mut database = Database::open(database).map_err(other)?;
     let tx = database
         .connection()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(other)?;
     let mut changed = false;
-    for (key, value) in values {
+    for (key, desired) in &values {
+        let value = crate::database_sync::projection::prepare(path, &tx, key, desired)?;
         if document(&tx, &key).map_err(other)? == value {
             continue;
         }
@@ -184,7 +188,11 @@ pub fn store(database: &Path, table: &mut toml::Table, sections: &[&str]) -> io:
         )
         .map_err(other)?;
     }
-    tx.commit().map_err(other)
+    tx.commit().map_err(other)?;
+    for (key, value) in values {
+        crate::database_sync::projection::remember(path, &key, value);
+    }
+    Ok(())
 }
 
 /// Saves one section, given as it appears in the config.

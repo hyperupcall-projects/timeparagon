@@ -6,16 +6,15 @@ They replace the old Google Keep integration, which has been removed.
 
 ## Storage
 
-- Each note is one `.md` file in the hidden Google Drive app folder. This uses
-  the existing `drive.appdata` permission, so nobody needs to reconnect Google.
-- The note's title is the filename. Its color and connections are JSON in the
-  file's `description`, so the file itself stays plain Markdown.
-- Notes save automatically and work offline from a copy in the local database
-  (`<data dir>/timeslay.sqlite3`). They upload about 3 seconds after typing stops.
-- Notes sync when the window opens, when the Notes screen opens, and on the
-  calendar's periodic sync.
-- A new note stays off Drive until it has a title, text, or a connection. An
-  empty one is dropped when closed.
+- Notes save automatically to `<data dir>/timeslay.sqlite3` and work offline.
+- Turso synchronizes them through the private Tailscale server alongside habits
+  and scratch data. Both devices must be connected to Tailscale to exchange edits.
+- The upgrade retains existing local notes and their links. Normal builds no
+  longer upload/download notes through Drive; older Drive files are left intact.
+- Fields merge independently, and every version is retained in the sync journal
+  for recovery if two devices edit the same text. Export versions with the
+  `database_history` example in `timeslay-core`.
+- A new, empty note is dropped when closed.
 
 ## Editing
 

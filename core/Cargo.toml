@@ -17,7 +17,10 @@ log = "0.4.34"
 notify = "8.2.0"
 # Parses note bodies; the HTML renderer is not needed.
 pulldown-cmark = { version = "0.13", default-features = false }
-rusqlite = { version = "0.41.0", features = ["bundled"] }
+rusqlite = { version = "0.41.0", features = ["bundled", "backup"] }
+rustls = { optional = true, version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+turso = { optional = true, version = "=0.8.3", default-features = false, features = ["sync"] }
+tokio = { optional = true, version = "1", features = ["rt", "time", "net"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = { version = "0.10.9", default-features = false }
@@ -31,3 +34,15 @@ urlencoding = "2.1.3"
 webbrowser = "1"
 jni = "0.21"
 ndk-context = "0.1"
+
+[features]
+default = ["turso-sync"]
+turso-sync = ["dep:turso", "dep:tokio", "dep:rustls"]
+
+[[example]]
+name = "sync_preflight"
+required-features = ["turso-sync"]
+
+[[example]]
+name = "sync_roundtrip"
+required-features = ["turso-sync"]
