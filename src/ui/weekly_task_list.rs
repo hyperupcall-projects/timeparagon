@@ -89,7 +89,7 @@ pub(super) fn toolbar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
                 }
             })
     };
-    let shift = i64::from(state.config.calendar.weekly_days());
+    let shift = i64::from(state.config.calendar.weekly_step());
     let mut bar = row![
         control(
             "▦ Today".into(),

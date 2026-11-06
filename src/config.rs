@@ -19,8 +19,8 @@ use crate::hex::HexColor;
 use crate::todos::TodoList;
 
 pub use timeslay_core::config::{
-    CalendarSettings, Project, ProjectsSettings, TriageRequirements, WeekRange, config_path,
-    project_dirs,
+    CalendarSettings, DatabaseSyncSettings, Project, ProjectsSettings, TriageRequirements,
+    WeekRange, config_path, project_dirs,
 };
 pub use timeslay_core::places::{Place, RouteMode, SavedRoute, TravelMode};
 
@@ -40,8 +40,12 @@ pub struct Config {
     pub alarm: AlarmProfile,
     /// Notifications for what is coming up. Left out of the file until
     /// something is changed, so an untouched config stays as it was.
-    #[serde(default, skip_serializing_if = "timeslay_core::reminders::ReminderSettings::is_default")]
+    #[serde(
+        default,
+        skip_serializing_if = "timeslay_core::reminders::ReminderSettings::is_default"
+    )]
     pub reminders: timeslay_core::reminders::ReminderSettings,
+    pub database_sync: DatabaseSyncSettings,
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
     /// Places and travel. It is left out of the file until something is set,

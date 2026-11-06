@@ -22,6 +22,7 @@ use iced_core::Color;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
+    pub database_sync: DatabaseSyncSettings,
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
     pub travel: crate::places::PlaceSettings,
@@ -30,6 +31,41 @@ pub struct Config {
     pub todos: crate::todos::TodoList,
     pub brain_dump: crate::brain_dump::Dumps,
     pub reminders: crate::reminders::ReminderSettings,
+}
+
+/// Device-local server settings. An empty URL disables network sync.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DatabaseSyncSettings {
+    pub url: String,
+}
+
+impl DatabaseSyncSettings {
+    /// Read only sync settings, without opening the local database.
+    pub fn load() -> Self {
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Settings {
+            database_sync: DatabaseSyncSettings,
+        }
+        config_path()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|text| toml::from_str::<Settings>(&text).ok())
+            .unwrap_or_default()
+            .database_sync
+    }
+}
+
+pub fn save_database_sync_url(url: &str) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_database_sync_url_at(&path, url)
+}
+
+fn save_database_sync_url_at(path: &std::path::Path, url: &str) -> io::Result<()> {
+    edit_table(path, "database_sync", |table| {
+        table.insert("url".into(), url.trim().into());
+        Ok(())
+    })
 }
 
 /// The part of `[notepad]` the Dioxus app edits. Its font size is the desktop's.
@@ -251,14 +287,11 @@ pub struct CalendarSettings {
     pub sleep_day_start_hour: u32,
     /// Latest wake-up hour (4-14). With no earlier event, sleep ends here.
     pub latest_wakeup_hour: u32,
-    /// The first column of the month and two-week views, the week view when it
-    /// shows a whole week, and the date pickers.
+    /// The first column of the month and two-week views, and the date pickers.
     pub first_day_of_week: crate::calendar::first_day::FirstDayOfWeek,
-    /// Total visible days: 7 from the selected day, or 8 from the previous day.
-    /// Ignored while `weekly_whole_week` is on.
+    /// Total visible days: 7 or 8 from the selected day, or 9 for 8 from the
+    /// selected day plus the day before it.
     pub weekly_days: u32,
-    /// Show the whole week holding the selected day, from its first day.
-    pub weekly_whole_week: bool,
     /// Width of each day in the horizontally scrollable weekly view.
     pub weekly_day_width: u32,
     /// Show task cards instead of the weekly time grid.
@@ -326,7 +359,6 @@ impl Default for CalendarSettings {
             latest_wakeup_hour: 8,
             first_day_of_week: Default::default(),
             weekly_days: 8,
-            weekly_whole_week: false,
             weekly_day_width: 150,
             weekly_task_list: false,
             weekly_task_order: BTreeMap::new(),
@@ -345,25 +377,33 @@ impl Default for CalendarSettings {
 /// Which days the week view shows, relative to the selected day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeekRange {
-    SevenFromToday,
-    EightFromYesterday,
-    WholeWeek,
+    /// The selected day and the six after it: Wed to next Tue.
+    Seven,
+    /// The selected day and the seven after it: Wed to next Wed.
+    Eight,
+    /// `Eight`, with the day before the selected day in front: Tue to next Wed.
+    EightAndYesterday,
 }
 
 impl WeekRange {
-    pub const ALL: [Self; 3] = [
-        Self::SevenFromToday,
-        Self::EightFromYesterday,
-        Self::WholeWeek,
-    ];
+    pub const ALL: [Self; 3] = [Self::Seven, Self::Eight, Self::EightAndYesterday];
+
+    /// The number of columns the range shows.
+    pub fn days(self) -> u32 {
+        match self {
+            Self::Seven => 7,
+            Self::Eight => 8,
+            Self::EightAndYesterday => 9,
+        }
+    }
 }
 
 impl std::fmt::Display for WeekRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::SevenFromToday => "7 days starting today",
-            Self::EightFromYesterday => "8 days starting yesterday",
-            Self::WholeWeek => "Whole week",
+            Self::Seven => "7 days",
+            Self::Eight => "8 days",
+            Self::EightAndYesterday => "8 days + ystd.",
         })
     }
 }
@@ -438,44 +478,33 @@ impl CalendarSettings {
     /// default.
     pub const MAX_DAY_END_HOUR: u32 = 5;
 
-    /// How many days the week view shows, which is also how far it steps.
+    /// How many days the week view shows, yesterday included.
     pub fn weekly_days(&self) -> u32 {
-        if self.weekly_whole_week {
-            7
-        } else {
-            self.weekly_days.clamp(7, 8)
-        }
+        self.weekly_days.clamp(7, 9)
+    }
+
+    /// How far the week view's arrows move: the days shown from the selected
+    /// day on. Yesterday is context, so it repeats as the next page's first
+    /// column rather than being skipped.
+    pub fn weekly_step(&self) -> u32 {
+        self.weekly_days().min(8)
     }
 
     pub fn week_range(&self) -> WeekRange {
-        if self.weekly_whole_week {
-            WeekRange::WholeWeek
-        } else if self.weekly_days() == 7 {
-            WeekRange::SevenFromToday
-        } else {
-            WeekRange::EightFromYesterday
+        match self.weekly_days() {
+            7 => WeekRange::Seven,
+            8 => WeekRange::Eight,
+            _ => WeekRange::EightAndYesterday,
         }
     }
 
     pub fn set_week_range(&mut self, range: WeekRange) {
-        self.weekly_whole_week = range == WeekRange::WholeWeek;
-        match range {
-            WeekRange::SevenFromToday => self.weekly_days = 7,
-            WeekRange::EightFromYesterday => self.weekly_days = 8,
-            WeekRange::WholeWeek => {}
-        }
+        self.weekly_days = range.days();
     }
 
     /// The days the week view shows for `anchor`.
     pub fn week_dates(&self, anchor: chrono::NaiveDate) -> Vec<chrono::NaiveDate> {
-        if self.weekly_whole_week {
-            let start = self.first_day_of_week.week_start(anchor);
-            (0..7)
-                .map(|offset| start + chrono::Duration::days(offset))
-                .collect()
-        } else {
-            crate::calendar::week_dates(anchor, self.weekly_days())
-        }
+        crate::calendar::week_dates(anchor, self.weekly_days())
     }
 
     pub fn weekly_day_width(&self) -> u32 {
@@ -887,6 +916,21 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_url_defaults_to_disabled_and_preserves_other_settings() {
+        assert!(Config::default().database_sync.url.is_empty());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "[window]\nwidth = 321\n").unwrap();
+        save_database_sync_url_at(&path, "  https://sync.example.com  ").unwrap();
+        let loaded = Config::load_from(&path, None);
+        assert_eq!(loaded.database_sync.url, "https://sync.example.com");
+        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(table["window"]["width"].as_integer(), Some(321));
+        save_database_sync_url_at(&path, "  ").unwrap();
+        assert!(Config::load_from(&path, None).database_sync.url.is_empty());
+    }
 
     #[test]
     fn scratch_data_comes_from_the_database_and_leaves_the_config_alone() {

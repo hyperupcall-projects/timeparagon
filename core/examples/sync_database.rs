@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{status}");
             previous = status.clone();
         }
-        if !watch && status == "Database synced through Tailscale" {
+        if !watch && status == "Database synced" {
             return Ok(());
         }
         if !watch && Instant::now() > deadline {

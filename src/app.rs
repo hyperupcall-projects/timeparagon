@@ -493,6 +493,7 @@ pub enum NotepadMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum SettingsMessage {
+    DatabaseSyncUrlChanged(String),
     ThemeSelected(String),
     TimeFormatSelected(TimeFormat),
     FirstDayOfWeekSelected(calendar::first_day::FirstDayOfWeek),

@@ -16,7 +16,6 @@ use std::{
     time::Duration,
 };
 
-pub const DEFAULT_URL: &str = "https://dragonfruit.tail30229e.ts.net:8210";
 const TABLE: &str = "timeslay_revisions_v1";
 const SHARED: &str = "'habits','notes','shared.todos','shared.notepad','shared.brain_dump','shared.projects','shared.task_work'";
 static STARTED: OnceLock<()> = OnceLock::new();
@@ -252,6 +251,15 @@ fn run() {
     let parent = path.parent().expect("database directory");
     let lock_path = parent.join("timeslay-sync.owner");
     loop {
+        let url = crate::config::DatabaseSyncSettings::load()
+            .url
+            .trim()
+            .to_owned();
+        if url.is_empty() {
+            set_status("Database sync disabled; configure a server URL in Settings".into());
+            std::thread::sleep(Duration::from_secs(5));
+            continue;
+        }
         let attempt = (|| -> io::Result<()> {
             let lock = fs::OpenOptions::new()
                 .write(true)
@@ -270,7 +278,7 @@ fn run() {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(transport(&path))?;
+            runtime.block_on(transport(&path, &url))?;
             drop(lock);
             Ok(())
         })();
@@ -282,8 +290,7 @@ fn run() {
         std::thread::sleep(Duration::from_secs(5));
     }
 }
-async fn transport(path: &Path) -> io::Result<()> {
-    let url = std::env::var("TIMESLAY_SYNC_URL").unwrap_or_else(|_| DEFAULT_URL.into());
+async fn transport(path: &Path, url: &str) -> io::Result<()> {
     let replica_directory = path
         .parent()
         .ok_or_else(|| other("missing database directory"))?
@@ -296,7 +303,7 @@ async fn transport(path: &Path) -> io::Result<()> {
             .to_str()
             .ok_or_else(|| other("invalid database path"))?,
     )
-    .with_remote_url(&url)
+    .with_remote_url(url)
     .build();
     let replica = tokio::time::timeout(Duration::from_secs(30), future)
         .await
@@ -311,6 +318,9 @@ async fn transport(path: &Path) -> io::Result<()> {
     .await
     .map_err(other)?;
     loop {
+        if crate::config::DatabaseSyncSettings::load().url.trim() != url {
+            return Ok(());
+        }
         let cycle = async {
             replica.pull().await.map_err(other)?;
             let pending = edits(&open(path)?, true)?;
@@ -347,7 +357,7 @@ async fn transport(path: &Path) -> io::Result<()> {
             Ok::<_, io::Error>(())
         };
         match tokio::time::timeout(Duration::from_secs(45), cycle).await {
-            Ok(Ok(())) => set_status("Database synced through Tailscale".into()),
+            Ok(Ok(())) => set_status("Database synced".into()),
             Ok(Err(e)) => {
                 set_status(format!("Database sync offline; edits saved locally: {e}"));
             }

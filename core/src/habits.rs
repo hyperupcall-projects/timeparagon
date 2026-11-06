@@ -329,33 +329,150 @@ pub struct DayEntry {
     pub value: Option<f64>,
 }
 
-/// When each slip and each resisted urge of a day was logged, on a "No" habit.
-/// The counts in `marks` and `resisted` stay the record; these only say when.
-/// Counts from before times were kept have fewer times than entries.
+/// One logged occurrence: when it happened and, on a habit that records a
+/// number, how much (such as how many minutes it went on for).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredLogEntry")]
+pub struct LogEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<NaiveTime>,
+    /// In the habit's unit, in thousandths, as `values` are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<i64>,
+}
+
+impl LogEntry {
+    pub fn new(at: Option<NaiveTime>, amount: Option<f64>) -> Self {
+        Self {
+            at,
+            amount: amount.map(|amount| (amount.max(0.0) * 1000.0).round() as i64),
+        }
+    }
+
+    pub fn amount(&self) -> Option<f64> {
+        self.amount.map(|amount| amount as f64 / 1000.0)
+    }
+
+    fn is_blank(&self) -> bool {
+        self.at.is_none() && self.amount.is_none()
+    }
+}
+
+/// The first logs kept only a time for each entry.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredLogEntry {
+    Time(NaiveTime),
+    Entry {
+        #[serde(default)]
+        at: Option<NaiveTime>,
+        #[serde(default)]
+        amount: Option<i64>,
+    },
+}
+
+impl From<StoredLogEntry> for LogEntry {
+    fn from(stored: StoredLogEntry) -> Self {
+        match stored {
+            StoredLogEntry::Time(at) => Self {
+                at: Some(at),
+                amount: None,
+            },
+            StoredLogEntry::Entry { at, amount } => Self { at, amount },
+        }
+    }
+}
+
+/// A day's log: each time it happened (done, or slipped on a "No" habit) and
+/// each time it was resisted. The counts in `marks` and `resisted` stay the
+/// record; the log says when and how much. Counts from before entries were
+/// logged have fewer entries than the count.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DayLog {
+    #[serde(default, alias = "slipped", skip_serializing_if = "Vec::is_empty")]
+    pub happened: Vec<LogEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub slipped: Vec<NaiveTime>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resisted: Vec<NaiveTime>,
+    pub resisted: Vec<LogEntry>,
 }
 
 impl DayLog {
     fn is_empty(&self) -> bool {
-        self.slipped.is_empty() && self.resisted.is_empty()
+        self.happened.is_empty() && self.resisted.is_empty()
     }
 }
 
-/// A day's `count` entries, untimed ones first and then the latest `count`
-/// times in order.
-fn log_entries(count: u32, times: &[NaiveTime]) -> Vec<Option<NaiveTime>> {
+/// A day's `count` entries in order of time, blank ones (from before entries
+/// were logged) first. More entries than the count keeps the latest.
+fn log_entries(count: u32, logged: &[LogEntry]) -> Vec<LogEntry> {
     let count = count as usize;
-    let mut times = times.to_vec();
-    times.sort();
-    let timed = times.len().min(count);
-    let mut entries = vec![None; count - timed];
-    entries.extend(times[times.len() - timed..].iter().copied().map(Some));
+    let mut logged = logged.to_vec();
+    logged.sort_by_key(|entry| entry.at);
+    let kept = logged.len().min(count);
+    let mut entries = vec![LogEntry::default(); count - kept];
+    entries.extend_from_slice(&logged[logged.len() - kept..]);
     entries
+}
+
+/// Entries as they are stored: in order of time, blank ones left out.
+fn stored_entries(entries: &[LogEntry]) -> Vec<LogEntry> {
+    let mut entries: Vec<LogEntry> = entries
+        .iter()
+        .filter(|entry| !entry.is_blank())
+        .copied()
+        .collect();
+    entries.sort_by_key(|entry| entry.at);
+    entries
+}
+
+/// Reads a time of day the way people type one: `20:05`, `8:05pm`, `8.05p`,
+/// `11p`, `2 PM`, `805p`.
+pub fn parse_log_time(text: &str) -> Option<NaiveTime> {
+    let text: String = text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let (clock, pm) = if let Some(rest) = text.strip_suffix("pm").or(text.strip_suffix('p')) {
+        (rest, Some(true))
+    } else if let Some(rest) = text.strip_suffix("am").or(text.strip_suffix('a')) {
+        (rest, Some(false))
+    } else {
+        (text.as_str(), None)
+    };
+    let (hour, minute) = match clock.split_once([':', '.']) {
+        Some((hour, minute)) if minute.len() == 2 => (hour, minute),
+        Some(_) => return None,
+        None if clock.len() > 2 => clock.split_at(clock.len() - 2),
+        None => (clock, "0"),
+    };
+    if hour.is_empty() || !(hour.chars().chain(minute.chars())).all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let mut hour: u32 = hour.parse().ok()?;
+    let minute: u32 = minute.parse().ok()?;
+    match pm {
+        Some(_) if !(1..=12).contains(&hour) => return None,
+        Some(true) if hour != 12 => hour += 12,
+        Some(false) if hour == 12 => hour = 0,
+        _ => {}
+    }
+    NaiveTime::from_hms_opt(hour, minute, 0)
+}
+
+/// Reads an amount, allowing a unit after it: `6`, `2.5`, `12m`, `20 mins`.
+pub fn parse_log_amount(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let split = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (number, rest) = text.split_at(split);
+    if !rest.chars().all(|c| c.is_alphabetic() || c.is_whitespace()) {
+        return None;
+    }
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 /// A time of day to the second, for logging something as it happens.
@@ -622,29 +739,25 @@ impl Habit {
         }
     }
 
-    /// Each slip of a day, with when it was logged if that is known.
-    pub fn slips_on(&self, day: NaiveDate) -> Vec<Option<NaiveTime>> {
-        let times = self.log.get(&day).map_or(&[][..], |log| &log.slipped[..]);
-        log_entries(self.times_on(day), times)
+    /// Each time it happened on a day (each slip, on a "No" habit), with when
+    /// and how much if that was logged.
+    pub fn happened_log_on(&self, day: NaiveDate) -> Vec<LogEntry> {
+        let logged = self.log.get(&day).map_or(&[][..], |log| &log.happened[..]);
+        log_entries(self.times_on(day), logged)
     }
 
-    /// Each time it was resisted on a day, with when it was logged if known.
-    pub fn resisted_log_on(&self, day: NaiveDate) -> Vec<Option<NaiveTime>> {
-        let times = self.log.get(&day).map_or(&[][..], |log| &log.resisted[..]);
-        log_entries(self.resisted_on(day), times)
+    /// Each time it was resisted on a day, with when if that was logged.
+    pub fn resisted_log_on(&self, day: NaiveDate) -> Vec<LogEntry> {
+        let logged = self.log.get(&day).map_or(&[][..], |log| &log.resisted[..]);
+        log_entries(self.resisted_on(day), logged)
     }
 
-    /// Records when a day's slips and resisted urges were logged. The counts
-    /// are set by [`Habit::set_entry`]; entries without a time are left out.
-    pub fn set_log(
-        &mut self,
-        day: NaiveDate,
-        slipped: &[Option<NaiveTime>],
-        resisted: &[Option<NaiveTime>],
-    ) {
+    /// Records a day's log. The counts are set by [`Habit::set_entry`]; blank
+    /// entries are left out.
+    pub fn set_log(&mut self, day: NaiveDate, happened: &[LogEntry], resisted: &[LogEntry]) {
         let log = DayLog {
-            slipped: slipped.iter().flatten().copied().collect(),
-            resisted: resisted.iter().flatten().copied().collect(),
+            happened: stored_entries(happened),
+            resisted: stored_entries(resisted),
         };
         if log.is_empty() {
             self.log.remove(&day);
@@ -2686,5 +2799,55 @@ mod tests {
     fn a_habit_saved_before_icons_existed_keeps_symbols() {
         let habit: Habit = serde_json::from_str(r#"{"id":"h","name":"Read"}"#).unwrap();
         assert_eq!(habit.icons, Icons::Symbols);
+    }
+
+    #[test]
+    fn log_times_read_as_typed() {
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0);
+        for (text, time) in [
+            ("20:05", t(20, 5)),
+            ("8:05pm", t(20, 5)),
+            ("8.05p", t(20, 5)),
+            ("8:05 PM", t(20, 5)),
+            ("11p", t(23, 0)),
+            ("2pm", t(14, 0)),
+            ("12a", t(0, 0)),
+            ("12:30p", t(12, 30)),
+            ("805p", t(20, 5)),
+            ("9", t(9, 0)),
+            ("13p", None),
+            ("8:5", None),
+            ("noon", None),
+            ("", None),
+        ] {
+            assert_eq!(parse_log_time(text), time, "{text}");
+        }
+        assert_eq!(parse_log_amount("12m"), Some(12.0));
+        assert_eq!(parse_log_amount("2.5 mins"), Some(2.5));
+        assert_eq!(parse_log_amount("-3"), None);
+        assert_eq!(parse_log_amount("lots"), None);
+    }
+
+    #[test]
+    fn a_log_keeps_its_entries_and_reads_the_first_format() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let mut habit: Habit = serde_json::from_str(
+            r#"{"id":"h","name":"Smoke","kind":"no","marks":{"2026-11-05":{"reps":2}},
+                "log":{"2026-11-05":{"slipped":["20:05:00"]}}}"#,
+        )
+        .unwrap();
+        let at = NaiveTime::from_hms_opt(20, 5, 0);
+        assert_eq!(
+            habit.happened_log_on(day),
+            vec![LogEntry::default(), LogEntry::new(at, None)],
+            "the count from before is kept, untimed"
+        );
+        let late = LogEntry::new(NaiveTime::from_hms_opt(23, 0, 0), Some(12.0));
+        habit.set_log(day, &[late, LogEntry::new(at, Some(6.0))], &[]);
+        let back: Habit = serde_json::from_str(&serde_json::to_string(&habit).unwrap()).unwrap();
+        assert_eq!(
+            back.happened_log_on(day),
+            vec![LogEntry::new(at, Some(6.0)), late]
+        );
     }
 }

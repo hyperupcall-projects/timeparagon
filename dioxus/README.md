@@ -15,8 +15,9 @@ sheets over it:
   sound per kind (see [docs/reminders.md](../docs/reminders.md)).
 
 Habits, notes, todos, the notepad, brain dumps, projects and work sessions sync
-through `https://dragonfruit.tail30229e.ts.net:8210`. Each device must have
-Tailscale connected and permission to reach that server. Changes save locally
+through the Turso server configured in **Settings → Database sync** on each
+device. The URL is stored in `[database_sync].url` in `config.toml`; a blank URL
+disables sync. Each device needs network access to that server. Changes save locally
 when offline and retry automatically. Local data stays in the data directory,
 because Android may empty an app's cache.
 

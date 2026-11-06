@@ -94,9 +94,18 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ),
         section(
             "Database sync",
-            text(crate::database_sync::status())
-                .size(metrics.label())
-                .into(),
+            column![
+                text("Sync server URL (blank disables sync)").size(metrics.label()),
+                crate::ui::controls::text_input(
+                    "https://sync.example.com",
+                    &state.config.database_sync.url
+                )
+                .on_input(|url| Message::Settings(SettingsMessage::DatabaseSyncUrlChanged(url)))
+                .size(metrics.label()),
+                text(crate::database_sync::status()).size(metrics.label()),
+            ]
+            .spacing(metrics.spacing)
+            .into(),
             metrics
         ),
         section("Appearance", appearance(state, metrics), metrics),
@@ -1311,9 +1320,9 @@ mod tests {
         let size = iced::Size::new(200.0, 400.0);
         let metrics = Metrics::of(size);
         for (range, next) in [
-            (WeekRange::SevenFromToday, WeekRange::EightFromYesterday),
-            (WeekRange::EightFromYesterday, WeekRange::WholeWeek),
-            (WeekRange::WholeWeek, WeekRange::SevenFromToday),
+            (WeekRange::Seven, WeekRange::Eight),
+            (WeekRange::Eight, WeekRange::EightAndYesterday),
+            (WeekRange::EightAndYesterday, WeekRange::Seven),
         ] {
             let mut state = State::blank();
             state.config.calendar.set_week_range(range);
