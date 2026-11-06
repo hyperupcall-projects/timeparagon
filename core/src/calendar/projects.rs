@@ -1,6 +1,6 @@
 //! Project assignments live on each event's private Google Calendar copy.
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Selection {
     pub ids: Vec<u64>,
     pub query: String,

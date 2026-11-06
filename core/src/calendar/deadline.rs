@@ -27,7 +27,7 @@ const INPUT_ERROR: &str = "Enter a deadline as YYYY-MM-DD or YYYY-MM-DD HH:MM";
 const TIME_ERROR: &str = "Enter a time as HH:MM";
 
 /// When a task must be finished. Without a time the whole day counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Deadline {
     pub date: NaiveDate,
     pub time: Option<NaiveTime>,

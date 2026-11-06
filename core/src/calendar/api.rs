@@ -239,6 +239,7 @@ pub fn fetch_range(
     day_end_hour: u32,
     app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
+    let fetch_started = crate::clock::now();
     let mut calendars = fetch_calendars(access_token)?;
     // Every event TimeSlay writes lives on one calendar. Find it by name, or
     // create it the first time it is missing.
@@ -297,6 +298,11 @@ pub fn fetch_range(
     }
     let (merged, changes) = super::scheduled::merge(events, task_events, &loaded_calendars);
     events = merged;
+    if let Some(path) = crate::task_db::path() {
+        super::operations::overlay(&path, &mut events, Some(fetch_started))?;
+        super::operations::observe_range(&path, &events, first, last, fetch_started)?;
+    }
+    super::operations::cache_tasks(&events, false)?;
     let mut database = crate::task_db::open()?;
     for event in &events {
         if event.is_task() {
@@ -311,7 +317,10 @@ pub fn fetch_range(
             }
         }
     }
-    for (link, body) in changes {
+    for (link, body) in changes
+        .into_iter()
+        .filter(|_| super::operations::list().is_ok_and(|rows| rows.is_empty()))
+    {
         if let Err(error) =
             super::scheduled::request("PATCH", &link.event_url(), access_token, Some(&body))
         {
@@ -331,7 +340,7 @@ pub fn fetch_range(
         calendars,
         events,
         day,
-        fetched_at: crate::clock::now(),
+        fetched_at: fetch_started,
         notice,
     })
 }
@@ -738,12 +747,26 @@ pub fn insert_habit(
         None => super::scheduled::app_calendar(access_token)?,
     };
     let url = format!("{EVENTS}/{}/events", urlencoding::encode(&calendar_id));
-    let response = post(
+    let mut body = body.clone();
+    if let Some(id) = super::operations::insert_id() {
+        body["id"] = id.into();
+    }
+    let response = match post(
         &url,
         access_token,
         &body.to_string(),
         "Google Calendar habit",
-    )?;
+    ) {
+        Ok(value) => value,
+        Err(error) if error.status == Some(409) && body["id"].is_string() => {
+            get::<serde_json::Value>(
+                &format!("{url}/{}", body["id"].as_str().unwrap()),
+                access_token,
+            )?
+            .to_string()
+        }
+        Err(error) => return Err(error.into()),
+    };
     let created: EventEntry = serde_json::from_str(&response)
         .map_err(|error| format!("Google Calendar habit response: {error}"))?;
     parse_habit(created, &calendar_id)
@@ -988,6 +1011,7 @@ fn fetch_tasks(access_token: &str, day: NaiveDate) -> Result<FetchedTasks, Googl
         events.extend(fetch_task_items(access_token, &list.id, &id, color, day)?);
     }
 
+    super::operations::cache_tasks(&events, true)?;
     Ok((calendars, events, None))
 }
 
@@ -1936,6 +1960,9 @@ pub fn insert_event(
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
         "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
     });
+    if let Some(id) = super::operations::insert_id() {
+        body["id"] = id.into();
+    }
     if let Some(options) = options {
         options.write(&mut body)?;
     }
@@ -1963,12 +1990,20 @@ pub fn insert_event(
     }
     let query = super::meeting::write_query(&body, notify);
 
-    let response = post(
+    let response = match post(
         &format!("{url}{query}"),
         access_token,
         &body.to_string(),
         "Google Calendar",
-    )?;
+    ) {
+        Ok(response) => response,
+        Err(error) if error.status == Some(409) && body["id"].is_string() => {
+            let item_url = format!("{url}/{}", body["id"].as_str().unwrap());
+            patch_event_changes(&item_url, access_token, &body, notify)?;
+            get::<serde_json::Value>(&item_url, access_token)?.to_string()
+        }
+        Err(error) => return Err(error),
+    };
     let value: serde_json::Value = serde_json::from_str(&response)
         .map_err(|error| format!("Google Calendar response: {error}"))?;
     // The event exists whatever became of its call. Failing here would invite a

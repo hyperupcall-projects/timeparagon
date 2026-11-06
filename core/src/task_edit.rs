@@ -20,6 +20,9 @@ pub type Access = fn(&CalendarSettings) -> Result<String, String>;
 /// The token from the stored sign-in, refreshed if it has expired.
 pub fn google_access(settings: &CalendarSettings) -> Result<String, String> {
     let tokens = calendar::oauth::load_tokens().ok_or("Not connected to Google")?;
+    if !calendar::operations::replaying() {
+        return Ok(tokens.access_token);
+    }
     calendar::oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)
         .map(|tokens| tokens.access_token)
 }
@@ -89,6 +92,7 @@ pub fn clean_label(input: &str) -> Result<String, &'static str> {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Change {
     Description(String),
     Title(String),
@@ -196,6 +200,9 @@ pub fn save(
     order: i64,
     access: Access,
 ) -> Result<Event, String> {
+    if !calendar::operations::replaying() {
+        return calendar::operations::edit_task(task, settings, change, order);
+    }
     let mut database = crate::task_db::open()?;
     let mut data = database.import(&task)?;
     // A previous attempt may have moved the task before Calendar failed. The
@@ -511,6 +518,16 @@ pub fn schedule(
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<(), String> {
+    if !calendar::operations::replaying() {
+        *task = calendar::operations::edit_task(
+            task.clone(),
+            settings,
+            Change::Time(start, end),
+            data.metadata.order,
+        )?;
+        *data = task.details.task_data.clone().ok_or("Missing task data")?;
+        return Ok(());
+    }
     schedule_with(
         task,
         data,
@@ -624,6 +641,9 @@ pub fn create_inbox_task(
     due: Option<chrono::NaiveDate>,
     metadata: Option<crate::timeblocking::Metadata>,
 ) -> Result<Event, String> {
+    if !calendar::operations::replaying() {
+        return calendar::operations::create_task(settings, title, notes, due, metadata);
+    }
     let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
     let created_at = crate::clock::utc_now();
     let created = calendar::api::insert_task_with(

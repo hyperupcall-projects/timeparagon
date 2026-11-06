@@ -64,6 +64,9 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             Task::none()
         }
         SystemMessage::DatabaseSyncPolled => {
+            if let Err(error) = state.calendar.apply_local_operations() {
+                log::warn!("Could not load committed edits: {error}");
+            }
             state.habits.reload_shared();
             state.notes.reload_shared();
             Task::none()

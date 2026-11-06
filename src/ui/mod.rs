@@ -264,6 +264,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         let nav_metrics = Metrics::of(size);
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
+            (Screen::Operations, _) => operations_view(),
             (Screen::Settings, _) => settings::view(state, &metrics),
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
@@ -285,6 +286,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
         let mut base = column![
             container(tabs(state, &nav_metrics)).width(Length::Fixed(nav_width)),
+            saving_indicator(),
             content
         ]
         .width(Fill)
@@ -536,7 +538,14 @@ pub fn plan_view_label(state: &State) -> &'static str {
 pub const TASKS_LABELS: [&str; 3] = ["Overdue", "Inbox", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 5] = ["Travel", "Habits", "Notes", "People", "Brain dump"];
+pub const MORE_LABELS: [&str; 6] = [
+    "Travel",
+    "Habits",
+    "Notes",
+    "People",
+    "Brain dump",
+    "Operations",
+];
 
 /// A little breathing room between the menu and the top of the window.
 const TAB_TOP_MARGIN: f32 = 6.0;
@@ -625,7 +634,12 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let more_active = state.more_menu_open
         || matches!(
             state.screen,
-            Screen::Travel | Screen::Habits | Screen::Notes | Screen::People | Screen::BrainDump
+            Screen::Travel
+                | Screen::Habits
+                | Screen::Notes
+                | Screen::People
+                | Screen::BrainDump
+                | Screen::Operations
         );
 
     let view = tab(
@@ -916,6 +930,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         Screen::Notes,
         Screen::People,
         Screen::BrainDump,
+        Screen::Operations,
     ]) {
         panel = panel.push(
             button(text(*label).size(metrics.label()).center().width(Fill))
@@ -947,4 +962,43 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
     iced::widget::stack(layers).into()
+}
+
+fn saving_indicator<'a>() -> Element<'a, Message> {
+    timeslay_core::calendar::operations::start();
+    match timeslay_core::calendar::operations::list() {
+        Ok(rows) if !rows.is_empty() => text(format!("Saving… ({} pending)", rows.len()))
+            .size(12)
+            .into(),
+        Err(error) => text(format!("Cannot read operations: {error}"))
+            .size(12)
+            .into(),
+        _ => Space::new().height(0).into(),
+    }
+}
+fn operations_view<'a>() -> Element<'a, Message> {
+    let mut panel = column![text("Operations").size(24)].spacing(12).padding(16);
+    match timeslay_core::calendar::operations::list() {
+        Ok(rows) => {
+            if rows.is_empty() {
+                panel = panel.push(text("All changes saved to Google."));
+            }
+            for row in rows {
+                panel = panel.push(
+                    text(format!(
+                        "#{} · {} · {}\n{}\n{}\n{}",
+                        row.id,
+                        row.kind,
+                        row.created_at,
+                        format!("{} · Attempts: {}", row.entity, row.attempts),
+                        row.error.unwrap_or_else(|| "Waiting for Google".into()),
+                        row.payload
+                    ))
+                    .size(13),
+                );
+            }
+        }
+        Err(error) => panel = panel.push(text(error)),
+    }
+    iced::widget::scrollable(panel).height(Fill).into()
 }

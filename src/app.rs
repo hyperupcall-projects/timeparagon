@@ -143,6 +143,7 @@ pub enum Screen {
     Notes,
     /// Contacts from every signed-in Google account, and their directories.
     People,
+    Operations,
     Settings,
 }
 
@@ -2142,6 +2143,9 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
+    if let Err(error) = state.calendar.apply_local_operations() {
+        state.calendar.error = Some(error);
+    }
     state.timeblocking.revision += 1;
     Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 }

@@ -64,6 +64,12 @@ impl Database {
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL, legacy_key TEXT UNIQUE);
             CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS google_task_records (id TEXT PRIMARY KEY, event TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT);
+            CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
         if path != Path::new(":memory:") {
@@ -87,6 +93,20 @@ impl Database {
         &mut self.0
     }
 
+    /// Queued metadata remains authoritative while Google refreshes in parallel.
+    pub(crate) fn pending_task_data(&self, event: &Event) -> Result<Option<TaskData>, String> {
+        let stable =
+            crate::calendar::task_metadata::read(&event.details.description)?.map(|data| data.id);
+        let json:Option<String>=self.0.query_row("SELECT e.event FROM google_entities e WHERE (json_extract(e.event,'$.id')=?1 OR json_extract(e.event,'$.details.task_data.id')=?2) AND EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=e.id)",params![event.id,stable],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+        json.map(|json| {
+            serde_json::from_str::<Event>(&json)
+                .map(|e| e.details.task_data)
+                .map_err(|e| e.to_string())
+        })
+        .transpose()
+        .map(Option::flatten)
+    }
+
     /// Adopt authoritative remote data even on a fresh installation.
     pub fn cache_remote(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
         self.save(event, data)
@@ -94,6 +114,40 @@ impl Database {
 
     /// Allocate and record the mapping in one transaction. No ID escapes until commit.
     pub fn import(&mut self, event: &Event) -> Result<TaskData, String> {
+        if let Some(id) = crate::calendar::operations::operation_id() {
+            let json: Option<String> = self
+                .0
+                .query_row(
+                    "SELECT data FROM google_operation_progress WHERE operation_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if let Some(json) = json {
+                return serde_json::from_str(&json).map_err(|e| e.to_string());
+            }
+        }
+        if crate::calendar::operations::replaying() {
+            if let Some(data) = &event.details.task_data {
+                let mut data = data.clone();
+                let remote: Option<String> = self
+                    .0
+                    .query_row(
+                        "SELECT data FROM google_task_backend_state WHERE task_id=?1",
+                        [data.id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                if let Some(remote) = remote {
+                    let remote: TaskData =
+                        serde_json::from_str(&remote).map_err(|e| e.to_string())?;
+                    data.metadata.schedule = remote.metadata.schedule;
+                }
+                return Ok(data);
+            }
+        }
         if let Some(data) = crate::calendar::task_metadata::read(&event.details.description)? {
             self.cache_remote(event, &data)?;
             return Ok(data);
@@ -181,6 +235,22 @@ impl Database {
 
     /// Keep both old and new Google identifiers when a move changes the task ID.
     pub fn save(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
+        if let Some(id) = crate::calendar::operations::operation_id() {
+            let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
+            let tx = self
+                .0
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            tx.execute("INSERT INTO google_operation_progress(operation_id,data) VALUES(?1,?2) ON CONFLICT(operation_id) DO UPDATE SET data=excluded.data",params![id,json]).map_err(|e|e.to_string())?;
+            if event.is_task() {
+                let local:Option<String>=tx.query_row("SELECT COALESCE(json_extract(payload,'$.TaskEdit.task.id'),json_extract(payload,'$.Status.task.id'),json_extract(payload,'$.CreateTask.task.id')) FROM google_operations WHERE id=?1",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
+                if let Some(local) = local {
+                    tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local.trim_start_matches("task:"),event.id.trim_start_matches("task:"),event.calendar_id]).map_err(|e|e.to_string())?;
+                }
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(());
+        }
         (|| -> rusqlite::Result<()> {
             let tx = self.0.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let json = serde_json::to_string(&data.metadata).expect("metadata serializes");

@@ -140,7 +140,7 @@ impl Attendance {
 }
 
 /// How people join the event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Conference {
     #[default]
     None,
@@ -254,7 +254,7 @@ pub fn is_email(value: &str) -> bool {
 }
 
 /// The Meeting section of the event form, staged until Save.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Form {
     pub guests: Vec<Guest>,
     pub permissions: Permissions,
