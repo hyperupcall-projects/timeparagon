@@ -101,6 +101,17 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             }
             Task::none()
         }
+        EventEditMessage::EventEditAllDayToggled(all_day) => {
+            if let Some(draft) = state
+                .calendar
+                .edit_draft
+                .as_mut()
+                .filter(|draft| !draft.saving && !draft.loading)
+            {
+                draft.set_all_day(all_day);
+            }
+            Task::none()
+        }
         EventEditMessage::EventEditEndChanged(text) => {
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
                 draft.set_end_text(text);

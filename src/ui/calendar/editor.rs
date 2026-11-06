@@ -67,31 +67,46 @@ pub fn event_editor<'a>(
         .on_press(Message::Event(EventMessage::EventTitleEdit))
         .into()
     };
-    let start = column![
-        label(if event.details.habit {
-            "Start day"
-        } else {
-            "Start Time"
-        }),
-        super::super::controls::date(
-            state.config.appearance.time_format,
-            &draft.date_text,
-            false,
-            false,
-            true,
-            metrics.label(),
-            |v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))
-        ),
-        super::super::controls::time(
+    // Habits and time blocks are always timed, so only a plain event can be
+    // switched to whole days.
+    let can_be_all_day = !event.details.habit
+        && event.details.scheduled.is_none()
+        && !crate::timeblocking::is_block(event, &state.config.calendar);
+    let mut start = column![label(if event.details.habit {
+        "Start day"
+    } else if draft.all_day {
+        "Start Date"
+    } else {
+        "Start Time"
+    })]
+    .spacing(6)
+    .width(Fill);
+    if can_be_all_day {
+        start = start.push(
+            crate::ui::controls::checkbox(draft.all_day)
+                .label("All day")
+                .text_size(metrics.label())
+                .on_toggle(|v0| Message::EventEdit(EventEditMessage::EventEditAllDayToggled(v0))),
+        );
+    }
+    start = start.push(super::super::controls::date(
+        state.config.appearance.time_format,
+        &draft.date_text,
+        false,
+        false,
+        true,
+        metrics.label(),
+        |v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0)),
+    ));
+    if !draft.all_day {
+        start = start.push(super::super::controls::time(
             state.config.appearance.time_format,
             &draft.start_text,
             true,
             metrics.label(),
-            |v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))
-        ),
-    ]
-    .spacing(6)
-    .width(Fill);
+            |v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0)),
+        ));
+    }
     let targets = state.calendar.move_targets(event, &state.config.calendar);
     let source: Element<'a, Message> = if targets.is_empty() {
         event_source(state, event, metrics)
@@ -143,29 +158,36 @@ pub fn event_editor<'a>(
             |v0| Message::EventEdit(EventEditMessage::EventEditRecurrence(v0)),
         ));
     } else {
-        body = body.push(
-            column![
-                label("End Time"),
-                super::super::controls::date(
-                    state.config.appearance.time_format,
-                    &draft.end_date_text,
-                    false,
-                    false,
-                    true,
-                    metrics.label(),
-                    |v0| Message::Event(EventMessage::EventEndDateChanged(v0))
-                ),
-                super::super::controls::time(
-                    state.config.appearance.time_format,
-                    &draft.end_text,
-                    true,
-                    metrics.label(),
-                    |v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))
-                ),
-            ]
-            .spacing(6)
-            .width(Fill),
-        );
+        // An all-day end date is the last day covered, not Google's
+        // exclusive end.
+        let mut end = column![
+            label(if draft.all_day {
+                "End Date"
+            } else {
+                "End Time"
+            }),
+            super::super::controls::date(
+                state.config.appearance.time_format,
+                &draft.end_date_text,
+                false,
+                false,
+                true,
+                metrics.label(),
+                |v0| Message::Event(EventMessage::EventEndDateChanged(v0))
+            ),
+        ]
+        .spacing(6)
+        .width(Fill);
+        if !draft.all_day {
+            end = end.push(super::super::controls::time(
+                state.config.appearance.time_format,
+                &draft.end_text,
+                true,
+                metrics.label(),
+                |v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0)),
+            ));
+        }
+        body = body.push(end);
         let mut labels = column![label("Labels")].spacing(6).width(Fill);
         for value in &draft.labels {
             labels = labels.push(

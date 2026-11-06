@@ -232,17 +232,43 @@ pub struct NewEvent {
     pub title: String,
     pub description: String,
     pub date: String,
+    /// The last day, when it is not the start day. Empty means the same day,
+    /// or the next one for a timed event whose end is before its start.
+    pub end_date: String,
     pub start: String,
     pub end: String,
+    /// It covers whole days, so the clock times are ignored.
+    pub all_day: bool,
 }
 
 impl NewEvent {
-    /// When it starts and ends, or why that cannot be saved.
+    /// When it starts and ends, or why that cannot be saved. An all-day
+    /// event runs from the first midnight to the one after its last day,
+    /// which is how Google stores it.
     pub fn range(&self) -> Result<(DateTime<Local>, DateTime<Local>), String> {
         if self.title.trim().is_empty() {
             return Err("Enter a title".to_owned());
         }
-        let (start, end) = task_edit::schedule_range(&self.date, &self.start, &self.end)?;
+        let first = calendar::deadline::parse_date(self.date.trim())?;
+        let last = match self.end_date.trim() {
+            "" => None,
+            text => Some(calendar::deadline::parse_date(text)?),
+        };
+        if last.is_some_and(|last| last < first) {
+            return Err("The end date has to be on or after the start".to_owned());
+        }
+        if self.all_day {
+            let last = last.unwrap_or(first);
+            let after = last.succ_opt().ok_or("Invalid end date")?;
+            return Ok((
+                calendar::at_clock(first, 0, 0),
+                calendar::at_clock(after, 0, 0),
+            ));
+        }
+        let (start, mut end) = task_edit::schedule_range(&self.date, &self.start, &self.end)?;
+        if let Some(last) = last.filter(|last| *last != first) {
+            end = calendar::at_clock(last, end.hour(), end.minute());
+        }
         if end <= start {
             return Err("The end time has to be after the start".to_owned());
         }
@@ -268,6 +294,7 @@ pub fn create_event(
         end,
         &[],
         &[],
+        new.all_day,
         None,
         None,
     )
@@ -1659,8 +1686,10 @@ mod tests {
             title: title.to_owned(),
             description: String::new(),
             date: "2026-11-04".to_owned(),
+            end_date: String::new(),
             start: start.to_owned(),
             end: end.to_owned(),
+            all_day: false,
         };
         assert!(new(" ", "09:00", "10:00").range().is_err());
         assert!(new("Call", "10:00", "10:00").range().is_err());
@@ -1669,6 +1698,34 @@ mod tests {
         // An end before the start runs past midnight, as it does for tasks.
         let (start, end) = new("Late", "23:00", "01:00").range().unwrap();
         assert_eq!((end - start).num_minutes(), 120);
+    }
+
+    #[test]
+    fn a_new_event_can_cover_whole_days_or_run_over_several() {
+        let new = |end_date: &str, all_day: bool| NewEvent {
+            title: "Trip".to_owned(),
+            description: String::new(),
+            date: "2026-11-04".to_owned(),
+            end_date: end_date.to_owned(),
+            start: "09:00".to_owned(),
+            end: "17:00".to_owned(),
+            all_day,
+        };
+        let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+        // One day: Google's end is the following midnight.
+        let (start, end) = new("", true).range().unwrap();
+        assert_eq!((start.date_naive(), end.date_naive()), (day(4), day(5)));
+        assert_eq!((start.hour(), end.hour()), (0, 0));
+        // The end date is the last day covered.
+        let (start, end) = new("2026-11-06", true).range().unwrap();
+        assert_eq!((start.date_naive(), end.date_naive()), (day(4), day(7)));
+        // A timed event can end on a later day.
+        let (start, end) = new("2026-11-06", false).range().unwrap();
+        assert_eq!(
+            (start.hour(), end.date_naive(), end.hour()),
+            (9, day(6), 17)
+        );
+        assert!(new("2026-11-03", true).range().is_err());
     }
 
     #[test]

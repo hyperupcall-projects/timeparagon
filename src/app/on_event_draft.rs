@@ -83,6 +83,18 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             }
             Task::none()
         }
+        EventDraftMessage::EventDraftEndDateChanged(text) => {
+            if let Some(draft) = state.calendar.draft.as_mut() {
+                draft.set_end_date_text(text);
+            }
+            Task::none()
+        }
+        EventDraftMessage::EventDraftAllDayToggled(all_day) => {
+            if let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) {
+                draft.set_all_day(all_day);
+            }
+            Task::none()
+        }
         EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::Sleep) => {
             let Some(draft) = state.calendar.draft.take() else {
                 return Task::none();
@@ -209,16 +221,24 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             }
 
             if draft.end <= draft.start {
-                state.calendar.error = Some("The end time has to be after the start".to_owned());
+                state.calendar.error = Some(if draft.all_day {
+                    "The end date has to be on or after the start".to_owned()
+                } else {
+                    "The end time has to be after the start".to_owned()
+                });
                 return Task::none();
             }
 
             // A time block is always written to the app's TimeSlay calendar
             // and labelled and colored as a block; an ordinary event stays on
             // the calendar the picker shows.
+            // An all-day entry on the TimeSlay calendar is a plain event, as
+            // it is when read back from Google.
             let is_block = draft.kind == calendar::DraftKind::TimeBlock
-                || state.config.calendar.app_calendar.as_deref()
-                    == Some(draft.calendar_id.as_str());
+                || (!draft.all_day
+                    && state.config.calendar.app_calendar.as_deref()
+                        == Some(draft.calendar_id.as_str()));
+            let all_day = draft.all_day && draft.kind != calendar::DraftKind::TimeBlock;
             let color = if is_block {
                 state.config.calendar.time_block_color()
             } else {
@@ -277,6 +297,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                         draft.end,
                         &recurrence,
                         &draft.projects.ids,
+                        all_day,
                         Some(&draft.options),
                         (!is_block).then_some(&draft.meeting),
                     )?;
@@ -295,7 +316,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                     },
                     start: draft.start,
                     end: draft.end,
-                    all_day: false,
+                    all_day,
                     color,
                     completed: false,
                     details: calendar::Details {
