@@ -322,8 +322,9 @@ For a custom build/runtime location, set `CEF_PATH` at build time and
 
 Normal installs also build `core/examples/sync_database`, install it as
 `timeslay-database-sync`, and enable `timeslay-database-sync.service`. It syncs
-SQLite user documents with the Turso server over Tailscale while windows are
-closed. Its replica owner lock is shared with the panel and dock workers, so
+SQLite user documents with the Turso server configured in **Settings → Database sync**
+while windows are closed. The URL is stored in `[database_sync].url` in
+`config.toml`; an empty URL disables sync. No server is configured by default. Its replica owner lock is shared with the panel and dock workers, so
 only one process opens the native replica at a time. `--no-enable` installs the
 unit without starting it; uninstall removes the worker and unit but keeps data.
 

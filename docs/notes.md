@@ -7,8 +7,9 @@ They replace the old Google Keep integration, which has been removed.
 ## Storage
 
 - Notes save automatically to `<data dir>/timeslay.sqlite3` and work offline.
-- Turso synchronizes them through the private Tailscale server alongside habits
-  and scratch data. Both devices must be connected to Tailscale to exchange edits.
+- Turso synchronizes them alongside habits and scratch data using the server URL
+  configured in **Settings → Database sync** on each device. A blank URL disables
+  sync; devices need network access to the configured server to exchange edits.
 - Existing local notes and their links are retained. The app no longer accesses
   Drive; files previously stored there are left intact.
 - Fields merge independently, and every version is retained in the sync journal

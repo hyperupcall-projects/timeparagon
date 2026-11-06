@@ -1,4 +1,4 @@
-use chrono::{Datelike, Duration, Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
@@ -6,7 +6,6 @@ use timeslay::app::{
     CalendarMessage, EventMessage, MonthPicker, NavigationMessage, PlanTab, SettingsMessage,
     SystemMessage, TaskMessage,
 };
-use timeslay::calendar::first_day::FirstDayOfWeek;
 use timeslay::config::WeekRange;
 use timeslay::{
     app::{self, Message, Screen, State},
@@ -28,6 +27,7 @@ fn at(day: u32, hour: u32) -> chrono::DateTime<Local> {
 
 fn state() -> State {
     let mut state = State::blank();
+    state.config.calendar.weekly_days = 9;
     let mut snapshot = calendar::sample_snapshot();
     snapshot.day = date(15);
     let mut block = snapshot
@@ -67,7 +67,7 @@ fn state() -> State {
     state.week_anchor = date(15);
     state
         .calendar
-        .apply_week_snapshot(snapshot, &calendar::week_dates(date(15), 8));
+        .apply_week_snapshot(snapshot, &calendar::week_dates(date(15), 9));
     state
 }
 
@@ -124,67 +124,66 @@ fn click_in(
 }
 
 #[test]
-fn week_range_shows_seven_from_today_or_eight_from_yesterday() {
-    let eight = calendar::week_dates(date(15), 8);
-    assert_eq!(eight, (14..=21).map(date).collect::<Vec<_>>());
+fn week_range_shows_seven_or_eight_from_today_or_eight_plus_yesterday() {
     let seven = calendar::week_dates(date(15), 7);
     assert_eq!(seven, (15..=21).map(date).collect::<Vec<_>>());
+    let eight = calendar::week_dates(date(15), 8);
+    assert_eq!(eight, (15..=22).map(date).collect::<Vec<_>>());
+    let nine = calendar::week_dates(date(15), 9);
+    assert_eq!(nine, (14..=22).map(date).collect::<Vec<_>>());
     let new_year = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
-    assert_eq!(calendar::week_dates(new_year, 7)[0], new_year);
+    assert_eq!(calendar::week_dates(new_year, 8)[0], new_year);
     assert_eq!(
-        calendar::week_dates(new_year, 8)[0],
+        calendar::week_dates(new_year, 9)[0],
         new_year - Duration::days(1)
     );
 }
 
 #[test]
-fn a_whole_week_starts_on_the_first_day_of_the_week_and_steps_by_seven() {
+fn the_week_steps_by_the_days_from_the_selected_day() {
     let mut state = state();
-    let anchor = state.week_anchor;
-    for first_day in FirstDayOfWeek::ALL {
-        state.config.calendar.first_day_of_week = first_day;
+    for (range, step) in [
+        (WeekRange::Seven, 7),
+        (WeekRange::Eight, 8),
+        (WeekRange::EightAndYesterday, 8),
+    ] {
         let _ = app::update(
             &mut state,
-            Message::Settings(SettingsMessage::CalendarWeekRangeChanged(
-                WeekRange::WholeWeek,
-            )),
+            Message::Settings(SettingsMessage::CalendarWeekRangeChanged(range)),
         );
-        let dates = state.calendar_dates();
-        assert_eq!(dates.len(), 7);
-        assert_eq!(dates[0], first_day.week_start(anchor));
-        assert_eq!(dates[0].weekday(), first_day.weekdays()[0]);
-        assert!(dates.contains(&anchor), "{first_day}");
-        // Changing the range does not move the selected day.
-        assert_eq!(state.week_anchor, anchor);
+        let first = state.calendar_dates()[0];
+        assert_eq!(state.calendar_dates().len() as u32, range.days());
+        assert_eq!(state.config.calendar.weekly_step(), step);
+        let _ = app::update(
+            &mut state,
+            Message::Calendar(CalendarMessage::CalendarDayShift(i64::from(step))),
+        );
+        assert_eq!(
+            state.calendar_dates()[0],
+            first + Duration::days(step.into())
+        );
     }
-
-    state.config.calendar.first_day_of_week = FirstDayOfWeek::Sunday;
-    let first = state.calendar_dates()[0];
-    let step = i64::from(state.config.calendar.weekly_days());
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::CalendarDayShift(step)),
-    );
-    assert_eq!(state.calendar_dates()[0], first + Duration::days(7));
 }
 
 #[test]
-fn switching_the_week_range_keeps_the_other_ranges_day_count() {
+fn switching_the_week_range_round_trips() {
     let mut settings = timeslay::config::CalendarSettings::default();
-    assert_eq!(settings.week_range(), WeekRange::EightFromYesterday);
+    assert_eq!(settings.week_range(), WeekRange::Eight);
     for range in WeekRange::ALL {
         settings.set_week_range(range);
         assert_eq!(settings.week_range(), range);
+        assert_eq!(settings.weekly_days(), range.days());
         let saved = toml::to_string(&settings).unwrap();
         let loaded: timeslay::config::CalendarSettings = toml::from_str(&saved).unwrap();
         assert_eq!(loaded.week_range(), range);
     }
-    settings.set_week_range(WeekRange::WholeWeek);
-    assert_eq!(settings.weekly_days(), 7);
-    settings.set_week_range(WeekRange::EightFromYesterday);
-    assert_eq!(settings.weekly_days(), 8);
-    assert_eq!(settings.week_dates(date(15)).len(), 8);
+    settings.set_week_range(WeekRange::EightAndYesterday);
+    assert_eq!(settings.week_dates(date(15)).len(), 9);
     assert_eq!(settings.week_dates(date(15))[0], date(14));
+    // The old whole-week flag is ignored.
+    let old: timeslay::config::CalendarSettings =
+        toml::from_str("weekly_days = 7\nweekly_whole_week = true").unwrap();
+    assert_eq!(old.week_range(), WeekRange::Seven);
 }
 
 #[test]
@@ -253,7 +252,7 @@ fn weekly_settings_round_trip_and_clamp_old_or_invalid_values() {
     settings.weekly_day_width = 0;
     assert_eq!(
         (settings.weekly_days(), settings.weekly_day_width()),
-        (8, 100)
+        (9, 100)
     );
 }
 
@@ -712,7 +711,7 @@ fn plan_schedule_and_tasks_tabs_keep_the_overview_and_selected_day() -> Result<(
                         .find(if screen == Screen::Inbox {
                             "Inbox"
                         } else {
-                            "Fri Oct 16"
+                            "Oct. 16 ▾"
                         })
                         .is_ok()
                 );
@@ -804,8 +803,9 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
         state.view_menu_open = false;
     }
     let mut ui = render(&state, Size::new(180.0, 240.0));
-    let heading = ui.find("Wed Oct 14")?.bounds();
-    assert!(heading.y + heading.height < 240.0, "heading {heading:?}");
+    let month = format!("{} ▾", timeslay::calendar::month_day_label(state.calendar.day));
+    let month = ui.find(month)?.bounds();
+    assert!(month.y + month.height < 240.0, "month button {month:?}");
     drop(ui);
     state.screen = Screen::Settings;
     let mut ui = render_main(&state, Size::new(900.0, 1600.0));
@@ -1221,7 +1221,7 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
             fetched_at: Local::now(),
             notice: None,
         },
-        &calendar::week_dates(date(15), 8),
+        &calendar::week_dates(date(15), 9),
     );
     for (name, theme) in [("light", iced::Theme::Light), ("dark", iced::Theme::Dark)] {
         let mut ui = render(&state, Size::new(492.0, 653.0));

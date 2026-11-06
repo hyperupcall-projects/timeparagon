@@ -1940,10 +1940,15 @@ pub fn sync_range(
     )
 }
 
-/// Seven days starting at the selected day, or eight starting one day earlier.
+/// Seven or eight days starting at the selected day, or for nine, eight
+/// starting at the selected day with the day before it in front.
 pub fn week_dates(anchor: NaiveDate, days: u32) -> Vec<NaiveDate> {
-    let start = if days.clamp(7, 8) == 8 { -1 } else { 0 };
-    (start..7)
+    let (start, end) = match days.clamp(7, 9) {
+        7 => (0, 7),
+        8 => (0, 8),
+        _ => (-1, 8),
+    };
+    (start..end)
         .filter_map(|offset| anchor.checked_add_signed(chrono::Duration::days(offset)))
         .collect()
 }

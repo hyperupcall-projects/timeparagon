@@ -19,13 +19,14 @@ use iced::{Color, Task};
 use crate::app::{CalendarMessage, EventMessage};
 use crate::app::{Message, State};
 use crate::blocking;
+use crate::calendar::time_format::TimeFormat;
 use crate::calendar::{self, api::HabitEvent, api::HabitListing, colors, deadline};
 use crate::recurrence::Rule;
 
 pub use crate::recurrence::{EndKind, MonthlyMode, Recurrence, RepeatMode, WEEKDAYS};
 pub use timeslay_core::habits::{
-    Bucket, Computed, DayEntry, Frequency, Habit, Icons, Kind, Library, Mark, Measure, Outcome,
-    Section, SortKey, Status, Streak,
+    Bucket, Computed, DayEntry, Frequency, Habit, Icons, Kind, Library, LogEntry, Mark, Measure,
+    Outcome, Section, SortKey, Status, Streak,
 };
 
 /// The `ttKind` Google extended property that marks a habit event.
@@ -497,41 +498,111 @@ pub struct Drag {
     pub moved: bool,
 }
 
+/// One of a day's two logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Log {
+    /// Each time it was done, or each slip on a habit to avoid.
+    Happened,
+    /// On a habit to avoid: each time it came to mind and was not done.
+    Resisted,
+}
+
+/// A log entry as it is being edited: the time and the amount as typed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogRow {
+    /// Blank for an entry from before times were kept.
+    pub time: String,
+    /// Blank for no amount.
+    pub amount: String,
+}
+
+impl LogRow {
+    fn of(entry: LogEntry, format: TimeFormat) -> Self {
+        Self {
+            time: entry.at.map_or(String::new(), |at| {
+                crate::calendar::time_format::clock(at, format)
+            }),
+            amount: entry
+                .amount()
+                .map_or(String::new(), timeslay_core::habits::format_amount),
+        }
+    }
+
+    /// The entry, or why it cannot be read.
+    fn entry(&self, amounts: bool) -> Result<LogEntry, String> {
+        let time = self.time.trim();
+        let at = if time.is_empty() {
+            None
+        } else {
+            Some(timeslay_core::habits::parse_log_time(time).ok_or_else(|| {
+                format!("Could not read the time \"{time}\". Try 8:05pm or 20:05")
+            })?)
+        };
+        let amount = self.amount.trim();
+        let amount = if !amounts || amount.is_empty() {
+            None
+        } else {
+            Some(
+                timeslay_core::habits::parse_log_amount(amount)
+                    .ok_or_else(|| format!("Could not read \"{amount}\" as a number"))?,
+            )
+        };
+        Ok(LogEntry::new(at, amount))
+    }
+}
+
 /// The dialog for one day, holding its edits until they are saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DayDialog {
     pub habit_id: String,
     pub day: NaiveDate,
     pub outcome: Outcome,
-    /// How many times it happened, when it did.
-    pub times: u32,
-    pub resisted: u32,
-    /// Whether this is a habit to avoid, which logs each slip and each resisted
-    /// urge, with the time, rather than counting them.
+    /// Whether this is a habit to avoid, whose "Avoided it" and "Slipped"
+    /// buttons each show their own log, and whose answer follows from them.
     pub avoid: bool,
-    /// On a habit to avoid: each slip, with when it was logged if known.
-    /// `times` is always its length.
-    pub slips: Vec<Option<NaiveTime>>,
-    /// On a habit to avoid: each resisted urge, as `slips`. `resisted` is
-    /// always its length.
-    pub thoughts: Vec<Option<NaiveTime>>,
+    /// On a habit to avoid, which log shows: `NotDone` for "Avoided it",
+    /// `Done` for "Slipped".
+    pub view: Outcome,
+    /// How many times make the day complete, on a habit to do.
+    pub goal: u32,
+    /// Whether each time it happened records an amount in the habit's unit.
+    pub amounts: bool,
+    /// Each time it happened. How many there are is how many times.
+    pub happened: Vec<LogRow>,
+    /// Each time it was resisted, on a habit to avoid.
+    pub resisted: Vec<LogRow>,
+    pub time_format: TimeFormat,
     /// What is typed for the value. Blank for no value.
     pub value: String,
     pub error: Option<String>,
 }
 
 impl DayDialog {
-    fn new(habit: &Habit, day: NaiveDate) -> Self {
+    fn new(habit: &Habit, day: NaiveDate, time_format: TimeFormat) -> Self {
         let entry = habit.entry(day);
+        let avoid = habit.kind == Kind::No;
+        let rows = |entries: Vec<LogEntry>| {
+            entries
+                .into_iter()
+                .map(|entry| LogRow::of(entry, time_format))
+                .collect::<Vec<_>>()
+        };
+        let happened = rows(habit.happened_log_on(day));
         Self {
             habit_id: habit.id.clone(),
             day,
             outcome: entry.outcome,
-            times: entry.times,
-            resisted: entry.resisted,
-            avoid: habit.kind == Kind::No,
-            slips: habit.slips_on(day),
-            thoughts: habit.resisted_log_on(day),
+            avoid,
+            view: if avoid && !happened.is_empty() {
+                Outcome::Done
+            } else {
+                Outcome::NotDone
+            },
+            goal: habit.frequency.per_day(),
+            amounts: habit.measure.is_some(),
+            happened,
+            resisted: rows(habit.resisted_log_on(day)),
+            time_format,
             value: entry
                 .value
                 .map_or(String::new(), timeslay_core::habits::format_amount),
@@ -539,64 +610,151 @@ impl DayDialog {
         }
     }
 
-    /// Chooses an answer. Having done it starts from the whole of the day's goal.
-    fn choose(&mut self, outcome: Outcome, goal: u32) {
-        self.outcome = outcome;
+    /// How many times it happened.
+    pub fn times(&self) -> u32 {
+        self.happened.len() as u32
+    }
+
+    pub fn log(&self, log: Log) -> &[LogRow] {
+        match log {
+            Log::Happened => &self.happened,
+            Log::Resisted => &self.resisted,
+        }
+    }
+
+    fn log_mut(&mut self, log: Log) -> &mut Vec<LogRow> {
+        match log {
+            Log::Happened => &mut self.happened,
+            Log::Resisted => &mut self.resisted,
+        }
+    }
+
+    /// Whether the log of each time it happened is showing.
+    pub fn shows_happened(&self) -> bool {
         if self.avoid {
-            if outcome != Outcome::Done {
-                self.slips.clear();
-            } else if self.slips.is_empty() {
-                self.slips.push(Some(now_time()));
+            self.view == Outcome::Done && self.outcome != Outcome::Skipped
+        } else {
+            self.outcome == Outcome::Done
+        }
+    }
+
+    /// What a habit to avoid's logs answer: slipping if any slip is logged.
+    fn logged_outcome(&self) -> Outcome {
+        if self.happened.is_empty() {
+            Outcome::NotDone
+        } else {
+            Outcome::Done
+        }
+    }
+
+    fn now_row(&self) -> LogRow {
+        LogRow {
+            time: crate::calendar::time_format::clock(now_time(), self.time_format),
+            amount: String::new(),
+        }
+    }
+
+    /// Chooses an answer. On a habit to avoid, "Avoided it" and "Slipped"
+    /// switch between their logs, which decide the answer. On a habit to do,
+    /// having done it starts from the whole of the day's goal.
+    fn choose(&mut self, outcome: Outcome) {
+        self.error = None;
+        if self.avoid {
+            match outcome {
+                Outcome::Done | Outcome::NotDone => {
+                    self.view = outcome;
+                    self.outcome = self.logged_outcome();
+                }
+                _ => self.outcome = outcome,
             }
-            self.times = self.slips.len() as u32;
             return;
         }
-        self.times = if outcome == Outcome::Done {
-            self.times.max(goal)
+        self.outcome = outcome;
+        if outcome == Outcome::Done {
+            while self.times() < self.goal {
+                let row = self.now_row();
+                self.happened.push(row);
+            }
         } else {
-            0
+            self.happened.clear();
+        }
+    }
+
+    /// Logs an entry at the current time, which answers the day: it happened,
+    /// or, having been resisted, it was avoided.
+    fn add(&mut self, log: Log) {
+        let row = self.now_row();
+        self.log_mut(log).push(row);
+        self.error = None;
+        match log {
+            Log::Happened => {
+                self.outcome = Outcome::Done;
+                self.view = Outcome::Done;
+            }
+            Log::Resisted => {
+                if matches!(self.outcome, Outcome::Unanswered | Outcome::Skipped) {
+                    self.outcome = self.logged_outcome();
+                }
+            }
+        }
+    }
+
+    /// Takes an entry out of a log. With nothing left that happened, it did not.
+    fn remove(&mut self, log: Log, index: usize) {
+        let rows = self.log_mut(log);
+        if index < rows.len() {
+            rows.remove(index);
+        }
+        self.error = None;
+        if log == Log::Happened && self.happened.is_empty() && self.outcome == Outcome::Done {
+            self.outcome = Outcome::NotDone;
+        }
+    }
+
+    fn edit(&mut self, log: Log, index: usize, edit: impl FnOnce(&mut LogRow)) {
+        if let Some(row) = self.log_mut(log).get_mut(index) {
+            edit(row);
+        }
+        self.error = None;
+    }
+
+    /// The total of the amounts logged, when any are.
+    pub fn logged_total(&self) -> Option<f64> {
+        if !self.amounts {
+            return None;
+        }
+        let amounts: Vec<f64> = self
+            .happened
+            .iter()
+            .filter_map(|row| timeslay_core::habits::parse_log_amount(&row.amount))
+            .collect();
+        (!amounts.is_empty()).then(|| amounts.iter().sum())
+    }
+
+    /// What the dialog holds, with the day's two logs, unless something typed
+    /// cannot be read.
+    fn entry(&self) -> Result<(DayEntry, Vec<LogEntry>, Vec<LogEntry>), String> {
+        let happened = if self.outcome == Outcome::Done {
+            self.happened
+                .iter()
+                .map(|row| row.entry(self.amounts))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
         };
-    }
-
-    /// Logs a slip now, which answers that it slipped.
-    fn log_slip(&mut self) {
-        self.slips.push(Some(now_time()));
-        self.times = self.slips.len() as u32;
-        self.outcome = Outcome::Done;
-    }
-
-    /// Takes a slip out of the log. With none left, it was avoided.
-    fn unlog_slip(&mut self, index: usize) {
-        if index < self.slips.len() {
-            self.slips.remove(index);
-        }
-        self.times = self.slips.len() as u32;
-        if self.slips.is_empty() && self.outcome == Outcome::Done {
-            self.outcome = Outcome::NotDone;
-        }
-    }
-
-    /// Logs a resisted urge now. Having resisted it answers whether it was
-    /// avoided.
-    fn log_thought(&mut self) {
-        self.thoughts.push(Some(now_time()));
-        self.resisted = self.thoughts.len() as u32;
-        if self.outcome == Outcome::Unanswered {
-            self.outcome = Outcome::NotDone;
-        }
-    }
-
-    fn unlog_thought(&mut self, index: usize) {
-        if index < self.thoughts.len() {
-            self.thoughts.remove(index);
-        }
-        self.resisted = self.thoughts.len() as u32;
-    }
-
-    /// What the dialog holds, unless the value cannot be read.
-    fn entry(&self) -> Result<DayEntry, String> {
+        let resisted = if self.avoid {
+            self.resisted
+                .iter()
+                .map(|row| row.entry(false))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        let logged: Vec<f64> = happened.iter().filter_map(LogEntry::amount).collect();
         let value = self.value.trim();
-        let value = if value.is_empty() {
+        let value = if !logged.is_empty() {
+            Some(logged.iter().sum())
+        } else if value.is_empty() {
             None
         } else {
             Some(
@@ -607,12 +765,13 @@ impl DayDialog {
                     .ok_or("The value has to be a number of zero or more")?,
             )
         };
-        Ok(DayEntry {
+        let entry = DayEntry {
             outcome: self.outcome,
-            times: self.times,
-            resisted: self.resisted,
+            times: happened.len() as u32,
+            resisted: resisted.len() as u32,
             value,
-        })
+        };
+        Ok((entry, happened, resisted))
     }
 }
 
@@ -926,14 +1085,14 @@ pub enum Action {
     /// One more time, or one fewer.
     StepTimes(bool),
     StepResisted(bool),
-    /// Logs a slip at the current time, in the day dialog.
-    LogSlip,
-    /// Removes a slip from the day dialog's log, by position.
-    UnlogSlip(usize),
-    /// Logs a resisted urge at the current time, in the day dialog.
-    LogResisted,
-    /// Removes a resisted urge from the day dialog's log, by position.
-    UnlogResisted(usize),
+    /// Logs an entry at the current time, in the day dialog.
+    LogAdd(Log),
+    /// Removes an entry from one of the day dialog's logs, by position.
+    LogRemove(Log, usize),
+    /// Edits the time of an entry in the day dialog.
+    LogTime(Log, usize, String),
+    /// Edits the amount of an entry in the day dialog.
+    LogAmount(Log, usize, String),
     DayValue(String),
     /// Records what the dialog holds.
     SaveDay,
@@ -1039,94 +1198,66 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 
         Action::OpenDay(id, day) => open_day(state, id, day),
         Action::DayOutcome(outcome) => {
-            let goal = day_goal(state);
             if let Some(dialog) = &mut state.habits.day_dialog {
-                dialog.choose(outcome, goal);
+                dialog.choose(outcome);
             }
             Task::none()
         }
         Action::StepTimes(up) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
-                if dialog.avoid {
-                    if up {
-                        dialog.log_slip();
-                    } else if dialog.slips.len() > 1 {
-                        dialog.unlog_slip(dialog.slips.len() - 1);
-                    }
-                    return Task::none();
+                if up {
+                    dialog.add(Log::Happened);
+                } else if dialog.happened.len() > 1 {
+                    dialog.remove(Log::Happened, dialog.happened.len() - 1);
                 }
-                dialog.times = if up {
-                    dialog.times.saturating_add(1)
-                } else {
-                    dialog.times.saturating_sub(1).max(1)
-                };
             }
             Task::none()
         }
         Action::StepResisted(up) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
-                if dialog.avoid {
-                    if up {
-                        dialog.log_thought();
-                    } else if let Some(last) = dialog.thoughts.len().checked_sub(1) {
-                        dialog.unlog_thought(last);
-                    }
-                    return Task::none();
-                }
-                dialog.resisted = if up {
-                    dialog.resisted.saturating_add(1)
-                } else {
-                    dialog.resisted.saturating_sub(1)
-                };
-                // Having resisted it answers whether it was avoided.
-                if up && dialog.outcome == Outcome::Unanswered {
-                    dialog.outcome = Outcome::NotDone;
+                if up {
+                    dialog.add(Log::Resisted);
+                } else if let Some(last) = dialog.resisted.len().checked_sub(1) {
+                    dialog.remove(Log::Resisted, last);
                 }
             }
             Task::none()
         }
-        Action::LogSlip => {
+        Action::LogAdd(log) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
-                dialog.log_slip();
+                dialog.add(log);
             }
             Task::none()
         }
-        Action::UnlogSlip(index) => {
+        Action::LogRemove(log, index) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
-                dialog.unlog_slip(index);
+                dialog.remove(log, index);
             }
             Task::none()
         }
-        Action::LogResisted => {
+        Action::LogTime(log, index, time) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
-                dialog.log_thought();
+                dialog.edit(log, index, |row| row.time = time);
             }
             Task::none()
         }
-        Action::UnlogResisted(index) => {
+        Action::LogAmount(log, index, amount) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
-                dialog.unlog_thought(index);
+                dialog.edit(log, index, |row| row.amount = amount);
             }
             Task::none()
         }
         Action::DayValue(value) => {
-            let goal = day_goal(state);
-            let wanted = state
-                .habits
-                .day_dialog
-                .as_ref()
-                .and_then(|dialog| state.habits.library.habit(&dialog.habit_id))
-                .is_some_and(|habit| habit.kind == Kind::Yes);
             if let Some(dialog) = &mut state.habits.day_dialog {
                 let some = value.trim().parse::<f64>().is_ok_and(|value| value > 0.0);
                 dialog.value = value;
                 dialog.error = None;
                 // A number to record on a habit to do means it was done.
-                if wanted
+                if !dialog.avoid
                     && some
                     && matches!(dialog.outcome, Outcome::NotDone | Outcome::Unanswered)
                 {
-                    dialog.choose(Outcome::Done, goal);
+                    dialog.choose(Outcome::Done);
                 }
             }
             Task::none()
@@ -1482,22 +1613,13 @@ fn open_day(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
     let Some(habit) = state.habits.library.habit(&id) else {
         return Task::none();
     };
-    state.habits.day_dialog = Some(DayDialog::new(habit, day));
+    let format = state.config.appearance.time_format;
+    state.habits.day_dialog = Some(DayDialog::new(habit, day, format));
     if habit.measure.is_some() {
         iced::widget::operation::focus(iced::widget::Id::new(DAY_FIELD))
     } else {
         Task::none()
     }
-}
-
-/// How many times make the dialog's day complete.
-fn day_goal(state: &State) -> u32 {
-    state
-        .habits
-        .day_dialog
-        .as_ref()
-        .and_then(|dialog| state.habits.library.habit(&dialog.habit_id))
-        .map_or(1, |habit| habit.frequency.per_day())
 }
 
 /// Records what the dialog holds, keeping calendar occurrences in step. A value
@@ -1506,7 +1628,7 @@ fn save_day(state: &mut State) -> Task<Message> {
     let Some(dialog) = &mut state.habits.day_dialog else {
         return Task::none();
     };
-    let entry = match dialog.entry() {
+    let (entry, happened, resisted) = match dialog.entry() {
         Ok(entry) => entry,
         Err(error) => {
             dialog.error = Some(error);
@@ -1514,21 +1636,12 @@ fn save_day(state: &mut State) -> Task<Message> {
         }
     };
     let (id, day) = (dialog.habit_id.clone(), dialog.day);
-    let Some(dialog) = state.habits.day_dialog.take() else {
-        return Task::none();
-    };
+    state.habits.day_dialog = None;
     let Some(habit) = state.habits.library.habit_mut(&id) else {
         return Task::none();
     };
     habit.set_entry(day, entry);
-    if habit.kind == Kind::No {
-        let slips: &[Option<NaiveTime>] = if entry.outcome == Outcome::Done {
-            &dialog.slips
-        } else {
-            &[]
-        };
-        habit.set_log(day, slips, &dialog.thoughts);
-    }
+    habit.set_log(day, &happened, &resisted);
     state.habits.recompute_one(&id);
     Task::batch([persist(state), sync_occurrences(state, &id, day)])
 }

@@ -4,6 +4,10 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Message> {
     match message {
+        SettingsMessage::DatabaseSyncUrlChanged(url) => {
+            state.config.database_sync.url = url;
+            queue_save(state)
+        }
         SettingsMessage::ShortcutInputChanged(action, value) => {
             let editor = &mut state.shortcut_editors[action.index()];
             editor.input = value;

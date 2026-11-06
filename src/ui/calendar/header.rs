@@ -94,7 +94,7 @@ pub(super) fn header<'a>(
             nav_button(
                 "◀",
                 Message::Calendar(CalendarMessage::CalendarDayShift(-i64::from(
-                    state.config.calendar.weekly_days()
+                    state.config.calendar.weekly_step()
                 ))),
                 metrics
             ),
@@ -102,7 +102,7 @@ pub(super) fn header<'a>(
             nav_button(
                 "▶",
                 Message::Calendar(CalendarMessage::CalendarDayShift(i64::from(
-                    state.config.calendar.weekly_days()
+                    state.config.calendar.weekly_step()
                 ))),
                 metrics
             ),
@@ -175,7 +175,11 @@ pub(super) const TWO_LINE_HEADER: f32 = 320.0;
 /// splits its buttons below [`TWO_LINE_HEADER`].
 pub(super) fn header_lines(metrics: &Metrics, weekly: bool) -> u8 {
     if !weekly {
-        return if metrics.size.width >= TWO_LINE_HEADER { 1 } else { 2 };
+        return if metrics.size.width >= TWO_LINE_HEADER {
+            1
+        } else {
+            2
+        };
     }
     if metrics.size.width >= SINGLE_LINE_HEADER {
         1

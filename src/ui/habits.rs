@@ -11,7 +11,7 @@ use iced::{Alignment, Color, Element, Fill, Font, Theme, font, mouse};
 
 use crate::app::{EventMessage, FormField, Message, State};
 use crate::habits::{
-    Action, Bucket, FIRST_WEEKDAY, Form, FormAction, FrequencyKind, Habit, Icons, Kind, Menu,
+    Action, Bucket, FIRST_WEEKDAY, Form, FormAction, FrequencyKind, Habit, Icons, Kind, Log, Menu,
     Outcome, Section, SectionEdit, Series, SortKey, Status,
 };
 use timeslay_core::habits::{self as model, PALETTE_SIZE, palette_color};
@@ -1401,21 +1401,43 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
         }
     };
 
+    let counted = |label: &str, count: usize| {
+        if count > 0 {
+            format!("{label} · {count}")
+        } else {
+            label.to_owned()
+        }
+    };
     let (good, bad) = match habit.kind {
-        Kind::Yes => (("Did it", Outcome::Done), ("Didn't", Outcome::NotDone)),
-        Kind::No => (("Avoided it", Outcome::NotDone), ("Slipped", Outcome::Done)),
+        Kind::Yes => (
+            ("Did it".to_owned(), Outcome::Done),
+            ("Didn't".to_owned(), Outcome::NotDone),
+        ),
+        Kind::No => (
+            (
+                counted("Avoided it", dialog.resisted.len()),
+                Outcome::NotDone,
+            ),
+            (counted("Slipped", dialog.happened.len()), Outcome::Done),
+        ),
     };
     let mut choices = vec![good, bad];
     if habit.skip_days {
-        choices.push(("Skipped", Outcome::Skipped));
+        choices.push(("Skipped".to_owned(), Outcome::Skipped));
     }
     // A habit to avoid is answered by its logs, so it has no "Not sure".
     if habit.question_marks && habit.kind == Kind::Yes {
-        choices.push(("Not sure", Outcome::Unanswered));
+        choices.push(("Not sure".to_owned(), Outcome::Unanswered));
     }
     let mut outcomes = row![].spacing(4);
     for (label, outcome) in choices {
-        let on = dialog.outcome == outcome;
+        // On a habit to avoid, "Avoided it" and "Slipped" pick which log shows.
+        let on = if dialog.avoid && matches!(outcome, Outcome::Done | Outcome::NotDone) {
+            dialog.view == outcome
+                && !matches!(dialog.outcome, Outcome::Skipped | Outcome::Unanswered)
+        } else {
+            dialog.outcome == outcome
+        };
         outcomes = outcomes.push(
             button(text(label).size(metrics.label() - 1.0).center().width(Fill))
                 .width(Fill)
@@ -1445,51 +1467,58 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     .spacing(metrics.spacing)
     .width(Fill);
 
-    if habit.kind == Kind::No {
-        let format = state.config.appearance.time_format;
-        body = body.push(day_log(
-            "Avoided it",
-            "Thought about it, didn't do it",
-            &dialog.thoughts,
-            Action::LogResisted,
-            Action::UnlogResisted,
-            format,
-            metrics,
-        ));
-        body = body.push(day_log(
-            "Slipped",
-            "Times slipped",
-            &dialog.slips,
-            Action::LogSlip,
-            Action::UnlogSlip,
-            format,
-            metrics,
-        ));
-    } else if dialog.outcome == Outcome::Done {
-        let goal = habit.frequency.per_day();
-        let label = if goal > 1 {
-            format!("Times done, out of {goal}")
-        } else {
-            "Times done".to_owned()
+    let unit = habit.measure.as_ref().map(|measure| measure.unit.as_str());
+    if dialog.shows_happened() {
+        let add = match habit.kind {
+            Kind::No => "Times slipped".to_owned(),
+            Kind::Yes if dialog.goal > 1 => {
+                format!("Did it ({} of {})", dialog.times(), dialog.goal)
+            }
+            Kind::Yes => "Did it".to_owned(),
         };
-        body = body.push(stepper(label, dialog.times, 1, Action::StepTimes, metrics));
+        body = body.push(day_log(dialog, Log::Happened, add, unit, metrics));
+    } else if dialog.avoid && dialog.outcome != Outcome::Skipped {
+        body = body.push(day_log(
+            dialog,
+            Log::Resisted,
+            "Thought about it, didn't do it".to_owned(),
+            None,
+            metrics,
+        ));
     }
     if let Some(measure) = &habit.measure {
-        let unit = if measure.unit.is_empty() {
-            "Value".to_owned()
+        let mut field = if dialog.happened.is_empty() || dialog.outcome != Outcome::Done {
+            let unit = if measure.unit.is_empty() {
+                "Value".to_owned()
+            } else {
+                format!("Value in {}", measure.unit)
+            };
+            column![
+                text(unit).size(metrics.label() - 1.0).style(medium),
+                crate::ui::controls::text_input("None", &dialog.value)
+                    .id(crate::habits::DAY_FIELD)
+                    .on_input(|value| msg(Action::DayValue(value)))
+                    .on_submit(msg(Action::SaveDay))
+                    .size(metrics.label()),
+            ]
+            .spacing(3)
+        } else if dialog.shows_happened()
+            && let Some(total) = dialog.logged_total()
+        {
+            // The day's value is what its entries add up to.
+            column![
+                text(format!(
+                    "Total: {} {}",
+                    timeslay_core::habits::format_amount(total),
+                    measure.unit
+                ))
+                .size(metrics.label() - 1.0)
+                .style(medium)
+            ]
         } else {
-            format!("Value in {}", measure.unit)
+            column![]
         };
-        let mut field = column![
-            text(unit).size(metrics.label() - 1.0).style(medium),
-            crate::ui::controls::text_input("None", &dialog.value)
-                .id(crate::habits::DAY_FIELD)
-                .on_input(|value| msg(Action::DayValue(value)))
-                .on_submit(msg(Action::SaveDay))
-                .size(metrics.label()),
-        ]
-        .spacing(3);
-        if measure.target.is_some() {
+        if measure.target.is_some() && (dialog.shows_happened() || dialog.happened.is_empty()) {
             field = field.push(
                 text(format!("Target: {}", measure.label(habit.kind)))
                     .size(metrics.label() - 2.0)
@@ -1525,27 +1554,59 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     overlay(card.into(), msg(Action::CloseDay))
 }
 
-/// One of a habit to avoid's logs in the day dialog: a heading with its count,
-/// a button that logs an entry at the current time, and each entry with the
-/// time it was logged and an X to remove it.
-#[allow(clippy::too_many_arguments)]
+/// One of the day dialog's logs: a button that logs an entry at the current
+/// time, and each entry with its time, its amount when `unit` is given, and an
+/// X to remove it. Times and amounts can be changed in place.
 fn day_log<'a>(
-    title: &'static str,
-    add: &'static str,
-    entries: &[Option<chrono::NaiveTime>],
-    on_add: Action,
-    on_remove: fn(usize) -> Action,
-    format: crate::calendar::time_format::TimeFormat,
+    dialog: &'a crate::habits::DayDialog,
+    log: Log,
+    add: String,
+    unit: Option<&'a str>,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let mut log = column![
-        row![
-            text(title).size(metrics.label()).width(Fill),
-            text(entries.len().to_string())
-                .size(metrics.label())
-                .style(medium),
+    let mut entries = column![].spacing(4);
+    for (index, entry) in dialog.log(log).iter().enumerate() {
+        let mut line = row![
+            crate::ui::controls::text_input("No time recorded", &entry.time)
+                .on_input(move |time| msg(Action::LogTime(log, index, time)))
+                .on_submit(msg(Action::SaveDay))
+                .size(metrics.label() - 1.0)
+                .padding([3, 6])
+                .width(if unit.is_some() {
+                    iced::Length::Fixed(96.0)
+                } else {
+                    Fill
+                }),
         ]
-        .align_y(Alignment::Center),
+        .spacing(6)
+        .align_y(Alignment::Center);
+        if let Some(unit) = unit {
+            line = line.push(text("for").size(metrics.label() - 1.0).style(medium));
+            line = line.push(
+                crate::ui::controls::text_input("0", &entry.amount)
+                    .on_input(move |amount| msg(Action::LogAmount(log, index, amount)))
+                    .on_submit(msg(Action::SaveDay))
+                    .size(metrics.label() - 1.0)
+                    .padding([3, 6])
+                    .width(56),
+            );
+            line = line.push(
+                text(if unit.is_empty() { "" } else { unit })
+                    .size(metrics.label() - 1.0)
+                    .style(medium)
+                    .width(Fill),
+            );
+        }
+        line = line.push(
+            button(text("×").size(metrics.label()).center().width(Fill))
+                .padding(0)
+                .width(24)
+                .style(crate::ui::controls::ghost)
+                .on_press(msg(Action::LogRemove(log, index))),
+        );
+        entries = entries.push(line);
+    }
+    column![
         crate::ui::controls::quiet_button(
             text(format!("+ {add}"))
                 .size(metrics.label() - 1.0)
@@ -1553,69 +1614,10 @@ fn day_log<'a>(
         )
         .width(Fill)
         .padding([4, 8])
-        .on_press(msg(on_add)),
+        .on_press(msg(Action::LogAdd(log))),
+        container(crate::ui::controls::scrollable(entries)).max_height(220),
     ]
-    .spacing(4);
-    for (index, entry) in entries.iter().enumerate() {
-        let when = match entry {
-            Some(time) => crate::calendar::time_format::clock(*time, format),
-            None => "No time recorded".to_owned(),
-        };
-        log = log.push(
-            row![
-                text(when)
-                    .size(metrics.label() - 1.0)
-                    .style(medium)
-                    .width(Fill),
-                button(text("×").size(metrics.label()).center().width(Fill))
-                    .padding([0, 0])
-                    .width(24)
-                    .style(crate::ui::controls::ghost)
-                    .on_press(msg(on_remove(index))),
-            ]
-            .padding(iced::Padding {
-                left: 8.0,
-                ..iced::Padding::ZERO
-            })
-            .align_y(Alignment::Center),
-        );
-    }
-    log.into()
-}
-
-/// A count with buttons to change it, which stops at `least`.
-fn stepper<'a>(
-    label: String,
-    value: u32,
-    least: u32,
-    on_step: fn(bool) -> Action,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
-    let step = |label: &'static str, up: bool| {
-        let mut step = crate::ui::controls::quiet_button(
-            text(label).size(metrics.label()).center().width(Fill),
-        )
-        .padding([2, 0])
-        .width(28);
-        if up || value > least {
-            step = step.on_press(msg(on_step(up)));
-        }
-        step
-    };
-    row![
-        text(label)
-            .size(metrics.label() - 1.0)
-            .style(medium)
-            .width(Fill),
-        step("−", false),
-        text(value.to_string())
-            .size(metrics.label())
-            .center()
-            .width(28),
-        step("+", true),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center)
+    .spacing(6)
     .into()
 }
 
@@ -2021,7 +2023,7 @@ mod tests {
             assert!(ui.find(label).is_err(), "{label}");
         }
         assert!(ui.find("Thought about it, didn't do it").is_err());
-        assert!(ui.find("Times done").is_err(), "until it was done");
+        assert!(ui.find("+ Did it").is_err(), "until it was done");
     }
 
     #[test]
@@ -2049,18 +2051,22 @@ mod tests {
             "Slipped",
             "Skipped",
             "+ Times slipped",
-            "+ Thought about it, didn't do it",
             "Value in cigarettes",
             "Target: At most 5 cigarettes per day",
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
         assert!(ui.find("Not sure").is_err(), "the logs answer it");
+        assert!(
+            ui.find("+ Thought about it, didn't do it").is_err(),
+            "\"Slipped\" shows only its own log"
+        );
     }
 
     #[test]
     fn the_popup_logs_each_slip_and_urge_with_its_time() {
         use chrono::{NaiveTime, TimeZone};
+        use model::LogEntry;
         let mut state = state();
         add(&mut state, "h", "Smoke");
         let today = state.habits.today();
@@ -2076,50 +2082,154 @@ mod tests {
                 .unwrap()
                 .with_timezone(&chrono::Utc)
         };
-        let time = |hour, minute| Some(NaiveTime::from_hms_opt(hour, minute, 7).unwrap());
+        let time = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0);
+        let dialog = |state: &State| state.habits.day_dialog.clone().unwrap();
 
         act(&mut state, Action::OpenDay("h".into(), today));
+        assert_eq!(dialog(&state).view, Outcome::NotDone, "avoided shows first");
         {
             let _clock = crate::clock::freeze(at(9, 30));
-            act(&mut state, Action::LogResisted);
+            act(&mut state, Action::LogAdd(Log::Resisted));
+        }
+        let times: Vec<String> = dialog(&state)
+            .resisted
+            .into_iter()
+            .map(|row| row.time)
+            .collect();
+        assert_eq!(times, ["", "09:30"]);
+        {
+            let ui = dialog_ui(&state);
+            let mut ui = ui;
+            assert!(ui.find("+ Thought about it, didn't do it").is_ok());
+            assert!(ui.find("+ Times slipped").is_err(), "only its own log");
+        }
+
+        act(&mut state, Action::DayOutcome(Outcome::Done));
+        assert_eq!(
+            dialog(&state).outcome,
+            Outcome::NotDone,
+            "nothing slipped yet"
+        );
+        assert_eq!(
+            dialog(&state).resisted.len(),
+            2,
+            "switching keeps the other log"
+        );
+        {
+            let mut ui = dialog_ui(&state);
+            assert!(ui.find("+ Times slipped").is_ok());
+            assert!(ui.find("+ Thought about it, didn't do it").is_err());
         }
         {
             let _clock = crate::clock::freeze(at(14, 5));
-            act(&mut state, Action::LogSlip);
-            act(&mut state, Action::LogSlip);
+            act(&mut state, Action::LogAdd(Log::Happened));
+            act(&mut state, Action::LogAdd(Log::Happened));
         }
-        let dialog = state.habits.day_dialog.as_ref().unwrap();
-        assert_eq!(dialog.outcome, Outcome::Done, "a slip answers it");
-        assert_eq!(dialog.thoughts, vec![None, time(9, 30)]);
-        assert_eq!(dialog.slips, vec![time(14, 5), time(14, 5)]);
-        assert!(dialog_ui(&state).find("No time recorded").is_ok());
-
-        act(&mut state, Action::UnlogSlip(0));
+        assert_eq!(dialog(&state).outcome, Outcome::Done, "a slip answers it");
+        act(
+            &mut state,
+            Action::LogTime(Log::Happened, 0, "8.05p".into()),
+        );
+        act(&mut state, Action::LogTime(Log::Happened, 1, "11p".into()));
+        act(&mut state, Action::DayOutcome(Outcome::NotDone));
+        assert_eq!(dialog(&state).outcome, Outcome::Done, "still slipped");
         act(&mut state, Action::SaveDay);
+
         let habit = state.habits.library.habit("h").unwrap();
         assert_eq!(
             state.habits.computed("h").unwrap().status(today),
-            Status::Slipped(1)
+            Status::Slipped(2)
         );
-        assert_eq!(habit.slips_on(today), vec![time(14, 5)]);
-        assert_eq!(habit.resisted_log_on(today), vec![None, time(9, 30)]);
+        assert_eq!(
+            habit.happened_log_on(today),
+            vec![
+                LogEntry::new(time(20, 5), None),
+                LogEntry::new(time(23, 0), None)
+            ]
+        );
+        assert_eq!(habit.resisted_on(today), 2);
+        assert_eq!(
+            habit.resisted_log_on(today)[1],
+            LogEntry::new(time(9, 30), None)
+        );
 
         act(&mut state, Action::OpenDay("h".into(), today));
-        act(&mut state, Action::UnlogSlip(0));
-        assert_eq!(
-            state.habits.day_dialog.as_ref().unwrap().outcome,
-            Outcome::NotDone,
-            "with no slips left it was avoided"
+        assert_eq!(dialog(&state).view, Outcome::Done, "slips show first");
+        act(
+            &mut state,
+            Action::LogTime(Log::Happened, 0, "half eight".into()),
         );
-        act(&mut state, Action::UnlogResisted(0));
+        act(&mut state, Action::SaveDay);
+        assert!(dialog(&state).error.unwrap().contains("half eight"));
+        act(&mut state, Action::LogRemove(Log::Happened, 0));
+        act(&mut state, Action::LogRemove(Log::Happened, 0));
+        assert_eq!(dialog(&state).outcome, Outcome::NotDone, "none left");
+        act(&mut state, Action::LogRemove(Log::Resisted, 0));
         act(&mut state, Action::SaveDay);
         let habit = state.habits.library.habit("h").unwrap();
         assert_eq!(
             state.habits.computed("h").unwrap().status(today),
             Status::Clean
         );
-        assert!(habit.slips_on(today).is_empty());
-        assert_eq!(habit.resisted_log_on(today), vec![time(9, 30)]);
+        assert!(habit.happened_log_on(today).is_empty());
+        assert_eq!(habit.resisted_on(today), 1);
+    }
+
+    #[test]
+    fn each_entry_records_how_long_in_the_unit() {
+        use chrono::NaiveTime;
+        use model::LogEntry;
+        for kind in [Kind::No, Kind::Yes] {
+            let mut state = state();
+            add(&mut state, "h", "Reading");
+            let today = state.habits.today();
+            let habit = state.habits.library.habit_mut("h").unwrap();
+            habit.kind = kind;
+            habit.created = Some(today);
+            habit.measure = Some(model::Measure {
+                unit: "mins".into(),
+                target: None,
+                days: 1,
+            });
+            state.habits.recompute();
+            act(&mut state, Action::OpenDay("h".into(), today));
+            act(&mut state, Action::DayOutcome(Outcome::Done));
+            if kind == Kind::No {
+                act(&mut state, Action::LogAdd(Log::Happened));
+            }
+            act(&mut state, Action::LogAdd(Log::Happened));
+            act(
+                &mut state,
+                Action::LogTime(Log::Happened, 0, "8:05pm".into()),
+            );
+            act(&mut state, Action::LogAmount(Log::Happened, 0, "6".into()));
+            act(
+                &mut state,
+                Action::LogTime(Log::Happened, 1, "23:00".into()),
+            );
+            act(
+                &mut state,
+                Action::LogAmount(Log::Happened, 1, "12m".into()),
+            );
+            {
+                let mut ui = dialog_ui(&state);
+                assert!(ui.find("mins").is_ok(), "{kind:?}");
+                assert!(ui.find("Total: 18 mins").is_ok(), "{kind:?}");
+            }
+            act(&mut state, Action::SaveDay);
+            assert!(state.habits.day_dialog.is_none(), "{kind:?}");
+            let habit = state.habits.library.habit("h").unwrap();
+            assert_eq!(
+                habit.happened_log_on(today),
+                vec![
+                    LogEntry::new(NaiveTime::from_hms_opt(20, 5, 0), Some(6.0)),
+                    LogEntry::new(NaiveTime::from_hms_opt(23, 0, 0), Some(12.0)),
+                ],
+                "{kind:?}"
+            );
+            assert_eq!(habit.value_on(today), Some(18.0), "{kind:?}");
+            assert_eq!(habit.times_on(today), 2, "{kind:?}");
+        }
     }
 
     #[test]
@@ -2164,6 +2274,7 @@ mod tests {
         act(&mut state, Action::DayOutcome(Outcome::Done));
         act(&mut state, Action::StepTimes(true));
         act(&mut state, Action::StepTimes(true));
+        act(&mut state, Action::StepTimes(true));
         act(&mut state, Action::StepTimes(false));
         act(&mut state, Action::SaveDay);
         assert_eq!(
@@ -2183,7 +2294,7 @@ mod tests {
         state.habits.recompute();
         act(&mut state, Action::OpenDay("h".into(), today));
         act(&mut state, Action::DayOutcome(Outcome::Done));
-        assert_eq!(state.habits.day_dialog.as_ref().unwrap().times, 3);
+        assert_eq!(state.habits.day_dialog.as_ref().unwrap().times(), 3);
         act(&mut state, Action::StepTimes(false));
         act(&mut state, Action::SaveDay);
         assert_eq!(
@@ -2194,7 +2305,7 @@ mod tests {
         for _ in 0..5 {
             act(&mut state, Action::StepTimes(false));
         }
-        assert_eq!(state.habits.day_dialog.as_ref().unwrap().times, 1);
+        assert_eq!(state.habits.day_dialog.as_ref().unwrap().times(), 1);
     }
 
     #[test]
@@ -2562,6 +2673,7 @@ mod tests {
         assert!(computed.score(today) > 0.0, "already going well");
         act(&mut state, Action::OpenDay(id.clone(), today));
         act(&mut state, Action::DayOutcome(Outcome::Done));
+        act(&mut state, Action::LogAdd(Log::Happened));
         act(&mut state, Action::SaveDay);
         assert_eq!(
             state.habits.computed(&id).unwrap().status(today),
@@ -2666,7 +2778,7 @@ mod tests {
             act(&mut state, Action::OpenDay(id.into(), today));
             act(&mut state, Action::DayOutcome(Outcome::Done));
             if id == "h" {
-                assert!(dialog_ui(&state).find("Times done").is_ok());
+                assert!(dialog_ui(&state).find("+ Did it").is_ok());
                 act(&mut state, Action::StepTimes(true));
                 act(&mut state, Action::StepTimes(true));
             }

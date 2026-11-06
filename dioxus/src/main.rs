@@ -970,6 +970,24 @@ fn App() -> Element {
                                 }
                             }
                         }
+                        h3 { class: "settings-heading", "Database sync" }
+                        label { r#for: "settings-sync-url", "Sync server URL (blank disables sync)" }
+                        input {
+                            id: "settings-sync-url",
+                            class: "client-input",
+                            placeholder: "https://sync.example.com",
+                            value: "{config().database_sync.url}",
+                            onchange: move |event: FormEvent| {
+                                match timeslay_core::config::save_database_sync_url(&event.value()) {
+                                    Ok(()) => {
+                                        config.set(day::load_config());
+                                        settings_error.set(None);
+                                    }
+                                    Err(error) => settings_error.set(Some(error.to_string())),
+                                }
+                            },
+                        }
+                        p { class: "hint", "{database_sync_status}" }
                         reminders::ReminderSection { config }
                         h3 { class: "settings-heading", "Google" }
                         form {

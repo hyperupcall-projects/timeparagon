@@ -18,7 +18,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-
 pub use timeslay_core::sounds::{CHANNELS, Pcm, SAMPLE_RATE, Tone};
 
 /// A request to play something.
