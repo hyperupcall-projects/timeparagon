@@ -74,6 +74,19 @@ pipewire-audio = ["dep:pipewire"]
 # own when no adapter is available.
 wgpu = ["iced/wgpu"]
 
+# Debug builds used to carry full DWARF for everything: 745 of the 914 MiB of a
+# debug `timeslay` binary was debug info, and the tree holds ~250 binaries (one
+# per test/example target), which is what made `target/` ~80 GiB. Keep file:line
+# for our own crates so backtraces stay useful, but drop type and variable info.
+[profile.dev]
+debug = "line-tables-only"
+
+# Third-party crates are the bulk of the graph and of its DWARF, and we almost
+# never step through them. The `"*"` wildcard does not cover workspace members,
+# so `timeslay`, `timeslay-core`, `dioxus` and `migrate` keep their debug info.
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 opt-level = "z"
 lto = "fat"
