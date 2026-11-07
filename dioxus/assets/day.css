@@ -1672,68 +1672,856 @@ textarea {
     font-family: monospace;
 }
 
-.habit-row {
+/* ---------------------------------------------------------------- habits */
+
+/*
+ * The Habits tab, as the desktop lays it out (src/ui/habits.rs): the list fills
+ * the tab, and a habit's page or form takes its place with Back at the top.
+ * `--hc` is the habit's own color and `--hc-ink` the ink on it; both are
+ * `--habit-*` palette variables, which follow the theme.
+ */
+
+.habits-screen {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--hairline);
+    position: relative;
 }
 
-.habit-head {
+.habit-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.habit-list-page {
+    gap: 8px;
+    padding: 12px 12px 0;
+}
+
+.habit-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.habit-list-title {
+    flex: 1;
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.habit-icon-button {
+    appearance: none;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    cursor: pointer;
+}
+
+.habit-icon-button:active {
+    background: var(--pressed);
+    border-color: var(--hairline);
+}
+
+.habit-glyph {
+    flex: none;
+    opacity: 0.65;
+}
+
+.habit-plus {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.habit-error {
+    margin: 0;
+    color: var(--danger);
+}
+
+.habit-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 6px 10px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    background: var(--accent-soft);
+    color: var(--on-accent-soft);
+    border-radius: var(--radius-control);
+}
+
+.habit-notice-close {
+    appearance: none;
+    margin-left: auto;
+    padding: 0 4px;
+    font-size: 18px;
+    color: inherit;
+    background: none;
+    border: none;
+}
+
+.habit-empty,
+.habit-hint {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.habit-days-head {
+    display: flex;
+    align-items: center;
+    padding: 0 9px;
+}
+
+.habit-days-spacer {
+    flex: 1;
+}
+
+.habit-day-head {
+    width: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 11px;
+    line-height: 1.25;
+    color: var(--muted);
+}
+
+.habit-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+.habit-row {
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+}
+
+.habit-row.dragging {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-floating);
+}
+
+.habit-identity {
+    appearance: none;
+    flex: 1;
+    min-width: 0;
+    height: 44px;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 0;
-    border: none;
-    background: none;
     text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    -webkit-touch-callout: none;
+    user-select: none;
 }
 
-.habit-days {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 4px;
+.habit-ring {
+    flex: none;
 }
 
-.habit-day {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
+.habit-name {
     min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 15px;
+    color: var(--hc);
 }
 
-.habit-day-name {
-    font-size: 11px;
+.habit-day-button {
+    appearance: none;
+    flex: none;
+    width: 40px;
+    height: 44px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    cursor: pointer;
+}
+
+.habit-day-button:active {
+    background: var(--pressed);
+    border-color: var(--hairline);
+}
+
+.habit-mark-glyph {
+    display: block;
+}
+
+.habit-section {
+    display: flex;
+    align-items: center;
+    padding-top: 6px;
+}
+
+.habit-section-fold {
+    appearance: none;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    font-weight: 700;
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    cursor: pointer;
+}
+
+.habit-section-fold:active {
+    background: var(--pressed);
+}
+
+.habit-section-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.habit-section-count {
+    font-size: 13px;
+    font-weight: 400;
     color: var(--muted);
 }
 
-.habit-mark {
-    width: 100%;
-    height: 40px;
-    border: 1px solid var(--edge);
-    border-radius: 8px;
+.habit-section-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 6px;
+}
+
+.habit-quiet-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* A drop-down below the toolbar or bar, at the right. */
+.habit-menu-dismiss {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+}
+
+.habit-menu {
+    position: absolute;
+    top: 52px;
+    right: 12px;
+    z-index: 21;
+    width: min(220px, calc(100% - 24px));
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
     background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-floating);
 }
 
-.habit-mark.done {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--on-accent);
+.habit-menu-item {
+    appearance: none;
+    min-height: 38px;
+    padding: 6px 10px;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    cursor: pointer;
 }
 
-.habit-amount {
-    width: 100%;
-    padding: 4px;
-    text-align: center;
+.habit-menu-item:active {
+    background: var(--pressed);
+    border-color: var(--hairline);
 }
 
-.habit-details,
-.habit-form {
+.habit-menu-label {
+    padding: 4px 10px 0;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.habit-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 0 6px;
+}
+
+.habit-check input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+}
+
+/* -------------------------------------------------------- a habit's page */
+
+/* Loop's colored bar. A dark theme keeps it black. */
+.habit-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    color: #fff;
+    background: color-mix(in srgb, #000 var(--habit-bar-black), var(--hc));
+}
+
+.habit-bar-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.habit-bar-button,
+.habit-bar-save {
+    appearance: none;
+    min-width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    color: #fff;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.habit-bar-button:active,
+.habit-bar-save:active {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.habit-bar .habit-glyph {
+    opacity: 1;
+}
+
+.habit-page-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+.habit-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 16px;
+    background: var(--accent-soft);
+    color: var(--on-accent-soft);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+}
+
+.habit-summary p {
+    margin: 0;
+}
+
+.habit-question {
+    font-size: 16px;
+    color: var(--hc);
+}
+
+.habit-goal {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.habit-goal,
+.habit-summary-line {
+    font-size: 14px;
+    opacity: 0.75;
+}
+
+.habit-notes {
+    white-space: pre-wrap;
+}
+
+.habit-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding-top: 3px;
+}
+
+.habit-card {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 0;
+    padding: 12px 14px;
+    background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+}
+
+.habit-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.habit-card-title {
+    flex: 1;
+    margin: 0;
+    font-size: 17px;
+    font-weight: 400;
+    color: var(--hc);
+}
+
+.habit-spinner {
+    width: auto;
+    flex: none;
+    min-height: 34px;
+    padding: 4px 8px;
+    font-size: 14px;
+}
+
+.habit-overview {
+    display: flex;
+    align-items: center;
+}
+
+.habit-overview-ring {
+    flex: none;
+    padding: 0 16px 0 6px;
+}
+
+.habit-stat {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.habit-stat-value {
+    font-size: 16px;
+    color: var(--hc);
+}
+
+.habit-stat-name {
+    font-size: 13px;
+    color: var(--muted);
+}
+
+/* A chart: a grid across the card, the plot that scrolls over it, and any
+   labels that stay at the card's edge. */
+.habit-chart {
+    position: relative;
+    overflow: hidden;
+}
+
+.habit-chart-grid,
+.habit-chart-fixed {
+    position: absolute;
+    top: 0;
+    pointer-events: none;
+    overflow: visible;
+}
+
+.habit-chart-grid {
+    left: 0;
+}
+
+.habit-chart-fixed {
+    left: 0;
+    z-index: 1;
+}
+
+.habit-chart-names {
+    left: auto;
+    right: 0;
+}
+
+/* Reversed, so the chart opens on its newest end at the right. */
+.habit-chart-scroll {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    flex-direction: row-reverse;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.habit-chart-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+.habit-chart-plot {
+    flex: none;
+    overflow: visible;
+}
+
+.habit-calendar-day {
+    cursor: pointer;
+}
+
+.habit-streaks {
+    display: flex;
+    flex-direction: column;
+}
+
+.habit-streak {
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 11px;
+}
+
+.habit-streak-date {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    color: var(--habit-medium);
+}
+
+.habit-streak-date.start {
+    text-align: right;
+}
+
+/* Dates make way for the bars on a narrow screen, as they do in Loop. */
+@media (max-width: 330px) {
+    .habit-streak-date {
+        display: none;
+    }
+}
+
+.habit-streak-bar {
+    flex: none;
+    width: max(28px, calc((100% - 180px) * var(--share)));
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+}
+
+.habit-event {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.habit-event-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.habit-event-title {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.habit-event-when {
+    font-size: 13px;
+    color: var(--muted);
+}
+
+/* -------------------------------------------------------- add and edit page */
+
+.habit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 14px;
+}
+
+.habit-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.habit-field-label {
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.habit-choices {
+    display: flex;
+    gap: 4px;
+}
+
+.habit-choices .btn {
+    flex: 1;
+}
+
+.habit-samples {
+    display: flex;
+    gap: 4px;
+}
+
+.habit-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.habit-swatch {
+    appearance: none;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.habit-swatch[aria-pressed="true"] {
+    border-color: var(--text);
+    box-shadow: 0 0 0 2px var(--bg) inset;
+}
+
+.habit-frequency {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.habit-radio {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+}
+
+.habit-radio input[type="radio"] {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.habit-number {
+    width: 56px;
+    text-align: center;
+}
+
+.habit-weekdays {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+
+.habit-weekdays .btn {
+    min-width: 42px;
+}
+
+.habit-toggle {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 0;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.habit-toggle-label {
+    flex: 1;
+}
+
+.habit-toggle[aria-checked="true"] .source-switch {
+    background: var(--accent);
+    border-color: var(--accent-edge);
+}
+
+.habit-toggle[aria-checked="true"] .source-knob {
+    background: var(--on-accent);
+    transform: translateX(18px);
+}
+
+.habit-measure {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding-top: 6px;
+}
+
+.habit-periods {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 16px;
+}
+
+.habit-notes-input {
+    min-height: 100px;
+    resize: vertical;
+}
+
+/* ------------------------------------------------------------------ dialogs */
+
+.habit-dialog-backdrop {
+    align-items: center;
+    padding: 16px;
+}
+
+.habit-dialog {
+    width: min(340px, 100%);
+    max-height: 88vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-floating);
+}
+
+.habit-dialog-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 400;
+}
+
+.habit-outcomes {
+    display: flex;
+    gap: 4px;
+}
+
+.habit-outcomes .btn {
+    flex: 1;
+    min-width: 0;
+    padding-left: 2px;
+    padding-right: 2px;
+}
+
+.habit-log {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.habit-log-add {
+    text-align: left;
+}
+
+.habit-log-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.habit-log-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.habit-log-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.habit-log-time {
+    width: 96px;
+    flex: none;
+}
+
+.habit-log-time.wide {
+    width: auto;
+    flex: 1;
+}
+
+.habit-log-amount {
+    width: 64px;
+    flex: none;
+}
+
+.habit-log-unit {
+    flex: 1;
+    min-width: 0;
+}
+
+.habit-log-remove {
+    appearance: none;
+    width: 30px;
+    height: 36px;
+    flex: none;
+    margin-left: auto;
+    font-size: 18px;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.habit-log-note {
+    width: calc(100% - 36px);
+}
+
+.habit-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.habit-dialog-actions.even .btn {
+    flex: 1;
 }
 
 .todo-row {

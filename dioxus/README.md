@@ -1,7 +1,7 @@
 # TimeSlay
 
-The mobile application is built around the day view, with the rest of the app in
-sheets over it:
+The mobile application is built around the day view, with the Habits tab as its
+own screen and the rest of the app in sheets over it:
 
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
 - Notes, with Markdown, colors, connections and Turso sync.
@@ -10,7 +10,10 @@ sheets over it:
 - Overdue and Inbox filters on the Tasks tab.
 - Joining meetings and answering invitations.
 - Todos, the notepad, brain dumps and projects, shared through Turso.
-- The habit tracker.
+- The habit tracker, with the desktop's features: the list with sections, sorting
+  and filters (hold a row to drag it in manual order), each habit's page with its
+  charts, notes and calendar events, the add and edit form, the day dialog with
+  its logs, archiving, deleting and CSV export (to the Download folder).
 - Reminders for events, tasks, time blocks, habits, sleep and travel, with a
   sound per kind (see [docs/reminders.md](../docs/reminders.md)).
 
@@ -40,7 +43,7 @@ own sources of truth. Settings in `config.toml` stay local to each device.
 
 These stay on the desktop: the dock and panel, global shortcuts, alarms and the
 Pomodoro timer (neither runs in the background here yet), voice input, People,
-habit charts, and the Slack and browser integrations, which reach the phone as
+and the Slack and browser integrations, which reach the phone as
 ordinary tasks.
 
 Both apps share data and code via the `timeslay-core` crate:
