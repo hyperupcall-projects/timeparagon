@@ -570,44 +570,104 @@ pub(super) fn day_cell<'a>(
     }
 }
 
-/// The calendar or app-specific type shown beneath an item's title.
-pub(crate) fn event_source<'a>(
-    state: &State,
-    event: &Event,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
+/// The app-specific kind of an item ("Habit", "Task", …) and the color
+/// configured for that kind, or `None` for an event on another calendar.
+pub(crate) fn event_kind(state: &State, event: &Event) -> Option<(&'static str, Color)> {
+    let settings = &state.config.calendar;
     let calendar = state
         .calendar
         .calendars
         .iter()
         .find(|calendar| calendar.id == event.calendar_id);
-    let managed = state.config.calendar.app_calendar.as_deref() == Some(&event.calendar_id)
+    let managed = settings.app_calendar.as_deref() == Some(&event.calendar_id)
         || calendar.is_some_and(|calendar| {
             crate::config::CalendarSettings::is_app_calendar_name(&calendar.name)
         });
-    let kind = if event.details.sleep.is_some() {
-        Some("Sleep")
+    if event.details.sleep.is_some() {
+        Some(("Sleep", settings.sleep_color()))
     } else if event.details.habit {
-        Some("Habit")
-    } else if event.is_task() || event.details.scheduled.is_some() {
-        Some("Task")
+        Some(("Habit", settings.habit_color()))
+    } else if event.details.scheduled.is_some() {
+        Some(("Task", settings.task_event_color()))
+    } else if event.is_task() {
+        Some((
+            "Task",
+            settings
+                .task_color(&event.calendar_id)
+                .unwrap_or(colors::TASK),
+        ))
     } else if managed {
-        Some(if event.all_day { "Event" } else { "Time Block" })
+        Some(if event.all_day {
+            ("Event", settings.event_color())
+        } else {
+            ("Time Block", settings.time_block_color())
+        })
     } else {
         None
-    };
-    let label = if let Some(kind) = kind {
-        format!("Type: {kind}")
-    } else {
-        format!(
-            "Calendar: {}",
-            calendar.map_or(event.calendar_id.as_str(), |calendar| calendar
-                .name
-                .as_str())
-        )
-    };
-    text(label)
-        .size(metrics.label())
-        .style(text::secondary)
+    }
+}
+
+/// A small pill naming an item's kind, in that kind's configured color.
+pub(crate) fn kind_chip<'a>(kind: &'static str, color: Color, metrics: &Metrics) -> Element<'a, Message> {
+    let ink = on_color(color);
+    container(text(kind).size(metrics.label() - 1.0).color(ink).wrapping(text::Wrapping::None))
+        .padding([2.0, 8.0])
+        .style(move |_| container::Style {
+            background: Some(color.into()),
+            border: iced::Border {
+                color: timeslay_core::theme::EVENT_EDGE,
+                width: 1.0,
+                radius: 999.0.into(),
+            },
+            ..container::Style::default()
+        })
         .into()
+}
+
+/// An item's title with its kind chip pinned to the top-right, so the chip
+/// stays put however many lines the title wraps onto.
+pub(crate) fn titled<'a>(
+    state: &State,
+    event: &Event,
+    title: impl Into<Element<'a, Message>>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let title = container(title).width(Fill);
+    match event_kind(state, event) {
+        Some((kind, color)) => row![title, kind_chip(kind, color, metrics)]
+            .spacing(8)
+            .align_y(Alignment::Start)
+            .width(Fill)
+            .into(),
+        None => title.into(),
+    }
+}
+
+/// The calendar an item belongs to, shown beneath its title when it has no
+/// app-specific kind (that goes in a chip beside the title instead).
+pub(crate) fn event_source<'a>(
+    state: &State,
+    event: &Event,
+    metrics: &Metrics,
+) -> Option<Element<'a, Message>> {
+    if event_kind(state, event).is_some() {
+        return None;
+    }
+    let calendar = state
+        .calendar
+        .calendars
+        .iter()
+        .find(|calendar| calendar.id == event.calendar_id);
+    let label = format!(
+        "Calendar: {}",
+        calendar.map_or(event.calendar_id.as_str(), |calendar| calendar
+            .name
+            .as_str())
+    );
+    Some(
+        text(label)
+            .size(metrics.label())
+            .style(text::secondary)
+            .into(),
+    )
 }
