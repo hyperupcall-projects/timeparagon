@@ -1468,25 +1468,29 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
 
     let unit = habit.measure.as_ref().map(|measure| measure.unit.as_str());
     if dialog.shows_happened() {
-        let add = match habit.kind {
-            Kind::No => "Times slipped".to_owned(),
-            Kind::Yes if dialog.goal > 1 => {
-                format!("Did it ({} of {})", dialog.times(), dialog.goal)
-            }
-            Kind::Yes => "Did it".to_owned(),
+        let add = if habit.kind == Kind::Yes && dialog.goal > 1 {
+            format!("Add entry ({} of {})", dialog.times(), dialog.goal)
+        } else {
+            "Add entry".to_owned()
         };
         body = body.push(day_log(dialog, Log::Happened, add, unit, metrics));
     } else if dialog.avoid && dialog.outcome != Outcome::Skipped {
         body = body.push(day_log(
             dialog,
             Log::Resisted,
-            "Thought about it, didn't do it".to_owned(),
-            None,
+            "Add entry".to_owned(),
+            unit,
             metrics,
         ));
     }
-    if let Some(measure) = &habit.measure {
-        let mut field = if dialog.happened.is_empty() || dialog.outcome != Outcome::Done {
+    // Not having done a habit to do leaves nothing to measure.
+    let didnt = habit.kind == Kind::Yes && dialog.outcome == Outcome::NotDone;
+    if let Some(measure) = habit.measure.as_ref().filter(|_| !didnt) {
+        // On a habit to avoid, "Avoided it" records amounts on its entries.
+        let avoided = dialog.avoid && !dialog.shows_happened();
+        let mut field = if avoided {
+            column![]
+        } else if dialog.happened.is_empty() || dialog.outcome != Outcome::Done {
             let unit = if measure.unit.is_empty() {
                 "Value".to_owned()
             } else {
@@ -2021,8 +2025,7 @@ mod tests {
         for label in ["Clear", "Skipped", "Not sure", "Slipped", "Avoided it"] {
             assert!(ui.find(label).is_err(), "{label}");
         }
-        assert!(ui.find("Thought about it, didn't do it").is_err());
-        assert!(ui.find("+ Did it").is_err(), "until it was done");
+        assert!(ui.find("+ Add entry").is_err(), "until it was done");
     }
 
     #[test]
@@ -2049,17 +2052,13 @@ mod tests {
             "Avoided it",
             "Slipped",
             "Skipped",
-            "+ Times slipped",
+            "+ Add entry",
             "Value in cigarettes",
             "Target: At most 5 cigarettes per day",
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
         assert!(ui.find("Not sure").is_err(), "the logs answer it");
-        assert!(
-            ui.find("+ Thought about it, didn't do it").is_err(),
-            "\"Slipped\" shows only its own log"
-        );
     }
 
     #[test]
@@ -2099,8 +2098,7 @@ mod tests {
         {
             let ui = dialog_ui(&state);
             let mut ui = ui;
-            assert!(ui.find("+ Thought about it, didn't do it").is_ok());
-            assert!(ui.find("+ Times slipped").is_err(), "only its own log");
+            assert!(ui.find("+ Add entry").is_ok());
         }
 
         act(&mut state, Action::DayOutcome(Outcome::Done));
@@ -2116,8 +2114,7 @@ mod tests {
         );
         {
             let mut ui = dialog_ui(&state);
-            assert!(ui.find("+ Times slipped").is_ok());
-            assert!(ui.find("+ Thought about it, didn't do it").is_err());
+            assert!(ui.find("+ Add entry").is_ok());
         }
         {
             let _clock = crate::clock::freeze(at(14, 5));
@@ -2329,9 +2326,46 @@ mod tests {
             Outcome::Done
         );
         act(&mut state, Action::DayOutcome(Outcome::NotDone));
+        assert!(
+            dialog_ui(&state).find("Value in miles").is_err(),
+            "\"Didn't\" has nothing to measure"
+        );
         act(&mut state, Action::SaveDay);
         let saved = entry(&state, "h", today);
-        assert_eq!((saved.outcome, saved.value), (Outcome::NotDone, Some(1.0)));
+        assert_eq!((saved.outcome, saved.value), (Outcome::NotDone, None));
+    }
+
+    #[test]
+    fn each_resisted_urge_records_an_amount() {
+        let mut state = state();
+        add(&mut state, "h", "Snack");
+        let today = state.habits.today();
+        let habit = state.habits.library.habit_mut("h").unwrap();
+        habit.kind = Kind::No;
+        habit.measure = Some(model::Measure {
+            unit: "lbs".into(),
+            target: None,
+            days: 1,
+        });
+        state.habits.recompute();
+        act(&mut state, Action::OpenDay("h".into(), today));
+        act(&mut state, Action::LogAdd(Log::Resisted));
+        assert!(dialog_ui(&state).find("lbs").is_ok());
+        act(&mut state, Action::LogAmount(Log::Resisted, 0, "2.5".into()));
+        act(&mut state, Action::SaveDay);
+        let log = state
+            .habits
+            .library
+            .habit("h")
+            .unwrap()
+            .resisted_log_on(today);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].amount(), Some(2.5));
+        act(&mut state, Action::OpenDay("h".into(), today));
+        assert!(
+            dialog_ui(&state).find("Value in lbs").is_err(),
+            "\"Avoided it\" has no value of its own"
+        );
     }
 
     #[test]
@@ -2774,7 +2808,7 @@ mod tests {
             act(&mut state, Action::OpenDay(id.into(), today));
             act(&mut state, Action::DayOutcome(Outcome::Done));
             if id == "h" {
-                assert!(dialog_ui(&state).find("+ Did it").is_ok());
+                assert!(dialog_ui(&state).find("+ Add entry").is_ok());
                 act(&mut state, Action::StepTimes(true));
                 act(&mut state, Action::StepTimes(true));
             }
