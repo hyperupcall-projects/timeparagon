@@ -4,7 +4,7 @@
 //! inbox until it is triaged, which here means being given a day: scheduling
 //! it, timeblocking it, or finishing it all take it out of the inbox, as does
 //! moving it to another list (the closest thing Google Tasks has to a project).
-mod creation;
+pub(crate) mod creation;
 pub mod preview;
 
 use chrono::{Duration, Local, NaiveDate};
@@ -28,6 +28,7 @@ const MAX_TITLE_CHARS: usize = 1024;
 #[derive(Default)]
 pub struct Inbox {
     pub voice: crate::voice::Session,
+    pub image: crate::image_input::Session,
     /// Inactive creation forms, retained while another type is selected.
     pub(crate) entry_drafts: Vec<calendar::Draft>,
     previous_calendar_draft: Option<calendar::Draft>,
@@ -98,6 +99,7 @@ impl Draft {
 #[derive(Debug, Clone)]
 pub enum Action {
     Voice(crate::voice::Action),
+    Image(crate::image_input::Action),
     Sort(InboxSort),
     OverdueSort(InboxSort),
     /// Open the new-task popup.
@@ -291,6 +293,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             Task::done(Message::Event(crate::app::EventMessage::EventOpened(id)))
         }
         Action::Voice(action) => crate::voice::update(state, action),
+        Action::Image(action) => crate::image_input::update(state, action),
         Action::Sort(sort) => {
             state.config.calendar.inbox_sort = sort;
             crate::app::queue_save(state)
@@ -392,6 +395,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             fetched(state, lookup, result);
             Task::none()
         }
+        Action::Create if state.inbox.image.busy => Task::none(),
         Action::Create => {
             if state.inbox.draft.as_ref().and_then(|d| d.kind).is_some() {
                 creation::create(state)
@@ -484,6 +488,7 @@ fn blank_event() -> Event {
 
 fn close_draft(state: &mut State) {
     state.inbox.voice.cancel();
+    state.inbox.image = Default::default();
     state.inbox.preview = None;
     state.calendar.draft = state.inbox.previous_calendar_draft.take();
     state.inbox.entry_drafts.clear();
@@ -845,7 +850,9 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
             if event.is_task() {
                 state.inbox.created_list = Some(event.calendar_id.clone());
             }
-            close_draft(state);
+            if !crate::image_input::saved(state) {
+                close_draft(state);
+            }
             state.timeblocking.revision += 1;
             state.calendar.events.retain(|other| other.id != event.id);
             if event.is_task() {
