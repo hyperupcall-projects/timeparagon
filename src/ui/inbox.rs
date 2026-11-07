@@ -730,7 +730,11 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
             let mut control = button(text(label).size(metrics.label()).center())
                 .width(Fill)
                 .style(crate::ui::controls::nav(kind == value));
-            if !draft.saving && !draft.fetching && !state.inbox.voice.active() {
+            if !draft.saving
+                && !draft.fetching
+                && !state.inbox.voice.active()
+                && !state.inbox.image.busy
+            {
                 control = control.on_press(msg(Action::KindSelected(value)));
             }
             control
@@ -752,10 +756,14 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
         } else {
             super::calendar::draft_editor(state, metrics)
         };
-        return column![container(types).padding([8, 16]), content]
-            .width(Fill)
-            .height(Fill)
-            .into();
+        return column![
+            container(types).padding([8, 16]),
+            crate::image_input::review(state),
+            content
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into();
     }
     let card = if let Some(preview) = preview {
         // The grid scrolls inside, so the card gets a height of its own.
@@ -764,6 +772,14 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
             .height(iced::Length::Fixed(
                 (metrics.size.height - 32.0).clamp(80.0, 640.0),
             ))
+    } else if draft.kind.is_some() {
+        container(column![
+            crate::image_input::review(state),
+            super::calendar::draft_editor(state, metrics)
+        ])
+        .height(iced::Length::Fixed(
+            (metrics.size.height - 32.0).clamp(80.0, 640.0),
+        ))
     } else {
         container(crate::ui::controls::scrollable(
             container(form(state, draft, metrics)).padding(iced::Padding {
@@ -833,6 +849,9 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
 fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
     let locked = draft.saving;
     let mut body = column![text("New task").size(20)].spacing(8);
+    if state.sidebar.is_none() || state.task_creation_window {
+        body = column![crate::image_input::review(state), body].spacing(8);
+    }
     if let Some(event) = &draft.event {
         body = body.push(super::timeblocking::fields(state, event, metrics));
     }
@@ -873,7 +892,7 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
         })
         .size(metrics.label()),
     );
-    if !draft.saving && !draft.fetching && !state.inbox.voice.active() {
+    if !draft.saving && !draft.fetching && !state.inbox.voice.active() && !state.inbox.image.busy {
         add = add.on_press(msg(Action::Create));
     }
     let mut cancel = button(text("Cancel").size(metrics.label())).style(crate::ui::controls::ghost);
@@ -903,7 +922,8 @@ pub(crate) fn view_in_calendar_button<'a>(
         .draft
         .as_ref()
         .is_none_or(|draft| draft.saving || draft.fetching)
-        || state.inbox.voice.active();
+        || state.inbox.voice.active()
+        || state.inbox.image.busy;
     button(text("View in calendar").size(metrics.label()).center())
         .style(crate::ui::controls::secondary)
         .on_press_maybe((!busy).then_some(msg(Action::Preview(

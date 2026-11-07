@@ -47,4 +47,5 @@ pub mod timeblocking;
 pub mod pomodoro;
 pub mod task_work;
 
+pub mod image_input;
 pub mod voice;
