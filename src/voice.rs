@@ -27,6 +27,7 @@ pub struct Settings {
     pub model: String,
     pub voice_openrouter_model: String,
     pub image_ollama_url: String,
+    pub image_provider: String,
     pub image_ollama_model: String,
     pub image_openrouter_model: String,
     pub extraction_openrouter_model: String,
@@ -40,13 +41,14 @@ impl Default for Settings {
             model: String::new(),
             voice_openrouter_model: String::new(),
             image_ollama_url: "http://localhost:11434".into(),
+            image_provider: "ollama".into(),
             image_ollama_model: String::new(),
             image_openrouter_model: String::new(),
             extraction_openrouter_model: String::new(),
         }
     }
 }
-/// Provider tabs are navigation only; they do not change the running pipeline.
+/// Providers available in the AI input settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Provider {
     #[default]
@@ -101,7 +103,6 @@ pub enum Action {
 #[derive(Default)]
 pub struct Session {
     voice_tab: Provider,
-    image_tab: Option<Provider>,
     extraction_tab: Option<Provider>,
     openrouter_token: Token,
     token_status: Option<&'static str>,
@@ -203,7 +204,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             let session = &mut state.inbox.voice;
             match section {
                 InputSection::Voice => session.voice_tab = provider,
-                InputSection::Image => session.image_tab = Some(provider),
+                InputSection::Image => {
+                    state.config.voice.image_provider = if provider == Provider::OpenRouter {
+                        "openrouter"
+                    } else {
+                        "ollama"
+                    }
+                    .into();
+                    return crate::app::queue_save(state);
+                }
                 InputSection::Extraction => session.extraction_tab = Some(provider),
             }
             return Task::none();
@@ -248,7 +257,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 state.inbox.voice.phase = "Finishing recording".into();
                 return Task::none();
             }
-            if state.inbox.voice.active()
+            if state.inbox.image.busy
+                || state.inbox.voice.active()
                 || state
                     .inbox
                     .draft
@@ -808,6 +818,7 @@ pub fn input<'a>(
             style
         });
     if (!voice.active() || recording)
+        && !state.inbox.image.busy
         && state
             .inbox
             .draft
@@ -817,11 +828,16 @@ pub fn input<'a>(
         mic = mic.on_press(msg(Action::Toggle));
     }
     let mut content = column![
-        row![title, iced::widget::container(mic).id("voice-record")]
-            .spacing(6)
-            .align_y(iced::Center)
+        row![
+            title,
+            iced::widget::container(mic).id("voice-record"),
+            crate::image_input::input_button(state)
+        ]
+        .spacing(6)
+        .align_y(iced::Center)
     ]
     .spacing(4);
+    content = content.push(crate::image_input::sources(state));
     let processing = match voice.phase.as_str() {
         "Transcribing" => Some("Transcribing..."),
         "Extracting task details" => Some("Extracting..."),
@@ -928,7 +944,11 @@ pub fn settings<'a>(state: &'a State) -> iced::Element<'a, Message> {
     if let Some(error) = &voice.error {
         voice_fields = voice_fields.push(text(error).style(text::danger));
     }
-    let image_tab = voice.image_tab.unwrap_or(Provider::Ollama);
+    let image_tab = if settings.image_provider == "openrouter" {
+        Provider::OpenRouter
+    } else {
+        Provider::Ollama
+    };
     let mut image = column![
         heading("Image input"),
         provider_tabs(InputSection::Image, image_tab)
