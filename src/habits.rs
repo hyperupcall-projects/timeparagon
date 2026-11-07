@@ -745,13 +745,18 @@ impl DayDialog {
         let resisted = if self.avoid {
             self.resisted
                 .iter()
-                .map(|row| row.entry(false))
+                .map(|row| row.entry(self.amounts))
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             Vec::new()
         };
         let logged: Vec<f64> = happened.iter().filter_map(LogEntry::amount).collect();
-        let value = self.value.trim();
+        // A habit to do that was not done has no value to record.
+        let value = if !self.avoid && self.outcome == Outcome::NotDone {
+            ""
+        } else {
+            self.value.trim()
+        };
         let value = if !logged.is_empty() {
             Some(logged.iter().sum())
         } else if value.is_empty() {
