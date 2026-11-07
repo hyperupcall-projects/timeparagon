@@ -514,6 +514,8 @@ pub struct LogRow {
     pub time: String,
     /// Blank for no amount.
     pub amount: String,
+    /// Blank for no comment.
+    pub note: String,
 }
 
 impl LogRow {
@@ -525,6 +527,7 @@ impl LogRow {
             amount: entry
                 .amount()
                 .map_or(String::new(), timeslay_core::habits::format_amount),
+            note: entry.note,
         }
     }
 
@@ -547,7 +550,7 @@ impl LogRow {
                     .ok_or_else(|| format!("Could not read \"{amount}\" as a number"))?,
             )
         };
-        Ok(LogEntry::new(at, amount))
+        Ok(LogEntry::new(at, amount).with_note(self.note.trim()))
     }
 }
 
@@ -651,6 +654,7 @@ impl DayDialog {
         LogRow {
             time: crate::calendar::time_format::clock(now_time(), self.time_format),
             amount: String::new(),
+            note: String::new(),
         }
     }
 
@@ -1097,6 +1101,8 @@ pub enum Action {
     LogTime(Log, usize, String),
     /// Edits the amount of an entry in the day dialog.
     LogAmount(Log, usize, String),
+    /// Edits the comment on an entry in the day dialog.
+    LogNote(Log, usize, String),
     DayValue(String),
     /// Records what the dialog holds.
     SaveDay,
@@ -1248,6 +1254,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::LogAmount(log, index, amount) => {
             if let Some(dialog) = &mut state.habits.day_dialog {
                 dialog.edit(log, index, |row| row.amount = amount);
+            }
+            Task::none()
+        }
+        Action::LogNote(log, index, note) => {
+            if let Some(dialog) = &mut state.habits.day_dialog {
+                dialog.edit(log, index, |row| row.note = note);
             }
             Task::none()
         }
