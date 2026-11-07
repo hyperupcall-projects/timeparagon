@@ -5,6 +5,7 @@
 //! it, timeblocking it, or finishing it all take it out of the inbox, as does
 //! moving it to another list (the closest thing Google Tasks has to a project).
 mod creation;
+pub mod preview;
 
 use chrono::{Duration, Local, NaiveDate};
 use iced::Task;
@@ -32,6 +33,8 @@ pub struct Inbox {
     previous_calendar_draft: Option<calendar::Draft>,
     /// The new-task popup, while it is open.
     pub draft: Option<Draft>,
+    /// "View in calendar": what is about to be created, over its day or week.
+    pub preview: Option<preview::Preview>,
     /// The task whose day chooser is open.
     pub scheduling: Option<String>,
     /// The day typed into the open chooser.
@@ -100,6 +103,8 @@ pub enum Action {
     /// Open the new-task popup.
     NewTask,
     KindSelected(calendar::DraftKind),
+    /// The "View in calendar" preview.
+    Preview(preview::PreviewAction),
     Cancel,
     Title(String),
     SyntaxHelp(bool),
@@ -309,6 +314,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             operation::focus(Id::new(TITLE_FIELD))
         }
         Action::KindSelected(kind) => creation::select(state, kind),
+        Action::Preview(action) => preview::update(state, action),
         Action::Cancel => {
             // A task being saved cannot be taken back, so keep its popup up
             // to show whether the save worked.
@@ -478,6 +484,7 @@ fn blank_event() -> Event {
 
 fn close_draft(state: &mut State) {
     state.inbox.voice.cancel();
+    state.inbox.preview = None;
     state.calendar.draft = state.inbox.previous_calendar_draft.take();
     state.inbox.entry_drafts.clear();
     state.inbox.draft = None;

@@ -321,6 +321,9 @@ impl Flash {
 
 pub struct State {
     pub picker: Option<crate::ui::controls::Picker>,
+    /// Local edits still waiting for Google, as last read from the database.
+    /// Refreshed on a timer, so drawing never touches SQLite.
+    pub operations: Result<Vec<timeslay_core::calendar::operations::Operation>, String>,
     /// Keyboard choice in the calendar quick-create popup; None means title entry.
     pub draft_kind_focus: Option<calendar::DraftKind>,
     /// Persistent cursor and selection state for new events, event edits and habits.
@@ -860,6 +863,7 @@ impl State {
 
         Self {
             picker: None,
+            operations: Ok(Vec::new()),
             draft_kind_focus: None,
             task_description: text_editor::Content::new(),
             task_creation_window: false,
@@ -992,6 +996,11 @@ impl State {
     /// built-in themes. It is what tests and previews start from.
     pub fn blank() -> Self {
         Self::new(Config::default(), Catalog::built_in())
+    }
+
+    /// Rereads the queue of edits waiting for Google.
+    pub fn refresh_operations(&mut self) {
+        self.operations = timeslay_core::calendar::operations::list();
     }
 
     pub fn weekly(&self) -> bool {
@@ -1215,6 +1224,10 @@ fn boot_state() -> State {
 
     // Start sync only for the running app; hand-built test states stay offline.
     crate::database_sync::start();
+    // Uploads edits that were saved locally but not yet accepted by Google,
+    // including ones left over from a previous run.
+    timeslay_core::calendar::operations::start();
+    state.refresh_operations();
 
     // Days are kept under the XDG cache directory as well as in memory, so a
     // restart opens on what the last run saw rather than an empty grid. This
@@ -1929,8 +1942,12 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         };
     }
     if state.inbox.draft.is_some() {
-        // Typing into the popup must not reach the clock shortcuts.
+        // Typing into the popup must not reach the clock shortcuts. Escape
+        // leaves the calendar preview first, back to the form it came from.
         return match key.as_ref() {
+            Key::Named(Named::Escape) if state.inbox.preview.is_some() => Some(Message::Inbox(
+                crate::inbox::Action::Preview(crate::inbox::preview::PreviewAction::Close),
+            )),
             Key::Named(Named::Escape) => Some(Message::Inbox(crate::inbox::Action::Cancel)),
             _ => None,
         };

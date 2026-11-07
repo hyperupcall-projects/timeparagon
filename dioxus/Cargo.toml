@@ -29,3 +29,5 @@ dioxus = { version = "0.7.3", default-features = false, features = ["desktop", "
 
 [dev-dependencies]
 dioxus-ssr = "0.7.3"
+# Keeps tests away from the real database, config, Google account and sync server.
+timeslay-core = { path = "../core", features = ["test-isolation"] }

@@ -135,7 +135,15 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         description = description.push(links);
     }
 
+    // Only the sidebar's creation form has a preview: the calendar's own
+    // quick-create already sits on the grid it would land in.
+    let view_in_calendar: Element<'a, Message> = if sidebar {
+        crate::ui::inbox::view_in_calendar_button(state, metrics)
+    } else {
+        Space::new().into()
+    };
     let actions = row![
+        view_in_calendar,
         Space::new().width(Fill),
         button(text("Cancel").size(metrics.label()).center())
             .on_press_maybe((!draft.saving).then_some(cancel))

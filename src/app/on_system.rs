@@ -74,6 +74,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             }
             state.habits.reload_shared();
             state.notes.reload_shared();
+            state.refresh_operations();
             Task::none()
         }
         SystemMessage::ConfigReloaded(config) => {

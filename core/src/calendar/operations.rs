@@ -308,6 +308,10 @@ pub fn cached_event(calendar: &str, id: &str) -> Result<Option<Event>, String> {
     Ok(None)
 }
 pub fn start() {
+    // Test runs keep their queue local: it must never reach Google.
+    if crate::config::isolated() {
+        return;
+    }
     static START: OnceLock<()> = OnceLock::new();
     START.get_or_init(|| {
         std::thread::spawn(|| {

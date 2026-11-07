@@ -293,7 +293,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         let nav_metrics = Metrics::of(size);
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
-            (Screen::Operations, _) => operations_view(),
+            (Screen::Operations, _) => operations_view(state),
             (Screen::Settings, _) => settings::view(state, &metrics),
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
@@ -315,7 +315,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
         let mut base = column![
             container(tabs(state, &nav_metrics)).width(Length::Fixed(nav_width)),
-            saving_indicator(),
+            saving_indicator(state),
             content
         ]
         .width(Fill)
@@ -993,9 +993,8 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     iced::widget::stack(layers).into()
 }
 
-fn saving_indicator<'a>() -> Element<'a, Message> {
-    timeslay_core::calendar::operations::start();
-    match timeslay_core::calendar::operations::list() {
+fn saving_indicator<'a>(state: &State) -> Element<'a, Message> {
+    match &state.operations {
         Ok(rows) if !rows.is_empty() => text(format!("Saving… ({} pending)", rows.len()))
             .size(12)
             .into(),
@@ -1005,9 +1004,9 @@ fn saving_indicator<'a>() -> Element<'a, Message> {
         _ => Space::new().height(0).into(),
     }
 }
-fn operations_view<'a>() -> Element<'a, Message> {
+fn operations_view<'a>(state: &State) -> Element<'a, Message> {
     let mut panel = column![text("Operations").size(24)].spacing(12).padding(16);
-    match timeslay_core::calendar::operations::list() {
+    match &state.operations {
         Ok(rows) => {
             if rows.is_empty() {
                 panel = panel.push(text("All changes saved to Google."));
@@ -1015,19 +1014,20 @@ fn operations_view<'a>() -> Element<'a, Message> {
             for row in rows {
                 panel = panel.push(
                     text(format!(
-                        "#{} · {} · {}\n{}\n{}\n{}",
+                        "#{} · {} · {}\n{} · Attempts: {}\n{}\n{}",
                         row.id,
                         row.kind,
                         row.created_at,
-                        format!("{} · Attempts: {}", row.entity, row.attempts),
-                        row.error.unwrap_or_else(|| "Waiting for Google".into()),
+                        row.entity,
+                        row.attempts,
+                        row.error.as_deref().unwrap_or("Waiting for Google"),
                         row.payload
                     ))
                     .size(13),
                 );
             }
         }
-        Err(error) => panel = panel.push(text(error)),
+        Err(error) => panel = panel.push(text(error.clone())),
     }
     iced::widget::scrollable(panel).height(Fill).into()
 }

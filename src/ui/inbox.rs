@@ -716,6 +716,14 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     let Some(draft) = &state.inbox.draft else {
         return Space::new().into();
     };
+    // The preview takes the form's place, with its own way back to it.
+    let preview = state.inbox.preview.as_ref();
+    if let Some(preview) = preview
+        && state.sidebar.is_some()
+        && !state.task_creation_window
+    {
+        return super::calendar::preview_view(state, preview, metrics);
+    }
     if state.sidebar.is_some() && !state.task_creation_window {
         let kind = draft.kind.unwrap_or(calendar::DraftKind::Task);
         let type_button = |label: &'static str, value: calendar::DraftKind| {
@@ -727,18 +735,12 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
             }
             control
         };
-        let types = column![
-            row![
-                type_button("Task", calendar::DraftKind::Task),
-                type_button("Event", calendar::DraftKind::Event),
-                type_button("Time Block", calendar::DraftKind::TimeBlock)
-            ]
-            .spacing(4),
-            row![
-                type_button("Habit", calendar::DraftKind::Habit),
-                type_button("Sleep", calendar::DraftKind::Sleep)
-            ]
-            .spacing(4),
+        // Sleep is recorded from the calendar itself, so it is not offered here.
+        let types = row![
+            type_button("Task", calendar::DraftKind::Task),
+            type_button("Event", calendar::DraftKind::Event),
+            type_button("Time Block", calendar::DraftKind::TimeBlock),
+            type_button("Habit", calendar::DraftKind::Habit),
         ]
         .spacing(4);
         let content = if kind == calendar::DraftKind::Task {
@@ -755,14 +757,23 @@ pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
             .height(Fill)
             .into();
     }
-    let card = container(crate::ui::controls::scrollable(
-        container(form(state, draft, metrics)).padding(iced::Padding {
-            right: 14.0,
-            ..iced::Padding::ZERO
-        }),
-    ))
-    .padding(16)
-    .width(Fill);
+    let card = if let Some(preview) = preview {
+        // The grid scrolls inside, so the card gets a height of its own.
+        container(super::calendar::preview_view(state, preview, metrics))
+            .width(Fill)
+            .height(iced::Length::Fixed(
+                (metrics.size.height - 32.0).clamp(80.0, 640.0),
+            ))
+    } else {
+        container(crate::ui::controls::scrollable(
+            container(form(state, draft, metrics)).padding(iced::Padding {
+                right: 14.0,
+                ..iced::Padding::ZERO
+            }),
+        ))
+        .padding(16)
+        .width(Fill)
+    };
     let card = card
         .max_width(if state.task_creation_window { 440 } else { 420 })
         .max_height(
@@ -869,7 +880,36 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
     if !draft.saving {
         cancel = cancel.on_press(msg(Action::Cancel));
     }
-    body.push(row![add, cancel].spacing(8)).into()
+    body.push(
+        row![
+            add,
+            cancel,
+            Space::new().width(Fill),
+            view_in_calendar_button(state, metrics)
+        ]
+        .spacing(8)
+        .align_y(Center),
+    )
+    .into()
+}
+
+/// Opens the calendar preview of what the form would create.
+pub(crate) fn view_in_calendar_button<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let busy = state
+        .inbox
+        .draft
+        .as_ref()
+        .is_none_or(|draft| draft.saving || draft.fetching)
+        || state.inbox.voice.active();
+    button(text("View in calendar").size(metrics.label()).center())
+        .style(crate::ui::controls::secondary)
+        .on_press_maybe((!busy).then_some(msg(Action::Preview(
+            crate::inbox::preview::PreviewAction::Open,
+        ))))
+        .into()
 }
 
 #[cfg(test)]
@@ -1268,6 +1308,121 @@ mod tests {
         }
     }
 
+    fn sidebar_state() -> State {
+        use crate::app::Sidebar;
+        let mut state = state_with_task("");
+        state.sidebar = Some(Sidebar {
+            width: 400.0,
+            side: crate::panel::Side::Left,
+        });
+        let _ = crate::app::update(&mut state, msg(Action::NewTask));
+        state
+    }
+
+    #[test]
+    fn the_sidebar_selector_no_longer_offers_sleep() {
+        let state = sidebar_state();
+        let mut ui = simulator(&state, 400.0);
+        for label in ["Task", "Event", "Time Block", "Habit"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        assert!(ui.find("Sleep").is_err());
+    }
+
+    #[test]
+    fn view_in_calendar_previews_the_form_and_returns_to_it() {
+        use crate::inbox::preview::PreviewAction;
+        for kind in [calendar::DraftKind::Task, calendar::DraftKind::Event] {
+            let mut state = sidebar_state();
+            let _ = crate::app::update(&mut state, msg(Action::Title("Plan launch".into())));
+            let _ = crate::app::update(&mut state, msg(Action::KindSelected(kind)));
+            // The forms scroll; a tall window keeps the button in reach.
+            let mut ui = simulator_of(&state, Size::new(400.0, 1600.0));
+            ui.click("View in calendar").unwrap();
+            let message = ui
+                .into_messages()
+                .find(|message| {
+                    matches!(
+                        message,
+                        Message::Inbox(Action::Preview(PreviewAction::Open))
+                    )
+                })
+                .expect("the button opens the preview");
+            let _ = crate::app::update(&mut state, message);
+            let mut ui = simulator(&state, 400.0);
+            assert!(ui.find("1 new item").is_ok(), "{kind:?}");
+            assert!(ui.find("Plan launch").is_ok(), "{kind:?}");
+            assert!(ui.find("Day").is_ok() && ui.find("Week").is_ok());
+            assert!(
+                ui.find("Add").is_ok(),
+                "a single item can be added from the preview"
+            );
+            assert!(
+                ui.find("Event").is_err(),
+                "the type selector gives way to the preview"
+            );
+            ui.click("Back to edit").unwrap();
+            let message = ui
+                .into_messages()
+                .find(|message| {
+                    matches!(
+                        message,
+                        Message::Inbox(Action::Preview(PreviewAction::Close))
+                    )
+                })
+                .unwrap();
+            let _ = crate::app::update(&mut state, message);
+            let mut ui = simulator(&state, 400.0);
+            assert!(ui.find("View in calendar").is_ok());
+        }
+    }
+
+    #[test]
+    fn the_preview_lists_several_items_in_the_day_and_week() {
+        use crate::inbox::preview::{self, PreviewAction, Proposal, When};
+        let mut state = sidebar_state();
+        let today = crate::clock::now().date_naive();
+        let at = |title: &str, day: chrono::NaiveDate, hour: u32| {
+            let start = calendar::at_clock(day, hour, 0);
+            Proposal {
+                kind: calendar::DraftKind::Event,
+                title: title.into(),
+                when: Some(When {
+                    start,
+                    end: start + chrono::Duration::hours(1),
+                    all_day: false,
+                    repeat: None,
+                }),
+                color: calendar::colors::DEFAULT_EVENT,
+            }
+        };
+        let tomorrow = today + chrono::Duration::days(1);
+        let mut undated = at("Buy stamps", today, 0);
+        undated.kind = calendar::DraftKind::Task;
+        undated.when = None;
+        let _ = preview::open(
+            &mut state,
+            vec![at("Standup", today, 9), at("Gym", tomorrow, 18), undated],
+            false,
+        );
+        for span in [preview::Span::Week, preview::Span::Day] {
+            let _ = crate::app::update(&mut state, msg(Action::Preview(PreviewAction::Span(span))));
+            for width in [400.0, 900.0] {
+                let mut ui = simulator(&state, width);
+                assert!(ui.find("3 new items").is_ok());
+                for title in ["Standup", "Gym", "Buy stamps"] {
+                    assert!(ui.find(title).is_ok(), "{title} in the list");
+                }
+                assert!(
+                    ui.find("Task · No date yet, so it won't show on the calendar")
+                        .is_ok()
+                );
+                // Several items from elsewhere are not saved by the form's Add.
+                assert!(ui.find("Add").is_err());
+            }
+        }
+    }
+
     #[test]
     fn the_sidebar_selector_opens_every_creation_form_without_saving() {
         use crate::app::{CalendarView, Sidebar};
@@ -1279,7 +1434,6 @@ mod tests {
                 calendar::DraftKind::TimeBlock,
             ),
             ("Habit", "New habit", calendar::DraftKind::Habit),
-            ("Sleep", "New sleep", calendar::DraftKind::Sleep),
         ] {
             let mut state = state_with_task("");
             state.sidebar = Some(Sidebar {

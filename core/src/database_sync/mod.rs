@@ -233,6 +233,10 @@ pub fn history(path: &Path) -> io::Result<Vec<Edit>> {
 }
 
 pub fn start() {
+    // Test runs must never push their fixtures to the user's sync server.
+    if crate::config::isolated() {
+        return;
+    }
     STARTED.get_or_init(|| {
         set_status("Database sync starting…".into());
         if let Err(e) = std::thread::Builder::new()
