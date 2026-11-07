@@ -1119,33 +1119,56 @@ impl EditContext {
     }
 }
 
+/// Where an item comes from, as the editor heading shows it: an app-specific
+/// kind in a chip of the kind's configured color, or the calendar's name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    Kind {
+        name: &'static str,
+        color: timeslay_core::Color,
+    },
+    Calendar(String),
+}
+
 /// How the editor describes where an item comes from, like the iced details pane.
-pub fn source_label(event: &Event, context: &EditContext) -> String {
+pub fn source_label(event: &Event, context: &EditContext) -> Source {
+    let settings = &context.settings;
     let calendar = context
         .calendars
         .iter()
         .find(|calendar| calendar.id == event.calendar_id);
-    let managed = context.settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
+    let managed = settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
         || calendar.is_some_and(|calendar| CalendarSettings::is_app_calendar_name(&calendar.name));
     let kind = if event.details.sleep.is_some() {
-        Some("Sleep")
+        Some(("Sleep", settings.sleep_color()))
     } else if event.details.habit {
-        Some("Habit")
-    } else if event.is_task() || event.details.scheduled.is_some() {
-        Some("Task")
+        Some(("Habit", settings.habit_color()))
+    } else if event.details.scheduled.is_some() {
+        Some(("Task", settings.task_event_color()))
+    } else if event.is_task() {
+        Some((
+            "Task",
+            settings
+                .task_color(&event.calendar_id)
+                .unwrap_or(calendar::colors::TASK),
+        ))
     } else if managed {
-        Some(if event.all_day { "Event" } else { "Time Block" })
+        Some(if event.all_day {
+            ("Event", settings.event_color())
+        } else {
+            ("Time Block", settings.time_block_color())
+        })
     } else {
         None
     };
     match kind {
-        Some(kind) => format!("Type: {kind}"),
-        None => format!(
+        Some((name, color)) => Source::Kind { name, color },
+        None => Source::Calendar(format!(
             "Calendar: {}",
             calendar.map_or(event.calendar_id.as_str(), |calendar| calendar
                 .name
                 .as_str())
-        ),
+        )),
     }
 }
 
@@ -2223,14 +2246,25 @@ mod tests {
             events: Vec::new(),
         };
         let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
-        assert_eq!(source_label(&block, &context), "Type: Time Block");
+        let kind = |event: &Event| match source_label(event, &context) {
+            Source::Kind { name, .. } => name.to_owned(),
+            Source::Calendar(name) => name,
+        };
+        assert_eq!(kind(&block), "Time Block");
+        assert_eq!(
+            source_label(&block, &context),
+            Source::Kind {
+                name: "Time Block",
+                color: context.settings.time_block_color()
+            }
+        );
         let meeting = event("m1", "work", "Standup", at(12, 0), at(12, 30));
-        assert_eq!(source_label(&meeting, &context), "Calendar: Work");
+        assert_eq!(kind(&meeting), "Calendar: Work");
         let mut habit = meeting.clone();
         habit.details.habit = true;
-        assert_eq!(source_label(&habit, &context), "Type: Habit");
+        assert_eq!(kind(&habit), "Habit");
         let write = task("a", "Write", None, 1, 45, false);
-        assert_eq!(source_label(&write, &context), "Type: Task");
+        assert_eq!(kind(&write), "Task");
     }
 
     #[test]
