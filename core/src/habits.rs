@@ -330,8 +330,8 @@ pub struct DayEntry {
 }
 
 /// One logged occurrence: when it happened and, on a habit that records a
-/// number, how much (such as how many minutes it went on for).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// number, how much (such as how many minutes it went on for), with a comment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "StoredLogEntry")]
 pub struct LogEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -339,6 +339,9 @@ pub struct LogEntry {
     /// In the habit's unit, in thousandths, as `values` are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount: Option<i64>,
+    /// Blank for no comment.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 impl LogEntry {
@@ -346,7 +349,14 @@ impl LogEntry {
         Self {
             at,
             amount: amount.map(|amount| (amount.max(0.0) * 1000.0).round() as i64),
+            note: String::new(),
         }
+    }
+
+    /// The entry with a comment.
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = note.into();
+        self
     }
 
     pub fn amount(&self) -> Option<f64> {
@@ -354,7 +364,7 @@ impl LogEntry {
     }
 
     fn is_blank(&self) -> bool {
-        self.at.is_none() && self.amount.is_none()
+        self.at.is_none() && self.amount.is_none() && self.note.is_empty()
     }
 }
 
@@ -368,6 +378,8 @@ enum StoredLogEntry {
         at: Option<NaiveTime>,
         #[serde(default)]
         amount: Option<i64>,
+        #[serde(default)]
+        note: String,
     },
 }
 
@@ -377,8 +389,9 @@ impl From<StoredLogEntry> for LogEntry {
             StoredLogEntry::Time(at) => Self {
                 at: Some(at),
                 amount: None,
+                note: String::new(),
             },
-            StoredLogEntry::Entry { at, amount } => Self { at, amount },
+            StoredLogEntry::Entry { at, amount, note } => Self { at, amount, note },
         }
     }
 }
@@ -418,7 +431,7 @@ fn stored_entries(entries: &[LogEntry]) -> Vec<LogEntry> {
     let mut entries: Vec<LogEntry> = entries
         .iter()
         .filter(|entry| !entry.is_blank())
-        .copied()
+        .cloned()
         .collect();
     entries.sort_by_key(|entry| entry.at);
     entries
@@ -2843,7 +2856,7 @@ mod tests {
             "the count from before is kept, untimed"
         );
         let late = LogEntry::new(NaiveTime::from_hms_opt(23, 0, 0), Some(12.0));
-        habit.set_log(day, &[late, LogEntry::new(at, Some(6.0))], &[]);
+        habit.set_log(day, &[late.clone(), LogEntry::new(at, Some(6.0))], &[]);
         let back: Habit = serde_json::from_str(&serde_json::to_string(&habit).unwrap()).unwrap();
         assert_eq!(
             back.happened_log_on(day),

@@ -29,7 +29,7 @@ fn shadow(elevation: Elevation, is_dark: bool) -> String {
 fn scheme_variables(scheme: Scheme) -> String {
     let palette = scheme.extended();
     let dark = palette.is_dark;
-    let colors: [(&str, Color); 24] = [
+    let colors: [(&str, Color); 27] = [
         ("bg", palette.background.base.color),
         ("text", palette.background.base.text),
         ("card", palette.background.weakest.color),
@@ -51,6 +51,30 @@ fn scheme_variables(scheme: Scheme) -> String {
             look::shade(palette.primary.base.color, look::FILLED_HOVER_SHADE),
         ),
         ("accent-soft", palette.primary.weak.color),
+        (
+            "accent-faint",
+            look::tint(
+                palette.background.weakest.color,
+                palette.primary.base.color,
+                look::TODAY_TINT,
+            ),
+        ),
+        (
+            "accent-faint-hover",
+            look::tint(
+                palette.background.weaker.color,
+                palette.primary.base.color,
+                look::TODAY_HOVER_TINT,
+            ),
+        ),
+        (
+            "accent-faint-pressed",
+            look::tint(
+                palette.background.weak.color,
+                palette.primary.base.color,
+                look::TODAY_PRESS_TINT,
+            ),
+        ),
         ("on-accent-soft", palette.primary.weak.text),
         ("danger", palette.danger.base.color),
         ("on-danger", palette.danger.base.text),

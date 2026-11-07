@@ -719,14 +719,13 @@ pub fn secondary(t: &Theme, s: button::Status) -> button::Style {
 pub fn subtle_primary(t: &Theme, s: button::Status) -> button::Style {
     let mut style = secondary(t, s);
     let amount = match s {
-        button::Status::Active => 0.06,
-        button::Status::Hovered => 0.10,
-        button::Status::Pressed => 0.14,
+        button::Status::Active => look::TODAY_TINT,
+        button::Status::Hovered => look::TODAY_HOVER_TINT,
+        button::Status::Pressed => look::TODAY_PRESS_TINT,
         button::Status::Disabled => return style,
     };
     if let Some(iced::Background::Color(background)) = style.background {
-        style.background =
-            Some(iced::theme::palette::mix(background, t.palette().primary, amount).into());
+        style.background = Some(look::tint(background, t.palette().primary, amount).into());
     }
     style
 }

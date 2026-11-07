@@ -122,6 +122,16 @@ pub fn shade(color: Color, by: f32) -> Color {
     iced_core::theme::palette::mix(color, Color::BLACK, by)
 }
 
+/// How much of the accent tints a surface that marks today.
+pub const TODAY_TINT: f32 = 0.15;
+pub const TODAY_HOVER_TINT: f32 = 0.22;
+pub const TODAY_PRESS_TINT: f32 = 0.30;
+
+/// A surface pulled toward `accent`, for a very light accent fill.
+pub fn tint(surface: Color, accent: Color, by: f32) -> Color {
+    iced_core::theme::palette::mix(surface, accent, by)
+}
+
 /// The dim sheet behind a dialog.
 pub const SCRIM: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
 

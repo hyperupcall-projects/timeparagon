@@ -163,15 +163,15 @@ textarea {
 }
 
 .month-anchor .btn.today {
-    background: color-mix(in srgb, var(--card), var(--accent) 6%);
+    background: var(--accent-faint);
 }
 
 .month-anchor .btn.today:hover {
-    background: color-mix(in srgb, var(--hover), var(--accent) 10%);
+    background: var(--accent-faint-hover);
 }
 
 .month-anchor .btn.today:active {
-    background: color-mix(in srgb, var(--pressed), var(--accent) 14%);
+    background: var(--accent-faint-pressed);
 }
 
 .btn.danger {

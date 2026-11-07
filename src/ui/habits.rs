@@ -1461,10 +1461,21 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
         ))
         .size(metrics.label() + 1.0),
         text(question).size(metrics.label() - 1.0).style(medium),
-        outcomes,
     ]
     .spacing(metrics.spacing)
     .width(Fill);
+    if let Some(measure) = habit
+        .measure
+        .as_ref()
+        .filter(|measure| measure.target.is_some())
+    {
+        body = body.push(
+            text(format!("Target: {}", measure.label(habit.kind)))
+                .size(metrics.label() - 2.0)
+                .style(medium),
+        );
+    }
+    body = body.push(outcomes);
 
     let unit = habit.measure.as_ref().map(|measure| measure.unit.as_str());
     if dialog.shows_happened() {
@@ -1486,9 +1497,8 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
     // Not having done a habit to do leaves nothing to measure.
     let didnt = habit.kind == Kind::Yes && dialog.outcome == Outcome::NotDone;
     if let Some(measure) = habit.measure.as_ref().filter(|_| !didnt) {
-        // On a habit to avoid, "Avoided it" records amounts on its entries.
-        let avoided = dialog.avoid && !dialog.shows_happened();
-        let mut field = if avoided {
+        // A habit to avoid records amounts on its entries alone.
+        let field = if dialog.avoid && (!dialog.shows_happened() || dialog.happened.is_empty()) {
             column![]
         } else if dialog.happened.is_empty() || dialog.outcome != Outcome::Done {
             let unit = if measure.unit.is_empty() {
@@ -1521,13 +1531,6 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
         } else {
             column![]
         };
-        if measure.target.is_some() && (dialog.shows_happened() || dialog.happened.is_empty()) {
-            field = field.push(
-                text(format!("Target: {}", measure.label(habit.kind)))
-                    .size(metrics.label() - 2.0)
-                    .style(medium),
-            );
-        }
         body = body.push(field);
     }
     if let Some(error) = &dialog.error {
@@ -1559,7 +1562,7 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
 
 /// One of the day dialog's logs: a button that logs an entry at the current
 /// time, and each entry with its time, its amount when `unit` is given, and an
-/// X to remove it. Times and amounts can be changed in place.
+/// X to remove it, and a comment under them. All can be changed in place.
 fn day_log<'a>(
     dialog: &'a crate::habits::DayDialog,
     log: Log,
@@ -1567,7 +1570,8 @@ fn day_log<'a>(
     unit: Option<&'a str>,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let mut entries = column![].spacing(4);
+    // Wider than the gap within an entry, so each entry reads as one.
+    let mut entries = column![].spacing(12);
     for (index, entry) in dialog.log(log).iter().enumerate() {
         let mut line = row![
             crate::ui::controls::text_input("No time recorded", &entry.time)
@@ -1607,7 +1611,19 @@ fn day_log<'a>(
                 .style(crate::ui::controls::ghost)
                 .on_press(msg(Action::LogRemove(log, index))),
         );
-        entries = entries.push(line);
+        // Under the time and amount, lined up with them rather than the X.
+        let note = container(
+            crate::ui::controls::text_input("Comment", &entry.note)
+                .on_input(move |note| msg(Action::LogNote(log, index, note)))
+                .on_submit(msg(Action::SaveDay))
+                .size(metrics.label() - 1.0)
+                .padding([3, 6]),
+        )
+        .padding(iced::Padding {
+            right: 30.0,
+            ..Default::default()
+        });
+        entries = entries.push(column![line, note].spacing(4));
     }
     column![
         crate::ui::controls::quiet_button(
@@ -1618,7 +1634,7 @@ fn day_log<'a>(
         .width(Fill)
         .padding([4, 8])
         .on_press(msg(Action::LogAdd(log))),
-        container(crate::ui::controls::scrollable(entries)).max_height(220),
+        container(crate::ui::controls::scrollable(entries)).max_height(300),
     ]
     .spacing(6)
     .into()
@@ -2053,12 +2069,15 @@ mod tests {
             "Slipped",
             "Skipped",
             "+ Add entry",
-            "Value in cigarettes",
             "Target: At most 5 cigarettes per day",
         ] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
         assert!(ui.find("Not sure").is_err(), "the logs answer it");
+        assert!(
+            ui.find("Value in cigarettes").is_err(),
+            "amounts go on each entry"
+        );
     }
 
     #[test]
@@ -2351,7 +2370,14 @@ mod tests {
         act(&mut state, Action::OpenDay("h".into(), today));
         act(&mut state, Action::LogAdd(Log::Resisted));
         assert!(dialog_ui(&state).find("lbs").is_ok());
-        act(&mut state, Action::LogAmount(Log::Resisted, 0, "2.5".into()));
+        act(
+            &mut state,
+            Action::LogAmount(Log::Resisted, 0, "2.5".into()),
+        );
+        act(
+            &mut state,
+            Action::LogNote(Log::Resisted, 0, " after lunch ".into()),
+        );
         act(&mut state, Action::SaveDay);
         let log = state
             .habits
@@ -2361,6 +2387,7 @@ mod tests {
             .resisted_log_on(today);
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].amount(), Some(2.5));
+        assert_eq!(log[0].note, "after lunch");
         act(&mut state, Action::OpenDay("h".into(), today));
         assert!(
             dialog_ui(&state).find("Value in lbs").is_err(),
