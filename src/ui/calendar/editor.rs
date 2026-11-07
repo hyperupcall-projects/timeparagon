@@ -20,7 +20,12 @@ pub fn event_editor<'a>(
         .filter(|draft| draft.id == event.id)
     else {
         return column![
-            super::super::links::text(event.title.clone(), metrics.label() + 2.0),
+            titled(
+                state,
+                event,
+                super::super::links::text(event.title.clone(), metrics.label() + 2.0),
+                metrics,
+            ),
             event_source(state, event, metrics),
             text(schedule_line(event, state.config.appearance.time_format))
                 .size(metrics.label())
@@ -108,7 +113,7 @@ pub fn event_editor<'a>(
         ));
     }
     let targets = state.calendar.move_targets(event, &state.config.calendar);
-    let source: Element<'a, Message> = if targets.is_empty() {
+    let source: Option<Element<'a, Message>> = if targets.is_empty() {
         event_source(state, event, metrics)
     } else {
         let options: Vec<CalendarChoice> = targets
@@ -123,17 +128,17 @@ pub fn event_editor<'a>(
             .iter()
             .find(|option| option.id == draft.calendar_id)
             .cloned();
-        calendar_select(
+        Some(calendar_select(
             options,
             selected,
             draft.calendar_dropdown_open,
             metrics,
             |id| Message::EventEdit(EventEditMessage::EventEditCalendarSelected(id)),
             Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled),
-        )
+        ))
     };
     let mut body = column![
-        title,
+        titled(state, event, title, metrics),
         source,
         super::super::description::preview(&event.id, &draft.description, metrics),
     ]
@@ -611,8 +616,7 @@ pub(super) fn sleep_editor<'a>(
         .spacing(4)
     };
     let mut body = column![
-        text("Sleep").size(metrics.label() + 3.0),
-        event_source(state, event, metrics),
+        titled(state, event, text("Sleep").size(metrics.label() + 3.0), metrics),
         text(format!("{} · {}", calendar::sleep::duration(&preview), calendar::sleep::time_label(&preview, state.config.appearance.time_format))).size(metrics.label()),
         field("Sleep start",
             crate::ui::controls::text_input("YYYY-MM-DD", &draft.date_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))).into(),

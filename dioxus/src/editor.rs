@@ -23,6 +23,7 @@ use timeslay_core::task_edit::{self, Change};
 use timeslay_core::timeblocking as tb;
 
 use crate::css_color;
+use timeslay_core::calendar::colors::on_color;
 use crate::day::{self, AssignedTask, EditContext, HabitRow, TaskFields, TimeBlock};
 
 const NTH_LABELS: [(i8, &str); 6] = [
@@ -69,7 +70,7 @@ pub fn Editor(
 #[component]
 fn Sheet(
     title: String,
-    source: String,
+    source: day::Source,
     color: String,
     on_close: EventHandler<()>,
     footer: Option<Element>,
@@ -81,8 +82,19 @@ fn Sheet(
                 div { class: "modal-head",
                     div { class: "modal-mark", style: "background: {color};" }
                     div { class: "modal-titles",
-                        h2 { class: "modal-title", "{title}" }
-                        div { class: "modal-sub", "{source}" }
+                        div { class: "modal-title-row",
+                            h2 { class: "modal-title", "{title}" }
+                            if let day::Source::Kind { name, color } = &source {
+                                span {
+                                    class: "kind-chip",
+                                    style: "background: {css_color(*color)}; color: {css_color(on_color(*color))};",
+                                    "{name}"
+                                }
+                            }
+                        }
+                        if let day::Source::Calendar(name) = &source {
+                            div { class: "modal-sub", "{name}" }
+                        }
                     }
                     button {
                         class: "modal-close",
@@ -2515,7 +2527,7 @@ mod tests {
         let html = render(habit);
         assert_offers(
             &html,
-            &["Type: Habit", "Mark as done", "Start day", "Repeat"],
+            &["kind-chip", ">Habit<", "Mark as done", "Start day", "Repeat"],
         );
         assert!(!html.contains("End Time"));
     }
@@ -2525,7 +2537,7 @@ mod tests {
         let html = render(event("b1", "blocks", "Deep work"));
         assert_offers(
             &html,
-            &["Type: Time Block", "Deep work", "End Time", ">Save<"],
+            &["kind-chip", ">Time Block<", "Deep work", "End Time", ">Save<"],
         );
     }
 
@@ -2565,7 +2577,8 @@ mod tests {
         assert_offers(
             &html,
             &[
-                "Type: Sleep",
+                ">Sleep<",
+                "kind-chip",
                 "Sleep start",
                 "Wake-up time",
                 "Estimated Sleep Start",

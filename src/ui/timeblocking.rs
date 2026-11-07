@@ -429,7 +429,7 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         )
     };
     column![
-        title,
+        super::calendar::titled(state, task, title, metrics),
         super::calendar::event_source(state, task, metrics),
         description,
         editor(state, task, metrics),
@@ -947,7 +947,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         row![delete, close].spacing(metrics.spacing).into()
     };
     let mut body = column![
-        text(block.title.clone()).size(18),
+        super::calendar::titled(state, block, text(block.title.clone()).size(18), metrics),
         super::calendar::event_source(state, block, metrics),
         text({
             let (start, end) = crate::calendar::time_format::range_parts(
