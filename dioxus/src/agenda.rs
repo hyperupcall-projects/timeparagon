@@ -68,11 +68,19 @@ pub fn AgendaSheet(
     today: NaiveDate,
     /// Bumped by every write, so a change shows here when its editor closes.
     revision: Signal<u32>,
+    /// A habit's events alone, which open on the month, as the desktop's
+    /// "Show on calendar" does.
+    filter: Option<crate::habits::CalendarFilter>,
     on_day: EventHandler<NaiveDate>,
     on_open: EventHandler<Event>,
     on_close: EventHandler<()>,
 ) -> Element {
-    let mut range = use_signal(|| Range::Week);
+    let starting = if filter.is_some() {
+        Range::Month
+    } else {
+        Range::Week
+    };
+    let mut range = use_signal(move || starting);
     let mut anchor = use_signal(move || day);
     let load_settings = settings.clone();
     let loaded = use_resource(move || {
@@ -99,7 +107,12 @@ pub fn AgendaSheet(
         None => rsx! { p { class: "hint", role: "status", "Loading…" } },
         Some(Err(message)) => rsx! { p { class: "editor-error", role: "alert", "{message}" } },
         Some(Ok((snapshot, dates))) => {
-            let days = day::agenda(snapshot, dates, &settings);
+            let mut days = day::agenda(snapshot, dates, &settings);
+            if let Some(filter) = &filter {
+                for (_, rows) in &mut days {
+                    rows.retain(|row| shows(filter, &row.event));
+                }
+            }
             rsx! {
                 for (date, rows) in days {
                     section { key: "{date}", class: "agenda-day",
@@ -139,7 +152,12 @@ pub fn AgendaSheet(
         div { class: "modal-backdrop editor-backdrop",
             div { class: "modal editor", role: "dialog", aria_label: "Agenda",
                 div { class: "modal-head",
-                    div { class: "modal-titles", h2 { class: "modal-title", "Agenda" } }
+                    div { class: "modal-titles",
+                        h2 { class: "modal-title", "Agenda" }
+                        if let Some(filter) = &filter {
+                            div { class: "modal-sub", "Events of {filter.name}" }
+                        }
+                    }
                     button {
                         class: "modal-close",
                         title: "Close",
@@ -171,6 +189,16 @@ pub fn AgendaSheet(
             }
         }
     }
+}
+
+/// Whether an occurrence belongs to one of the filter's series.
+fn shows(filter: &crate::habits::CalendarFilter, event: &Event) -> bool {
+    let series = event
+        .details
+        .recurring_event_id
+        .as_deref()
+        .unwrap_or(&event.id);
+    filter.series.iter().any(|id| id == series)
 }
 
 #[cfg(test)]

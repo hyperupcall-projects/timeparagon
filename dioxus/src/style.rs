@@ -106,6 +106,40 @@ fn scheme_variables(scheme: Scheme) -> String {
     for (name, elevation) in shadows {
         let _ = write!(css, "--{name}:{};", shadow(elevation, dark));
     }
+    css.push_str(&habit_variables(dark));
+    css
+}
+
+/// Loop's palette and chart grays for one scheme, which the habit screens draw
+/// with, as the iced app's charts pick them by whether the theme is dark.
+fn habit_variables(dark: bool) -> String {
+    let mut css = String::new();
+    for index in 0..timeslay_core::habits::PALETTE_SIZE {
+        let color = timeslay_core::habits::palette_color(index, dark);
+        let _ = write!(
+            css,
+            "--habit-{index}:{};--habit-ink-{index}:{};",
+            css_color(color),
+            css_color(colors::on_color(color))
+        );
+    }
+    let gray = |light: u8, night: u8| {
+        let value = if dark { night } else { light };
+        Color::from_rgb8(value, value, value)
+    };
+    let quiet = gray(0xBD, 0x75);
+    for (name, color) in [
+        ("habit-low", gray(0xE0, 0x42)),
+        ("habit-medium", gray(0x9E, 0x9E)),
+        ("habit-quiet", quiet),
+        ("habit-quiet-ink", colors::on_color(quiet)),
+        ("habit-day-text", gray(0x75, 0xBD)),
+    ] {
+        let _ = write!(css, "--{name}:{};", css_color(color));
+    }
+    // Loop's dark theme keeps the page bar black, as a pale color would leave
+    // its white text unreadable.
+    let _ = write!(css, "--habit-bar-black:{}%;", if dark { 100 } else { 0 });
     css
 }
 
@@ -147,6 +181,9 @@ fn fixed_variables() -> String {
         css_color(Color::BLACK.scale_alpha(far_alpha)),
     );
     let _ = write!(css, "--shadow-chip:{};", shadow(look::EVENT_CHIP, false));
+    // A habit's own color and the ink on it, which each habit sets for itself,
+    // and a streak's length against the longest, which each bar sets.
+    css.push_str("--hc:var(--accent);--hc-ink:var(--on-accent);--share:1;");
     css.push_str("}\n");
     css
 }

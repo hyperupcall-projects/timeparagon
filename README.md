@@ -4,7 +4,7 @@ Slay the day with TimeSlayyyyy.
 
 ## Overview
 
-TimeSlay is designed to help you implement some of the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime). Rather than spending time switching between, searching through, and using multiple apps, just focus on the work.
+TimeSlay is designed to help you implement some of the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime). Rather than spending time switching between, searching through, and using multiple apps, just focus on the work. It is inspired by [Sunsama](https://www.sunsama.com), [Loop Habits](https://github.com/isoron/uhabits), [Griply](https://griply.app), and [Strides](https://www.stridesapp.com/).
 
 Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and edit events/tasks from this view:
 
@@ -88,7 +88,7 @@ Of course, there's also week, 2-week, and month views:
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
 	- Allow setting/connecting goals to Habits (TODO).
-- **Notes:** (TODO)
+- **Notes:**
 	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
 	- Notes are stored in the local database and synced through Turso.

@@ -2,14 +2,16 @@
 //!
 //! The main screen is the day: every calendar event, every Google Task, and
 //! every time block for one day. Tapping an item opens a sheet that edits it; a
-//! time block first lists its assigned tasks. Everything else (adding, notes,
-//! habits, search, the agenda and the lists) opens as a sheet over the day.
+//! time block first lists its assigned tasks. The Habits tab takes the screen
+//! over, as on the desktop's panel. Everything else (adding, notes, search, the
+//! agenda and the lists) opens as a sheet over the day.
 
 mod agenda;
 mod create;
 mod day;
 mod editor;
 mod habits;
+mod habits_charts;
 mod notes;
 mod reminders;
 mod scratch;
@@ -205,8 +207,9 @@ fn App() -> Element {
     let mut sync_url_error = use_signal(|| None::<String>);
     let mut sync_url_saved = use_signal(|| false);
     let mut show_calendars = use_signal(|| false);
-    let mut show_habits = use_signal(|| false);
     let mut show_tracker = use_signal(|| false);
+    // A habit's events, which "Show on calendar" opens the agenda on.
+    let mut agenda_filter = use_signal(|| None::<habits::CalendarFilter>);
     let mut show_notes = use_signal(|| false);
     let mut show_create = use_signal(|| false);
     let mut show_search = use_signal(|| false);
@@ -316,7 +319,6 @@ fn App() -> Element {
             // Rolling over would take the day out from under an open editor.
             if follow_today()
                 && editing.peek().is_none()
-                && !*show_habits.peek()
                 && !*show_create.peek()
                 && !*block_writing.peek()
             {
@@ -484,14 +486,20 @@ fn App() -> Element {
 
     let topbar = rsx! {
         header { class: "nav-card",
-            {nav_tab("Schedule", !show_tasks(), "", move |_| show_tasks.set(false))}
-            {nav_tab("Tasks", show_tasks(), "narrow-only", move |_| show_tasks.set(true))}
+            {nav_tab("Schedule", !show_tasks() && !show_tracker(), "", move |_| {
+                show_tasks.set(false);
+                show_tracker.set(false);
+            })}
+            {nav_tab("Tasks", show_tasks() && !show_tracker(), "narrow-only", move |_| {
+                show_tasks.set(true);
+                show_tracker.set(false);
+            })}
             div { class: "spacer" }
             {nav_tab("Notes", show_notes(), "", move |_| show_notes.set(true))}
             {nav_tab("Habits", show_tracker(), "", move |_| show_tracker.set(true))}
             {nav_tab("More", show_more(), "", move |_| show_more.set(true))}
         }
-        div { class: "day-header",
+        div { class: "day-header", hidden: show_tracker(),
             h1 { class: "day-title", "{heading}" }
             if !google_operations().is_empty() {span { class: "hint", role: "status", "Saving…" }}
             div { class: "day-controls",
@@ -740,32 +748,6 @@ fn App() -> Element {
             ))
         });
 
-    // Keyed by what was opened: a task's id can change while it is being edited
-    // (moving lists renames it), and that must not reset the sheet.
-    let habits_sheet = edit_context
-        .clone()
-        .filter(|_| show_habits())
-        .map(|context| {
-            rsx! {
-                editor::HabitsSheet {
-                    context,
-                    revision,
-                    on_open: move |habit| editing.set(Some(habit)),
-                    on_close: move |()| show_habits.set(false),
-                }
-            }
-        });
-
-    let tracker_sheet = show_tracker().then(|| {
-        rsx! {
-            habits::TrackerSheet {
-                today,
-                on_series: move |()| show_habits.set(true),
-                on_close: move |()| show_tracker.set(false),
-            }
-        }
-    });
-
     let create_sheet = show_create().then(|| {
         let store = cached_days.read();
         let calendars = store.calendars.clone();
@@ -807,17 +789,25 @@ fn App() -> Element {
                 day: selected_day,
                 today,
                 revision,
+                filter: agenda_filter(),
                 on_day: move |day| {
                     show_agenda.set(false);
+                    agenda_filter.set(None);
+                    show_tracker.set(false);
                     day_nav.go_to(day, day == day::today(&config.peek().calendar));
                 },
                 on_open: move |event: Event| {
                     let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
                     show_agenda.set(false);
+                    agenda_filter.set(None);
+                    show_tracker.set(false);
                     day_nav.go_to(day, day == day::today(&config.peek().calendar));
                     pending_open.set(Some(event.id));
                 },
-                on_close: move |()| show_agenda.set(false),
+                on_close: move |()| {
+                    show_agenda.set(false);
+                    agenda_filter.set(None);
+                },
             }
         }
     });
@@ -1227,9 +1217,25 @@ fn App() -> Element {
         div { class: "app",
             {topbar}
             {banner}
-            {notice}
-            {body}
-            if model.is_some() {
+            if show_tracker() {
+                habits::HabitsScreen {
+                    today,
+                    time_format,
+                    settings: settings.clone(),
+                    signed_in: signed_in(),
+                    revision,
+                    day_events: snapshot.as_ref().map(|snapshot| snapshot.events.clone()).unwrap_or_default(),
+                    on_open_event: move |event| editing.set(Some(event)),
+                    on_show_calendar: move |filter| {
+                        agenda_filter.set(Some(filter));
+                        show_agenda.set(true);
+                    },
+                }
+            } else {
+                {notice}
+                {body}
+            }
+            if model.is_some() && !show_tracker() {
                 button {
                     class: "fab",
                     title: "Add",
@@ -1239,8 +1245,6 @@ fn App() -> Element {
                 }
             }
             {modal}
-            {tracker_sheet}
-            {habits_sheet}
             {agenda_sheet}
             {edit_sheet}
             {notes_sheet}
@@ -2170,7 +2174,6 @@ mod sheet_tests {
     use super::*;
     use chrono::{Local, TimeZone};
     use timeslay_core::config::{Config, ProjectsSettings};
-    use timeslay_core::habits::Habit;
     use timeslay_core::notes::Library;
 
     fn today() -> NaiveDate {
@@ -2334,23 +2337,6 @@ mod sheet_tests {
                 "Write the report",
                 "Add a step",
             ],
-        );
-    }
-
-    #[test]
-    fn a_tracked_habit_shows_its_goal_and_days() {
-        fn app() -> Element {
-            let today = today();
-            let mut habit = Habit::new("run", "Run");
-            habit.created = Some(today);
-            habit.add_rep(today);
-            let saved = use_signal(move || habits::for_tests(vec![habit.clone()]));
-            let open = use_signal(|| None::<String>);
-            rsx! { habits::HabitRow { habit: saved.read().library.habits[0].clone(), today, saved, open } }
-        }
-        assert_offers(
-            &render(app),
-            &["Run", "Every day", "streak 1", "✓", "Wed 4"],
         );
     }
 

@@ -1308,22 +1308,9 @@ pub struct HabitRow {
     pub event: Event,
 }
 
-/// Blocking: callers run this on a worker thread.
-pub fn load_habits(settings: &CalendarSettings) -> Result<Vec<HabitRow>, String> {
-    let habits = calendar::sync_habits(
-        &settings.client_id,
-        &settings.client_secret,
-        settings.app_calendar.as_deref(),
-    )?;
-    Ok(habits
-        .into_iter()
-        .map(|habit| habit_row(habit, settings))
-        .collect())
-}
-
 /// A habit's master as the editor expects it. It names itself as its series, so
 /// opening it loads the full master through the same path as an occurrence.
-fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) -> HabitRow {
+pub fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) -> HabitRow {
     let anchor = habit.start.date_naive();
     let recurrence = timeslay_core::recurrence::Recurrence::from_lines(&habit.recurrence);
     let schedule = if recurrence.is_empty() {
@@ -1356,6 +1343,7 @@ fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) -> H
             completed: false,
             details: calendar::Details {
                 habit: true,
+                habit_id: habit.habit_id,
                 description: habit.notes,
                 recurrence: habit.recurrence,
                 recurring_event_id: Some(habit.id),
@@ -1476,6 +1464,23 @@ pub fn save_event(
     draft.recurrence_lines()?;
 
     let settings = &context.settings;
+    // A habit event opened from a habit's page, which is created on Google
+    // counting towards that habit.
+    if original.id == crate::habits::NEW_HABIT_ID {
+        let habit_id = original
+            .details
+            .habit_id
+            .as_deref()
+            .ok_or("Open a habit to add an event to it")?;
+        calendar::create_habit(
+            &settings.client_id,
+            &settings.client_secret,
+            draft,
+            original.details.color_id.as_deref(),
+            habit_id,
+        )?;
+        return Ok(());
+    }
     let labelled_block = tb::is_block(original, settings);
     let description = if labelled_block {
         calendar::event_description(&draft.description, "Time Block", &[])

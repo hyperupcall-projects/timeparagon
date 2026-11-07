@@ -16,6 +16,7 @@ pub mod config_watch;
 pub mod database_migration;
 pub mod database_sync;
 pub mod fsutil;
+pub mod habit_edit;
 pub mod habits;
 pub mod hex;
 pub mod notes;
