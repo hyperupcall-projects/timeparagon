@@ -972,10 +972,29 @@ textarea {
     min-width: 0;
 }
 
+.modal-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
 .modal-title {
+    flex: 1;
+    min-width: 0;
     margin: 0;
     font-size: 16px;
     overflow-wrap: anywhere;
+}
+
+/* An item's kind, pinned top-right however far the title wraps. */
+.kind-chip {
+    flex: none;
+    padding: 2px 8px;
+    border: 1px solid var(--event-edge);
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
 }
 
 .modal-sub {
