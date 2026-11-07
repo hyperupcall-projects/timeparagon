@@ -36,6 +36,18 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         .on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)))
         .size(metrics.label() + 2.0)
         .width(Fill);
+    let title: Element<'a, Message> = if sidebar {
+        column![
+            row![title, crate::image_input::input_button(state)]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            crate::image_input::sources(state)
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        title.into()
+    };
 
     let date_field = |value: &str, change: fn(String) -> EventDraftMessage| {
         container(super::super::controls::date(
@@ -159,11 +171,13 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
             .size(metrics.label())
             .center()
         )
-        .on_press_maybe((!draft.saving).then_some(if sidebar {
-            Message::Inbox(crate::inbox::Action::Create)
-        } else {
-            Message::EventDraft(EventDraftMessage::EventDraftSaveRequested)
-        }))
+        .on_press_maybe(
+            (!draft.saving && !state.inbox.image.busy).then_some(if sidebar {
+                Message::Inbox(crate::inbox::Action::Create)
+            } else {
+                Message::EventDraft(EventDraftMessage::EventDraftSaveRequested)
+            })
+        )
         .style(crate::ui::controls::primary),
     ]
     .spacing(metrics.spacing)

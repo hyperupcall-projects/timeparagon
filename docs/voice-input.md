@@ -198,3 +198,25 @@ suite does not capture real microphone audio or measure speech recognition accur
 - [whisper.cpp CLI options](https://github.com/ggml-org/whisper.cpp/blob/master/examples/cli/README.md)
 - [Ollama installed models API](https://docs.ollama.com/api/tags)
 - [Ollama chat and structured output format](https://docs.ollama.com/api/chat)
+
+## Pictures to calendar events
+
+The picture button to the right of the microphone opens **Take picture**,
+**Paste image**, and **Choose image file**. Event creation also has a picture
+button. Choose the active provider and vision model in **Settings → AI → Image
+input**. Ollama uses its image server/model settings; OpenRouter uses its image
+model and saved API token. The image provider selection persists across restarts.
+
+PNG, JPEG, and WebP files up to 20 MB are supported. Clipboard import reads PNG
+images with `wl-paste` (`wl-clipboard`) on Wayland or `xclip` on X11. Camera capture
+requires `ffmpeg`, reads `/dev/video0`, and times out after 20 seconds. The picture
+is sent to the selected image provider for recognition.
+
+A short extraction prompt requests a JSON object containing an `events` array.
+Each event has a title, date/end date, start/end time, description, and location;
+unknown values are null. Both providers receive the JSON schema. Detected events
+appear below the creation tabs and above the form. Select one to edit its fields,
+or use × to remove it. Add saves only the selected event and leaves the others
+for review. Cancel discards the remaining proposals. A missing date must be
+entered before adding; missing start times use an all-day draft and missing end
+times use a one-hour duration. Location text is retained in the editable notes.

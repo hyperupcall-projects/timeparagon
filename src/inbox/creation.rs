@@ -3,13 +3,15 @@ use super::*;
 use calendar::DraftKind;
 use chrono::Timelike;
 
-pub(super) fn select(state: &mut State, kind: DraftKind) -> Task<Message> {
+pub(crate) fn select(state: &mut State, kind: DraftKind) -> Task<Message> {
     let Some(task) = state.inbox.draft.as_ref() else {
         return Task::none();
     };
-    if task.saving || task.fetching || state.inbox.voice.active() {
+    if task.saving || task.fetching || state.inbox.voice.active() || state.inbox.image.busy {
         return Task::none();
     }
+    crate::image_input::stash(state);
+    let task = state.inbox.draft.as_ref().unwrap();
     let previous = task.kind.unwrap_or(DraftKind::Task);
     if previous == kind {
         return Task::none();
