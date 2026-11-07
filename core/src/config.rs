@@ -9,10 +9,10 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::calendar::colors;
@@ -643,8 +643,102 @@ impl CalendarSettings {
     }
 }
 
+/// Where the app keeps its config, database, tokens and caches.
+///
+/// Mirrors the accessors of [`directories::ProjectDirs`], so callers read the
+/// same way, but can also point at a scratch directory (see [`isolated`]).
+#[derive(Debug, Clone)]
+pub struct ProjectDirs {
+    config: PathBuf,
+    data: PathBuf,
+    data_local: PathBuf,
+    cache: PathBuf,
+    state: Option<PathBuf>,
+}
+
+impl ProjectDirs {
+    fn under(root: &Path) -> Self {
+        Self {
+            config: root.join("config"),
+            data: root.join("data"),
+            data_local: root.join("data-local"),
+            cache: root.join("cache"),
+            state: Some(root.join("state")),
+        }
+    }
+
+    pub fn config_dir(&self) -> &Path {
+        &self.config
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.data
+    }
+
+    pub fn data_local_dir(&self) -> &Path {
+        &self.data_local
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache
+    }
+
+    pub fn state_dir(&self) -> Option<&Path> {
+        self.state.as_deref()
+    }
+}
+
 pub fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("dev", "TimeSlay", "timeslay")
+    if let Some(root) = isolated_root() {
+        return Some(ProjectDirs::under(root));
+    }
+    let dirs = directories::ProjectDirs::from("dev", "TimeSlay", "timeslay")?;
+    Some(ProjectDirs {
+        config: dirs.config_dir().to_owned(),
+        data: dirs.data_dir().to_owned(),
+        data_local: dirs.data_local_dir().to_owned(),
+        cache: dirs.cache_dir().to_owned(),
+        state: dirs.state_dir().map(Path::to_owned),
+    })
+}
+
+/// Whether this process is a test run that must not touch the user's files or
+/// accounts. Every path then lives in a fresh scratch directory, so tests never
+/// see the real database, config or Google tokens, and background workers that
+/// talk to Google or the sync server stay off.
+///
+/// Core's own tests are always isolated. Other crates' tests opt in through the
+/// `test-isolation` feature from their `[dev-dependencies]`. Cargo can also
+/// enable that feature for a normal binary when one invocation builds tests and
+/// binaries together (`--all-targets`), so it only applies to executables that
+/// Cargo placed in `deps/`, which is where test harnesses live.
+pub fn isolated() -> bool {
+    isolated_root().is_some()
+}
+
+fn isolated_root() -> Option<&'static Path> {
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let test_harness = || {
+            std::env::current_exe().is_ok_and(|exe| {
+                exe.parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == "deps")
+            })
+        };
+        if !(cfg!(test) || (cfg!(feature = "test-isolation") && test_harness())) {
+            return None;
+        }
+        // A scratch directory that is never handed out twice, so a test run
+        // cannot fall back to the real directories if creation fails.
+        let root = tempfile::Builder::new()
+            .prefix("timeslay-test-")
+            .tempdir()
+            .expect("tests need a scratch directory instead of the real data")
+            .keep();
+        Some(root)
+    })
+    .as_deref()
 }
 
 pub fn config_path() -> Option<PathBuf> {
