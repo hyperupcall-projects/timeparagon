@@ -83,7 +83,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
             .event("standup")
             .unwrap()
             .display_color(&state.config.calendar),
-        original
+        state.config.calendar.time_block_color()
     );
     state.config.calendar.app_calendar = None;
     let _ = app::update(
@@ -596,6 +596,7 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
         }
         assert!(ui.find("Renamed app calendar").is_err());
         assert!(ui.find("TimeSlayer").is_err());
+        assert!(ui.find("Events").is_err());
         let messages: Vec<_> = ui.into_messages().collect();
         for source in calendar::sources::TimeSlaySource::ALL {
             assert!(
@@ -615,13 +616,13 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
 
     let mut state = state();
     state.config.calendar.app_calendar = Some("app".into());
-    let base = state.calendar.events[0].clone();
+    let base = state.calendar.event("standup").unwrap().clone();
     state.calendar.events.clear();
     for source in TimeSlaySource::ALL {
         let mut event = Event {
             id: source.id().into(),
             calendar_id: "app".into(),
-            all_day: source == TimeSlaySource::Events,
+            all_day: false,
             details: Default::default(),
             ..base.clone()
         };
@@ -713,13 +714,13 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
     use calendar::sources::TimeSlaySource;
     let mut state = state();
     state.config.calendar.app_calendar = Some("app".into());
-    let base = state.calendar.events[0].clone();
+    let base = state.calendar.event("standup").unwrap().clone();
     state.calendar.events.clear();
     for source in TimeSlaySource::ALL {
         let mut event = Event {
             id: source.id().into(),
             calendar_id: "app".into(),
-            all_day: source == TimeSlaySource::Events,
+            all_day: false,
             details: Default::default(),
             ..base.clone()
         };
@@ -840,5 +841,63 @@ fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
         !state
             .calendar
             .calendar_enabled(TimeSlaySource::TimeBlocks.id(), &state.config.calendar)
+    );
+}
+
+#[test]
+fn plain_event_choices_and_defaults_exclude_the_app_calendar() {
+    let mut state = state();
+    state.config.calendar.app_calendar = Some("tasks".into());
+    state.config.calendar.default_calendar = Some("tasks".into());
+    assert_eq!(
+        state
+            .calendar
+            .default_calendar_id(&state.config.calendar)
+            .as_deref(),
+        Some("personal")
+    );
+    let choices: Vec<_> = state
+        .calendar
+        .event_calendars(&state.config.calendar)
+        .map(|calendar| calendar.id.as_str())
+        .collect();
+    assert_eq!(choices, ["personal", "work"]);
+    state
+        .calendar
+        .calendars
+        .retain(|calendar| calendar.id == "tasks");
+    assert!(
+        state
+            .calendar
+            .default_calendar_id(&state.config.calendar)
+            .is_none()
+    );
+}
+
+#[test]
+fn legacy_all_day_events_are_preserved_without_the_removed_source() {
+    let mut state = state();
+    state.config.calendar.app_calendar = Some("tasks".into());
+    state
+        .config
+        .calendar
+        .disabled
+        .push("timeslay:events".into());
+    let mut event = state.calendar.events[0].clone();
+    event.calendar_id = "tasks".into();
+    event.all_day = true;
+    event.details = Default::default();
+    assert_eq!(calendar::sources::TimeSlaySource::of(&event, "tasks"), None);
+    assert!(calendar::event_enabled(
+        &state.calendar.calendars,
+        &event,
+        &state.config.calendar
+    ));
+    assert_eq!(
+        event
+            .kind(&state.config.calendar, &state.calendar.calendars)
+            .chip(&event, &state.config.calendar, &state.calendar.calendars)
+            .0,
+        "Event"
     );
 }

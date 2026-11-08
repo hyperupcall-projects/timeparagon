@@ -6,7 +6,6 @@ use iced_core::Color;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeSlaySource {
-    Events,
     Tasks,
     TimeBlocks,
     Habits,
@@ -14,17 +13,10 @@ pub enum TimeSlaySource {
 }
 
 impl TimeSlaySource {
-    pub const ALL: [Self; 5] = [
-        Self::Events,
-        Self::Tasks,
-        Self::TimeBlocks,
-        Self::Habits,
-        Self::Sleep,
-    ];
+    pub const ALL: [Self; 4] = [Self::Tasks, Self::TimeBlocks, Self::Habits, Self::Sleep];
 
     pub fn id(self) -> &'static str {
         match self {
-            Self::Events => "timeslay:events",
             Self::Tasks => "timeslay:tasks",
             Self::TimeBlocks => "timeslay:time-blocks",
             Self::Habits => "timeslay:habits",
@@ -34,7 +26,6 @@ impl TimeSlaySource {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Events => "Events",
             Self::Tasks => "Tasks",
             Self::TimeBlocks => "Time Blocks",
             Self::Habits => "Habits",
@@ -48,7 +39,6 @@ impl TimeSlaySource {
 
     pub fn color(self, settings: &CalendarSettings) -> Color {
         match self {
-            Self::Events => settings.event_color(),
             Self::Tasks => settings.task_event_color(),
             Self::TimeBlocks => settings.time_block_color(),
             Self::Habits => settings.habit_color(),
@@ -59,7 +49,6 @@ impl TimeSlaySource {
     /// The custom color set for this kind, if the user chose one.
     pub fn custom_color(self, settings: &CalendarSettings) -> Option<Color> {
         match self {
-            Self::Events => settings.event_color,
             Self::Tasks => settings.task_event_color,
             Self::TimeBlocks => settings.time_block_color,
             Self::Habits => settings.habit_color,
@@ -71,7 +60,6 @@ impl TimeSlaySource {
     /// Sets this kind's color, or clears it back to the built-in default.
     pub fn set_color(self, settings: &mut CalendarSettings, color: Option<Color>) {
         match self {
-            Self::Events => settings.set_event_color(color),
             Self::Tasks => settings.set_task_event_color(color),
             Self::TimeBlocks => settings.set_time_block_color(color),
             Self::Habits => settings.set_habit_color(color),
@@ -100,7 +88,9 @@ impl TimeSlaySource {
             // Plain timed entries on the app calendar are time blocks.
             Self::TimeBlocks
         } else {
-            Self::Events
+            // Plain all-day entries remain regular Google events, including
+            // any saved on the app calendar by an older version.
+            return None;
         })
     }
 }

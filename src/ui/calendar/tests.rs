@@ -883,6 +883,7 @@ fn canvas_with_one_block() -> DayCanvas {
             tasks: Vec::new(),
             time_block: false,
             habit: None,
+            habit_completed: None,
         }],
         travel: Vec::new(),
         needle: None,
@@ -1044,6 +1045,7 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
         tasks: Vec::new(),
         time_block: false,
         habit: None,
+        habit_completed: None,
     };
     let blocks = [at("standup", 540, 570), at("review", 840, 900)];
 
@@ -1230,6 +1232,7 @@ fn the_cache_key_holds_until_a_traced_detail_changes() {
         tasks: Vec::new(),
         time_block: false,
         habit: None,
+        habit_completed: None,
     };
 
     let key = cache_key(
@@ -2431,4 +2434,97 @@ fn quick_create_focuses_the_title_before_the_first_keystroke() {
     assert!(messages.iter().any(|message| matches!(message,
         Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(title)) if title == "P"
     )));
+}
+
+#[test]
+fn habit_checkboxes_toggle_without_opening_or_dragging_the_event() {
+    for compact in [false, true] {
+        for linked in [false, true] {
+            for completed in [false, true] {
+                let mut canvas = canvas_with_one_block();
+                canvas.compact = compact;
+                canvas.blocks[0].habit_completed = Some(completed);
+                if linked {
+                    canvas.blocks[0].habit = Some(("h".into(), canvas.day));
+                }
+                let bounds = canvas.block_rect(&canvas.blocks[0], 600.0);
+                let label = if linked {
+                    habit_actions(bounds).0
+                } else {
+                    bounds
+                };
+                let checkbox = habit_completion_bounds(label).1;
+                assert_eq!(
+                    canvas.completion_at(checkbox.center(), 600.0),
+                    Some("standup")
+                );
+                assert!(canvas.record_at(checkbox.center(), 600.0).is_none());
+                let element: Element<'_, Message> =
+                    canvas_widget(canvas).width(600).height(1440).into();
+                let mut ui = iced_test::Simulator::with_size(
+                    Default::default(),
+                    Size::new(600.0, 1440.0),
+                    element,
+                );
+                ui.point_at(checkbox.center());
+                ui.simulate([
+                    iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                ]);
+                let messages: Vec<_> = ui.into_messages().collect();
+                assert_eq!(messages.len(), 1, "{messages:?}");
+                assert!(
+                    matches!(&messages[0], Message::Habits(crate::habits::Action::ToggleCompleted(id)) if id == "standup")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_habits_completion_change_invalidates_the_grid_cache() {
+    let mut canvas = canvas_with_one_block();
+    let mut keys = Vec::new();
+    for completed in [None, Some(false), Some(true)] {
+        canvas.blocks[0].habit_completed = completed;
+        keys.push(cache_key(&canvas.blocks, 48.0, GUTTER, false, 0, None));
+    }
+    assert_ne!(keys[0], keys[1]);
+    assert_ne!(keys[1], keys[2]);
+}
+
+#[test]
+fn a_compact_habit_checkbox_captures_the_click_inside_the_event_button() {
+    let mut state = State::blank();
+    let mut event = calendar::sample_snapshot().events.remove(0);
+    event.details.habit = true;
+    let metrics = Metrics::of(Size::new(400.0, 100.0));
+    for busy in [false, true] {
+        if busy {
+            state.habits.completing.insert(event.id.clone());
+        }
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            Size::new(400.0, 100.0),
+            all_day_chip(&state, &event, &metrics),
+        );
+        ui.point_at(Point::new(385.0, 13.0));
+        ui.simulate([
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]);
+        let messages: Vec<_> = ui.into_messages().collect();
+        if !busy {
+            assert_eq!(messages.len(), 1, "{messages:?}");
+            assert!(
+                matches!(&messages[0], Message::Habits(crate::habits::Action::ToggleCompleted(id)) if id == &event.id)
+            );
+        } else {
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| matches!(message, Message::Habits(_)))
+            );
+        }
+    }
 }

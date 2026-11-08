@@ -90,7 +90,7 @@ impl Category {
     /// The color of the matching calendar row.
     pub fn color(self, settings: &CalendarSettings) -> crate::Color {
         match self {
-            Self::Events => TimeSlaySource::Events.color(settings),
+            Self::Events => settings.event_color(),
             Self::Tasks => TimeSlaySource::Tasks.color(settings),
             Self::TimeBlocks => TimeSlaySource::TimeBlocks.color(settings),
             Self::Habits => TimeSlaySource::Habits.color(settings),
@@ -107,7 +107,7 @@ impl Category {
             Some(TimeSlaySource::TimeBlocks) => Self::TimeBlocks,
             Some(TimeSlaySource::Habits) => Self::Habits,
             Some(TimeSlaySource::Sleep) => Self::Sleep,
-            Some(TimeSlaySource::Events) | None => Self::Events,
+            None => Self::Events,
         }
     }
 }

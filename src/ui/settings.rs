@@ -928,13 +928,13 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         metrics,
     ));
 
-    // The calendar new events are created on. Task lists are excluded since
-    // they hold Google Tasks rather than calendar events.
+    // New plain events use regular Google calendars; task lists and the
+    // calendar reserved for TimeSlay's own kinds are excluded.
     let options: Vec<calendar::Calendar> = state
         .calendar
         .calendars
         .iter()
-        .filter(|calendar| !calendar.is_task_list())
+        .filter(|calendar| !calendar.is_task_list() && !calendar.is_app_calendar(settings))
         .cloned()
         .collect();
 

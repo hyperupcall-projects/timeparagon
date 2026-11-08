@@ -120,6 +120,7 @@ pub(super) fn day_canvas<'a>(
                     .then(|| state.habits.habit_of(event))
                     .flatten()
                     .map(|id| (id.to_owned(), event.start.date_naive())),
+                habit_completed: (event.details.habit && !hidden).then_some(event.completed),
                 // A block owns its task rows independently of standalone task visibility.
                 tasks: if time_block {
                     let key = crate::timeblocking::block_key(event);

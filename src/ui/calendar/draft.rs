@@ -438,9 +438,7 @@ pub(super) fn draft_calendar_picker<'a>(
 ) -> Element<'a, Message> {
     let options: Vec<CalendarChoice> = state
         .calendar
-        .calendars
-        .iter()
-        .filter(|calendar| !calendar.is_task_list())
+        .event_calendars(&state.config.calendar)
         .map(|calendar| CalendarChoice {
             id: calendar.id.clone(),
             name: calendar.name.clone(),

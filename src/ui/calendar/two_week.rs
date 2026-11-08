@@ -263,32 +263,28 @@ fn all_day_row<'a>(
     let ink = on_color(color);
     let title = if hidden {
         PRIVATE_TITLE.to_owned()
-    } else if event.completed {
+    } else if event.completed && !event.details.habit {
         format!("✓ {}", event.title)
     } else {
         event.title.clone()
     };
     let alpha = if past { PAST_ALPHA } else { 1.0 };
-    button(
-        text(title)
-            .size(metrics.label())
-            .wrapping(text::Wrapping::None),
-    )
-    .width(Fill)
-    .height(ROW_HEIGHT)
-    .padding([2, 6])
-    .clip(true)
-    .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
-    .style(move |_theme, status| {
-        let mut style = event_chip_style(color, ink, status);
-        style.background = style
-            .background
-            .map(|background| background.scale_alpha(alpha));
-        style.text_color = style.text_color.scale_alpha(alpha);
-        style.shadow = iced::Shadow::default();
-        style
-    })
-    .into()
+    button(event_label(state, event, title, metrics.label()))
+        .width(Fill)
+        .height(ROW_HEIGHT)
+        .padding([2, 6])
+        .clip(true)
+        .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
+        .style(move |_theme, status| {
+            let mut style = event_chip_style(color, ink, status);
+            style.background = style
+                .background
+                .map(|background| background.scale_alpha(alpha));
+            style.text_color = style.text_color.scale_alpha(alpha);
+            style.shadow = iced::Shadow::default();
+            style
+        })
+        .into()
 }
 
 /// A dot in the event's color, then its time and title.
@@ -308,7 +304,7 @@ fn timed_row<'a>(
     let clock = calendar::time_format::clock(event.start, state.config.appearance.time_format);
     let label = if hidden {
         PRIVATE_TITLE.to_owned()
-    } else if event.completed {
+    } else if event.completed && !event.details.habit {
         format!("{clock} ✓ {}", event.title)
     } else {
         format!("{clock} {}", event.title)
@@ -325,14 +321,9 @@ fn timed_row<'a>(
             ..Default::default()
         });
     button(
-        row![
-            dot,
-            text(label)
-                .size(metrics.label())
-                .wrapping(text::Wrapping::None),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center),
+        row![dot, event_label(state, event, label, metrics.label()),]
+            .spacing(6)
+            .align_y(Alignment::Center),
     )
     .width(Fill)
     .height(ROW_HEIGHT)
