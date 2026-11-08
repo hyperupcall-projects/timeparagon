@@ -938,38 +938,35 @@ pub fn project_dirs() -> Option<ProjectDirs> {
 /// see the real database, config or Google tokens, and background workers that
 /// talk to Google or the sync server stay off.
 ///
-/// Core's own tests are always isolated. Other crates' tests opt in through the
-/// `test-isolation` feature from their `[dev-dependencies]`. Cargo can also
-/// enable that feature for a normal binary when one invocation builds tests and
-/// binaries together (`--all-targets`), so it only applies to executables that
-/// Cargo placed in `deps/`, which is where test harnesses live.
+/// Core's own tests and Cargo test executables are always isolated, including
+/// when this crate is compiled as an ordinary dependency without `cfg(test)`.
+/// Detection must not depend on features enabled by the calling test crate.
+/// Normal app binaries live outside Cargo's `deps` directory.
 pub fn isolated() -> bool {
     isolated_root().is_some()
 }
 
 fn isolated_root() -> Option<&'static Path> {
-    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static ROOT: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
     ROOT.get_or_init(|| {
-        let test_harness = || {
-            std::env::current_exe().is_ok_and(|exe| {
-                exe.parent()
-                    .and_then(Path::file_name)
-                    .is_some_and(|name| name == "deps")
-            })
-        };
-        if !(cfg!(test) || (cfg!(feature = "test-isolation") && test_harness())) {
+        let executable = std::env::current_exe().expect("cannot determine storage isolation");
+        let test_harness = executable
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "deps");
+        if !cfg!(test) && !test_harness {
             return None;
         }
-        // A scratch directory that is never handed out twice, so a test run
-        // cannot fall back to the real directories if creation fails.
-        let root = tempfile::Builder::new()
-            .prefix("timeslay-test-")
-            .tempdir()
-            .expect("tests need a scratch directory instead of the real data")
-            .keep();
-        Some(root)
+        // Fail closed: never fall back to the user's files if allocation fails.
+        Some(
+            tempfile::Builder::new()
+                .prefix("timeslay-test-")
+                .tempdir()
+                .expect("tests need a scratch directory instead of the real data"),
+        )
     })
-    .as_deref()
+    .as_ref()
+    .map(tempfile::TempDir::path)
 }
 
 pub fn config_path() -> Option<PathBuf> {
