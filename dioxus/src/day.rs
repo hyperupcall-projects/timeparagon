@@ -1115,36 +1115,22 @@ impl EditContext {
     }
 }
 
-/// Where an item comes from, as the editor heading shows it: an app-specific
-/// kind in a chip of the kind's configured color, or the calendar's name.
+/// Where an item comes from, as the editor heading's chip shows it: an
+/// app-specific kind in the kind's configured color, or for an event on
+/// another calendar, the calendar's name in the event's color.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Source {
-    Kind {
-        name: &'static str,
-        color: timeslay_core::Color,
-    },
-    Calendar(String),
+pub struct Source {
+    pub name: String,
+    pub color: timeslay_core::Color,
 }
 
 /// How the editor describes where an item comes from, like the iced details pane.
 pub fn source_label(event: &Event, context: &EditContext) -> Source {
     let settings = &context.settings;
-    let calendar = context
-        .calendars
-        .iter()
-        .find(|calendar| calendar.id == event.calendar_id);
-    let kind = event
+    let (name, color) = event
         .kind(settings, &context.calendars)
-        .chip(event, settings);
-    match kind {
-        Some((name, color)) => Source::Kind { name, color },
-        None => Source::Calendar(format!(
-            "Calendar: {}",
-            calendar.map_or(event.calendar_id.as_str(), |calendar| calendar
-                .name
-                .as_str())
-        )),
-    }
+        .chip(event, settings, &context.calendars);
+    Source { name, color }
 }
 
 /// A task's fields as they are being typed, before each one is saved.
@@ -2200,20 +2186,23 @@ mod tests {
             events: Vec::new(),
         };
         let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
-        let kind = |event: &Event| match source_label(event, &context) {
-            Source::Kind { name, .. } => name.to_owned(),
-            Source::Calendar(name) => name,
-        };
+        let kind = |event: &Event| source_label(event, &context).name;
         assert_eq!(kind(&block), "Time Block");
         assert_eq!(
             source_label(&block, &context),
-            Source::Kind {
-                name: "Time Block",
+            Source {
+                name: "Time Block".into(),
                 color: context.settings.time_block_color()
             }
         );
         let meeting = event("m1", "work", "Standup", at(12, 0), at(12, 30));
-        assert_eq!(kind(&meeting), "Calendar: Work");
+        assert_eq!(
+            source_label(&meeting, &context),
+            Source {
+                name: "Work".into(),
+                color: meeting.display_color(&context.settings)
+            }
+        );
         let mut habit = meeting.clone();
         habit.details.habit = true;
         assert_eq!(kind(&habit), "Habit");
