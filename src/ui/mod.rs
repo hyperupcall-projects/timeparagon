@@ -317,7 +317,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
         let mut base = column![
             container(tabs(state, &nav_metrics)).width(Length::Fixed(nav_width)),
-            saving_indicator(state),
             content
         ]
         .width(Fill)
@@ -329,23 +328,40 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 * (state.config.views.panel_border_outer_width()
                     + state.config.views.panel_border_inner_width());
             let footer_width = (state.calendar_width() - borders).max(1.0).min(size.width);
+            let add = container(
+                tooltip(
+                    button(text("+").size(14).center().width(Fill))
+                        .width(Fill)
+                        .height(PANEL_ACTION_HEIGHT)
+                        .padding(0)
+                        .style(crate::ui::controls::secondary)
+                        .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
+                    text("Create new item").size(12),
+                    tooltip::Position::Top,
+                )
+                .style(crate::ui::controls::surface),
+            )
+            .id("panel-add-task")
+            .width(Length::Fixed(
+                (footer_width * PANEL_ADD_SHARE).max(PANEL_ACTION_HEIGHT * 2.0),
+            ))
+            .height(PANEL_ACTION_HEIGHT);
             base = base.push(
                 container(
-                    tooltip(
-                        button(text("+").size(14).center().width(Fill))
-                            .width(Fill)
-                            .height(PANEL_ACTION_HEIGHT)
-                            .padding(0)
-                            .style(crate::ui::controls::secondary)
-                            .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
-                        text("Create new item").size(12),
-                        tooltip::Position::Top,
-                    )
-                    .style(crate::ui::controls::surface),
+                    row![activity_button(state), add]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
                 )
-                .id("panel-add-task")
+                .id("panel-footer")
                 .width(Length::Fixed(footer_width))
                 .height(PANEL_ACTION_HEIGHT),
+            );
+        } else {
+            base = base.push(
+                container(activity_button(state))
+                    .id("panel-footer")
+                    .width(Fill)
+                    .height(PANEL_ACTION_HEIGHT),
             );
         }
         // Adding/removing a wrapper resets the state of all its descendants.
@@ -356,6 +372,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         }
         if state.more_menu_open {
             layers.push(more_menu(state, &nav_metrics));
+        }
+        if state.activity.open {
+            layers.push(activity_log(state, &nav_metrics));
         }
         // Shared state is visible to both windows, but dialogs have one owner.
         // New-task creation stays in the sidebar, including its supporting dialogs.
@@ -549,6 +568,9 @@ const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
 
 /// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
+/// The part of the footer the add-task button takes; what the app is doing
+/// takes the rest.
+const PANEL_ADD_SHARE: f32 = 0.3;
 
 /// The Do destination opens the day panel.
 pub fn calendar_view_label(_state: &State) -> &'static str {
@@ -1005,31 +1027,122 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     iced::widget::stack(layers).into()
 }
 
-fn saving_indicator<'a>(state: &State) -> Element<'a, Message> {
-    match &state.operations {
-        Ok(rows) => {
-            let pending = rows.iter().filter(|row| row.pending()).count();
-            let failed = rows.len() - pending;
-            let mut parts = Vec::new();
-            if pending > 0 {
-                parts.push(format!("Saving… ({pending} pending)"));
-            }
-            if failed > 0 {
-                parts.push(format!(
-                    "{failed} change{} could not be saved",
-                    if failed == 1 { "" } else { "s" }
-                ));
-            }
-            if parts.is_empty() {
-                Space::new().height(0).into()
-            } else {
-                text(parts.join(" · ")).size(12).into()
-            }
-        }
-        Err(error) => text(format!("Cannot read operations: {error}"))
-            .size(12)
-            .into(),
+/// The foot of the panel's left side: what is happening in the background,
+/// or "Logs" when nothing is. It opens the log either way.
+fn activity_button<'a>(state: &State) -> Element<'a, Message> {
+    let label = text(state.activity.label().to_owned())
+        .size(12)
+        .wrapping(text::Wrapping::None);
+    let label = if state.activity.busy() {
+        label
+    } else {
+        label.style(text::secondary)
+    };
+    container(
+        button(
+            container(label)
+                .clip(true)
+                .width(Fill)
+                .height(Fill)
+                .align_y(Alignment::Center),
+        )
+        .width(Fill)
+        .height(PANEL_ACTION_HEIGHT)
+        .padding([0, 6])
+        .style(crate::ui::controls::ghost)
+        .on_press(Message::Navigation(NavigationMessage::ActivityLogToggled)),
+    )
+    .id("activity-status")
+    .width(Fill)
+    .into()
+}
+
+/// The log of background work, in a card rising from the foot of the panel.
+fn activity_log<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+        .on_press(Message::Navigation(NavigationMessage::ActivityLogToggled));
+    let time_format = state.config.appearance.time_format;
+
+    let mut entries = column![].spacing(6.0).width(Fill);
+    let mut empty = true;
+    for entry in state.activity.log() {
+        empty = false;
+        let time = crate::calendar::time_format::clock(entry.at, time_format);
+        let what = if entry.repeats > 1 {
+            format!("{} (×{})", entry.text, entry.repeats)
+        } else {
+            entry.text.clone()
+        };
+        let what = text(what).size(metrics.label()).width(Fill);
+        let what = if entry.failed {
+            what.style(text::danger)
+        } else {
+            what
+        };
+        entries = entries.push(
+            row![
+                text(time)
+                    .size(metrics.label() - 1.0)
+                    .style(text::secondary)
+                    .wrapping(text::Wrapping::None),
+                what,
+            ]
+            .spacing(8.0),
+        );
     }
+    if empty {
+        entries = entries.push(
+            text("Nothing has happened yet.")
+                .size(metrics.label())
+                .style(text::secondary),
+        );
+    }
+
+    let mut panel = column![
+        text("Logs").size(metrics.label() + 2.0),
+        container(crate::ui::controls::scrollable(entries).width(Fill))
+            .max_height((metrics.size.height * 0.6).max(120.0)),
+    ]
+    .spacing(8.0)
+    .width(Fill);
+    if matches!(&state.operations, Ok(rows) if !rows.is_empty()) {
+        panel = panel.push(
+            button(
+                text("Open operations")
+                    .size(metrics.label())
+                    .center()
+                    .width(Fill),
+            )
+            .width(Fill)
+            .style(crate::ui::controls::secondary)
+            .on_press(Message::Navigation(NavigationMessage::ScreenSelected(
+                Screen::Operations,
+            ))),
+        );
+    }
+
+    let width = (metrics.size.width - metrics.padding * 2.0).clamp(160.0, 360.0);
+    let card = container(panel)
+        .id("activity-log")
+        .width(Length::Fixed(width))
+        .padding(10.0)
+        .style(crate::ui::controls::surface);
+
+    let aligned = column![
+        Space::new().height(Fill),
+        container(row![iced::widget::opaque(card), Space::new().width(Fill)])
+            .padding(Padding {
+                left: metrics.padding,
+                bottom: PANEL_ACTION_HEIGHT + metrics.spacing,
+                ..Default::default()
+            })
+            .width(Fill),
+    ]
+    .width(Fill)
+    .height(Fill);
+
+    let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
+    iced::widget::stack(layers).into()
 }
 fn operations_view<'a>(state: &State) -> Element<'a, Message> {
     let mut panel = column![text("Operations").size(24)].spacing(12).padding(16);

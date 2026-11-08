@@ -85,6 +85,10 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             // The queue and the local copies it shows over Google's changed.
             crate::local_poll::refresh_overlay(state)
         }
+        SystemMessage::ActivityTick => {
+            state.activity.tick(Instant::now());
+            Task::none()
+        }
         SystemMessage::ConfigReloaded(config) => {
             // Only a config that parsed gets here, so the file is usable again.
             state.config_error = None;

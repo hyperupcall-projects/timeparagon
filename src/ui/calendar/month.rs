@@ -209,13 +209,9 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     );
     let mut content = column![
         heading,
-        text(if state.calendar_loading() {
-            "Loading..."
-        } else {
-            "Select a date to open its timeline."
-        })
-        .size(metrics.label() - 1.0)
-        .style(text::secondary),
+        text("Select a date to open its timeline.")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
         grid,
     ]
     .spacing(metrics.spacing)
