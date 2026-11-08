@@ -614,7 +614,7 @@ mod tests {
         let id = state.notes.open.clone().unwrap();
         let _ = app_update(
             &mut state,
-            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects)),
+            Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
         );
         assert!(state.notes.open.is_none());
         assert!(state.notes.return_to.is_none());

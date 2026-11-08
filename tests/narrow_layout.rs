@@ -645,7 +645,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 }
 
 #[test]
-fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), Error> {
+fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
     let mut state = state();
     let mut ui = render(&state, Size::new(200.0, 500.0));
     ui.click(tab_label(200.0, 2))?;
@@ -654,42 +654,49 @@ fn projects_lists_the_defaults_alphabetically_and_can_be_edited() -> Result<(), 
         .find(|message| {
             matches!(
                 message,
-                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects))
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life))
             )
         })
-        .expect("Projects should select its view");
+        .expect("Life should select its view");
     let _ = app::update(&mut state, message);
-    assert_eq!(state.screen, Screen::Projects);
+    assert_eq!(state.screen, Screen::Life);
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
-    let mut tops = Vec::new();
-    for name in [
-        "Personal",
-        "Personal/Chores",
-        "School/Calculus",
-        "School/Homework",
-        "Work",
-    ] {
-        tops.push(ui.find(name).expect(name).bounds().y);
-    }
-    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "{tops:?}");
+    assert!(ui.find("Life").is_ok());
+    assert!(ui.find("Personal").is_ok());
+    // The projects themselves are no longer listed on the page.
+    assert!(ui.find("School/Calculus").is_err());
     assert!(ui.find("Add").is_ok());
     assert!(ui.find("Set Alarm").is_err());
-    assert!(ui.find("Theme").is_err());
     assert!(ui.find(tab_label(200.0, 0)).is_ok());
     drop(ui);
 
-    // Editing a project exposes its name, color and folder.
-    let id = state.config.projects.sorted()[0].id;
     let _ = app::update(
         &mut state,
-        Message::Projects(timeslay::projects::Action::Edit(id)),
+        Message::Life(timeslay::life::Action::Open(
+            timeslay::config::PERSONAL_AREA,
+        )),
     );
     let mut ui = render(&state, Size::new(200.0, 700.0));
-    for label in ["Name", "Color", "Folder path", "Browse…", "Save", "Cancel"] {
+    for label in ["Vision", "Implementation", "Goals", "Add goal", "Close"] {
         assert!(
             ui.find(label).is_ok(),
-            "{label:?} is missing from the editor"
+            "{label:?} is missing from the panel"
+        );
+    }
+    drop(ui);
+
+    let _ = app::update(
+        &mut state,
+        Message::Life(timeslay::life::Action::ShowTab(
+            timeslay::life::Tab::Implementation,
+        )),
+    );
+    let mut ui = render(&state, Size::new(200.0, 900.0));
+    for label in ["Objectives", "Habits", "Projects", "Work"] {
+        assert!(
+            ui.find(label).is_ok(),
+            "{label:?} is missing from Implementation"
         );
     }
     Ok(())

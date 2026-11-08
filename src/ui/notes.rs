@@ -26,7 +26,7 @@ fn pastel(color: Pastel) -> Color {
     Color::from_rgb8(r, g, b)
 }
 
-fn note_surface(color: Pastel) -> impl Fn(&Theme) -> container::Style {
+pub(crate) fn note_surface(color: Pastel) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(pastel(color).into()),
         text_color: Some(INK),
@@ -435,7 +435,7 @@ fn styled<'a>(runs: Vec<Inline>, size: f32, bold: bool) -> Element<'a, Message> 
 }
 
 /// A note's text as it reads, on a note's background.
-fn rendered<'a>(body: &str, size: f32) -> Element<'a, Message> {
+pub(crate) fn rendered<'a>(body: &str, size: f32) -> Element<'a, Message> {
     let blocks = markdown::parse(body);
     if blocks.is_empty() {
         return text("Nothing written yet. Switch to Edit to start.")

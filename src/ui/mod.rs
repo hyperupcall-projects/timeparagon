@@ -15,12 +15,12 @@ pub mod habits;
 mod habits_charts;
 pub mod inbox;
 pub mod layout;
+pub mod life;
 pub mod links;
 mod meetings;
 pub mod notepad;
 pub mod notes;
 pub mod people;
-pub mod projects;
 pub mod recurrence;
 pub mod reminders;
 pub mod settings;
@@ -305,7 +305,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
             (Screen::Triaged, _) => inbox::triaged(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
-            (Screen::Projects, _) => projects::view(state, &metrics),
+            (Screen::Life, _) => life::view(state, &metrics),
             (Screen::Travel, _) => travel::view(state, &main_metrics),
             (Screen::Habits, _) => habits::view(state, &main_metrics),
             (Screen::Calendar, _) => {
@@ -538,12 +538,12 @@ fn drag_ghost<'a>(
 
 /// The six main navigation items.
 const TAB_COUNT: usize = 6;
-const TAB_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Projects", "Note", "More", "Settings"];
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Proj", "Note", "More", "Set"];
+const TAB_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Life", "Note", "More", "Settings"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Life", "Note", "More", "Set"];
 const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
-    ["Do", "Plan 2 Weeks", "Projects", "Note", "More", "Settings"];
+    ["Do", "Plan 2 Weeks", "Life", "Note", "More", "Settings"];
 const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-    ["Do", "Plan 2 Weeks", "Proj", "Note", "More", "Set"];
+    ["Do", "Plan 2 Weeks", "Life", "Note", "More", "Set"];
 
 /// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
@@ -685,10 +685,10 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         metrics,
         fit,
     );
-    let projects = tab(
+    let life = tab(
         labels[2],
-        state.screen == Screen::Projects,
-        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects)),
+        state.screen == Screen::Life,
+        Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
         metrics,
         fit,
     );
@@ -719,7 +719,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         row![
             row![view, plan].spacing(fit.gap),
             Space::new().width(Fill),
-            projects,
+            life,
             Space::new().width(Fill),
             row![note, more, settings].spacing(fit.gap),
         ]

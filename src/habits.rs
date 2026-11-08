@@ -578,7 +578,7 @@ pub(crate) fn write_for_test(state: &State, path: &std::path::Path) {
     write(path, &state.habits.library).unwrap();
 }
 
-fn persist(state: &mut State) -> Task<Message> {
+pub(crate) fn persist(state: &mut State) -> Task<Message> {
     let Some(path) = state.habits.path.clone() else {
         return Task::none();
     };

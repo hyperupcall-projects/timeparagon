@@ -375,7 +375,7 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ))
         .id("dock-reservation")
         .width(Fill),
-        text("Keep maximized windows beside the dock. Popups do not reserve space.")
+        text("Enabling prevents maximized windows from overlapping the dock.")
             .size(metrics.label())
             .style(text::secondary),
         layout_number(
@@ -437,7 +437,7 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ))
         .id("panel-reservation")
         .width(Fill),
-        text("Keep maximized windows beside the panel. Tooltips do not reserve space.")
+        text("Enabling prevents maximized windows from overlapping the panel.")
             .size(metrics.label())
             .style(text::secondary),
         layout_number(

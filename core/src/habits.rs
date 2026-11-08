@@ -540,6 +540,9 @@ pub struct Habit {
     /// Each day's number in thousandths. It outlives `measure` being turned off.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub values: BTreeMap<NaiveDate, i64>,
+    /// The life area it belongs to, by id. Unset means the Personal area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<u64>,
 }
 
 /// A habit as any version has saved it.
@@ -585,6 +588,8 @@ struct StoredHabit {
     measure: Option<Measure>,
     #[serde(default)]
     values: BTreeMap<NaiveDate, i64>,
+    #[serde(default)]
+    area: Option<u64>,
 }
 
 #[derive(Deserialize, Default, PartialEq, Clone, Copy)]
@@ -684,6 +689,7 @@ impl From<StoredHabit> for Habit {
                 stored.measure
             },
             values,
+            area: stored.area,
         }
     }
 }
@@ -709,6 +715,7 @@ impl Habit {
             section: None,
             measure: None,
             values: BTreeMap::new(),
+            area: None,
         }
     }
 
