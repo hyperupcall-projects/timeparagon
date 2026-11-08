@@ -106,6 +106,7 @@ pub struct NotepadText {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceSettings {
+    pub distance_unit: crate::places::DistanceUnit,
     pub time_format: crate::calendar::time_format::TimeFormat,
 }
 
@@ -113,6 +114,7 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             time_format: crate::calendar::time_format::TimeFormat::TwentyFourHour,
+            distance_unit: crate::places::DistanceUnit::default(),
         }
     }
 }
@@ -1255,6 +1257,20 @@ mod tests {
             Config::default().appearance.time_format,
             crate::calendar::time_format::TimeFormat::TwentyFourHour
         );
+    }
+
+    #[test]
+    fn distance_unit_defaults_and_round_trips_in_shared_config() {
+        use crate::places::DistanceUnit;
+        let old: Config = toml::from_str("[appearance]\ntime_format = 'compact'").unwrap();
+        assert_eq!(old.appearance.distance_unit, DistanceUnit::Kilometers);
+        for unit in DistanceUnit::ALL {
+            let mut config = old.clone();
+            config.appearance.distance_unit = unit;
+            let saved = toml::to_string(&config).unwrap();
+            let restored: Config = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.appearance.distance_unit, unit);
+        }
     }
 
     #[test]

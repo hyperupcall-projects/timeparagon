@@ -112,7 +112,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         section("Dock", dock(state, metrics), metrics),
         section("Side panel", panel(state, metrics), metrics),
         section("Overlays", overlays(state, metrics), metrics),
-        section("Windowing", windowing(state, metrics), metrics),
         section("Keyboard shortcuts", shortcuts(state, metrics), metrics),
         section(
             "Calendar view order",
@@ -301,6 +300,13 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
                 ),
                 metrics,
             ),
+            choice(
+                "Distance unit",
+                config::DistanceUnit::ALL.to_vec(),
+                Some(state.config.appearance.distance_unit),
+                |unit| Message::Settings(SettingsMessage::DistanceUnitSelected(unit)),
+                metrics,
+            ),
         ]
         .spacing(metrics.spacing),
     )
@@ -348,6 +354,7 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             state,
             metrics
         ),
+        windowing(state, metrics),
     ]
     .spacing(metrics.spacing)
     .into()
@@ -782,7 +789,7 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     column![
         field(
-            format!("Sleep goal: {} hours", settings.sleep_goal_hours()),
+            "Sleep goal",
             number_dropdown(
                 6..=12,
                 settings.sleep_goal_hours(),
@@ -793,10 +800,7 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics,
         ),
         field(
-            format!(
-                "Sleep day starts at {}",
-                calendar::time_format::hour(settings.sleep_day_start_hour(), time_format)
-            ),
+            "Sleep day starts at",
             number_dropdown(
                 0..=6,
                 settings.sleep_day_start_hour(),
@@ -807,10 +811,7 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             metrics,
         ),
         field(
-            format!(
-                "Latest wake-up: {}",
-                calendar::time_format::hour(settings.latest_wakeup_hour(), time_format)
-            ),
+            "Latest wake-up",
             number_dropdown(
                 4..=14,
                 settings.latest_wakeup_hour(),
@@ -969,6 +970,39 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     indent(section.into(), metrics)
 }
 
+/// Keep a single named default choice, with an empty ID so destinations still
+/// find or create the default list when tasks are filed.
+fn task_list_options(
+    task_lists: &[CalendarOption],
+    default_name: &str,
+    configured: Option<&str>,
+) -> (Vec<CalendarOption>, Option<CalendarOption>) {
+    let default = CalendarOption {
+        id: String::new(),
+        name: default_name.to_owned(),
+    };
+    let uses_default = configured.is_none_or(str::is_empty)
+        || task_lists
+            .iter()
+            .any(|list| Some(list.id.as_str()) == configured && list.name == default_name);
+    let mut options = vec![default.clone()];
+    options.extend(
+        task_lists
+            .iter()
+            .filter(|list| list.name != default_name)
+            .cloned(),
+    );
+    let selected = if uses_default {
+        Some(default)
+    } else {
+        options
+            .iter()
+            .find(|list| Some(list.id.as_str()) == configured)
+            .cloned()
+    };
+    (options, selected)
+}
+
 /// The Google Tasks lists the app files tasks into. Each task list is chosen
 /// here: where scheduled tasks, backlog, triaged tasks and new tasks land.
 fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -986,18 +1020,11 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let mut section = column![].spacing(metrics.spacing);
 
-    let mut options = vec![CalendarOption {
-        id: String::new(),
-        name: format!(
-            "Default: {}",
-            crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST
-        ),
-    }];
-    options.extend(task_lists.clone());
-    let selected = options
-        .iter()
-        .find(|option| settings.time_block_list.as_deref().unwrap_or("") == option.id)
-        .cloned();
+    let (options, selected) = task_list_options(
+        &task_lists,
+        crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
+        settings.time_block_list.as_deref(),
+    );
     section = section.push(field(
         "Google Tasks list for time-blocked and scheduled tasks",
         crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
@@ -1009,18 +1036,11 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         metrics,
     ));
 
-    let mut options = vec![CalendarOption {
-        id: String::new(),
-        name: format!(
-            "Default: {}",
-            crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST
-        ),
-    }];
-    options.extend(task_lists.clone());
-    let selected = options
-        .iter()
-        .find(|option| settings.backlog_list.as_deref().unwrap_or("") == option.id)
-        .cloned();
+    let (options, selected) = task_list_options(
+        &task_lists,
+        crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST,
+        settings.backlog_list.as_deref(),
+    );
     section = section.push(field(
         "Google Tasks list for backlog tasks",
         crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
@@ -1034,18 +1054,11 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         metrics,
     ));
 
-    let mut options = vec![CalendarOption {
-        id: String::new(),
-        name: format!(
-            "Default: {}",
-            crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST
-        ),
-    }];
-    options.extend(task_lists.clone());
-    let selected = options
-        .iter()
-        .find(|option| settings.triaged_list.as_deref().unwrap_or("") == option.id)
-        .cloned();
+    let (options, selected) = task_list_options(
+        &task_lists,
+        crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST,
+        settings.triaged_list.as_deref(),
+    );
     section = section.push(field(
         "Google Tasks list for triaged tasks",
         crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
@@ -1059,15 +1072,11 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         metrics,
     ));
 
-    let mut options = vec![CalendarOption {
-        id: String::new(),
-        name: format!("Default: {}", crate::inbox::DEFAULT_LIST),
-    }];
-    options.extend(task_lists);
-    let selected = options
-        .iter()
-        .find(|option| settings.inbox_list.as_deref().unwrap_or("") == option.id)
-        .cloned();
+    let (options, selected) = task_list_options(
+        &task_lists,
+        crate::inbox::DEFAULT_LIST,
+        settings.inbox_list.as_deref(),
+    );
     section = section.push(field(
         "Google Tasks list for new tasks (the Inbox)",
         crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
@@ -1257,23 +1266,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn task_list_defaults_are_selected_once_and_keep_automatic_creation() {
+        for default_name in [
+            config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
+            config::CalendarSettings::DEFAULT_BACKLOG_LIST,
+            config::CalendarSettings::DEFAULT_TRIAGED_LIST,
+            crate::inbox::DEFAULT_LIST,
+        ] {
+            let custom = CalendarOption {
+                id: "tasks:custom".into(),
+                name: "Personal".into(),
+            };
+            // The named default remains selectable before Google has created it.
+            let (options, selected) = task_list_options(&[custom.clone()], default_name, None);
+            assert_eq!(options.len(), 2);
+            let selected = selected.unwrap();
+            assert_eq!(selected.name, default_name);
+            assert!(selected.id.is_empty(), "default must use find-or-create");
+
+            let lists = vec![
+                CalendarOption {
+                    id: "tasks:default".into(),
+                    name: default_name.into(),
+                },
+                custom,
+            ];
+            for configured in [None, Some(""), Some("tasks:default")] {
+                let (options, selected) = task_list_options(&lists, default_name, configured);
+                assert_eq!(options.len(), 2);
+                assert_eq!(
+                    options
+                        .iter()
+                        .filter(|list| list.name == default_name)
+                        .count(),
+                    1
+                );
+                let selected = selected.unwrap();
+                assert_eq!(selected.name, default_name);
+                assert!(selected.id.is_empty());
+            }
+            let (_, selected) = task_list_options(&lists, default_name, Some("tasks:custom"));
+            assert_eq!(selected.unwrap().id, "tasks:custom");
+        }
+    }
+
+    #[test]
     fn sleep_settings_live_in_their_own_section() {
         use iced_test::{Simulator, core::Settings};
 
         let state = State::blank();
         let size = iced::Size::new(420.0, 1200.0);
         let metrics = Metrics::of(size);
-        for label in [
-            "Sleep goal: 8 hours",
-            "Sleep day starts at 00:00",
-            "Latest wake-up: 08:00",
-        ] {
+        for label in ["Sleep goal", "Sleep day starts at", "Latest wake-up"] {
             let mut ui = Simulator::with_size(Settings::default(), size, sleep(&state, &metrics));
             assert!(ui.find(label).is_ok(), "missing {label}");
         }
 
         let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
-        assert!(ui.find("Sleep goal: 8 hours").is_err());
+        assert!(ui.find("Sleep goal").is_err());
     }
 
     #[test]
@@ -1397,7 +1447,7 @@ mod tests {
         }
         assert!(!state.config.views.dock_hour_lines);
 
-        let mut ui = Simulator::with_size(Settings::default(), size, windowing(&state, &metrics));
+        let mut ui = Simulator::with_size(Settings::default(), size, appearance(&state, &metrics));
         assert!(ui.find(iced::widget::Id::from("dock-hour-lines")).is_err());
 
         let mut ui = Simulator::with_size(Settings::default(), size, overlays(&state, &metrics));
@@ -1515,6 +1565,51 @@ mod tests {
     }
 
     #[test]
+    fn distance_unit_choices_persist_without_changing_cached_routes() {
+        use crate::{
+            app,
+            config::{Config, DistanceUnit, SavedRoute, TravelMode},
+        };
+        use iced_test::{Simulator, core::Settings};
+
+        let old: Config = toml::from_str("[appearance]\ntheme = 'Sakura'\n").unwrap();
+        assert_eq!(old.appearance.distance_unit, DistanceUnit::Kilometers);
+        let mut state = State::blank();
+        state.config.travel.routes.push(SavedRoute {
+            from: 1,
+            to: 2,
+            mode: TravelMode::Walk,
+            seconds: 600,
+            meters: 1609,
+        });
+        let cached = state.config.travel.routes.clone();
+        for unit in [DistanceUnit::Miles, DistanceUnit::Kilometers] {
+            let _ = app::update(
+                &mut state,
+                Message::Settings(SettingsMessage::DistanceUnitSelected(unit)),
+            );
+            let saved = toml::to_string(&state.config).unwrap();
+            let restored: Config = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.appearance.distance_unit, unit);
+            assert_eq!(restored.travel.routes, cached);
+            let shared: timeslay_core::config::Config = toml::from_str(&saved).unwrap();
+            assert_eq!(shared.appearance.distance_unit, unit);
+            assert_eq!(shared.travel.routes, cached);
+        }
+        let size = iced::Size::new(180.0, 600.0);
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            size,
+            preferences(&state, &Metrics::of(size)),
+        );
+        ui.click("Kilometers").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::Settings(SettingsMessage::DistanceUnitSelected(DistanceUnit::Miles))
+        )));
+    }
+
+    #[test]
     fn time_format_choices_update_and_persist_the_preference() {
         use crate::{app, calendar::time_format::TimeFormat, config::Config, theme::Catalog};
         use iced_test::{Simulator, core::Settings};
@@ -1548,7 +1643,7 @@ mod tests {
                 preferences(&state, &Metrics::of(size)),
             );
             if width < 200.0 {
-                ui.click("Compact 2").unwrap();
+                ui.click("930p").unwrap();
                 assert!(ui.into_messages().any(|message| matches!(
                     message,
                     Message::Settings(SettingsMessage::TimeFormatSelected(TimeFormat::TwelveHour))

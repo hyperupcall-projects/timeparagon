@@ -16,6 +16,28 @@ const MAX_RESULTS: u32 = 8;
 /// What a trip's start is called when it is Home.
 pub const START_OF_DAY: &str = "Start of day";
 
+/// Display units only; route requests and cached distances always use meters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DistanceUnit {
+    #[default]
+    Kilometers,
+    Miles,
+}
+
+impl DistanceUnit {
+    pub const ALL: [Self; 2] = [Self::Kilometers, Self::Miles];
+}
+
+impl std::fmt::Display for DistanceUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Kilometers => "Kilometers",
+            Self::Miles => "Miles",
+        })
+    }
+}
+
 /// How a trip between two places is made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -169,20 +191,22 @@ pub fn duration_label(seconds: u32) -> String {
     }
 }
 
-/// "850 m", or "1.2 km".
-pub fn distance_label(meters: u32) -> String {
-    if meters < 1000 {
+/// Convert a meter distance for display without changing the stored route.
+pub fn distance_label(meters: u32, unit: DistanceUnit) -> String {
+    if unit == DistanceUnit::Miles {
+        format!("{:.1} mi", f64::from(meters) / 1609.344)
+    } else if meters < 1000 {
         format!("{meters} m")
     } else {
         format!("{:.1} km", f64::from(meters) / 1000.0)
     }
 }
 
-pub fn route_label(route: Route) -> String {
+pub fn route_label(route: Route, unit: DistanceUnit) -> String {
     format!(
         "{} · {}",
         duration_label(route.seconds),
-        distance_label(route.meters)
+        distance_label(route.meters, unit)
     )
 }
 
@@ -517,6 +541,22 @@ pub fn get(url: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distance_units_convert_only_the_display() {
+        let route = Route {
+            seconds: 600,
+            meters: 1609,
+        };
+        assert_eq!(
+            route_label(route, DistanceUnit::Kilometers),
+            "10 min · 1.6 km"
+        );
+        assert_eq!(route_label(route, DistanceUnit::Miles), "10 min · 1.0 mi");
+        assert_eq!(distance_label(0, DistanceUnit::Miles), "0.0 mi");
+        assert_eq!(distance_label(850, DistanceUnit::Kilometers), "850 m");
+        assert_eq!(distance_label(8047, DistanceUnit::Miles), "5.0 mi");
+    }
 
     #[test]
     fn saved_matches_puts_favorites_then_recent_first() {
