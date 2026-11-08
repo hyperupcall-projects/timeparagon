@@ -131,6 +131,10 @@ pub struct Project {
     /// Where the project's files are kept on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<PathBuf>,
+    /// The [`LifeArea`] it belongs to, by id. Unset, or pointing at an area
+    /// that is gone, means [`PERSONAL_AREA`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<u64>,
 }
 
 impl Project {
@@ -139,11 +143,63 @@ impl Project {
     }
 }
 
-/// The projects shown in the Projects tab and offered when editing a task.
+/// The life area that projects and habits without one belong to. It always
+/// exists and cannot be removed, though it can be renamed.
+pub const PERSONAL_AREA: u64 = 1;
+
+/// A part of life, such as health or work, with a vision of where it is
+/// going, the goals that get it there, and the projects and habits in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LifeArea {
+    pub id: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<HexColor>,
+    /// Markdown describing where this area of life is meant to go.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vision: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub goals: Vec<Goal>,
+}
+
+impl LifeArea {
+    pub fn color(&self) -> Option<Color> {
+        self.color.map(Color::from)
+    }
+}
+
+/// One goal of a life area.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Goal {
+    pub id: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+fn personal_area() -> LifeArea {
+    LifeArea {
+        id: PERSONAL_AREA,
+        name: "Personal".to_owned(),
+        color: None,
+        vision: String::new(),
+        goals: Vec::new(),
+    }
+}
+
+fn default_areas() -> Vec<LifeArea> {
+    vec![personal_area()]
+}
+
+/// The projects offered when editing a task, and the life areas they are
+/// grouped under in the Life tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectsSettings {
     pub items: Vec<Project>,
+    /// In the order they are listed.
+    #[serde(default = "default_areas")]
+    pub areas: Vec<LifeArea>,
 }
 
 impl Default for ProjectsSettings {
@@ -163,10 +219,14 @@ impl Default for ProjectsSettings {
             name: name.to_owned(),
             color: None,
             directory: None,
+            area: None,
         })
         .collect();
 
-        let mut settings = Self { items };
+        let mut settings = Self {
+            items,
+            areas: default_areas(),
+        };
         settings.sort();
         settings
     }
@@ -226,6 +286,7 @@ impl ProjectsSettings {
             name,
             color: None,
             directory: None,
+            area: None,
         });
         self.sort();
         id
@@ -235,24 +296,98 @@ impl ProjectsSettings {
         self.items.retain(|project| project.id != id);
     }
 
+    pub fn area(&self, id: u64) -> Option<&LifeArea> {
+        self.areas.iter().find(|area| area.id == id)
+    }
+
+    pub fn area_mut(&mut self, id: u64) -> Option<&mut LifeArea> {
+        self.areas.iter_mut().find(|area| area.id == id)
+    }
+
+    /// The area something filed under `area` is listed in: that area when it
+    /// still exists, otherwise [`PERSONAL_AREA`].
+    pub fn resolve_area(&self, area: Option<u64>) -> u64 {
+        area.filter(|id| self.area(*id).is_some())
+            .unwrap_or(PERSONAL_AREA)
+    }
+
+    /// Puts back the Personal area if the data somehow lost it, so that what
+    /// falls back to it is never left without a place to be listed.
+    pub fn ensure_personal_area(&mut self) {
+        if self.area(PERSONAL_AREA).is_none() {
+            self.areas.insert(0, personal_area());
+        }
+    }
+
+    /// Tidies an area name and checks that no other area (`except` is the
+    /// one being renamed) already has it.
+    pub fn clean_area_name(&self, input: &str, except: Option<u64>) -> Result<String, String> {
+        let name = input.trim();
+        if name.is_empty() {
+            return Err("A life area needs a name".to_owned());
+        }
+        let taken = self
+            .areas
+            .iter()
+            .any(|area| Some(area.id) != except && area.name.to_lowercase() == name.to_lowercase());
+        if taken {
+            return Err(format!("There is already a life area named {name}"));
+        }
+        Ok(name.to_owned())
+    }
+
+    /// Adds a life area at the end of the list and returns its id.
+    pub fn add_area(&mut self, name: String) -> u64 {
+        let id = unique_id(self.areas.iter().map(|area| area.id));
+        self.areas.push(LifeArea {
+            id,
+            name,
+            color: None,
+            vision: String::new(),
+            goals: Vec::new(),
+        });
+        id
+    }
+
+    /// Removes a life area. What was in it falls back to Personal, which
+    /// itself cannot be removed.
+    pub fn remove_area(&mut self, id: u64) {
+        if id != PERSONAL_AREA {
+            self.areas.retain(|area| area.id != id);
+        }
+    }
+
+    /// Adds a goal to an area and returns its id.
+    pub fn add_goal(&mut self, area: u64, name: String) -> Option<u64> {
+        let area = self.area_mut(area)?;
+        let id = unique_id(area.goals.iter().map(|goal| goal.id));
+        area.goals.push(Goal {
+            id,
+            name,
+            description: String::new(),
+        });
+        Some(id)
+    }
+
     /// An id that no project has had before, as far as the file can tell.
     ///
     /// Ids are never handed out again after a removal that took the highest
     /// one, so a task left pointing at a removed project does not suddenly
     /// belong to a new one. The clock keeps them unique between runs.
     fn next_id(&self) -> u64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_millis() as u64);
-        let highest = self
-            .items
-            .iter()
-            .map(|project| project.id)
-            .max()
-            .unwrap_or(0);
-
-        now.max(highest + 1)
+        unique_id(self.items.iter().map(|project| project.id))
     }
+}
+
+/// An id above every one in `taken`, from the clock so that ids stay unique
+/// between runs and devices.
+fn unique_id(taken: impl Iterator<Item = u64>) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    let highest = taken.max().unwrap_or(0);
+
+    now.max(highest + 1)
 }
 
 /// Google Calendar connection and which calendars are shown on the calendar.

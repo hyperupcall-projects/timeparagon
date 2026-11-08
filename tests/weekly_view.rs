@@ -484,7 +484,7 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
             Screen::Inbox,
             Screen::Triaged,
             Screen::Backlog,
-            Screen::Projects,
+            Screen::Life,
             Screen::Notepad,
             Screen::Travel,
             Screen::Habits,
@@ -601,7 +601,7 @@ fn first_overview_click_opens_schedule_through_window_startup() -> Result<(), Er
         for screen in [
             Screen::Inbox,
             Screen::Backlog,
-            Screen::Projects,
+            Screen::Life,
             Screen::Notepad,
             Screen::Settings,
             Screen::Travel,
@@ -736,7 +736,7 @@ fn top_level_navigation_leaves_the_range_and_keeps_only_day_planning_open() {
         Screen::Overdue,
         Screen::Triaged,
         Screen::Backlog,
-        Screen::Projects,
+        Screen::Life,
         Screen::Notepad,
         Screen::Travel,
         Screen::Habits,
@@ -1218,6 +1218,7 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
         name: name.into(),
         color: Some(timeslay::hex::parse(color).unwrap().into()),
         directory: None,
+        area: None,
     })
     .collect();
     state.calendar.apply_week_snapshot(

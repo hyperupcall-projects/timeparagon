@@ -784,7 +784,7 @@ fn overview_refreshes_and_follows_today_on_other_panel_tabs() {
     for screen in [
         Screen::Inbox,
         Screen::Overdue,
-        Screen::Projects,
+        Screen::Life,
         Screen::Notepad,
         Screen::Travel,
         Screen::Habits,

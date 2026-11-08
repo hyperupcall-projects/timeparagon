@@ -130,7 +130,7 @@ pub enum Screen {
     /// Tasks that have been triaged but not yet scheduled.
     Triaged,
     Backlog,
-    Projects,
+    Life,
     /// The places events happen at, and the trips between them.
     Travel,
     /// Recurring events on the TimeSlay calendar: habits and their rules.
@@ -373,7 +373,7 @@ pub struct State {
     /// The day whose full list is open from its "N more" in the two-week view.
     pub two_week_more: Option<chrono::NaiveDate>,
     /// What the Projects tab is in the middle of.
-    pub projects: crate::projects::Workspace,
+    pub life: crate::life::Workspace,
     /// Places, place searches and trips: the Travel tab and travel on the day view.
     pub travel: crate::travel::Workspace,
     pub main_window: Option<window::Id>,
@@ -460,7 +460,7 @@ pub enum Message {
     People(crate::people::Action),
     Alarms(alarms::Action),
     Reminders(crate::reminders::Action),
-    Projects(crate::projects::Action),
+    Life(crate::life::Action),
     Travel(crate::travel::Action),
     Habits(crate::habits::Action),
     /// An event we deliberately do not act on, such as a key release or a
@@ -899,7 +899,7 @@ impl State {
             )),
             panel_day_wanted: false,
             two_week_more: None,
-            projects: Default::default(),
+            life: Default::default(),
             travel: crate::travel::Workspace::starting(config.travel.show),
             main_window: None,
             main_size: Size::new(
@@ -1470,7 +1470,7 @@ fn dispatch(state: &mut State, message: Message) -> Task<Message> {
         Message::People(action) => crate::people::update(state, action),
         Message::Alarms(action) => alarms::update(state, action),
         Message::Reminders(action) => crate::reminders::update(state, action),
-        Message::Projects(action) => crate::projects::update(state, action),
+        Message::Life(action) => crate::life::update(state, action),
         Message::Travel(action) => crate::travel::update(state, action),
         Message::Habits(action) => crate::habits::update(state, action),
         Message::Picker(action) => crate::ui::controls::update(state, action),
