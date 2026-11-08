@@ -2,7 +2,7 @@
 //! only an authenticated ciphertext is written to the no-backup directory.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 

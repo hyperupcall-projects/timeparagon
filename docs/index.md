@@ -16,6 +16,9 @@ cargo run -p timeslay --release
 
 # Dioxus mobile app.
 ./scripts/build-android.sh
+
+# Dioxus desktop app.
+cargo run -p timeslay-dioxus
 ```
 
 It is recommended to use [Obtainium](https://github.com/ImranR98/Obtainium) to download the Android app.
@@ -37,7 +40,7 @@ To use all features, a bit of setup is required:
 	- Highly recommended for creating VPN to connect devices with Turso for syncing.
 	- Run it like `sudo tailscale serve --bg --https <TAILNET_PORT> <INTERNAL_PORT>`
 	- Has very usable free tier.
-- Syncthing
+- [Syncthing](https://syncthing.net)
 	- Highly recommended to sync markdown notes between devices.
 	- Completely free.
 - Google Accounts
@@ -99,7 +102,7 @@ The design of this app is, in part, constrainted by the fact that:
 
 ## Features
 
-The documentation below is AI-generated.
+The documentation below (and pretty  much everywhere else) is AI-generated.
 
 - [Meeetings](./docs/meetings.md)
 - [Notes](./docs/notes.md)
