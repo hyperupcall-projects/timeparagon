@@ -127,25 +127,3 @@ Of course, there's also week, 2-week, and month views:
 ## Documentation
 
 See [Documentation](./docs/index.md) for more details.
-
-## Development hooks
-
-Install the pinned [hk](https://hk.jdx.dev/) and Pkl tools with [mise](https://mise.jdx.dev/), then enable the repository's pre-commit hook:
-
-```sh
-mise install
-rustup component add rustfmt clippy
-mise exec -- hk install --mise
-```
-
-Python 3 and the native build dependencies used by CI are also required for Clippy.
-On commit, hk saves unstaged work, applies machine-applicable Clippy fixes only
-to staged Rust files, formats those files with rustfmt, stages the fixes, and
-restores unstaged work. Vendored sources are excluded. Fixes can affect the whole
-staged version of a changed file; they are not limited to changed lines.
-Clippy still analyzes the workspace and all targets, so remaining warnings
-(including warnings in unchanged files) or build errors block the commit.
-Manifest and lockfile changes also trigger Clippy but do not broaden its fix scope.
-
-Use `mise exec -- hk check --all` to check manually, or `mise exec -- hk fix`
-to fix changed files without staging the results.
