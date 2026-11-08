@@ -51,18 +51,113 @@ textarea {
 
 /* ---------------------------------------------------------------- navigation */
 
+/* One card, as on the desktop: Do and Plan, then Note, More and Settings,
+ * with Plan's lists on a row of their own beneath. */
 .nav-card {
     flex: none;
     position: relative;
     z-index: 5;
     display: flex;
-    align-items: center;
-    gap: 4px;
+    flex-direction: column;
+    gap: 2px;
     padding: 6px 10px;
     background: var(--card);
     color: var(--on-card);
     border-bottom: 1px solid var(--edge);
     box-shadow: var(--shadow-card);
+}
+
+.nav-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.plan-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.plan-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.label-short {
+    display: none;
+}
+
+/* The Plan button: the period it plans, and the menu that changes it. */
+.plan-switch {
+    flex: none;
+    display: flex;
+    align-items: stretch;
+    min-height: 38px;
+    background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-control);
+    box-shadow: var(--shadow-button);
+    overflow: hidden;
+}
+
+.plan-switch.active {
+    background: var(--accent);
+    border-color: var(--accent-edge);
+    color: var(--on-accent);
+}
+
+.plan-main,
+.plan-toggle {
+    appearance: none;
+    padding: 0 9px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.plan-toggle {
+    padding: 0 8px;
+    border-left: 1px solid var(--hairline);
+}
+
+.plan-main:active,
+.plan-toggle:active {
+    background: var(--pressed);
+}
+
+.menu-dismiss {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+}
+
+.plan-menu,
+.actions-menu {
+    position: absolute;
+    z-index: 21;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 160px;
+    padding: 6px;
+    background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-menu);
+}
+
+.plan-menu {
+    top: 48px;
+    left: 10px;
+}
+
+.actions-menu {
+    top: calc(100% + 6px);
+    left: 0;
 }
 
 .nav-tab {
@@ -252,7 +347,6 @@ textarea {
 .month-name {
     flex: 1;
     font-weight: 700;
-    text-align: center;
 }
 
 .month-grid {
@@ -290,6 +384,11 @@ textarea {
     background: var(--accent-soft);
     color: var(--on-accent-soft);
     border-color: var(--accent);
+}
+
+.month-day.in-range {
+    background: var(--accent-soft);
+    color: var(--on-accent-soft);
 }
 
 .month-day.today {
@@ -1474,8 +1573,8 @@ textarea {
 
 /* The Dioxus desktop build has room to keep the tasks beside the grid. */
 @media (min-width: 821px) {
-    .nav-tab.narrow-only {
-        display: none;
+    .day-header.wide-only {
+        display: flex;
     }
 
     .day-body[data-view] .sidebar,
@@ -2606,4 +2705,198 @@ textarea {
     margin: 0;
     color: var(--muted);
     font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ planning */
+
+/* Planning a day shows the grid beside its lists only where there is room. */
+.day-header.wide-only {
+    display: none;
+}
+
+.plan-page {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding: 10px 10px 84px;
+}
+
+.sidebar-scroll .plan-list {
+    padding-top: 10px;
+    padding-bottom: 72px;
+}
+
+.plan-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.plan-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.plan-titles {
+    flex: 1;
+    min-width: 0;
+}
+
+.plan-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 17px;
+}
+
+.plan-subtitle {
+    margin: 2px 0 0;
+}
+
+.plan-sort {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.plan-sort .client-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.plan-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-card);
+}
+
+.plan-section-title {
+    margin: 0;
+    font-size: 14px;
+}
+
+.plan-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.plan-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    padding: 6px 8px;
+    background: var(--card);
+    color: var(--on-card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-row);
+    box-shadow: var(--shadow-row);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.plan-card:active {
+    background: var(--pressed);
+}
+
+.plan-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.plan-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+}
+
+.plan-field-label {
+    color: var(--muted);
+}
+
+.plan-missing {
+    color: var(--danger);
+}
+
+.plan-projects,
+.plan-project {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.backlog-row {
+    cursor: default;
+}
+
+.backlog-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.backlog-check,
+.backlog-title {
+    appearance: none;
+    padding: 4px 2px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.backlog-check {
+    flex: none;
+    font-size: 16px;
+}
+
+.backlog-title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.backlog-section {
+    flex: none;
+    width: auto;
+    min-height: 34px;
+    padding: 4px 8px;
+    font-size: 14px;
+}
+
+.search-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* A phone keeps every tab on one line by shortening Settings and tightening. */
+@media (max-width: 400px) {
+    .nav-card .nav-tab,
+    .plan-main,
+    .plan-toggle {
+        padding: 0 7px;
+    }
+
+    .label-long {
+        display: none;
+    }
+
+    .label-short {
+        display: inline;
+    }
 }

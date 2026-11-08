@@ -1,4 +1,4 @@
-//! The search popup: narrows the day down to what matches. The rules, and what
+//! The Filter tab of the View sheet: narrows the calendar down to what matches. The rules, and what
 //! each filter means, are `timeslay_core::calendar::search`.
 
 use dioxus::prelude::*;
@@ -7,12 +7,11 @@ use timeslay_core::calendar::search::{Action, AvailabilityFilter, Search};
 use timeslay_core::config::ProjectsSettings;
 
 #[component]
-pub fn SearchSheet(
+pub fn SearchFields(
     search: Signal<Search>,
     labels: Vec<String>,
     locations: Vec<String>,
     projects: ProjectsSettings,
-    on_close: EventHandler<()>,
 ) -> Element {
     let current = search.read().clone();
     let mut apply = move |action: Action| search.write().update(action);
@@ -22,18 +21,7 @@ pub fn SearchSheet(
         .unwrap_or_default();
     let chosen_location = current.location.clone().unwrap_or_default();
     rsx! {
-        div { class: "modal-backdrop editor-backdrop",
-            div { class: "modal editor", role: "dialog", aria_label: "Search",
-                div { class: "modal-head",
-                    div { class: "modal-titles", h2 { class: "modal-title", "Search" } }
-                    button {
-                        class: "modal-close",
-                        title: "Close",
-                        onclick: move |_| on_close.call(()),
-                        "×"
-                    }
-                }
-                div { class: "modal-body editor-body",
+                div { class: "search-fields",
                     input {
                         class: "client-input",
                         r#type: "search",
@@ -153,12 +141,7 @@ pub fn SearchSheet(
                             }
                         }
                     }
-                }
-                div { class: "editor-footer",
                     button { class: "btn", onclick: move |_| apply(Action::Clear), "Clear" }
-                    button { class: "btn primary editor-wide", onclick: move |_| on_close.call(()), "Done" }
                 }
-            }
-        }
     }
 }

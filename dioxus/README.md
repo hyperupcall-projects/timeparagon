@@ -7,8 +7,9 @@ own screen and the rest of the app in sheets over it:
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   `[notes] directory` set in `config.toml`.
 - Search and filters for the day.
-- Week, two-week and month agendas.
-- Overdue and Inbox filters on the Tasks tab.
+- The desktop's navigation: **Do**, **Plan** (Day, Week, 2 Weeks or Month)
+  with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
+  **More** and **Settings**.
 - Joining meetings and answering invitations.
 - Todos, the notepad, brain dumps and projects, shared through Turso.
 - The habit tracker, with the desktop's features: the list with sections, sorting
@@ -175,13 +176,19 @@ To remove a previously granted Drive permission, revoke the app's access in
 connect Google again in the updated app on each device. Changing the requested
 scopes does not revoke existing tokens.
 
-### Mobile layout
+### Layout
 
-At widths of 820px or less, **Calendar** and **Tasks** tabs replace the side-by-side
-layout, with Calendar selected by default. The header and tabs stay visible while
-the selected pane scrolls independently. All-day events appear in Calendar, and
-switching tabs preserves each pane's scroll position. The calendar opens at the
-current time (or 8am on another day), and the time-block popup becomes a bottom sheet.
+The navigation card matches the desktop's. **Do** shows the day's calendar,
+with the day picker, **View** (the Calendars and Filter tabs) and **Actions**
+(Sync now) at the left; the picker's ● goes back to today. **Plan** plans the
+period named on it, and its ▾ chooses Day, Week, 2 Weeks or Month. Planning
+shows the Overdue, Inbox, Today and Backlog lists beneath the navigation, plus
+**Schedule** (the range, as a list of days) while planning a week, two weeks
+or a month. The lists take the same tasks as the desktop's and save the same
+sort settings; Backlog has a picker on each task for its planning horizon in
+place of dragging. At widths above 820px, planning a day keeps the grid beside
+its list. **Note** opens the notepad, and **More** holds Habits, Notes, Brain
+dump, Todos and projects, and Operations. Life stays on the desktop.
 
 ## What the day view shows
 
@@ -252,8 +259,9 @@ clean tree, because the manifest names the widget's resources.
 
 - Only the Dioxus crate enables the desktop/mobile renderers; the root
   workspace defaults to the iced package (`default-members = ["."]`).
-- The **☰** button opens the Calendars sheet, which switches Google calendars,
+- **View → Calendars** which switches Google calendars,
   task lists and TimeSlay event kinds on or off. It saves to this device's
   `[calendar]` settings. Tasks inside a time block's popup stay visible.
-- The ⚙ button only edits the Google client ID and secret. Other settings live
+- **Settings** edits the theme, first day of the week, database sync,
+  reminders and the Google client ID and secret. Other settings live
   in the iced application; this crate reloads the same config when it changes.

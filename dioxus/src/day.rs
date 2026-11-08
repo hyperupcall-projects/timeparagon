@@ -439,10 +439,6 @@ pub fn connect_google(settings: &CalendarSettings) -> Result<(), String> {
     Ok(())
 }
 
-pub fn shift_day(day: NaiveDate, days: i64) -> NaiveDate {
-    day + Duration::days(days)
-}
-
 /// A day's worth of screen-ready data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DayModel {
@@ -1329,7 +1325,7 @@ pub fn untriaged(task: &Event, context: &EditContext) -> bool {
     untriaged_in(task, &context.settings, &context.calendars)
 }
 
-fn untriaged_in(
+pub(crate) fn untriaged_in(
     task: &Event,
     settings: &CalendarSettings,
     calendars: &[calendar::Calendar],

@@ -3,6 +3,7 @@
 
 use chrono::{Duration, Months, NaiveDate};
 use dioxus::prelude::*;
+use timeslay_core::calendar::search::Search;
 use timeslay_core::calendar::{self, Event};
 use timeslay_core::config::CalendarSettings;
 
@@ -43,6 +44,21 @@ pub fn dates(range: Range, anchor: NaiveDate, settings: &CalendarSettings) -> Ve
     }
 }
 
+/// The range's name on its picker, as the desktop's narrow header gives it:
+/// "11/2 – 11/8" for a week or two, and the month's name for a month.
+pub fn label(range: Range, anchor: NaiveDate, settings: &CalendarSettings) -> String {
+    if range == Range::Month {
+        return calendar::month_heading(calendar::first_of_month(anchor));
+    }
+    let days = dates(range, anchor, settings);
+    match (days.first(), days.last()) {
+        (Some(first), Some(last)) => {
+            format!("{} – {}", first.format("%-m/%-d"), last.format("%-m/%-d"))
+        }
+        _ => String::new(),
+    }
+}
+
 /// The anchor of the next or previous range.
 pub fn step(range: Range, anchor: NaiveDate, forward: bool) -> NaiveDate {
     let days = |count: i64| anchor + Duration::days(if forward { count } else { -count });
@@ -61,57 +77,45 @@ pub fn step(range: Range, anchor: NaiveDate, forward: bool) -> NaiveDate {
     }
 }
 
+/// The days of a range with what is on each, as a list. Tapping a day opens
+/// it; tapping an item opens its sheet.
 #[component]
-pub fn AgendaSheet(
+pub fn AgendaDays(
     settings: CalendarSettings,
-    day: NaiveDate,
+    range: Range,
+    anchor: NaiveDate,
     today: NaiveDate,
     /// Bumped by every write, so a change shows here when its editor closes.
     revision: Signal<u32>,
-    /// A habit's events alone, which open on the month, as the desktop's
-    /// "Show on calendar" does.
+    /// A habit's events alone, as the desktop's "Show on calendar" does.
     filter: Option<crate::habits::CalendarFilter>,
+    /// The View sheet's filter, which narrows every view.
+    #[props(default)]
+    search: Search,
     on_day: EventHandler<NaiveDate>,
     on_open: EventHandler<Event>,
-    on_close: EventHandler<()>,
 ) -> Element {
-    let starting = if filter.is_some() {
-        Range::Month
-    } else {
-        Range::Week
-    };
-    let mut range = use_signal(move || starting);
-    let mut anchor = use_signal(move || day);
     let load_settings = settings.clone();
-    let loaded = use_resource(move || {
+    let loaded = use_resource(use_reactive!(|(range, anchor)| {
         let _ = revision();
         let settings = load_settings.clone();
-        let dates = dates(range(), anchor(), &settings);
+        let dates = dates(range, anchor, &settings);
         async move {
             let wanted = dates.clone();
             let snapshot = worker(move || crate::day::load_agenda(&wanted, &settings)).await;
             snapshot.map(|snapshot| (snapshot, dates))
         }
-    });
-    let tab = |label: &'static str, this: Range| {
-        rsx! {
-            button {
-                class: "nav-tab",
-                aria_pressed: (range() == this).to_string(),
-                onclick: move |_| range.set(this),
-                "{label}"
-            }
-        }
-    };
-    let body = match &*loaded.read() {
+    }));
+    match &*loaded.read() {
         None => rsx! { p { class: "hint", role: "status", "Loading…" } },
         Some(Err(message)) => rsx! { p { class: "editor-error", role: "alert", "{message}" } },
         Some(Ok((snapshot, dates))) => {
             let mut days = day::agenda(snapshot, dates, &settings);
-            if let Some(filter) = &filter {
-                for (_, rows) in &mut days {
-                    rows.retain(|row| shows(filter, &row.event));
-                }
+            for (_, rows) in &mut days {
+                rows.retain(|row| {
+                    filter.as_ref().is_none_or(|filter| shows(filter, &row.event))
+                        && search.shows(&row.event, &snapshot.events, &settings)
+                });
             }
             rsx! {
                 for (date, rows) in days {
@@ -145,6 +149,37 @@ pub fn AgendaSheet(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A habit's events on the calendar, from its page's "Show on calendar".
+#[component]
+pub fn AgendaSheet(
+    settings: CalendarSettings,
+    day: NaiveDate,
+    today: NaiveDate,
+    revision: Signal<u32>,
+    filter: Option<crate::habits::CalendarFilter>,
+    on_day: EventHandler<NaiveDate>,
+    on_open: EventHandler<Event>,
+    on_close: EventHandler<()>,
+) -> Element {
+    let starting = if filter.is_some() {
+        Range::Month
+    } else {
+        Range::Week
+    };
+    let mut range = use_signal(move || starting);
+    let mut anchor = use_signal(move || day);
+    let tab = |label: &'static str, this: Range| {
+        rsx! {
+            button {
+                class: "nav-tab",
+                aria_pressed: (range() == this).to_string(),
+                onclick: move |_| range.set(this),
+                "{label}"
             }
         }
     };
@@ -185,7 +220,18 @@ pub fn AgendaSheet(
                         "›"
                     }
                 }
-                div { class: "modal-body editor-body", {body} }
+                div { class: "modal-body editor-body",
+                    AgendaDays {
+                        settings,
+                        range: range(),
+                        anchor: anchor(),
+                        today,
+                        revision,
+                        filter,
+                        on_day,
+                        on_open,
+                    }
+                }
             }
         }
     }

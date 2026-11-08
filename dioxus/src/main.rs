@@ -1,10 +1,10 @@
 //! TimeSlay's Dioxus app.
 //!
-//! The main screen is the day: every calendar event, every Google Task, and
-//! every time block for one day. Tapping an item opens a sheet that edits it; a
-//! time block first lists its assigned tasks. The Habits tab takes the screen
-//! over, as on the desktop's panel. Everything else (adding, notes, search, the
-//! agenda and the lists) opens as a sheet over the day.
+//! The navigation is the desktop's: Do is the day's calendar, Plan plans a
+//! day, week, two weeks or month with the Overdue, Inbox, Today and Backlog
+//! lists beneath it, Note opens the notepad, More the other pages, and
+//! Settings the settings. Tapping an item opens a sheet that edits it; a time
+//! block first lists its assigned tasks.
 
 mod agenda;
 mod create;
@@ -13,6 +13,7 @@ mod editor;
 mod habits;
 mod habits_charts;
 mod notes;
+mod plan;
 mod reminders;
 mod scratch;
 mod search;
@@ -31,7 +32,8 @@ use timeslay_core::config_watch;
 use timeslay_core::theme as look;
 use timeslay_core::timeblocking as tb;
 
-use day::{BlockRef, DayModel, EditContext, TaskGroup, TaskRow, Theme, TimeBlock, TimedEvent};
+use day::{DayModel, EditContext, Theme, TimeBlock, TimedEvent};
+use plan::{PlanTab, PlanView};
 
 /// Height of one hour on the timeline, in pixels.
 const HOUR_HEIGHT: f32 = 60.0;
@@ -186,9 +188,18 @@ fn App() -> Element {
     let mut selected_block = use_signal(|| None::<String>);
     let mut editing = use_signal(|| None::<Event>);
     let block_writing = use_signal(|| false);
-    let mut show_tasks = use_signal(|| false);
+    // Where the navigation is: Do, Plan (with its period and list) or Habits.
+    let mut page = use_signal(|| Page::Do);
+    let plan_view = use_signal(|| PlanView::Day);
+    let plan_tab = use_signal(|| PlanTab::Overdue);
+    let mut plan_menu_open = use_signal(|| false);
+    // The day the range being planned holds.
+    let mut week_anchor = use_signal(|| *current_day.peek());
     let month_open = use_signal(|| false);
     let month_shown = use_signal(|| calendar::first_of_month(*current_day.peek()));
+    let range_month_open = use_signal(|| false);
+    let range_month_shown = use_signal(|| calendar::first_of_month(*current_day.peek()));
+    let mut show_actions = use_signal(|| false);
     let mut scrolled = use_signal(|| false);
     let follow_today = use_signal(|| true);
     let connecting = use_signal(|| false);
@@ -206,21 +217,19 @@ fn App() -> Element {
     let mut sync_url_input = use_signal(String::new);
     let mut sync_url_error = use_signal(|| None::<String>);
     let mut sync_url_saved = use_signal(|| false);
-    let mut show_calendars = use_signal(|| false);
-    let mut show_tracker = use_signal(|| false);
+    // The View sheet, open on Calendars or Filter.
+    let mut view_sheet = use_signal(|| None::<ViewTab>);
     // A habit's events, which "Show on calendar" opens the agenda on.
     let mut agenda_filter = use_signal(|| None::<habits::CalendarFilter>);
     let mut show_notes = use_signal(|| false);
     let mut show_create = use_signal(|| false);
-    let mut show_search = use_signal(|| false);
     let mut show_agenda = use_signal(|| false);
-    let mut show_scratch = use_signal(|| false);
+    let mut show_scratch = use_signal(|| None::<scratch::Page>);
     let mut show_more = use_signal(|| false);
     let mut show_operations = use_signal(|| false);
     let mut google_operations = use_signal(|| Vec::<calendar::operations::Operation>::new());
     calendar::operations::start();
     let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
-    let task_filter = use_signal(|| TaskFilter::All);
     let search_state = use_signal(Search::default);
     // A note's connection or an agenda row, waiting for its day to load.
     let mut pending_open = use_signal(|| None::<String>);
@@ -381,8 +390,10 @@ fn App() -> Element {
     // Put the current time in view once, without yanking the scroll position
     // on every later refresh.
     use_effect(move || {
-        // Retry when Calendar becomes visible if a day loaded in the Tasks tab.
-        let _ = show_tasks();
+        // Retry when the grid comes into view, if the day loaded on another page.
+        let _ = page();
+        let _ = plan_view();
+        let _ = plan_tab();
         let pending = matches!(*data.state().read(), UseResourceState::Pending);
         let loaded_day = match data.read().as_ref() {
             Some(Ok(snapshot)) => Some(snapshot.day),
@@ -492,7 +503,6 @@ fn App() -> Element {
         (model, travel)
     };
 
-    let heading = calendar::day_heading(selected_day, today);
     let time_format = config.read().appearance.time_format;
     let day_nav = DayNav {
         current_day,
@@ -501,76 +511,178 @@ fn App() -> Element {
         follow_today,
         pending_open,
     };
+    let plan_nav = PlanNav {
+        page,
+        view: plan_view,
+        tab: plan_tab,
+        menu_open: plan_menu_open,
+        week_anchor,
+        current_day,
+    };
+    let mut open_settings = move || {
+        settings_id.set(config.peek().calendar.client_id.clone());
+        settings_secret.set(String::new());
+        settings_error.set(None);
+        sync_url_input.set(config.peek().database_sync.url.clone());
+        sync_url_error.set(None);
+        sync_url_saved.set(false);
+        show_more.set(false);
+        plan_menu_open.set(false);
+        show_settings.set(true);
+    };
 
+    let planning_range = page() == Page::Plan && plan_view().range().is_some();
+    let plan_active = plan_menu_open() || page() == Page::Plan;
+    let more_active = show_more()
+        || page() == Page::Habits
+        || show_notes()
+        || show_operations()
+        || matches!(show_scratch(), Some(scratch::Page::BrainDump));
+    let plan_tabs = PlanTab::ALL
+        .into_iter()
+        .filter(|tab| planning_range || *tab != PlanTab::Schedule)
+        .map(|tab| {
+            let mut plan_tab = plan_tab;
+            nav_tab(tab.label(), plan_tab() == tab, "", move |_| {
+                plan_menu_open.set(false);
+                plan_tab.set(tab);
+            })
+        });
+    let plan_menu = plan_menu_open().then(|| {
+        rsx! {
+            div { class: "menu-dismiss", onclick: move |_| plan_menu_open.set(false) }
+            div { class: "plan-menu", role: "menu", aria_label: "Plan",
+                for view in PlanView::ALL {
+                    button {
+                        key: "{view.menu_label()}",
+                        class: "nav-tab",
+                        role: "menuitemradio",
+                        aria_pressed: (plan_view() == view).to_string(),
+                        onclick: move |_| plan_nav.choose(view),
+                        "{view.menu_label()}"
+                    }
+                }
+            }
+        }
+    });
+
+    // One card at the top, as on the desktop: Do and Plan, then Note, More
+    // and Settings, with Plan's lists on a second row while planning.
     let topbar = rsx! {
         header { class: "nav-card",
-            {nav_tab("Schedule", !show_tasks() && !show_tracker(), "", move |_| {
-                show_tasks.set(false);
-                show_tracker.set(false);
-            })}
-            {nav_tab("Tasks", show_tasks() && !show_tracker(), "narrow-only", move |_| {
-                show_tasks.set(true);
-                show_tracker.set(false);
-            })}
-            div { class: "spacer" }
-            {nav_tab("Notes", show_notes(), "", move |_| show_notes.set(true))}
-            {nav_tab("Habits", show_tracker(), "", move |_| show_tracker.set(true))}
-            {nav_tab("More", show_more(), "", move |_| show_more.set(true))}
-        }
-        div { class: "day-header", hidden: show_tracker(),
-            h1 { class: "day-title", "{heading}" }
-            if google_operations().iter().any(|operation| operation.pending()) {span { class: "hint", role: "status", "Saving…" }}
-            if google_operations().iter().any(|operation| !operation.pending()) {span { class: "hint", role: "status", "Some changes could not be saved" }}
-            div { class: "day-controls",
-                {month_picker(selected_day, today, settings.first_day_of_week, month_open, month_shown, day_nav)}
-                button {
-                    class: if searching { "btn icon primary" } else { "btn icon" },
-                    title: "Search",
-                    aria_label: "Search",
-                    onclick: move |_| show_search.set(true),
-                    "⌕"
+            div { class: "nav-row",
+                {nav_tab("Do", page() == Page::Do, "", move |_| {
+                    plan_menu_open.set(false);
+                    page.set(Page::Do);
+                })}
+                div { class: if plan_active { "plan-switch active" } else { "plan-switch" },
+                    button {
+                        class: "plan-main",
+                        aria_pressed: (page() == Page::Plan).to_string(),
+                        onclick: move |_| plan_nav.choose(plan_view()),
+                        "{plan_view().label()}"
+                    }
+                    button {
+                        class: "plan-toggle",
+                        title: "Choose what to plan",
+                        aria_label: "Choose what to plan",
+                        aria_expanded: plan_menu_open().to_string(),
+                        onclick: move |_| plan_menu_open.set(!plan_menu_open()),
+                        "▾"
+                    }
                 }
                 div { class: "spacer" }
+                {nav_tab("Note", show_scratch() == Some(scratch::Page::Notepad), "", move |_| {
+                    plan_menu_open.set(false);
+                    show_scratch.set(Some(scratch::Page::Notepad));
+                })}
+                {nav_tab("More", more_active, "", move |_| {
+                    plan_menu_open.set(false);
+                    show_more.set(true);
+                })}
                 button {
-                    class: "btn icon",
-                    title: "Previous day",
-                    aria_label: "Previous day",
-                    onclick: move |_| {
-                        let day = day::shift_day(current_day(), -1);
-                        day_nav.go_to(day, false);
-                    },
-                    "‹"
-                }
-                button {
-                    class: "btn",
-                    onclick: move |_| day_nav.go_to(day::today(&config.peek().calendar), true),
-                    "Today"
-                }
-                button {
-                    class: "btn icon",
-                    title: "Next day",
-                    aria_label: "Next day",
-                    onclick: move |_| {
-                        let day = day::shift_day(current_day(), 1);
-                        day_nav.go_to(day, false);
-                    },
-                    "›"
-                }
-                button {
-                    class: if show_calendars() { "btn primary" } else { "btn" },
-                    onclick: move |_| {
-                        calendars_error.set(None);
-                        show_calendars.set(true);
-                    },
-                    "Menu"
+                    class: "nav-tab",
+                    aria_pressed: show_settings().to_string(),
+                    onclick: move |_| open_settings(),
+                    span { class: "label-long", "Settings" }
+                    span { class: "label-short", "Set" }
                 }
             }
-            if pending {
-                p { class: "day-loading", "Loading..." }
+            if page() == Page::Plan {
+                div { class: "nav-row plan-tabs", {plan_tabs} }
             }
+            {plan_menu}
         }
     };
 
+    // View (Calendars and Filter) and Actions (Sync now), beside the picker.
+    let view_lit = view_sheet().is_some() || searching;
+    let header_buttons = move || rsx! {
+        button {
+            class: if view_lit { "btn primary" } else { "btn" },
+            aria_expanded: view_sheet().is_some().to_string(),
+            onclick: move |_| {
+                calendars_error.set(None);
+                show_actions.set(false);
+                view_sheet.set(Some(ViewTab::Calendars));
+            },
+            "View"
+        }
+        div { class: "month-anchor",
+            button {
+                class: if show_actions() { "btn primary" } else { "btn" },
+                aria_expanded: show_actions().to_string(),
+                onclick: move |_| show_actions.set(!show_actions()),
+                "Actions"
+            }
+            if show_actions() {
+                div { class: "month-dismiss", onclick: move |_| show_actions.set(false) }
+                div { class: "actions-menu", role: "menu", aria_label: "Actions",
+                    button {
+                        class: "btn",
+                        disabled: pending || !signed_in(),
+                        onclick: move |_| {
+                            show_actions.set(false);
+                            revision.set(revision() + 1);
+                        },
+                        if pending { "Syncing…" } else { "Sync now" }
+                    }
+                }
+            }
+        }
+    };
+    let status = move || rsx! {
+        if google_operations().iter().any(|operation| operation.pending()) {span { class: "hint", role: "status", "Saving…" }}
+        if google_operations().iter().any(|operation| !operation.pending()) {span { class: "hint", role: "status", "Some changes could not be saved" }}
+        if pending {
+            p { class: "day-loading", "Loading..." }
+        }
+    };
+    // The day's picker is labelled with the day in view, and is the way to
+    // move between days.
+    // Planning a day keeps the grid beside its lists where there is room.
+    let day_header_class = if page() == Page::Plan { "wide-only" } else { "" };
+    let day_header = {
+        rsx! {
+            div { class: "day-header {day_header_class}",
+                div { class: "day-controls",
+                    {month_picker(
+                        calendar::month_day_label(selected_day),
+                        selected_day,
+                        Vec::new(),
+                        selected_day == today,
+                        today,
+                        settings.first_day_of_week,
+                        month_open,
+                        month_shown,
+                        Pick::Day(day_nav),
+                    )}
+                    {header_buttons()}
+                }
+                {status()}
+            }
+        }
+    };
     let banner_connect_settings = settings.clone();
     let banner = fetch_error.as_ref().map(|error| {
         let error = error.clone();
@@ -618,12 +730,27 @@ fn App() -> Element {
     });
 
     let body: Element = match &model {
-        Some(model) => rsx! {
-            div { class: "day-body", "data-view": if show_tasks() { "tasks" } else { "calendar" },
-                {sidebar(model, task_filter, selected_block, editing)}
-                {timeline(model, &travel, &settings, time_format, selected_block, editing)}
+        Some(model) => {
+            // Planning a day shows its list, with the grid beside it only
+            // where there is room; Do shows the grid alone.
+            let lists = (page() == Page::Plan)
+                .then(|| snapshot.as_ref())
+                .flatten()
+                .map(|snapshot| {
+                    task_list(plan_tab(), snapshot, config, signed_in(), revision, editing, show_create)
+                });
+            let view = if lists.is_some() { "tasks" } else { "calendar" };
+            rsx! {
+                div { class: "day-body", "data-view": view,
+                    if let Some(lists) = lists {
+                        aside { id: "tasks-pane", class: "sidebar", aria_label: "Tasks",
+                            div { class: "sidebar-scroll", {lists} }
+                        }
+                    }
+                    {timeline(model, &travel, &settings, time_format, selected_block, editing)}
+                }
             }
-        },
+        }
         None if settings.client_id.trim().is_empty() && !pending => {
             let client_error_text = client_error().map(|message| {
                 rsx! { p { class: "error-text", "{message}" } }
@@ -746,6 +873,68 @@ fn App() -> Element {
         }
     };
 
+    // A week, two weeks or a month: the Schedule tab lists the range, and
+    // the other tabs are the same lists as planning a day.
+    let range_page = plan_view().range().filter(|_| page() == Page::Plan).map(|range| {
+        if plan_tab() != PlanTab::Schedule {
+            return match &snapshot {
+                Some(snapshot) => rsx! {
+                    div { class: "plan-page",
+                        {task_list(plan_tab(), snapshot, config, signed_in(), revision, editing, show_create)}
+                    }
+                },
+                None => body.clone(),
+            };
+        }
+        let anchor = week_anchor();
+        let shown = agenda::dates(range, anchor, &settings);
+        let shows_today = shown.contains(&today);
+        let preview = if range == agenda::Range::Month { Vec::new() } else { shown };
+        rsx! {
+            div { class: "day-header",
+                div { class: "day-controls",
+                    {month_picker(
+                        agenda::label(range, anchor, &settings),
+                        anchor,
+                        preview,
+                        shows_today,
+                        today,
+                        settings.first_day_of_week,
+                        range_month_open,
+                        range_month_shown,
+                        Pick::Anchor(week_anchor),
+                    )}
+                    if range == agenda::Range::Month {
+                        button { class: "btn", onclick: move |_| week_anchor.set(today), "Today" }
+                    }
+                    {header_buttons()}
+                }
+                {status()}
+            }
+            div { class: "plan-page",
+                agenda::AgendaDays {
+                    settings: settings.clone(),
+                    range,
+                    anchor,
+                    today,
+                    revision,
+                    filter: None,
+                    search: search_state.read().clone(),
+                    on_day: move |day| {
+                        page.set(Page::Do);
+                        day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                    },
+                    // Its sheet edits it among the rest of its own day.
+                    on_open: move |event: Event| {
+                        let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+                        day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                        pending_open.set(Some(event.id));
+                    },
+                }
+            }
+        }
+    });
+
     let edit_context = snapshot
         .as_ref()
         .map(|snapshot| EditContext::new(&config.read(), snapshot));
@@ -785,22 +974,6 @@ fn App() -> Element {
         }
     });
 
-    let search_sheet = show_search().then(|| {
-        let (labels, locations) = snapshot
-            .as_ref()
-            .map(|snapshot| day::search_choices(&snapshot.events))
-            .unwrap_or_default();
-        rsx! {
-            search::SearchSheet {
-                search: search_state,
-                labels,
-                locations,
-                projects: config.read().projects.clone(),
-                on_close: move |()| show_search.set(false),
-            }
-        }
-    });
-
     let agenda_sheet = show_agenda().then(|| {
         rsx! {
             agenda::AgendaSheet {
@@ -812,14 +985,14 @@ fn App() -> Element {
                 on_day: move |day| {
                     show_agenda.set(false);
                     agenda_filter.set(None);
-                    show_tracker.set(false);
+                    page.set(Page::Do);
                     day_nav.go_to(day, day == day::today(&config.peek().calendar));
                 },
                 on_open: move |event: Event| {
                     let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
                     show_agenda.set(false);
                     agenda_filter.set(None);
-                    show_tracker.set(false);
+                    page.set(Page::Do);
                     day_nav.go_to(day, day == day::today(&config.peek().calendar));
                     pending_open.set(Some(event.id));
                 },
@@ -831,12 +1004,13 @@ fn App() -> Element {
         }
     });
 
-    let scratch_sheet = show_scratch().then(|| {
+    let scratch_sheet = show_scratch().map(|start| {
         rsx! {
             scratch::ScratchSheet {
                 config,
                 day: selected_day,
-                on_close: move |()| show_scratch.set(false),
+                start,
+                on_close: move |()| show_scratch.set(None),
             }
         }
     });
@@ -861,39 +1035,42 @@ fn App() -> Element {
                             "×"
                         }
                     }
+                    // The desktop's More menu, less what stays on the desktop.
                     div { class: "modal-body more-body",
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
+                                page.set(Page::Habits);
+                            },
+                            "Habits"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
+                                show_notes.set(true);
+                            },
+                            "Notes"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
+                                show_scratch.set(Some(scratch::Page::BrainDump));
+                            },
+                            "Brain dump"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
+                                show_scratch.set(Some(scratch::Page::Todos));
+                            },
+                            "Todos and projects"
+                        }
                         button { class: "btn", onclick: move |_| {show_more.set(false);show_operations.set(true);}, "Operations" }
                         p { class: "hint", "{database_sync_status}" }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_agenda.set(true);
-                            },
-                            "Agenda"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_scratch.set(true);
-                            },
-                            "Todos, notepad and projects"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                settings_id.set(config.peek().calendar.client_id.clone());
-                                settings_secret.set(String::new());
-                                settings_error.set(None);
-                                sync_url_input.set(config.peek().database_sync.url.clone());
-                                sync_url_error.set(None);
-                                sync_url_saved.set(false);
-                                show_more.set(false);
-                                show_settings.set(true);
-                            },
-                            "Settings"
-                        }
                     }
                 }
             }
@@ -1116,7 +1293,7 @@ fn App() -> Element {
         }
     });
 
-    let calendars_modal = show_calendars().then(|| {
+    let view_modal = view_sheet().map(|view_tab| {
         let store = cached_days.read();
         let sections = day::source_sections(&store.display_sources(&settings), &settings);
         let no_calendars = store.calendars.is_empty();
@@ -1185,44 +1362,65 @@ fn App() -> Element {
                     }
                 }
             });
+        let (labels, locations) = snapshot
+            .as_ref()
+            .map(|snapshot| day::search_choices(&snapshot.events))
+            .unwrap_or_default();
+        let view_tab_button = |label: &'static str, this: ViewTab| {
+            rsx! {
+                button {
+                    class: "nav-tab",
+                    aria_pressed: (view_tab == this).to_string(),
+                    onclick: move |_| view_sheet.set(Some(this)),
+                    "{label}"
+                }
+            }
+        };
+        // The desktop's View sheet: which calendars show, and a filter that
+        // narrows every view.
         rsx! {
             div {
                 class: "modal-backdrop",
-                onclick: move |_| show_calendars.set(false),
+                onclick: move |_| view_sheet.set(None),
                 div {
                     class: "modal",
                     role: "dialog",
-                    aria_label: "Calendars",
+                    aria_label: "View",
                     onclick: move |event| event.stop_propagation(),
                     div { class: "modal-head",
-                        h2 { class: "modal-title", "Calendars" }
+                        h2 { class: "modal-title", "View" }
                         div { class: "spacer" }
                         button {
                             class: "modal-close",
                             title: "Close",
-                            onclick: move |_| show_calendars.set(false),
+                            onclick: move |_| view_sheet.set(None),
                             "×"
                         }
                     }
+                    div { class: "sheet-tabs",
+                        {view_tab_button("Calendars", ViewTab::Calendars)}
+                        {view_tab_button("Filter", ViewTab::Filter)}
+                    }
                     div { class: "modal-body",
-                        {error}
-                        {sections}
-                        if no_calendars {
-                            p { class: "empty-note",
-                                if signed_in() {
-                                    "No calendars yet. Sync to load them."
-                                } else {
-                                    "Connect Google to load your calendars."
+                        if view_tab == ViewTab::Filter {
+                            search::SearchFields {
+                                search: search_state,
+                                labels,
+                                locations,
+                                projects: config.read().projects.clone(),
+                            }
+                        } else {
+                            {error}
+                            {sections}
+                            if no_calendars {
+                                p { class: "empty-note",
+                                    if signed_in() {
+                                        "No calendars yet. Use Actions → Sync now to load them."
+                                    } else {
+                                        "Connect Google to load your calendars."
+                                    }
                                 }
                             }
-                        }
-                    }
-                    div { class: "source-actions",
-                        button {
-                            class: "btn primary source-sync",
-                            disabled: pending || !signed_in(),
-                            onclick: move |_| revision.set(revision() + 1),
-                            if pending { "Syncing…" } else { "Sync now" }
                         }
                     }
                 }
@@ -1236,7 +1434,7 @@ fn App() -> Element {
         div { class: "app",
             {topbar}
             {banner}
-            if show_tracker() {
+            if page() == Page::Habits {
                 habits::HabitsScreen {
                     today,
                     time_format,
@@ -1250,11 +1448,14 @@ fn App() -> Element {
                         show_agenda.set(true);
                     },
                 }
+            } else if let Some(range_page) = range_page {
+                {range_page}
             } else {
+                {day_header}
                 {notice}
                 {body}
             }
-            if model.is_some() && !show_tracker() {
+            if model.is_some() && page() != Page::Habits {
                 button {
                     class: "fab",
                     title: "Add",
@@ -1268,7 +1469,6 @@ fn App() -> Element {
             {edit_sheet}
             {notes_sheet}
             {create_sheet}
-            {search_sheet}
             {scratch_sheet}
             {more_sheet}
             if show_operations() {
@@ -1298,7 +1498,7 @@ fn App() -> Element {
                 }
             }
             {settings_modal}
-            {calendars_modal}
+            {view_modal}
         }
     }
 }
@@ -1377,16 +1577,121 @@ impl DayNav {
     }
 }
 
-/// The month button, and the month it opens: the desktop's way between days.
+/// Where the navigation is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Page {
+    /// The day's calendar.
+    Do,
+    /// The period being planned and its lists.
+    Plan,
+    Habits,
+}
+
+/// The tabs of the View sheet.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ViewTab {
+    Calendars,
+    Filter,
+}
+
+/// Chooses what Plan plans, as the desktop's Plan button and menu do.
+#[derive(Clone, Copy)]
+struct PlanNav {
+    page: Signal<Page>,
+    view: Signal<PlanView>,
+    tab: Signal<PlanTab>,
+    menu_open: Signal<bool>,
+    week_anchor: Signal<NaiveDate>,
+    current_day: Signal<NaiveDate>,
+}
+
+impl PlanNav {
+    /// Coming to a range from anywhere else opens on its Schedule, starting
+    /// from the day in view; moving between ranges keeps the list on show.
+    /// Planning a day keeps the list on show, or opens Overdue.
+    fn choose(mut self, view: PlanView) {
+        let was_range = *self.page.peek() == Page::Plan && self.view.peek().range().is_some();
+        let changed = *self.view.peek() != view;
+        self.menu_open.set(false);
+        self.view.set(view);
+        if view.range().is_some() {
+            if !was_range {
+                self.tab.set(PlanTab::Schedule);
+            }
+            if changed || !was_range {
+                self.week_anchor.set(*self.current_day.peek());
+            }
+        } else if *self.tab.peek() == PlanTab::Schedule {
+            self.tab.set(PlanTab::Overdue);
+        }
+        self.page.set(Page::Plan);
+    }
+}
+
+/// One of Plan's lists, over everything loaded with its local edits.
+fn task_list(
+    tab: PlanTab,
+    snapshot: &calendar::Snapshot,
+    config: Signal<timeslay_core::config::Config>,
+    signed_in: bool,
+    revision: Signal<u32>,
+    editing: Signal<Option<Event>>,
+    show_create: Signal<bool>,
+) -> Element {
+    let mut revision = revision;
+    let mut show_create = show_create;
+    let context = EditContext::new(&config.read(), snapshot);
+    rsx! {
+        plan::TaskList {
+            key: "{tab:?}",
+            tab,
+            config,
+            events: snapshot.events.clone(),
+            calendars: snapshot.calendars.clone(),
+            context: Some(context),
+            signed_in,
+            revision,
+            editing,
+            on_new_task: move |()| show_create.set(true),
+            on_saved: move |()| revision.set(revision() + 1),
+        }
+    }
+}
+
+/// What picking a day in a month picker moves.
+#[derive(Clone, Copy)]
+enum Pick {
+    /// The day in view.
+    Day(DayNav),
+    /// The range being planned.
+    Anchor(Signal<NaiveDate>),
+}
+
+impl Pick {
+    fn pick(self, day: NaiveDate, today: NaiveDate) {
+        match self {
+            Self::Day(nav) => nav.go_to(day, day == today),
+            Self::Anchor(mut anchor) => anchor.set(day),
+        }
+    }
+}
+
+/// The picker button, labelled with what is in view, and the month it opens:
+/// the desktop's way between days and ranges. The month is named on the left,
+/// with a month back, today (●) and a month forward on the right; `preview`
+/// marks the days of the range in view.
+#[allow(clippy::too_many_arguments)]
 fn month_picker(
+    label: String,
     selected: NaiveDate,
+    preview: Vec<NaiveDate>,
+    shows_today: bool,
     today: NaiveDate,
     first_day: FirstDayOfWeek,
     mut open: Signal<bool>,
     mut shown: Signal<NaiveDate>,
-    nav: DayNav,
+    pick: Pick,
 ) -> Element {
-    let label = format!("{} ▾", calendar::month_day_label(selected));
     let month = shown();
     let days = if open() {
         calendar::month_grid(month, first_day)
@@ -1398,7 +1703,10 @@ fn month_picker(
         if day.month() != month.month() {
             class.push_str(" outside");
         }
-        if day == selected {
+        if preview.contains(&day) {
+            class.push_str(" in-range");
+        }
+        if day == selected && preview.is_empty() {
             class.push_str(" selected");
         }
         if day == today {
@@ -1411,7 +1719,7 @@ fn month_picker(
                 class: "{class}",
                 onclick: move |_| {
                     open.set(false);
-                    nav.go_to(day, day == today);
+                    pick.pick(day, today);
                 },
                 "{number}"
             }
@@ -1423,6 +1731,7 @@ fn month_picker(
             div { class: "month-dismiss", onclick: move |_| open.set(false) }
             div { class: "month-picker", role: "dialog", aria_label: "Choose a day",
                 div { class: "month-head",
+                    span { class: "month-name", "{heading}" }
                     button {
                         class: "btn icon",
                         title: "Previous month",
@@ -1434,7 +1743,16 @@ fn month_picker(
                         },
                         "‹"
                     }
-                    span { class: "month-name", "{heading}" }
+                    button {
+                        class: "btn icon",
+                        title: "Today",
+                        aria_label: "Today",
+                        onclick: move |_| {
+                            open.set(false);
+                            pick.pick(today, today);
+                        },
+                        "●"
+                    }
                     button {
                         class: "btn icon",
                         title: "Next month",
@@ -1460,7 +1778,7 @@ fn month_picker(
     rsx! {
         div { class: "month-anchor",
             button {
-                class: if selected == today { "btn today" } else if open() { "btn primary" } else { "btn" },
+                class: if shows_today { "btn today" } else if open() { "btn primary" } else { "btn" },
                 aria_expanded: open().to_string(),
                 onclick: move |_| {
                     if !open() {
@@ -1468,113 +1786,9 @@ fn month_picker(
                     }
                     open.set(!open());
                 },
-                "{label}"
+                "{label} ▾"
             }
             {picker}
-        }
-    }
-}
-
-/// Which tasks the Tasks tab lists.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TaskFilter {
-    All,
-    Overdue,
-    Inbox,
-}
-
-impl TaskFilter {
-    fn keeps(self, task: &TaskRow) -> bool {
-        match self {
-            Self::All => true,
-            Self::Overdue => task.overdue,
-            Self::Inbox => task.inbox,
-        }
-    }
-}
-
-fn sidebar(
-    model: &DayModel,
-    filter: Signal<TaskFilter>,
-    open_block: Signal<Option<String>>,
-    editing: Signal<Option<Event>>,
-) -> Element {
-    let mut filter = filter;
-    let chosen = filter();
-    let tasks = || {
-        model
-            .task_groups
-            .iter()
-            .flat_map(|group| group.tasks.iter())
-    };
-    let total = tasks().count();
-    let overdue = tasks().filter(|task| task.overdue).count();
-    let inbox = tasks().filter(|task| task.inbox).count();
-    let groups: Vec<Element> = model
-        .task_groups
-        .iter()
-        .filter_map(|group| {
-            let tasks: Vec<TaskRow> = group
-                .tasks
-                .iter()
-                .filter(|task| chosen.keeps(task))
-                .cloned()
-                .collect();
-            (!tasks.is_empty()).then(|| {
-                task_group_view(
-                    &TaskGroup {
-                        tasks,
-                        ..group.clone()
-                    },
-                    open_block,
-                    editing,
-                )
-            })
-        })
-        .collect();
-    let groups_empty = groups.is_empty();
-    let tab = |label: &'static str, count: usize, this: TaskFilter| {
-        rsx! {
-            button {
-                class: "nav-tab",
-                aria_pressed: (chosen == this).to_string(),
-                onclick: move |_| filter.set(this),
-                "{label} {count}"
-            }
-        }
-    };
-
-    rsx! {
-        aside { id: "tasks-pane", class: "sidebar", aria_label: "Tasks",
-            div { class: "sidebar-scroll",
-                section { class: "panel-section",
-                    div { class: "section-head",
-                        span { class: "section-title", "Google Tasks" }
-                    }
-                    if model.tasks_hidden {
-                        p { class: "empty-note",
-                            "Google Tasks are hidden in Calendars. Tasks inside time blocks still appear when you open a block."
-                        }
-                    } else {
-                        div { class: "token-row",
-                            {tab("All", total, TaskFilter::All)}
-                            {tab("Overdue", overdue, TaskFilter::Overdue)}
-                            {tab("Inbox", inbox, TaskFilter::Inbox)}
-                        }
-                        if groups_empty {
-                            p { class: "empty-note",
-                                match chosen {
-                                    TaskFilter::All => "No Google Tasks for this day.",
-                                    TaskFilter::Overdue => "Nothing is overdue.",
-                                    TaskFilter::Inbox => "The inbox is empty.",
-                                }
-                            }
-                        } else {
-                            div { class: "task-groups", {groups.into_iter()} }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -1605,113 +1819,6 @@ fn all_day_chip(
             title: "{title}",
             onclick: move |_| editing.set(Some(opened.clone())),
             "{title}"
-        }
-    }
-}
-
-fn task_group_view(
-    group: &TaskGroup,
-    open_block: Signal<Option<String>>,
-    editing: Signal<Option<Event>>,
-) -> Element {
-    let dot = group
-        .tasks
-        .first()
-        .map(|task| css_color(task.event.color))
-        .unwrap_or_else(|| "rgba(84,132,237,1)".to_owned());
-    let open = group
-        .tasks
-        .iter()
-        .filter(|task| task.status == tb::TaskStatus::Active)
-        .count();
-    let total = group.tasks.len();
-    let list_name = group.list_name.clone();
-    let tasks: Vec<Element> = group
-        .tasks
-        .iter()
-        .map(|task| task_row_view(&list_name, task, open_block, editing))
-        .collect();
-
-    rsx! {
-        div { class: "task-group",
-            div { class: "task-list-name",
-                span { class: "day-dot", style: "background: {dot};" }
-                span { "{list_name}" }
-                span { class: "task-list-count", "{open} open / {total}" }
-            }
-            div { class: "task-rows", {tasks.into_iter()} }
-        }
-    }
-}
-
-fn task_row_view(
-    list_name: &str,
-    task: &TaskRow,
-    open_block: Signal<Option<String>>,
-    editing: Signal<Option<Event>>,
-) -> Element {
-    let mut editing = editing;
-    let opened = task.event.clone();
-    let status_class = match task.status {
-        tb::TaskStatus::Active => "active",
-        tb::TaskStatus::Completed => "done",
-        tb::TaskStatus::Ignored => "ignored",
-    };
-    let title_class = match task.status {
-        tb::TaskStatus::Active => "task-title",
-        tb::TaskStatus::Completed => "task-title done",
-        tb::TaskStatus::Ignored => "task-title ignored",
-    };
-    let icon = status_icon(task.status);
-    let title = task.event.title.clone();
-    let tooltip = format!("{title}\n{list_name}");
-    let minutes = (task.minutes > 0).then(|| day::duration_label(task.minutes));
-    let block = task
-        .block
-        .as_ref()
-        .map(|block| block_link_view(block, open_block));
-    let status_note = match task.status {
-        tb::TaskStatus::Active => None,
-        tb::TaskStatus::Completed => Some("Completed"),
-        tb::TaskStatus::Ignored => Some("Ignored"),
-    }
-    .map(|note| rsx! { span { class: "meta-pill", "{note}" } });
-    let minutes = minutes.map(|minutes| rsx! { span { class: "meta-pill", "{minutes}" } });
-
-    rsx! {
-        div {
-            class: "task-row",
-            role: "button",
-            tabindex: "0",
-            title: "{tooltip}",
-            onclick: move |_| editing.set(Some(opened.clone())),
-            span { class: "task-status {status_class}", "{icon}" }
-            div { class: "task-main",
-                div { class: "{title_class}", "{title}" }
-                div { class: "task-meta",
-                    {status_note}
-                    {minutes}
-                    {block}
-                }
-            }
-        }
-    }
-}
-
-fn block_link_view(block: &BlockRef, open_block: Signal<Option<String>>) -> Element {
-    let mut open = open_block;
-    let id = block.event_id.clone();
-    let label = format!("◧ {} · {}", block.title, block.time);
-    rsx! {
-        button {
-            class: "block-link",
-            title: "Open this time block",
-            // The row around this link opens the task.
-            onclick: move |event| {
-                event.stop_propagation();
-                open.set(Some(id.clone()));
-            },
-            "{label}"
         }
     }
 }
@@ -2313,16 +2420,15 @@ mod sheet_tests {
     }
 
     #[test]
-    fn the_search_sheet_offers_each_filter() {
+    fn the_filter_tab_offers_each_filter() {
         fn app() -> Element {
             let search = use_signal(Search::default);
             rsx! {
-                search::SearchSheet {
+                search::SearchFields {
                     search,
                     labels: vec!["deep".to_owned()],
                     locations: vec!["Office".to_owned()],
                     projects: ProjectsSettings::default(),
-                    on_close: |_| {},
                 }
             }
         }
@@ -2365,26 +2471,45 @@ mod sheet_tests {
         );
     }
 
+    fn render_list(app: fn() -> Element) -> String {
+        render(app)
+    }
+
+    fn list_app(tab: PlanTab) -> Element {
+        let start = Local.with_ymd_and_hms(2026, 11, 4, 0, 0, 0).unwrap();
+        let snapshot = calendar::Snapshot {
+            calendars: Vec::new(),
+            events: Vec::new(),
+            day: today(),
+            fetched_at: start,
+            notice: None,
+        };
+        let config = use_signal(Config::default);
+        let revision = use_signal(|| 0u32);
+        let editing = use_signal(|| None::<Event>);
+        let create = use_signal(|| false);
+        task_list(tab, &snapshot, config, false, revision, editing, create)
+    }
+
     #[test]
-    fn the_task_tab_offers_its_filters_with_counts() {
-        fn app() -> Element {
-            let start = Local.with_ymd_and_hms(2026, 11, 4, 0, 0, 0).unwrap();
-            let snapshot = calendar::Snapshot {
-                calendars: Vec::new(),
-                events: Vec::new(),
-                day: today(),
-                fetched_at: start,
-                notice: None,
-            };
-            let model = day::build_model(&snapshot, &CalendarSettings::default());
-            let filter = use_signal(|| TaskFilter::All);
-            let block = use_signal(|| None::<String>);
-            let editing = use_signal(|| None::<Event>);
-            sidebar(&model, filter, block, editing)
-        }
+    fn each_plan_list_has_the_desktops_heading_and_empty_note() {
         assert_offers(
-            &render(app),
-            &["All 0", "Overdue 0", "Inbox 0", "No Google Tasks"],
+            &render_list(|| list_app(PlanTab::Overdue)),
+            &["Overdue", "Sort by", "Manual order", "Nothing overdue"],
         );
+        assert_offers(
+            &render_list(|| list_app(PlanTab::Inbox)),
+            &["Inbox", "Tasks waiting to be triaged", ">New task<", "Sort by", "Nothing to triage"],
+        );
+        assert_offers(
+            &render_list(|| list_app(PlanTab::Today)),
+            &["Today", "No tasks left to slot in today"],
+        );
+        let backlog = render_list(|| list_app(PlanTab::Backlog));
+        assert_offers(
+            &backlog,
+            &["Backlog", "Search tasks", "No tasks on the Backlog list", "Next week or two", "Never"],
+        );
+        assert!(!backlog.contains("Sort by"));
     }
 }
