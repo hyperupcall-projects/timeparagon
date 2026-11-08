@@ -199,3 +199,27 @@ fn habit_occurrence<'a>(
     .style(crate::ui::controls::card_surface)
     .into()
 }
+
+/// The same completion control in all-day bars and compact calendar lists.
+fn event_label<'a>(state: &State, event: &Event, label: String, size: f32) -> Element<'a, Message> {
+    let mut content = row![
+        text(label)
+            .size(size)
+            .wrapping(text::Wrapping::None)
+            .width(Fill)
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .width(Fill);
+    if event.details.habit && !state.calendar.search.hides_details(event) {
+        let id = event.id.clone();
+        let mut checkbox = crate::ui::controls::checkbox(event.completed).size(14);
+        if !state.habits.completing.contains(&event.id) {
+            checkbox = checkbox.on_toggle(move |_| {
+                Message::Habits(crate::habits::Action::ToggleCompleted(id.clone()))
+            });
+        }
+        content = content.push(checkbox);
+    }
+    content.into()
+}

@@ -64,7 +64,21 @@ pub fn CreateSheet(
     let mut all_day = use_signal(|| false);
     let mut start = use_signal(move || start);
     let mut end = use_signal(move || end);
-    let mut calendar_id = use_signal(move || default_calendar.unwrap_or_default());
+    let event_default = default_calendar
+        .filter(|id| {
+            calendars.iter().any(|calendar| {
+                &calendar.id == id
+                    && !calendar.is_task_list()
+                    && !calendar.is_app_calendar(&settings)
+            })
+        })
+        .or_else(|| {
+            calendars
+                .iter()
+                .find(|calendar| !calendar.is_task_list() && !calendar.is_app_calendar(&settings))
+                .map(|calendar| calendar.id.clone())
+        });
+    let mut calendar_id = use_signal(move || event_default.unwrap_or_default());
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 

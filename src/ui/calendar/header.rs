@@ -349,14 +349,14 @@ pub(super) fn all_day_chip<'a>(
 
     let title = if hidden {
         PRIVATE_TITLE.to_owned()
-    } else if event.completed {
+    } else if event.completed && !event.details.habit {
         format!("✓ {}", event.title)
     } else {
         event.title.clone()
     };
 
     let id = event.id.clone();
-    button(text(title).size(metrics.label()).color(ink))
+    button(event_label(state, event, title, metrics.label()))
         .padding([4.0, 8.0])
         .width(Fill)
         .on_press(Message::Event(EventMessage::EventOpened(id)))

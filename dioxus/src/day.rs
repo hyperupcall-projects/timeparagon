@@ -1985,10 +1985,10 @@ mod tests {
         assert_eq!(sections[2].0, "TimeSlay");
         assert_eq!(
             names(&sections[2].1),
-            ["Events", "Tasks", "Time Blocks", "Habits", "Sleep"]
+            ["Tasks", "Time Blocks", "Habits", "Sleep"]
         );
-        assert!(!sections[2].1[3].enabled);
-        assert!(sections[2].1[4].enabled);
+        assert!(!sections[2].1[2].enabled);
+        assert!(sections[2].1[3].enabled);
     }
 
     #[test]

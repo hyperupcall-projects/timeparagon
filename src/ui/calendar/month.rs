@@ -104,23 +104,19 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                     event.display_color(&state.config.calendar)
                 };
                 events = events.push(
-                    button(
-                        text(label)
-                            .size(cell_metrics.label())
-                            .wrapping(text::Wrapping::None),
-                    )
-                    .width(Fill)
-                    .padding([3, 4])
-                    .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
-                    .style(move |theme, status| {
-                        let mut style = crate::ui::controls::secondary(theme, status);
-                        style.border = iced::Border {
-                            color,
-                            width: 1.0,
-                            radius: crate::ui::controls::RADIUS_SMALL.into(),
-                        };
-                        style
-                    }),
+                    button(event_label(state, event, label, cell_metrics.label()))
+                        .width(Fill)
+                        .padding([3, 4])
+                        .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
+                        .style(move |theme, status| {
+                            let mut style = crate::ui::controls::secondary(theme, status);
+                            style.border = iced::Border {
+                                color,
+                                width: 1.0,
+                                radius: crate::ui::controls::RADIUS_SMALL.into(),
+                            };
+                            style
+                        }),
                 );
             }
             if state.habits.calendar_habit.is_some()

@@ -218,6 +218,9 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 }
                 draft.kind = kind;
                 draft.editor_open = true;
+                if kind == calendar::DraftKind::Event {
+                    draft.calendar_id = default_calendar.clone().unwrap_or_default();
+                }
                 // An ordinary event uses the normal default calendar.
                 if let Some(calendar_id) = match kind {
                     calendar::DraftKind::Event
@@ -269,15 +272,8 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 return Task::none();
             }
 
-            // A time block is always written to the app's TimeSlay calendar
-            // and labelled and colored as a block; an ordinary event stays on
-            // the calendar the picker shows.
-            // An all-day entry on the TimeSlay calendar is a plain event, as
-            // it is when read back from Google.
-            let is_block = draft.kind == calendar::DraftKind::TimeBlock
-                || (!draft.all_day
-                    && state.config.calendar.app_calendar.as_deref()
-                        == Some(draft.calendar_id.as_str()));
+            // Time blocks use the app calendar; ordinary events use a regular calendar.
+            let is_block = draft.kind == calendar::DraftKind::TimeBlock;
             let all_day = draft.all_day && draft.kind != calendar::DraftKind::TimeBlock;
             let color = if is_block {
                 state.config.calendar.time_block_color()

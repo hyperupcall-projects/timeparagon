@@ -23,6 +23,8 @@ pub(super) struct Block {
     /// The habit this event counts towards and the day it would be recorded
     /// on, for its Record button.
     pub(super) habit: Option<(String, NaiveDate)>,
+    /// Completion of a visible habit occurrence, including unlinked habits.
+    pub(super) habit_completed: Option<bool>,
 }
 
 /// An alarm's needle on the day in view.
@@ -405,6 +407,15 @@ impl canvas::Program<Message> for DayCanvas {
                     }
                 }
 
+                if let Some(id) = self.completion_at(point, bounds.width) {
+                    return Some(
+                        canvas::Action::publish(Message::Habits(
+                            crate::habits::Action::ToggleCompleted(id.to_owned()),
+                        ))
+                        .and_capture(),
+                    );
+                }
+
                 if let Some((id, day)) = self.record_at(point, bounds.width) {
                     return Some(
                         canvas::Action::publish(Message::Habits(crate::habits::Action::OpenDay(
@@ -571,7 +582,9 @@ impl canvas::Program<Message> for DayCanvas {
                     return mouse::Interaction::Pointer;
                 }
             }
-            if self.record_at(point, bounds.width).is_some() {
+            if self.record_at(point, bounds.width).is_some()
+                || self.completion_at(point, bounds.width).is_some()
+            {
                 return mouse::Interaction::Pointer;
             }
         }
@@ -824,6 +837,11 @@ impl DayCanvas {
                 label_bounds = block_actions(block_bounds).0;
             } else if block.habit.is_some() {
                 label_bounds = habit_actions(block_bounds).0;
+            }
+            if let Some(completed) = block.habit_completed {
+                let (label, checkbox) = habit_completion_bounds(label_bounds);
+                label_bounds = label;
+                draw_habit_checkbox(frame, checkbox, completed, ink);
             }
             if label_bounds.height >= 14.0 {
                 draw_block_label(
@@ -1198,6 +1216,21 @@ impl DayCanvas {
         Some((index, mode))
     }
 
+    pub(super) fn completion_at(&self, point: Point, width: f32) -> Option<&str> {
+        let block = self.blocks.get(self.hit(Some(point), width)?)?;
+        block.habit_completed?;
+        let bounds = self.block_rect(block, width);
+        let label = if block.habit.is_some() {
+            habit_actions(bounds).0
+        } else {
+            bounds
+        };
+        habit_completion_bounds(label)
+            .1
+            .contains(point)
+            .then_some(block.id.as_str())
+    }
+
     /// The habit and day of the Record button under a grid point, if any.
     pub(super) fn record_at(&self, point: Point, width: f32) -> Option<(&str, NaiveDate)> {
         self.blocks.iter().rev().find_map(|block| {
@@ -1545,5 +1578,54 @@ pub(super) fn lighten(color: Color) -> Color {
         g: color.g + (1.0 - color.g) * AMOUNT,
         b: color.b + (1.0 - color.b) * AMOUNT,
         a: color.a,
+    }
+}
+
+/// Reserve a compact lane next to the title, before the optional Record action.
+pub(super) fn habit_completion_bounds(bounds: Rectangle) -> (Rectangle, Rectangle) {
+    let width = 24.0_f32.min(bounds.width * 0.4);
+    let label = Rectangle {
+        width: bounds.width - width,
+        ..bounds
+    };
+    let checkbox = Rectangle {
+        x: bounds.x + label.width,
+        width,
+        ..bounds
+    };
+    (label, checkbox)
+}
+
+fn draw_habit_checkbox(frame: &mut Frame, bounds: Rectangle, completed: bool, ink: Color) {
+    let size = 14.0_f32
+        .min((bounds.width - 4.0).max(0.0))
+        .min((bounds.height - 4.0).max(0.0));
+    if size < 3.0 {
+        return;
+    }
+    let x = bounds.center_x() - size / 2.0;
+    let y = bounds.center_y() - size / 2.0;
+    frame.stroke(
+        &Path::rounded_rectangle(Point::new(x, y), Size::new(size, size), 2.0.into()),
+        Stroke {
+            style: Style::Solid(ink),
+            width: 1.2,
+            ..Stroke::default()
+        },
+    );
+    if completed {
+        let tick = Path::new(|path| {
+            path.move_to(Point::new(x + size * 0.2, y + size * 0.5));
+            path.line_to(Point::new(x + size * 0.43, y + size * 0.75));
+            path.line_to(Point::new(x + size * 0.82, y + size * 0.25));
+        });
+        frame.stroke(
+            &tick,
+            Stroke {
+                style: Style::Solid(ink),
+                width: 1.8,
+                ..Stroke::default()
+            },
+        );
     }
 }

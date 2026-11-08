@@ -331,7 +331,13 @@ pub(super) fn cache_key(
             .wrapping_add(u64::from(block.time_block));
         hash = hash
             .wrapping_mul(31)
-            .wrapping_add(u64::from(block.habit.is_some()));
+            .wrapping_add(u64::from(block.habit.is_some()))
+            .wrapping_mul(31)
+            .wrapping_add(match block.habit_completed {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            });
         for (id, title, minutes) in &block.tasks {
             hash = hash.wrapping_mul(31).wrapping_add(u64::from(*minutes));
             for byte in id.bytes().chain(title.bytes()) {
