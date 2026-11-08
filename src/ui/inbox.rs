@@ -23,6 +23,7 @@ fn msg(action: Action) -> Message {
 enum List {
     Overdue,
     Inbox,
+    Today,
     Triaged,
 }
 
@@ -34,6 +35,10 @@ pub fn overdue<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
     list_view(state, metrics, List::Overdue)
 }
 
+pub fn today<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    list_view(state, metrics, List::Today)
+}
+
 /// The Triaged tab: tasks confirmed out of the Inbox but not yet scheduled.
 pub fn triaged<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     list_view(state, metrics, List::Triaged)
@@ -43,6 +48,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
     let tasks = match list {
         List::Overdue => inbox::overdue_tasks(state),
         List::Inbox => inbox::tasks(state),
+        List::Today => inbox::today_tasks(state),
         List::Triaged => inbox::triaged_tasks(state),
     };
     let (heading, subtitle) = match list {
@@ -51,6 +57,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
             "Incomplete tasks with a past scheduled time or deadline. This should be empty! Move tasks that you plan to do in inbox, schcedule them for later, or move them to the backlog.",
         ),
         List::Inbox => ("Inbox", "Tasks waiting to be triaged"),
+        List::Today => ("Today", "Tasks for today that still need a time slot"),
         List::Triaged => (
             "Triaged",
             "Tasks ready to be scheduled. Probably don't need this view, triaged tasks should show in projects and be schedule from there.",
@@ -118,6 +125,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
             text(match list {
                 List::Overdue => "Nothing overdue",
                 List::Inbox => "Nothing to triage",
+                List::Today => "No tasks left to slot in today",
                 List::Triaged => "Nothing triaged yet",
             })
             .size(metrics.label())
@@ -1223,6 +1231,40 @@ mod tests {
         // takes it out of the inbox straight away.
         let _ = crate::app::update(&mut state, reply);
         assert!(state.inbox.invitations.is_empty());
+    }
+
+    #[test]
+    fn today_opens_from_plan_day_and_uses_the_shared_task_cards() {
+        let mut state = state_with_task("");
+        let day = crate::clock::now().date_naive();
+        state.calendar.events[0].start = calendar::at_clock(day, 0, 0);
+        state.calendar.events[0].end = calendar::at_clock(day.succ_opt().unwrap(), 0, 0);
+        let mut ui = simulator(&state, 500.0);
+        ui.click("Today").unwrap();
+        let message = ui
+            .into_messages()
+            .find(|message| {
+                matches!(
+                    message,
+                    Message::Navigation(crate::app::NavigationMessage::PlanTabSelected(
+                        crate::app::PlanTab::Today
+                    ))
+                )
+            })
+            .unwrap();
+        let _ = crate::app::update(&mut state, message);
+        assert_eq!(state.screen, crate::app::Screen::Today);
+        assert!(state.day_plan_active());
+        let mut ui = simulator(&state, 500.0);
+        assert!(ui.find("Reply to Sam").is_ok());
+        ui.click("Reply to Sam").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(message,
+            Message::Event(EventMessage::EventOpened(id)) if id == "task:one"
+        )));
+        state.calendar.events[0].completed = true;
+        let mut ui = simulator(&state, 500.0);
+        assert!(ui.find("Reply to Sam").is_err());
+        assert!(ui.find("No tasks left to slot in today").is_ok());
     }
 
     #[test]

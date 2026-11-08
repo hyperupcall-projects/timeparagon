@@ -197,6 +197,28 @@ pub fn tasks(state: &State) -> Vec<&Event> {
     tasks
 }
 
+/// Incomplete date-only tasks for today that have no assigned block or time slot.
+pub fn today_tasks(state: &State) -> Vec<&Event> {
+    let today = crate::clock::now().date_naive();
+    let mut tasks: Vec<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| {
+            let meta = tb::metadata(event);
+            event.is_task()
+                && !event.completed
+                && !meta.ignored
+                && event.all_day
+                && event.start.date_naive() == today
+                && meta.block.is_none()
+                && meta.schedule.is_none()
+        })
+        .collect();
+    sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
+    tasks
+}
+
 /// Incomplete tasks across all lists whose planned time or deadline has passed.
 pub fn overdue_tasks(state: &State) -> Vec<&Event> {
     overdue_tasks_at(state, crate::clock::now())
@@ -1329,6 +1351,67 @@ mod tests {
         assert_eq!(tasks(&state)[0].title, "a");
         state.calendar.events.reverse();
         assert_eq!(tasks(&state)[0].title, "a");
+    }
+
+    #[test]
+    fn today_only_lists_active_tasks_without_a_slot_across_lists() {
+        let mut state = state();
+        let today = crate::clock::now().date_naive();
+        let mut done = task("done", "inbox", today);
+        done.completed = true;
+        let mut timed = task("timed", "projects", today);
+        timed.all_day = false;
+        let mut blocked = task("blocked", "projects", today);
+        blocked.details.task_data = Some(task_db::TaskData {
+            id: 101,
+            legacy_key: None,
+            metadata: tb::Metadata {
+                block: Some("block".into()),
+                ..Default::default()
+            },
+        });
+        let mut scheduled = task("scheduled", "inbox", today);
+        let link = calendar::scheduled::Link::new("calendar".into(), &scheduled).unwrap();
+        scheduled.details.task_data = Some(task_db::TaskData {
+            id: 102,
+            legacy_key: None,
+            metadata: tb::Metadata {
+                schedule: Some(link),
+                ..Default::default()
+            },
+        });
+        let mut ignored = task("ignored", "inbox", today);
+        ignored.details.task_data = Some(task_db::TaskData {
+            id: 103,
+            legacy_key: None,
+            metadata: tb::Metadata {
+                ignored: true,
+                ..Default::default()
+            },
+        });
+        let mut event = task("event", "calendar", today);
+        event.id = "event".into();
+        event.calendar_id = "calendar".into();
+        state.calendar.events = vec![
+            task("b", "projects", today),
+            task("a", "inbox", today),
+            task("yesterday", "inbox", today.pred_opt().unwrap()),
+            task("tomorrow", "inbox", today.succ_opt().unwrap()),
+            task("undated", "inbox", UNDATED),
+            done,
+            timed,
+            blocked,
+            scheduled,
+            ignored,
+            event,
+        ];
+        assert_eq!(
+            today_tasks(&state)
+                .iter()
+                .map(|task| task.title.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
     }
 
     #[test]
