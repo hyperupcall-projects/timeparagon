@@ -1,12 +1,17 @@
-amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
+// Vendored from package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0
+// so loading the config needs no network (GitHub 504s on the "@" asset URL).
+// Keep in sync with the hk version in mise.toml.
+amends ".hk/Config.pkl"
 
-local linters = new Mapping<String, Step> {
+// Pre-commit skips --all-targets so it doesn't compile every test, example and
+// bench on each commit; `hk check`/`hk fix` (and CI) still lint all targets.
+local function linters(allTargets: Boolean) = new Mapping<String, Step> {
   ["clippy"] {
     glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
     exclude = List("vendor/**")
     // Cargo must analyze whole crates, but the helper only edits selected files.
-    check = "cargo clippy --workspace --all-targets --locked -- -D warnings"
-    fix = "python3 scripts/clippy-fix.py {{files}}"
+    check = "cargo clippy --workspace \(if (allTargets) "--all-targets " else "")--locked -- -D warnings"
+    fix = "python3 scripts/clippy-fix.py \(if (allTargets) "--all-targets " else ""){{files}}"
     check_first = false
     exclusive = true
   }
@@ -25,16 +30,16 @@ hooks {
     fix = true
     stage = true
     stash = "git"
-    steps = linters
+    steps = linters(false)
   }
   ["check"] {
     fix = false
     stage = false
-    steps = linters
+    steps = linters(true)
   }
   ["fix"] {
     fix = true
     stage = false
-    steps = linters
+    steps = linters(true)
   }
 }
