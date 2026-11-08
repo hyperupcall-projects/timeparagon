@@ -355,6 +355,8 @@ pub struct State {
 
     pub screen: Screen,
     pub view: CalendarView,
+    /// Last period chosen for the Plan split button.
+    pub plan_view: CalendarView,
     /// Whether the Plan menu under the left-hand navigation group is open.
     pub view_menu_open: bool,
     /// Whether the More menu under the right-hand navigation group is open.
@@ -890,6 +892,7 @@ impl State {
             reminders: crate::reminders::Reminders::default(),
             screen: Screen::Calendar,
             view: CalendarView::default(),
+            plan_view: CalendarView::Day,
             view_menu_open: false,
             more_menu_open: false,
             week_anchor: calendar::day_at(crate::clock::now(), day_end_hour),

@@ -2293,7 +2293,7 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
     let mut ui = render(&state, Size::new(260.0, 600.0));
     assert!(ui.find("Todos").is_err());
     assert!(ui.find("0 tasks not planned").is_err());
-    ui.click("Plan Day")?;
+    ui.click(iced::widget::Id::new("plan-menu-toggle"))?;
     for message in ui.into_messages() {
         let _ = app::update(&mut state, message);
     }
