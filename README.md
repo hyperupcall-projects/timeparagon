@@ -1,10 +1,8 @@
 # TimeSlay
 
-Slay the day with TimeSlayyyyy.
+Easily manage your life using a single app. It is designed to minimize friction and maximize your time spent in flow state.
 
-## Overview
-
-TimeSlay is designed to help you implement some of the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime). Rather than spending time switching between, searching through, and using multiple apps, just focus on the work. It is inspired by [Sunsama](https://www.sunsama.com), [Loop Habits](https://github.com/isoron/uhabits), [Griply](https://griply.app), and [Strides](https://www.stridesapp.com/).
+## Tour
 
 Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and edit events/tasks from this view:
 
@@ -26,72 +24,71 @@ Of course, there's also week, 2-week, and month views:
 
 - Intuitive to use.
 - Stays out of your way during work, but is easily accessible when needed.
-	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+J</kbd>).
-	- Toggle between fully hiding and showing the app (<kbd>Meta+Shift+J</kbd>).
+	- Toggle between "docked" and "panel" mode as shown above (<kbd>Meta+F</kbd>).
+	- Toggle between fully hiding and showing the app (<kbd>Meta+Shift+F</kbd>).
 	- Takes up full screen when showing lots of data.
 	- Configure dock or panel to either show above existing apps or take up space.
 	- Configure widths of dock, panel, and side overlays.
 - **View your time:**
 	- By day, week, 2 weeks, or month.
 	- Allow zoom in and zoom out on day/week views.
+	- Toggle visibility of Google Calendars, Google Task Lists, and TimeSlay-specific events.
 	- Apply custom search or filter:
-		- Show only events or tasks that satisfy a search of their title or description.
-		- Filter by time of day, project, label, availability, public visibility, location, and more.
-		- Toggle to only show details of events with public visibility.
-- **Manage your time:**
-	- **Events**
-		- Tracks the "usual" fields like due dates, deadlines, labels/tags, priorities, location, project name, and more.
-		- Create events from pictures (TODO).
-		- Shows dedicated buttons for joining Zoom and Google Meet meetings.
-		- Create Zoom and Google Meet meetings and invite attendees.
+		- Show only events that satisfy a filter, like string search, time of day, project, availability, public visibility, location, and more.
+- **Manage your calendar:**
+	- **Events:**
+		- Manage the same event metadata as Google Calendar, plus projects, and tags.
+		- Create Google Meet and Zoom meetings; manage guest lists.
+		- Show join buttons for Google Meet and Zoom meetings.
 		- Send replies to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop).
 		- Location
-			- Estimate travel time and distance based on event locations
-			- Link to Google Maps for more detailed location and travel info.
-	- Tasks (described below)
-	- **Time blocks**
-		- These are standard calendar events with a special interface to easily order tasks within them; great for deep work.
-		- Tasks are assigned time blocks.
-		- Brain dump.
-		- Pomodoro timer.
-		- Record distractions.
-	- Habits (described below)
-	- Sleep
-		- Automatically create events for sleep based on sleep goal, next days' activities, and latest wakeup time.
+			- Estimate travel time and distance based on event locations.
+			- Open locations or trip in Google Maps or OpenStreetMap.
+	- **Time blocks:**
+		- Like a regular event, but has special interface for planning and focusing for many tasks or deep work.
+		- Easily add/remove tasks to the time block.
+		- Has special focus mode:
+			- Area to brain dump.
+			- Automatic pomodoro timer.
+			- Record distractions (integratead with habits) (TODO).
+	- **Sleep:**
+		- Like a regular event, but automatically create events for sleep based on sleep goal, next days' activities, and latest wakeup time.
 		- Sleep quality tracking (TODO).
 		- Automatic shutdown (TODO).
 - **Capture and manage tasks**:
-	- Track the "usual" fields like due dates, deadlines, labels/tags, priorities, project name, and estimated duration.
+	- Manage the same task metadata as Google Tasks, plus projects, tags, priorities, projects, and estimated duration.
 	- Create tasks:
-		- By typing; interprets keywords as metadata [like Todoist](https://www.todoist.com/help/todoist/features/use-task-quick-add-in-todoist-va4Lhpzz).
-		- With voice input.
-		- By pasting Gmail URLs
-		- From a web page with the browser extension
-		- From a Slack message with the Slack app
+		- By text input
+			- Supports [Todoist keywords](https://www.todoist.com/help/todoist/features/use-task-quick-add-in-todoist-va4Lhpzz).
+			- Supports pasting Gmail URLs
+		- By speaking.
+		- By taking, uploading, or pasting pictures (TODO).
+		- From the browser extension, when on a web page
+		- From the Slack app, for a specific message
 	- Inbox section for new tasks that have yet to be triaged.
 	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled.
+	- Today section for current-day tasks without a due time.
 	- Segmented backlog section for deferring tasks to next week, next month, and so on.
 	- Schedule tasks:
-		- Manually assign tasks to time blocks.
+		- Manually assign tasks to a day, time, or time blocks.
 		- _Automatically project tasks from a non-temporal, grouped and ordered list of tasks to the day's available time blocks (TODO)._
-		- "Do immediately" etc. No need to categorize other than project.
+		- "Do immediately" etc. No need to categorize other than project (TODO?).
 	- Handle long-running or multi-step/subtasks (TODO).
 		- Plan to do one task, but turns out, I have to do something smaller, and defer the original task. Easily do that.
 		- Tasks that may be done over multiple days/time blocks (TODO).
 		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
-		- But, also keep track of subtasks (TODO)?
+		- But, also keep track of subtasks (TODO?).
 		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
 - **Manage Habits**
-	- These are standard calendar events that are colored differently.
-	- Similar in style to [Loop Habits](https://github.com/isoron/uhabits).
-	- Two types: "Did it" and "Avoided it"; either may include a count for tracking value over time.
+	- Like a regular calendar event, but colored differently and managed differently (UPDATE?).
+	- Distinguish between habits to do, and ones to avoid.
+	- Allow adding data to habits
+	- Allow connecting habit to specific objectives like weight loss (TODO).
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
-	- Allow setting/connecting goals to Habits (TODO).
 - **Notes:**
 	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
-	- Notes are stored in the local database and synced through Turso.
 - **Project sessions:** (TODO)
 	- _Configure presets of applications and their positions for easy launching per project (TODO)._
 - **Set goals:** (TODO)
@@ -100,7 +97,7 @@ Of course, there's also week, 2-week, and month views:
 	- Implement your goals in a SMART way.
 	- Tasks, certain amount of time per project. (TODO)
 	- Day, week, month, quarter, year. (TODO)
-- **Manage projects** (TODO)
+- **Manage projects:** (TODO)
 	- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
 	- View as list, kanban, or calendar (TODO).
 	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
@@ -123,25 +120,6 @@ Of course, there's also week, 2-week, and month views:
 	- Location and exercise
 	- Food?
 
-## Architecture
+## More
 
-- Desktop app uses [Iced](https://iced.rs) for GUI and mobile app mostly uses [Dioxus](https://dioxuslabs.com).
-- Local-first approach; each device has own SQLite database, synced with [Turso](https://turso.tech), which is ran on a separate server.
-	- SQLite database contains cache of calendar, task, and other cloud data, and also app-specific data like habit information.
-- Uses Google to back calendar, tasks, and contact data.
-- Calendar and task edits commit locally with a durable `google_operations` queue row before the UI reports success. A background worker retries Google writes and removes each row only after success; newer queued values take precedence over refreshes.
-	- “Saving…” indicates outstanding Google operations. **More → Operations** shows their changes, attempts, and errors.
-	- Visited calendar months and full task records remain in local database tables for offline access. The Google queue and caches are device-local; Turso continues to replicate app-specific shared data.
-
-## Terminology
-
-- Overdue tasks are tasks not marked as "completed" or "ignored" that were due before the current day.
-- Inboxed tasks are tasks that the user still needs to organize.
-
-## Design Constraints
-
-The design of this app is, in part, constrainted by the fact that:
-
-- Google Task API does not allow for reading/writing the time of day of a due date or deadline (only day).
-- Google Task API does not allow writing the deadline field (only due date).
-- Integrates only with the KDE Plasma desktop environment on Linux.
+See [Documentation](./docs/index.md) for more details.
