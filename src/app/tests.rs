@@ -2449,3 +2449,67 @@ fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
     let _ = update(&mut state, escape);
     assert!(state.calendar.draft.is_none());
 }
+
+#[test]
+fn life_area_opens_in_a_separate_panel_and_escape_closes_it() {
+    use crate::life::Action;
+    use iced::Settings;
+    use iced_test::Simulator;
+
+    let mut state = State::blank();
+    state.screen = Screen::Life;
+    state.main_window = Some(window::Id::unique());
+    let main_size = state.main_size;
+    let actions = geometry_actions(update(
+        &mut state,
+        Message::Life(Action::Open(config::PERSONAL_AREA)),
+    ));
+    assert!(
+        matches!(actions.as_slice(), [GeometryAction::Open(settings)]
+        if settings.size.width == ui::life::PANEL_WIDTH)
+    );
+    assert!(state.editor_window.is_some());
+    assert_eq!(state.main_size, main_size);
+
+    let size = Size::new(560.0, 900.0);
+    {
+        let mut list = Simulator::with_size(Settings::default(), size, ui::view(&state));
+        assert!(list.find("Personal").is_ok());
+        assert!(list.find("Implementation").is_err());
+        let mut panel = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
+        assert!(panel.find("Vision").is_ok());
+        panel.click("Implementation").unwrap();
+        assert!(panel.into_messages().any(|message| matches!(
+            message,
+            Message::Life(Action::ShowTab(crate::life::Tab::Implementation))
+        )));
+    }
+    let escape = key_message(
+        &mut state,
+        Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::default(),
+    )
+    .unwrap();
+    let _ = update(&mut state, escape);
+    assert!(state.life.open.is_none());
+    assert!(state.editor_window.is_none());
+    assert_eq!(state.screen, Screen::Life);
+}
+
+#[test]
+fn closing_the_life_side_window_dismisses_the_area() {
+    let mut state = State::blank();
+    state.screen = Screen::Life;
+    state.main_window = Some(window::Id::unique());
+    let _ = update(
+        &mut state,
+        Message::Life(crate::life::Action::Open(config::PERSONAL_AREA)),
+    );
+    let editor = state.editor_window.unwrap();
+    let _ = update(
+        &mut state,
+        Message::System(SystemMessage::WindowClosed(editor)),
+    );
+    assert!(state.life.open.is_none());
+    assert!(state.editor_window.is_none());
+}

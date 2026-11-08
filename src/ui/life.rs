@@ -2,7 +2,7 @@
 //! open, with its vision and goals in one tab and the objectives, habits and
 //! projects that carry it out in the other.
 
-use iced::widget::{Space, button, column, container, mouse_area, opaque, row, stack, text};
+use iced::widget::{Space, button, column, container, row, text};
 use iced::{Alignment, Color, Element, Fill, Length, Padding, Theme};
 use timeslay_core::notes::Pastel;
 
@@ -20,8 +20,8 @@ const SCROLLBAR_GUTTER: f32 = 14.0;
 /// What an area or project without a color of its own is drawn with.
 const NO_COLOR: Color = Color::from_rgb(0.62, 0.62, 0.64);
 
-/// The widest the side panel gets.
-const PANEL_MAX_WIDTH: f32 = 560.0;
+/// Room for the vision editor and implementation lists in the side window.
+pub const PANEL_WIDTH: f32 = 560.0;
 
 fn msg(action: Action) -> Message {
     Message::Life(action)
@@ -86,32 +86,12 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     .height(Fill)
     .into();
 
-    let Some(open) = &state.life.open else {
-        return page;
-    };
-    let Some(area) = projects.area(open.area) else {
-        return page;
-    };
-
-    let width = if metrics.size.width < 600.0 {
-        metrics.size.width
-    } else {
-        (metrics.size.width * 0.6).min(PANEL_MAX_WIDTH)
-    };
-    let scrim = mouse_area(container(Space::new()).width(Fill).height(Fill).style(
-        |_theme: &Theme| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.25).into()),
-            ..container::Style::default()
-        },
-    ))
-    .on_press(msg(Action::Close));
-    let panel = container(panel(state, area, open, metrics))
-        .padding(metrics.padding)
-        .width(Length::Fixed(width))
-        .height(Fill)
-        .style(super::controls::card_surface);
-
-    stack![page, row![scrim, opaque(panel)].height(Fill)].into()
+    // Keep the list visible when the area has its own side window. Embedded
+    // hosts without a main window still need somewhere to show the details.
+    if state.editor_window.is_none() && state.life_panel_open() {
+        return panel(state, metrics);
+    }
+    page
 }
 
 fn add_box<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -208,12 +188,14 @@ fn heading<'a>(caption: &'a str, metrics: &Metrics) -> Element<'a, Message> {
     text(caption).size(metrics.label() + 2.0).into()
 }
 
-fn panel<'a>(
-    state: &'a State,
-    area: &'a LifeArea,
-    open: &'a Open,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
+/// The open life area's content, hosted in the separate side window.
+pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let Some(open) = &state.life.open else {
+        return Space::new().into();
+    };
+    let Some(area) = state.config.projects.area(open.area) else {
+        return Space::new().into();
+    };
     let size = metrics.label();
     let tab = |caption: &'static str, which: Tab| {
         button(text(caption).size(size))
@@ -243,17 +225,22 @@ fn panel<'a>(
         Tab::Implementation => implementation_tab(state, area, metrics),
     };
 
-    column![
-        top,
-        tabs,
-        crate::ui::controls::scrollable(container(body).padding(Padding {
-            right: SCROLLBAR_GUTTER,
-            ..Padding::ZERO
-        }))
+    container(
+        column![
+            top,
+            tabs,
+            crate::ui::controls::scrollable(container(body).padding(Padding {
+                right: SCROLLBAR_GUTTER,
+                ..Padding::ZERO
+            }))
+            .width(Fill)
+            .height(Fill),
+        ]
+        .spacing(metrics.spacing)
         .width(Fill)
         .height(Fill),
-    ]
-    .spacing(metrics.spacing)
+    )
+    .padding(metrics.padding)
     .width(Fill)
     .height(Fill)
     .into()

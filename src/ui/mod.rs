@@ -62,6 +62,14 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
                 .style(controls::surface)
                 .into();
         }
+        if state.life_panel_open() {
+            let metrics = Metrics::of(size);
+            return container(life::panel(state, &metrics))
+                .width(Fill)
+                .height(Fill)
+                .style(controls::surface)
+                .into();
+        }
         // Checked before the range views for the same reason. An event opened
         // from the habit's page goes beside it.
         if state.habit_panel_open() {
