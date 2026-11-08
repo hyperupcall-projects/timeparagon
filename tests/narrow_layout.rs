@@ -2718,32 +2718,6 @@ fn a_task_opened_from_the_focus_view_sits_beside_it_and_closes_first() {
 }
 
 #[test]
-#[ignore = "writes previews to /tmp/focus-preview for looking at by hand"]
-fn focus_view_preview() {
-    use timeslay::timeblocking::Action;
-    std::fs::create_dir_all("/tmp/focus-preview").unwrap();
-    for (name, size, running) in [
-        ("idle-480", Size::new(480.0, 1000.0), false),
-        ("running-480", Size::new(480.0, 1000.0), true),
-        ("running-260", Size::new(260.0, 800.0), true),
-        ("idle-900", Size::new(900.0, 720.0), false),
-    ] {
-        let mut state = focus_state();
-        if running {
-            let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
-        }
-        let mut ui = render(&state, size);
-        for (theme, shade) in [(iced::Theme::Light, "light"), (iced::Theme::Dark, "dark")] {
-            let path = format!("/tmp/focus-preview/{name}-{shade}");
-            let _ = ui
-                .snapshot(&theme)
-                .unwrap()
-                .matches_image(std::path::Path::new(&path));
-        }
-    }
-}
-
-#[test]
 fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
     let mut state = focus_state();
     let mut snapshot = timeslay::calendar::sample_snapshot();

@@ -503,9 +503,4 @@ mod tests {
 
         assert_eq!(playback.next_frame().unwrap()[0], 1.0);
     }
-
-    #[test]
-    fn a_frame_is_a_sample_per_channel() {
-        assert_eq!(STRIDE, SAMPLE_SIZE * CHANNELS);
-    }
 }

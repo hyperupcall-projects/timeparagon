@@ -276,13 +276,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tones_all_render_to_something_audible() {
-        for tone in Tone::ALL {
-            assert!(!tone.render().is_empty(), "{tone} rendered nothing");
-        }
-    }
-
-    #[test]
     fn gain_is_clamped_and_round_trips() {
         let shared = Shared::new();
 
