@@ -317,6 +317,10 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             state.config.appearance.follow_system = false;
             queue_save(state)
         }
+        SettingsMessage::DistanceUnitSelected(unit) => {
+            state.config.appearance.distance_unit = unit;
+            queue_save(state)
+        }
         SettingsMessage::TimeFormatSelected(format) => {
             state.config.appearance.time_format = format;
             queue_save(state)

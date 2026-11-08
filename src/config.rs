@@ -22,7 +22,7 @@ pub use timeslay_core::config::{
     CalendarSettings, DatabaseSyncSettings, Project, ProjectsSettings, TriageRequirements,
     WeekRange, config_path, project_dirs,
 };
-pub use timeslay_core::places::{Place, RouteMode, SavedRoute, TravelMode};
+pub use timeslay_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
 
 /// How long to wait after the last change before writing to disk.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -72,6 +72,8 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
+    /// Display units for distances; cached routes remain in meters.
+    pub distance_unit: DistanceUnit,
     /// The name of the selected theme, matching what the picker shows. It may
     /// be one of the catalog's names or one of the follow-the-system choices.
     pub theme: String,
@@ -89,6 +91,7 @@ impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme: "Light".to_owned(),
+            distance_unit: DistanceUnit::default(),
             follow_system: false,
             time_format: TimeFormat::TwentyFourHour,
         }

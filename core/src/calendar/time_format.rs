@@ -37,8 +37,8 @@ impl std::fmt::Display for TimeFormat {
         f.write_str(match self {
             Self::TwelveHour => "12-hour time",
             Self::TwentyFourHour => "24-hour time",
-            Self::Compact => "Compact 1",
-            Self::Compact2 => "Compact 2",
+            Self::Compact => "9:30p",
+            Self::Compact2 => "930p",
         })
     }
 }
