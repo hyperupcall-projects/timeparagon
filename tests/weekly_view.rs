@@ -90,7 +90,7 @@ fn render_main(state: &State, size: Size) -> Simulator<'_, Message> {
 
 fn open_plan(state: &mut State, size: Size) -> Result<(), Error> {
     let mut ui = render_main(state, size);
-    ui.click(timeslay::ui::plan_view_label(state))?;
+    ui.click(iced::widget::Id::new("plan-menu-toggle"))?;
     let messages: Vec<_> = ui.into_messages().collect();
     for message in messages {
         let _ = app::update(state, message);
@@ -470,6 +470,60 @@ fn plan_day_shows_calendar_beside_each_task_list() -> Result<(), Error> {
             "{} ▾",
             calendar::month_day_label(state.calendar.day)
         ))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Error> {
+    use timeslay::app::CalendarView;
+    for width in [180.0, 260.0, 420.0, 900.0] {
+        let mut state = state();
+        let size = Size::new(width, 900.0);
+        for (option, view, label) in [
+            ("Week", CalendarView::Week, "Plan Week"),
+            ("2 Weeks", CalendarView::TwoWeek, "Plan 2 Weeks"),
+            ("Month", CalendarView::Month, "Plan Month"),
+            ("Day", CalendarView::Day, "Plan Day"),
+        ] {
+            let before = (state.screen, state.view);
+            open_plan(&mut state, size)?;
+            assert_eq!((state.screen, state.view), before);
+            let mut ui = render_main(&state, size);
+            click_plan_option(&mut ui, option)?;
+            for message in ui.into_messages() {
+                let _ = app::update(&mut state, message);
+            }
+            assert_eq!(state.plan_view, view);
+            assert_eq!(state.view, view);
+            assert!(!state.view_menu_open);
+            assert_eq!(timeslay::ui::plan_view_label(&state), label);
+
+            // Leaving planning must preserve the label and main-button action.
+            let _ = app::update(
+                &mut state,
+                Message::Navigation(NavigationMessage::ScreenSelected(Screen::Projects)),
+            );
+            let mut ui = render_main(&state, size);
+            let main = ui.find(label)?.bounds();
+            let arrow = ui.find(iced::widget::Id::new("plan-menu-toggle"))?.bounds();
+            assert!(main.x + main.width <= arrow.x);
+            assert!(arrow.x + arrow.width <= width);
+            ui.click(label)?;
+            for message in ui.into_messages() {
+                let _ = app::update(&mut state, message);
+            }
+            assert_eq!(state.view, view);
+            assert_eq!(
+                state.screen,
+                if view == CalendarView::Day {
+                    Screen::Overdue
+                } else {
+                    Screen::Calendar
+                }
+            );
+            assert!(!state.view_menu_open);
+        }
     }
     Ok(())
 }
