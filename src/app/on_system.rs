@@ -346,6 +346,10 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
         SystemMessage::WindowClosed(id) => {
             if state.editor_window == Some(id) {
                 state.editor_window = None;
+                if state.life_panel_open() {
+                    state.life.open = None;
+                    return Task::none();
+                }
                 // Overview visibility belongs to its toggle, even if the
                 // compositor closes the floating surface. Reconciliation
                 // recreates it while the panel is visible.

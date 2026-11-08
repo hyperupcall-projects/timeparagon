@@ -996,6 +996,16 @@ impl State {
             && (self.habits.selected.is_some() || self.habits.form.is_some())
     }
 
+    /// A life area is open beside the Life list.
+    pub fn life_panel_open(&self) -> bool {
+        self.screen == Screen::Life
+            && self
+                .life
+                .open
+                .as_ref()
+                .is_some_and(|open| self.config.projects.area(open.area).is_some())
+    }
+
     /// The map picker is shown in the floating window at the right of the
     /// panel, never in the panel itself. The dock has no such window, so
     /// there it covers the dock instead.
@@ -1007,6 +1017,7 @@ impl State {
         !self.task_creation_window
             && (self.people_panel_open()
                 || self.habit_panel_open()
+                || self.life_panel_open()
                 || (shows_details(self.screen) && !self.range_view_active()))
     }
 
@@ -1408,6 +1419,8 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
         state.floating_editors() && state.main_window.is_some() && !state.panel_expected_close;
     let width = if visible && state.people_panel_open() {
         state.config.views.detail_width()
+    } else if visible && state.life_panel_open() {
+        ui::life::PANEL_WIDTH
     } else if visible && state.habit_panel_open() {
         ui::habits::PANEL_WIDTH
             + if state.calendar.open_event.is_some() {
@@ -2178,7 +2191,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             Some(Message::System(SystemMessage::Dismiss))
         }
         Key::Named(Named::Escape) => {
-            if state.calendar.open_event.is_some() {
+            if state.life_panel_open() {
+                Some(Message::Life(crate::life::Action::Close))
+            } else if state.calendar.open_event.is_some() {
                 Some(Message::Event(EventMessage::EventClosed))
             } else if state.timeblocking.block.is_some() {
                 Some(Message::TimeBlocking(crate::timeblocking::Action::Close))
