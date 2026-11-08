@@ -2,6 +2,7 @@
 //! should not have to know about.
 
 pub mod api;
+pub mod client;
 pub mod colors;
 pub(crate) mod day_cache;
 pub mod deadline;
@@ -30,6 +31,8 @@ use iced_core::Color;
 use serde::{Deserialize, Serialize};
 
 use crate::config::CalendarSettings;
+pub use client::GoogleClient;
+use google::GoogleError;
 
 /// Google Calendar in the browser, opened on the day view.
 pub const WEB_URL: &str = "https://calendar.google.com/calendar/r/day";
@@ -62,7 +65,7 @@ impl Calendar {
     /// Whether this is a Google Tasks list rather than a calendar. Task lists
     /// are synthetic calendars carrying a `tasks:` id.
     pub fn is_task_list(&self) -> bool {
-        self.id.starts_with("tasks:")
+        self.id.starts_with(ids::TASK_LIST)
     }
 
     pub fn is_app_calendar(&self, settings: &CalendarSettings) -> bool {
@@ -90,7 +93,7 @@ impl Calendar {
                 ]
                 .into_iter()
                 .flatten()
-                .any(|id| id.trim_start_matches("tasks:") == self.id.trim_start_matches("tasks:")))
+                .any(|id| ids::bare_list(id) == ids::bare_list(&self.id)))
     }
 }
 
@@ -146,7 +149,177 @@ impl Event {
     /// Whether this came from Google Tasks rather than Google Calendar. Task
     /// events carry a `task:` id and a `tasks:` calendar id.
     pub fn is_task(&self) -> bool {
-        self.id.starts_with("task:") || self.calendar_id.starts_with("tasks:")
+        self.id.starts_with(ids::TASK) || self.calendar_id.starts_with(ids::TASK_LIST)
+    }
+
+    /// The Google Task this is, when it is one.
+    pub fn task_ref(&self) -> Option<ids::TaskRef<'_>> {
+        ids::TaskRef::of(self)
+    }
+
+    /// What this item is to the app.
+    ///
+    /// Google stores everything as events or tasks; the app tells its own
+    /// kinds apart by the fields it writes. The order matters: a sleep or habit
+    /// event lives on the app's calendar too, and a scheduled task's block is
+    /// an event that carries a task link. `calendars` lets the app's calendar
+    /// be recognized by name before its ID has been recorded in `settings`.
+    pub fn kind(&self, settings: &CalendarSettings, calendars: &[Calendar]) -> EventKind {
+        if self.details.sleep.is_some() {
+            EventKind::Sleep
+        } else if self.details.habit {
+            EventKind::Habit
+        } else if self.details.scheduled.is_some() {
+            EventKind::ScheduledTask
+        } else if self.is_task() {
+            EventKind::Task
+        } else if settings.app_calendar.as_deref() == Some(self.calendar_id.as_str())
+            || calendars.iter().any(|calendar| {
+                calendar.id == self.calendar_id
+                    && CalendarSettings::is_app_calendar_name(&calendar.name)
+            })
+        {
+            if self.all_day {
+                EventKind::AppEvent
+            } else {
+                EventKind::TimeBlock
+            }
+        } else {
+            EventKind::External
+        }
+    }
+}
+
+/// What an item on the calendar is to the app. See [`Event::kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventKind {
+    /// A night, written by the sleep planner.
+    Sleep,
+    /// An occurrence of a habit's event.
+    Habit,
+    /// A task's time on the calendar: an event linked to a Google Task.
+    ScheduledTask,
+    /// A Google Task.
+    Task,
+    /// A timed event on the app's calendar, holding tasks.
+    TimeBlock,
+    /// An all-day event on the app's calendar.
+    AppEvent,
+    /// Anything on another calendar.
+    External,
+}
+
+impl EventKind {
+    /// The name the interface shows on the kind's chip. `None` for events
+    /// from other calendars, which are named by their calendar instead.
+    pub fn label(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Sleep => "Sleep",
+            Self::Habit => "Habit",
+            Self::ScheduledTask | Self::Task => "Task",
+            Self::TimeBlock => "Time Block",
+            Self::AppEvent => "Event",
+            Self::External => return None,
+        })
+    }
+
+    /// The kind's chip: its name, in the color configured for it.
+    pub fn chip(self, event: &Event, settings: &CalendarSettings) -> Option<(&'static str, Color)> {
+        let color = match self {
+            Self::Sleep => settings.sleep_color(),
+            Self::Habit => settings.habit_color(),
+            Self::ScheduledTask => settings.task_event_color(),
+            Self::Task => settings
+                .task_color(&event.calendar_id)
+                .unwrap_or(colors::TASK),
+            Self::TimeBlock => settings.time_block_color(),
+            Self::AppEvent => settings.event_color(),
+            Self::External => return None,
+        };
+        Some((self.label()?, color))
+    }
+}
+
+/// How Google Tasks appear among calendar events.
+///
+/// A task becomes an [`Event`] whose ID is `task:` followed by the task's ID
+/// and whose calendar ID is `tasks:` followed by its list's ID. These are the
+/// only places that know that encoding.
+pub mod ids {
+    use super::Event;
+
+    /// The prefix of a task's event ID.
+    pub const TASK: &str = "task:";
+    /// The prefix of a task list's calendar ID.
+    pub const TASK_LIST: &str = "tasks:";
+
+    /// A Google Task: its list and its own ID, without the prefixes.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct TaskRef<'a> {
+        pub list: &'a str,
+        pub task: &'a str,
+    }
+
+    impl<'a> TaskRef<'a> {
+        /// The task an event stands for, when both of its IDs say it is one.
+        pub fn of(event: &'a Event) -> Option<Self> {
+            Some(Self {
+                list: event.calendar_id.strip_prefix(TASK_LIST)?,
+                task: event.id.strip_prefix(TASK)?,
+            })
+        }
+
+        pub fn event_id(self) -> String {
+            event_id(self.task)
+        }
+
+        pub fn calendar_id(self) -> String {
+            calendar_id(self.list)
+        }
+    }
+
+    /// The event ID of the task with Google ID `task`.
+    pub fn event_id(task: &str) -> String {
+        format!("{TASK}{}", bare_task(task))
+    }
+
+    /// The calendar ID of the task list with Google ID `list`.
+    pub fn calendar_id(list: &str) -> String {
+        format!("{TASK_LIST}{}", bare_list(list))
+    }
+
+    /// A task's Google ID from its event ID, or the ID itself if it has no
+    /// prefix.
+    pub fn bare_task(id: &str) -> &str {
+        id.trim_start_matches(TASK)
+    }
+
+    /// A list's Google ID from its calendar ID, or the ID itself if it has no
+    /// prefix.
+    pub fn bare_list(id: &str) -> &str {
+        id.trim_start_matches(TASK_LIST)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn task_ids_round_trip_and_tolerate_either_form() {
+            let mut event = crate::calendar::sample_snapshot().events.remove(0);
+            event.id = event_id("abc");
+            event.calendar_id = calendar_id("tasks:list");
+            assert_eq!(event.id, "task:abc");
+            assert_eq!(event.calendar_id, "tasks:list");
+            let task = TaskRef::of(&event).unwrap();
+            assert_eq!((task.list, task.task), ("list", "abc"));
+            assert_eq!(task.event_id(), event.id);
+            assert_eq!(task.calendar_id(), event.calendar_id);
+            assert_eq!(bare_task("task:abc"), "abc");
+            assert_eq!(bare_task("abc"), "abc");
+            event.calendar_id = "primary".into();
+            assert!(TaskRef::of(&event).is_none());
+        }
     }
 }
 
@@ -630,7 +803,7 @@ pub fn parse_clock(text: &str) -> Option<(u32, u32)> {
 
 /// Whether the source with this id is switched on.
 pub fn calendar_enabled(id: &str, settings: &CalendarSettings) -> bool {
-    if id.starts_with("tasks:") {
+    if id.starts_with(ids::TASK_LIST) {
         settings.show_tasks && !settings.disabled.iter().any(|hidden| hidden == id)
     } else {
         !settings.disabled.iter().any(|hidden| hidden == id)
@@ -645,7 +818,7 @@ pub fn set_source_enabled(
     enabled: bool,
 ) {
     // Preserve a previous global hide when switching to per-list controls.
-    if enabled && id.starts_with("tasks:") && !settings.show_tasks {
+    if enabled && id.starts_with(ids::TASK_LIST) && !settings.show_tasks {
         for calendar in calendars.iter().filter(|calendar| calendar.is_task_list()) {
             settings.set_calendar_enabled(&calendar.id, false);
         }
@@ -822,7 +995,7 @@ fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
 fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
     if event.details.sleep.is_some() {
         event.color = settings.sleep_color();
-    } else if event.calendar_id.starts_with("tasks:") && event.details.scheduled.is_none() {
+    } else if event.calendar_id.starts_with(ids::TASK_LIST) && event.details.scheduled.is_none() {
         event.color = task_color(settings, &event.calendar_id);
     } else if event.details.scheduled.is_some() {
         // A task's calendar block, on the TimeSlay calendar.
@@ -1247,26 +1420,45 @@ impl Store {
     }
 
     /// Refresh loaded views from committed local rows without waiting for Google.
+    /// The database the day cache and the queued edits live in, when this
+    /// store is backed by one.
+    pub fn local_database(&self) -> Option<&std::path::Path> {
+        self.day_cache.as_deref()
+    }
+
+    /// Reads the queued local edits and puts them over every day in memory.
+    /// Blocking: the poll reads the overlay on a worker thread with
+    /// [`operations::load_overlay`] and hands it to [`Store::apply_overlay`].
     pub fn apply_local_operations(&mut self) -> Result<(), String> {
         let Some(path) = &self.day_cache else {
             return Ok(());
         };
-        operations::overlay(path, &mut self.events, None)?;
+        let overlay = operations::load_overlay(path)?;
+        self.apply_overlay(&overlay);
+        Ok(())
+    }
+
+    /// Puts already-read local edits over every day in memory. Touches no
+    /// files, so it is safe on the UI thread.
+    pub fn apply_overlay(&mut self, overlay: &operations::Overlay) {
+        if self.day_cache.is_none() {
+            return;
+        }
+        overlay.apply(&mut self.events, None);
         self.events
             .retain(|e| event_on_day(e, self.day, self.day_end_hour));
         for (day, events) in &mut self.cache {
-            operations::overlay(path, events, None)?;
+            overlay.apply(events, None);
             events.retain(|e| event_on_day(e, *day, self.day_end_hour));
         }
         if let Some(event) = &mut self.detail_event {
             let id = event.id.clone();
             let mut detail = vec![event.clone()];
-            operations::overlay(path, &mut detail, None)?;
+            overlay.apply(&mut detail, None);
             if let Some(updated) = detail.into_iter().find(|e| e.id == id) {
                 *event = updated;
             }
         }
-        Ok(())
     }
 
     pub fn apply_snapshot(&mut self, mut snapshot: Snapshot) {
@@ -1735,7 +1927,7 @@ impl Store {
     /// Drops a deleted task, every cached copy of it, and the calendar blocks
     /// that were standing in for it.
     pub fn forget_task(&mut self, id: &str) {
-        let task_id = id.strip_prefix("task:").unwrap_or(id).to_owned();
+        let task_id = ids::bare_task(id).to_owned();
         let drop_copies = |events: &mut Vec<Event>| {
             events.retain(|event| {
                 event.id != id
@@ -2029,28 +2221,18 @@ pub fn connect(client_id: String, client_secret: String) -> Result<oauth::Tokens
 /// needed. The day's window ends at `day_end_hour`, so a day that ends at 3am
 /// still includes the small hours of the next morning.
 pub fn sync_day(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     disabled: &[String],
     day: NaiveDate,
     day_end_hour: u32,
     app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::fetch_day(
-        &tokens.access_token,
-        disabled,
-        day,
-        day_end_hour,
-        app_calendar,
-    )
+    let token = client.access_token()?;
+    api::fetch_day(&token, disabled, day, day_end_hour, app_calendar)
 }
 
 pub fn sync_week(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     disabled: &[String],
     anchor: NaiveDate,
     days: u32,
@@ -2058,8 +2240,7 @@ pub fn sync_week(
     app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
     sync_range(
-        client_id,
-        client_secret,
+        client,
         disabled,
         anchor,
         &week_dates(anchor, days),
@@ -2070,8 +2251,7 @@ pub fn sync_week(
 
 /// Fetch the complete visible range for a week or month in a single request.
 pub fn sync_range(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     disabled: &[String],
     anchor: NaiveDate,
     dates: &[NaiveDate],
@@ -2080,11 +2260,9 @@ pub fn sync_range(
 ) -> Result<Snapshot, String> {
     let first = *dates.first().ok_or("Calendar range is empty")?;
     let last = *dates.last().ok_or("Calendar range is empty")?;
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let token = client.access_token()?;
     api::fetch_range(
-        &tokens.access_token,
+        &token,
         disabled,
         anchor,
         first,
@@ -2109,55 +2287,43 @@ pub fn week_dates(anchor: NaiveDate, days: u32) -> Vec<NaiveDate> {
 
 /// Connects a habit event to a habit, or lets it go when `habit_id` is `None`.
 pub fn link_habit_event(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     calendar_id: &str,
     event_id: &str,
     habit_id: Option<&str>,
 ) -> Result<(), String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::link_habit_event(&tokens.access_token, calendar_id, event_id, habit_id)
-        .map_err(describe_event_write_error)
+    let token = client.access_token()?;
+    api::link_habit_event(&token, calendar_id, event_id, habit_id)
+        .map_err(|error| describe_event_write_error(error).to_string())
 }
 
 /// Pulls every habit event series and past completion from the app's calendar.
 pub fn sync_habit_listing(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     app_calendar: Option<&str>,
 ) -> Result<api::HabitListing, String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::fetch_habit_listing(&tokens.access_token, app_calendar)
+    let token = client.access_token()?;
+    api::fetch_habit_listing(&token, app_calendar)
 }
 
 /// Pulls every habit master from the app's TimeSlay calendar.
 pub fn sync_habits(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     app_calendar: Option<&str>,
 ) -> Result<Vec<api::HabitEvent>, String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::fetch_habits(&tokens.access_token, app_calendar)
+    let token = client.access_token()?;
+    api::fetch_habits(&token, app_calendar)
 }
 
 /// Load a habit's repeat schedule without losing the selected occurrence.
 /// The Habits list starts at the first occurrence of its representative series.
 pub fn habit_edit_draft(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     event: &Event,
 ) -> Result<(Event, EditDraft), String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
+    let token = client.access_token()?;
     let master = api::fetch_event(
-        &tokens.access_token,
+        &token,
         event,
         event
             .details
@@ -2166,7 +2332,7 @@ pub fn habit_edit_draft(
             .unwrap_or(&event.id),
     )?;
     let occurrence = if event.id == master.id && !master.details.recurrence.is_empty() {
-        api::fetch_first_occurrence(&tokens.access_token, &master)?
+        api::fetch_first_occurrence(&token, &master)?
     } else if event.id == master.id {
         master.clone()
     } else {
@@ -2176,158 +2342,92 @@ pub fn habit_edit_draft(
     Ok((occurrence, draft))
 }
 
+// Writes. Each of these saves the change locally and queues it for Google
+// (see `operations`); none of them talks to Google itself, so none needs a
+// client. The queue sends them through the matching function in `send`.
+
 /// Creates a habit event using the shared details editor's fields, counting
 /// towards the habit `habit_id`.
 pub fn create_habit(
-    client_id: &str,
-    client_secret: &str,
     draft: &EditDraft,
     color_id: Option<&str>,
     habit_id: &str,
 ) -> Result<api::HabitEvent, String> {
-    if !operations::replaying() {
-        let id = operations::new_id()?;
-        let recurrence = draft.recurrence_lines()?;
-        let calendar = if draft.calendar_id.is_empty() {
-            crate::config::Config::load()
-                .calendar
-                .app_calendar
-                .ok_or("Sync Google once to discover the TimeSlay calendar")?
-        } else {
-            draft.calendar_id.clone()
-        };
-        let event = Event {
+    let id = operations::new_id()?;
+    let recurrence = draft.recurrence_lines()?;
+    let calendar = if draft.calendar_id.is_empty() {
+        crate::config::Config::load()
+            .calendar
+            .app_calendar
+            .ok_or("Sync Google once to discover the TimeSlay calendar")?
+    } else {
+        draft.calendar_id.clone()
+    };
+    let event = Event {
+        id: id.clone(),
+        calendar_id: calendar.clone(),
+        title: draft.title.clone(),
+        start: draft.start,
+        end: draft.end,
+        all_day: draft.all_day,
+        color: colors::DEFAULT_EVENT,
+        completed: false,
+        details: Details {
+            description: draft.description.clone(),
+            habit: true,
+            recurrence: recurrence.clone(),
+            projects: draft.projects.ids.clone(),
+            labels: draft.labels.clone(),
+            options: draft.options.clone(),
+            ..Default::default()
+        },
+    };
+    operations::enqueue(
+        operations::Job::CreateHabit {
             id: id.clone(),
-            calendar_id: calendar.clone(),
-            title: draft.title.clone(),
-            start: draft.start,
-            end: draft.end,
-            all_day: draft.all_day,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details {
-                description: draft.description.clone(),
-                habit: true,
-                recurrence: recurrence.clone(),
-                projects: draft.projects.ids.clone(),
-                labels: draft.labels.clone(),
-                options: draft.options.clone(),
-                ..Default::default()
-            },
-        };
-        operations::enqueue(
-            operations::Job::CreateHabit {
-                id: id.clone(),
-                draft: draft.clone(),
-                color: color_id.map(str::to_owned),
-                habit: habit_id.into(),
-            },
-            Some(&event),
-            &calendar,
-            &id,
-        )?;
-        return Ok(api::HabitEvent {
-            id,
-            calendar_id: calendar,
-            title: draft.title.clone(),
-            notes: draft.description.clone(),
-            start: draft.start,
-            end: draft.end,
-            recurrence,
-            color_id: color_id.map(str::to_owned),
-            habit_id: Some(habit_id.into()),
-        });
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let mut body = api::habit_body(
-        &draft.title,
-        &draft.description,
-        draft.start,
-        draft.end,
-        &draft.recurrence_lines()?,
-        color_id,
-    );
-    draft.options.write(&mut body)?;
-    projects::write(&mut body, &draft.projects.ids)?;
-    body["extendedProperties"]["private"][crate::habits::LINK_PROPERTY] = habit_id.into();
-    body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(&draft.labels)
-        .map_err(|error| error.to_string())?
-        .into();
-    api::insert_habit(
-        &tokens.access_token,
-        (!draft.calendar_id.is_empty()).then_some(draft.calendar_id.as_str()),
-        &body,
-    )
+            draft: draft.clone(),
+            color: color_id.map(str::to_owned),
+            habit: habit_id.into(),
+        },
+        Some(&event),
+        &calendar,
+        &id,
+    )?;
+    Ok(api::HabitEvent {
+        id,
+        calendar_id: calendar,
+        title: draft.title.clone(),
+        notes: draft.description.clone(),
+        start: draft.start,
+        end: draft.end,
+        recurrence,
+        color_id: color_id.map(str::to_owned),
+        habit_id: Some(habit_id.into()),
+    })
 }
 
 /// Deletes a habit master and every occurrence in its series.
-pub fn delete_habit(
-    client_id: &str,
-    client_secret: &str,
-    calendar_id: &str,
-    event_id: &str,
-) -> Result<(), String> {
-    if !operations::replaying() {
-        return delete_event_scope(
-            client_id,
-            client_secret,
-            calendar_id,
-            event_id,
-            SaveScope::All,
-            false,
-        );
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::delete_habit(&tokens.access_token, calendar_id, event_id).map_err(String::from)
+pub fn delete_habit(calendar_id: &str, event_id: &str) -> Result<(), String> {
+    delete_event_scope(calendar_id, event_id, SaveScope::All, false)
 }
 
 pub fn disconnect() {
     oauth::clear_tokens();
 }
 
-/// Ticks a Google Task off, or puts it back. Blocking: run it on a worker
-/// thread through the app's `blocking::run`.
+/// Ticks a Google Task off, or puts it back.
 pub fn set_task_completed(
-    client_id: &str,
-    client_secret: &str,
     calendar_id: &str,
     event_id: &str,
     completed: bool,
 ) -> Result<(), String> {
-    if !operations::replaying() {
-        let task = operations::cached_event(calendar_id, event_id)?.ok_or("Task is not cached")?;
-        return set_linked_task_completed(client_id, client_secret, &task, completed);
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    let list_id = calendar_id.strip_prefix("tasks:").unwrap_or(calendar_id);
-    let task_id = event_id.strip_prefix("task:").unwrap_or(event_id);
-
-    api::set_task_completed(&tokens.access_token, list_id, task_id, completed)
-        .map_err(describe_task_write_error)
+    let task = operations::cached_event(calendar_id, event_id)?.ok_or("Task is not cached")?;
+    set_linked_task_completed(&task, completed)
 }
 
 /// Completion retains the event and updates its visual completion marker.
-/// If Calendar refuses the update, restore Tasks so the optimistic UI can
-/// truthfully roll back as well.
-pub fn set_linked_task_completed(
-    client_id: &str,
-    client_secret: &str,
-    task: &Event,
-    completed: bool,
-) -> Result<(), String> {
+pub fn set_linked_task_completed(task: &Event, completed: bool) -> Result<(), String> {
     set_linked_task_status(
-        client_id,
-        client_secret,
         task,
         if completed {
             crate::timeblocking::TaskStatus::Completed
@@ -2339,295 +2439,108 @@ pub fn set_linked_task_completed(
 }
 
 pub fn set_linked_task_status(
-    client_id: &str,
-    client_secret: &str,
     task: &Event,
     status: crate::timeblocking::TaskStatus,
 ) -> Result<Event, String> {
-    if !operations::replaying() {
-        let mut event = task.clone();
-        let mut db = crate::task_db::open()?;
-        event.details.task_data = Some(db.import(task)?);
-        crate::timeblocking::apply_status(&mut event, status);
-        operations::enqueue(
-            operations::Job::Status {
-                task: task.clone(),
-                status,
-            },
-            Some(&event),
-            &task.calendar_id,
-            &task.id,
-        )?;
-        return Ok(event);
-    }
-
-    let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let mut database = crate::task_db::open()?;
-    save_task_status(&mut database, task, status, |updated| {
-        write_task_status(&tokens.access_token, updated)
-    })
-}
-
-/// Persist the distinction between ignored and completed only after Google
-/// accepts it. A failed remote or local write restores the previous state.
-fn save_task_status(
-    database: &mut crate::task_db::Database,
-    task: &Event,
-    status: crate::timeblocking::TaskStatus,
-    mut write: impl FnMut(&Event) -> Result<(), String>,
-) -> Result<Event, String> {
-    let mut previous = task.clone();
-    previous.details.task_data = Some(database.import(task)?);
-    previous.details.scheduled = previous
-        .details
-        .task_data
-        .as_ref()
-        .and_then(|d| d.metadata.schedule.clone());
-    let mut updated = previous.clone();
-    crate::timeblocking::apply_status(&mut updated, status);
-    if let Err(error) = write(&updated)
-        .and_then(|()| database.save(&updated, updated.details.task_data.as_ref().unwrap()))
-    {
-        return match write(&previous) {
-            Ok(()) => Err(format!(
-                "Task status could not be saved; the task was restored: {error}"
-            )),
-            Err(rollback) => Err(format!(
-                "Task status failed: {error}. Restoring the task also failed: {rollback}. Sync before retrying."
-            )),
-        };
-    }
-    Ok(updated)
-}
-
-fn write_task_status(token: &str, task: &Event) -> Result<(), String> {
-    let list = task
-        .calendar_id
-        .strip_prefix("tasks:")
-        .ok_or("Invalid task list")?;
-    let id = task.id.strip_prefix("task:").ok_or("Invalid task")?;
-    if let Some(data) = &task.details.task_data {
-        task_metadata::save(token, task, data)?;
-    }
-    api::set_task_completed(token, list, id, task.completed).map_err(describe_task_write_error)?;
-    if let Some(link) = &task.details.scheduled {
-        scheduled::request(
-            "PATCH",
-            &link.event_url(),
-            token,
-            Some(&scheduled::content(task, link)),
-        )
-        .map_err(|error| error.message)?;
-    }
-    Ok(())
+    let mut event = task.clone();
+    let mut db = crate::task_db::open()?;
+    event.details.task_data = Some(db.import(task)?);
+    crate::timeblocking::apply_status(&mut event, status);
+    operations::enqueue(
+        operations::Job::Status {
+            task: task.clone(),
+            status,
+        },
+        Some(&event),
+        &task.calendar_id,
+        &task.id,
+    )?;
+    Ok(event)
 }
 
 /// Deletes a task from Google Tasks, and the calendar blocks that point at it.
-///
-/// The chip's list can be stale after the task is moved onto the scheduling
-/// list. The Tasks API is asked for the task wherever it still lives. Every
-/// calendar event that records this task is removed too, including a second
-/// block created for the same task.
-pub fn delete_task(
-    client_id: &str,
-    client_secret: &str,
-    task: &Event,
-    app_calendar: Option<&str>,
-) -> Result<(), String> {
-    if !operations::replaying() {
-        operations::enqueue(
-            operations::Job::DeleteTask {
-                task: task.clone(),
-                calendar: app_calendar.map(str::to_owned),
-            },
-            None,
-            &task.calendar_id,
-            &task.id,
-        )?;
-        return Ok(());
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    let chip_list = task
-        .calendar_id
-        .strip_prefix("tasks:")
-        .unwrap_or(task.calendar_id.as_str());
-    let chip_task = task.id.strip_prefix("task:").unwrap_or(task.id.as_str());
-    // The schedule records the list the task was moved to. A cached chip can
-    // still name the list it left.
-    let (list_id, task_id) = match &task.details.scheduled {
-        Some(link) if !link.list_id.is_empty() && !link.task_id.is_empty() => {
-            (link.list_id.as_str(), link.task_id.as_str())
-        }
-        _ => (chip_list, chip_task),
-    };
-
-    match api::delete_task(&tokens.access_token, list_id, task_id) {
-        Ok(()) => {}
-        Err(e) if e.status == Some(404) => {}
-        Err(e) => return Err(describe_task_write_error(e)),
-    }
-
-    let mut calendars = Vec::new();
-    if let Some(link) = &task.details.scheduled {
-        calendars.push(link.calendar_id.as_str());
-    }
-    if let Some(calendar) = app_calendar.filter(|calendar| !calendars.contains(calendar)) {
-        calendars.push(calendar);
-    }
-    for calendar in calendars {
-        scheduled::remove_task_copies(&tokens.access_token, calendar, task_id)?;
-    }
-    Ok(())
+pub fn delete_task(task: &Event, app_calendar: Option<&str>) -> Result<(), String> {
+    operations::enqueue(
+        operations::Job::DeleteTask {
+            task: task.clone(),
+            calendar: app_calendar.map(str::to_owned),
+        },
+        None,
+        &task.calendar_id,
+        &task.id,
+    )
 }
 
-/// Deletes one task instance by list and ID. Used by the habits migration,
-/// which has no cached event to hand to [`delete_task`].
+/// Deletes one task instance by list and ID, straight away. Used by the habits
+/// migration, which has no cached event to hand to [`delete_task`].
 pub fn delete_task_instance(
-    client_id: &str,
-    client_secret: &str,
+    client: &GoogleClient,
     list_id: &str,
     task_id: &str,
 ) -> Result<(), String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::delete_task(&tokens.access_token, list_id, task_id).map_err(String::from)
+    let token = client.access_token()?;
+    Ok(api::delete_task(&token, list_id, task_id)?)
 }
 
-/// Store completion on one habit occurrence. Blocking: run on a worker thread.
-pub fn set_habit_completed(
-    client_id: &str,
-    client_secret: &str,
-    event: &Event,
-) -> Result<(), String> {
-    if !operations::replaying() {
-        operations::enqueue(
-            operations::Job::HabitCompleted {
-                event: event.clone(),
-            },
-            Some(event),
-            &event.calendar_id,
-            &event.id,
-        )?;
-        return Ok(());
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::patch_habit_completed(&tokens.access_token, event).map_err(describe_event_write_error)
+/// Store completion on one habit occurrence.
+pub fn set_habit_completed(event: &Event) -> Result<(), String> {
+    operations::enqueue(
+        operations::Job::HabitCompleted {
+            event: event.clone(),
+        },
+        Some(event),
+        &event.calendar_id,
+        &event.id,
+    )
 }
 
-/// Sets only an event's location on Google. Blocking: run on a worker thread.
-pub fn set_event_location(
-    client_id: &str,
-    client_secret: &str,
-    calendar_id: &str,
-    event_id: &str,
-    location: &str,
-) -> Result<(), String> {
-    if !operations::replaying() {
-        let mut event =
-            operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
-        event.details.location = location.into();
-        operations::enqueue(
-            operations::Job::Location {
-                calendar: calendar_id.into(),
-                id: event_id.into(),
-                location: location.into(),
-            },
-            Some(&event),
-            calendar_id,
-            event_id,
-        )?;
-        return Ok(());
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    api::patch_event_location(&tokens.access_token, calendar_id, event_id, location)
-        .map_err(describe_event_write_error)
+/// Sets only an event's location on Google.
+pub fn set_event_location(calendar_id: &str, event_id: &str, location: &str) -> Result<(), String> {
+    let mut event =
+        operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
+    event.details.location = location.into();
+    operations::enqueue(
+        operations::Job::Location {
+            calendar: calendar_id.into(),
+            id: event_id.into(),
+            location: location.into(),
+        },
+        Some(&event),
+        calendar_id,
+        event_id,
+    )
 }
 
-/// Turns a read-only-token rejection into something a user can act on.
-fn describe_task_write_error(error: google::GoogleError) -> String {
-    match error.kind {
-        google::Kind::MissingScope => {
-            "Reconnect Google in Settings so Tasks can be ticked off".to_owned()
-        }
-        _ => error.to_string(),
-    }
-}
-
-/// Moves an event's start and end on Google. Blocking: run it on a worker
-/// thread through the app's `blocking::run`.
+/// Moves an event's start and end on Google.
 pub fn set_event_time(
-    client_id: &str,
-    client_secret: &str,
     calendar_id: &str,
     event_id: &str,
     start: DateTime<Local>,
     end: DateTime<Local>,
     notify: bool,
 ) -> Result<(), String> {
-    if !operations::replaying() {
-        let mut event =
-            operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
-        event.start = start;
-        event.end = end;
-        operations::enqueue(
-            operations::Job::Time {
-                calendar: calendar_id.into(),
-                id: event_id.into(),
-                start,
-                end,
-                notify,
-            },
-            Some(&event),
-            calendar_id,
-            event_id,
-        )?;
-        return Ok(());
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    api::patch_event_time(
-        &tokens.access_token,
+    let mut event =
+        operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
+    event.start = start;
+    event.end = end;
+    operations::enqueue(
+        operations::Job::Time {
+            calendar: calendar_id.into(),
+            id: event_id.into(),
+            start,
+            end,
+            notify,
+        },
+        Some(&event),
         calendar_id,
         event_id,
-        start,
-        end,
-        notify,
     )
-    .map_err(describe_event_write_error)
 }
 
-/// Turns a read-only-token rejection into something a user can act on.
-fn describe_event_write_error(error: google::GoogleError) -> String {
-    match error.kind {
-        google::Kind::MissingScope => {
-            "Reconnect Google in Settings so events can be moved".to_owned()
-        }
-        _ => error.to_string(),
-    }
-}
-
-/// Creates a new event on Google and returns its id. Blocking: run it on a
-/// worker thread through the app's `blocking::run`.
+/// Creates a new event on Google and returns the ID it has until Google
+/// assigns one (see `operations`).
 #[allow(clippy::too_many_arguments)]
 pub fn create_event(
-    client_id: &str,
-    client_secret: &str,
     calendar_id: &str,
     title: &str,
     description: &str,
@@ -2640,83 +2553,54 @@ pub fn create_event(
     options: Option<&event_options::EventOptions>,
     meeting: Option<&meeting::Form>,
 ) -> Result<api::Inserted, String> {
-    if !operations::replaying() {
-        let id = operations::new_id()?;
-        let event = Event {
-            id: id.clone(),
-            calendar_id: calendar_id.into(),
-            title: title.into(),
-            start,
-            end,
-            all_day,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details {
-                description: description.into(),
-                recurrence: recurrence.to_vec(),
-                projects: projects.to_vec(),
-                options: options.cloned().unwrap_or_default(),
-                ..Default::default()
-            },
-        };
-        operations::enqueue(
-            operations::Job::Create {
-                id: id.clone(),
-                calendar: calendar_id.into(),
-                title: title.into(),
-                description: description.into(),
-                color: color_id.map(str::to_owned),
-                start,
-                end,
-                recurrence: recurrence.to_vec(),
-                projects: projects.to_vec(),
-                all_day,
-                options: options.cloned(),
-                meeting: meeting.cloned(),
-            },
-            Some(&event),
-            calendar_id,
-            &id,
-        )?;
-        return Ok(api::Inserted {
-            id,
-            ..Default::default()
-        });
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    api::insert_event(
-        &tokens.access_token,
-        calendar_id,
-        title,
-        description,
-        color_id,
+    let id = operations::new_id()?;
+    let event = Event {
+        id: id.clone(),
+        calendar_id: calendar_id.into(),
+        title: title.into(),
         start,
         end,
-        recurrence,
-        projects,
         all_day,
-        options,
-        meeting,
-    )
-    .map_err(describe_event_write_error)
+        color: colors::DEFAULT_EVENT,
+        completed: false,
+        details: Details {
+            description: description.into(),
+            recurrence: recurrence.to_vec(),
+            projects: projects.to_vec(),
+            options: options.cloned().unwrap_or_default(),
+            ..Default::default()
+        },
+    };
+    operations::enqueue(
+        operations::Job::Create {
+            id: id.clone(),
+            calendar: calendar_id.into(),
+            title: title.into(),
+            description: description.into(),
+            color: color_id.map(str::to_owned),
+            start,
+            end,
+            recurrence: recurrence.to_vec(),
+            projects: projects.to_vec(),
+            all_day,
+            options: options.cloned(),
+            meeting: meeting.cloned(),
+        },
+        Some(&event),
+        calendar_id,
+        &id,
+    )?;
+    Ok(api::Inserted {
+        id,
+        ..Default::default()
+    })
 }
 
 /// Creates a time block on the app's single TimeSlay calendar and returns its
-/// id together with the calendar it landed on.
-///
-/// Unlike [`create_event`], the calendar is resolved here: when its id is not
-/// known yet it is found by name or created, so a block never ends up on the
-/// user's primary calendar and is recognized as a block everywhere. Blocks do
-/// not repeat, so there are no recurrence lines. Blocking: run it on a worker
-/// thread through the app's `blocking::run`.
+/// id together with the calendar it landed on. Blocks do not repeat, so there
+/// are no recurrence lines.
 #[allow(clippy::too_many_arguments)]
 pub fn create_time_block(
-    client_id: &str,
-    client_secret: &str,
     known_calendar: Option<&str>,
     title: &str,
     description: &str,
@@ -2725,38 +2609,9 @@ pub fn create_time_block(
     end: DateTime<Local>,
     projects: &[u64],
 ) -> Result<(String, String), String> {
-    if !operations::replaying() {
-        let calendar =
-            known_calendar.ok_or("Sync Google once to discover the TimeSlay calendar")?;
-        let inserted = create_event(
-            client_id,
-            client_secret,
-            calendar,
-            title,
-            description,
-            color_id,
-            start,
-            end,
-            &[],
-            projects,
-            false,
-            None,
-            None,
-        )?;
-        return Ok((inserted.id, calendar.into()));
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    let calendar_id = match known_calendar {
-        Some(id) => id.to_owned(),
-        None => scheduled::app_calendar(&tokens.access_token)?,
-    };
-
-    let id = api::insert_event(
-        &tokens.access_token,
-        &calendar_id,
+    let calendar = known_calendar.ok_or("Sync Google once to discover the TimeSlay calendar")?;
+    let inserted = create_event(
+        calendar,
         title,
         description,
         color_id,
@@ -2767,19 +2622,13 @@ pub fn create_time_block(
         false,
         None,
         None,
-    )
-    .map_err(describe_event_write_error)?
-    .id;
-
-    Ok((id, calendar_id))
+    )?;
+    Ok((inserted.id, calendar.into()))
 }
 
 /// Updates an existing event on Google: title, description, start and end.
-/// Blocking: run it on a worker thread through the app's `blocking::run`.
 #[allow(clippy::too_many_arguments)]
 pub fn update_event(
-    client_id: &str,
-    client_secret: &str,
     calendar_id: &str,
     event_id: &str,
     title: &str,
@@ -2793,222 +2642,399 @@ pub fn update_event(
     labels: &[String],
     options: Option<&event_options::EventOptions>,
 ) -> Result<(), String> {
-    if !operations::replaying() {
-        let original =
-            operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
-        let mut draft = EditDraft::from_event(&original);
-        draft.title = title.into();
-        draft.description = description.into();
-        draft.start = start;
-        draft.end = end;
-        draft.projects.ids = projects.to_vec();
-        draft.all_day = all_day;
-        draft.labels = labels.to_vec();
-        if let Some(options) = options {
-            draft.options = options.clone();
-        }
-        if let Some(recurrence) = recurrence {
-            draft.rule = crate::recurrence::Rule::from_recurrence(
-                start.date_naive(),
-                &crate::recurrence::Recurrence::from_lines(recurrence),
-            );
-            draft.recurrence_changed = true;
-        }
-        return save_event_scope(
-            client_id,
-            client_secret,
-            &original,
-            &draft,
-            SaveScope::Current,
-            description,
-            color_id,
-        )
-        .map(|_| ());
+    let original = operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
+    let mut draft = EditDraft::from_event(&original);
+    draft.title = title.into();
+    draft.description = description.into();
+    draft.start = start;
+    draft.end = end;
+    draft.projects.ids = projects.to_vec();
+    draft.all_day = all_day;
+    draft.labels = labels.to_vec();
+    if let Some(options) = options {
+        draft.options = options.clone();
     }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    api::patch_event(
-        &tokens.access_token,
-        calendar_id,
-        event_id,
-        title,
-        description,
-        color_id,
-        start,
-        end,
-        recurrence,
-        projects,
-        all_day,
-        labels,
-        options,
-    )
-    .map_err(describe_event_write_error)
+    if let Some(recurrence) = recurrence {
+        draft.rule = crate::recurrence::Rule::from_recurrence(
+            start.date_naive(),
+            &crate::recurrence::Recurrence::from_lines(recurrence),
+        );
+        draft.recurrence_changed = true;
+    }
+    save_event_scope(&original, &draft, SaveScope::Current, description, color_id).map(|_| ())
 }
 
 /// Save an occurrence or a selected portion of its recurring series.
 pub fn save_event_scope(
-    client_id: &str,
-    client_secret: &str,
     original: &Event,
     draft: &EditDraft,
     scope: SaveScope,
     description: &str,
     color_id: Option<&str>,
 ) -> Result<api::Saved, String> {
-    if !operations::replaying() {
-        let mut event = original.clone();
-        event.title = draft.title.clone();
-        event.calendar_id = draft.calendar_id.clone();
-        event.start = draft.start;
-        event.end = draft.end;
-        event.all_day = draft.all_day;
-        event.details.description = description.into();
-        event.details.options = draft.options.clone();
-        event.details.projects = draft.projects.ids.clone();
-        event.details.labels = draft.labels.clone();
-        if draft.recurrence_changed {
-            event.details.recurrence = draft.recurrence_lines()?;
-        }
-        operations::enqueue(
-            operations::Job::Edit {
-                original: original.clone(),
-                draft: draft.clone(),
-                scope,
-                description: description.into(),
-                color: color_id.map(str::to_owned),
-            },
-            Some(&event),
-            &original.calendar_id,
-            &original.id,
-        )?;
-        return Ok(api::Saved {
-            link: original.details.link.clone(),
-            zoom_needed: false,
-        });
+    let mut event = original.clone();
+    event.title = draft.title.clone();
+    event.calendar_id = draft.calendar_id.clone();
+    event.start = draft.start;
+    event.end = draft.end;
+    event.all_day = draft.all_day;
+    event.details.description = description.into();
+    event.details.options = draft.options.clone();
+    event.details.projects = draft.projects.ids.clone();
+    event.details.labels = draft.labels.clone();
+    if draft.recurrence_changed {
+        event.details.recurrence = draft.recurrence_lines()?;
     }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::save_event_scope(
-        &tokens.access_token,
-        original,
-        draft,
-        scope,
-        description,
-        color_id,
-    )
-    .map_err(describe_event_write_error)
+    operations::enqueue(
+        operations::Job::Edit {
+            original: original.clone(),
+            draft: draft.clone(),
+            scope,
+            description: description.into(),
+            color: color_id.map(str::to_owned),
+        },
+        Some(&event),
+        &original.calendar_id,
+        &original.id,
+    )?;
+    Ok(api::Saved {
+        link: original.details.link.clone(),
+        zoom_needed: false,
+    })
 }
 
 /// The invitations on `calendar` waiting for an answer. Blocking: run on a
 /// worker thread.
-pub fn sync_invitations(
-    client_id: &str,
-    client_secret: &str,
-    calendar: &Calendar,
-) -> Result<Vec<Event>, String> {
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::fetch_invitations(&tokens.access_token, calendar)
+pub fn sync_invitations(client: &GoogleClient, calendar: &Calendar) -> Result<Vec<Event>, String> {
+    let token = client.access_token()?;
+    api::fetch_invitations(&token, calendar)
 }
 
-/// Sends the user's answer to an invitation. Blocking: run on a worker thread.
+/// Sends the user's answer to an invitation.
 pub fn reply_to_event(
-    client_id: &str,
-    client_secret: &str,
     calendar_id: &str,
     event_id: &str,
     email: &str,
     response: meeting::Response,
 ) -> Result<(), String> {
-    if !operations::replaying() {
-        let mut event =
-            operations::cached_event(calendar_id, event_id)?.ok_or("Invitation is not cached")?;
-        event.details.attendance.set_own_response(response);
-        operations::enqueue(
-            operations::Job::Reply {
-                event: event.clone(),
-                email: email.into(),
-                response,
-            },
-            Some(&event),
-            calendar_id,
-            event_id,
-        )?;
-        return Ok(());
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    api::reply_to_event(&tokens.access_token, calendar_id, event_id, email, response)
-        .map_err(describe_event_write_error)
+    let mut event =
+        operations::cached_event(calendar_id, event_id)?.ok_or("Invitation is not cached")?;
+    event.details.attendance.set_own_response(response);
+    operations::enqueue(
+        operations::Job::Reply {
+            event: event.clone(),
+            email: email.into(),
+            response,
+        },
+        Some(&event),
+        calendar_id,
+        event_id,
+    )
 }
 
-/// Deletes a single event on Google. Blocking: run it on a worker thread
-/// through the app's `blocking::run`. Tasks are Google Tasks, not calendar
+/// Deletes a single event on Google. Tasks are Google Tasks, not calendar
 /// events, so callers should guard with [`Event::is_task`] before reaching
 /// here.
-pub fn delete_event(
-    client_id: &str,
-    client_secret: &str,
-    calendar_id: &str,
-    event_id: &str,
-) -> Result<(), String> {
-    if !operations::replaying() {
-        return delete_event_scope(
-            client_id,
-            client_secret,
-            calendar_id,
-            event_id,
-            SaveScope::Current,
-            false,
-        );
-    }
-
-    let tokens =
-        oauth::load_tokens().ok_or_else(|| "Not connected to Google Calendar".to_owned())?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-
-    api::delete_event(&tokens.access_token, calendar_id, event_id)
-        .map_err(describe_event_write_error)
+pub fn delete_event(calendar_id: &str, event_id: &str) -> Result<(), String> {
+    delete_event_scope(calendar_id, event_id, SaveScope::Current, false)
 }
 
 /// Delete an occurrence or a selected portion of its series.
 pub fn delete_event_scope(
-    client_id: &str,
-    client_secret: &str,
     calendar_id: &str,
     event_id: &str,
     scope: SaveScope,
     notify: bool,
 ) -> Result<(), String> {
-    if !operations::replaying() {
-        operations::enqueue(
-            operations::Job::Delete {
-                calendar: calendar_id.into(),
-                id: event_id.into(),
-                scope,
-                notify,
-            },
-            None,
-            calendar_id,
-            event_id,
-        )?;
-        return Ok(());
+    operations::enqueue(
+        operations::Job::Delete {
+            calendar: calendar_id.into(),
+            id: event_id.into(),
+            scope,
+            notify,
+        },
+        None,
+        calendar_id,
+        event_id,
+    )
+}
+
+/// Turns a read-only-token rejection into something a user can act on,
+/// keeping the error's kind so the queue still knows whether to retry.
+fn describe_task_write_error(error: GoogleError) -> GoogleError {
+    match error.kind {
+        google::Kind::MissingScope => GoogleError {
+            detail: "Reconnect Google in Settings so Tasks can be ticked off".to_owned(),
+            context: String::new(),
+            ..error
+        },
+        _ => error,
+    }
+}
+
+/// Turns a read-only-token rejection into something a user can act on.
+fn describe_event_write_error(error: GoogleError) -> GoogleError {
+    match error.kind {
+        google::Kind::MissingScope => GoogleError {
+            detail: "Reconnect Google in Settings so events can be moved".to_owned(),
+            context: String::new(),
+            ..error
+        },
+        _ => error,
+    }
+}
+
+/// Sending queued writes to Google. Only the queue calls these, with the
+/// thread marked as replaying so the layers below write rather than enqueue.
+pub(crate) mod send {
+    use super::*;
+
+    pub fn create_habit(
+        client: &GoogleClient,
+        draft: &EditDraft,
+        color_id: Option<&str>,
+        habit_id: &str,
+    ) -> Result<api::HabitEvent, GoogleError> {
+        let token = client.access_token()?;
+        let mut body = api::habit_body(
+            &draft.title,
+            &draft.description,
+            draft.start,
+            draft.end,
+            &draft.recurrence_lines()?,
+            color_id,
+        );
+        draft.options.write(&mut body)?;
+        projects::write(&mut body, &draft.projects.ids)?;
+        body["extendedProperties"]["private"][crate::habits::LINK_PROPERTY] = habit_id.into();
+        body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(&draft.labels)
+            .map_err(|error| error.to_string())?
+            .into();
+        Ok(api::insert_habit(
+            &token,
+            (!draft.calendar_id.is_empty()).then_some(draft.calendar_id.as_str()),
+            &body,
+        )?)
     }
 
-    let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
-    let tokens = oauth::ensure_access(client_id, client_secret, tokens)?;
-    match api::delete_event_scope(&tokens.access_token, calendar_id, event_id, scope, notify) {
-        Ok(()) => Ok(()),
-        Err(error) if error.status == Some(404) => Ok(()),
-        Err(error) => Err(describe_event_write_error(error)),
+    pub fn task_status(
+        client: &GoogleClient,
+        task: &Event,
+        status: crate::timeblocking::TaskStatus,
+    ) -> Result<Event, GoogleError> {
+        let token = client.access_token()?;
+        let mut database = crate::task_db::open()?;
+        save_task_status(&mut database, task, status, |updated| {
+            write_task_status(&token, updated)
+        })
+    }
+
+    /// Persist the distinction between ignored and completed only after Google
+    /// accepts it. A failed remote or local write restores the previous state.
+    pub(super) fn save_task_status(
+        database: &mut crate::task_db::Database,
+        task: &Event,
+        status: crate::timeblocking::TaskStatus,
+        mut write: impl FnMut(&Event) -> Result<(), GoogleError>,
+    ) -> Result<Event, GoogleError> {
+        let mut previous = task.clone();
+        previous.details.task_data = Some(database.import(task)?);
+        previous.details.scheduled = previous
+            .details
+            .task_data
+            .as_ref()
+            .and_then(|d| d.metadata.schedule.clone());
+        let mut updated = previous.clone();
+        crate::timeblocking::apply_status(&mut updated, status);
+        if let Err(error) = write(&updated).and_then(|()| {
+            database
+                .save(&updated, updated.details.task_data.as_ref().unwrap())
+                .map_err(GoogleError::from)
+        }) {
+            // The message changes, but the failure is still the original one,
+            // so its kind decides whether the queue retries.
+            let detail = match write(&previous) {
+                Ok(()) => format!("Task status could not be saved; the task was restored: {error}"),
+                Err(rollback) => format!(
+                    "Task status failed: {error}. Restoring the task also failed: {rollback}. Sync before retrying."
+                ),
+            };
+            return Err(GoogleError {
+                detail,
+                context: String::new(),
+                ..error
+            });
+        }
+        Ok(updated)
+    }
+
+    fn write_task_status(token: &str, task: &Event) -> Result<(), GoogleError> {
+        let list = task
+            .calendar_id
+            .strip_prefix(ids::TASK_LIST)
+            .ok_or("Invalid task list")?;
+        let id = task.id.strip_prefix(ids::TASK).ok_or("Invalid task")?;
+        if let Some(data) = &task.details.task_data {
+            task_metadata::save(token, task, data)?;
+        }
+        api::set_task_completed(token, list, id, task.completed)
+            .map_err(describe_task_write_error)?;
+        if let Some(link) = &task.details.scheduled {
+            scheduled::request(
+                "PATCH",
+                &link.event_url(),
+                token,
+                Some(&scheduled::content(task, link)),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The chip's list can be stale after the task is moved onto the
+    /// scheduling list. The Tasks API is asked for the task wherever it still
+    /// lives. Every calendar event that records this task is removed too,
+    /// including a second block created for the same task.
+    pub fn delete_task(
+        client: &GoogleClient,
+        task: &Event,
+        app_calendar: Option<&str>,
+    ) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        let chip_list = task
+            .calendar_id
+            .strip_prefix(ids::TASK_LIST)
+            .unwrap_or(task.calendar_id.as_str());
+        let chip_task = ids::bare_task(&task.id);
+        // The schedule records the list the task was moved to. A cached chip can
+        // still name the list it left.
+        let (list_id, task_id) = match &task.details.scheduled {
+            Some(link) if !link.list_id.is_empty() && !link.task_id.is_empty() => {
+                (link.list_id.as_str(), link.task_id.as_str())
+            }
+            _ => (chip_list, chip_task),
+        };
+
+        match api::delete_task(&token, list_id, task_id) {
+            Ok(()) => {}
+            // Already gone is what a delete wants.
+            Err(e) if e.status == Some(404) => {}
+            Err(e) => return Err(describe_task_write_error(e)),
+        }
+
+        let mut calendars = Vec::new();
+        if let Some(link) = &task.details.scheduled {
+            calendars.push(link.calendar_id.as_str());
+        }
+        if let Some(calendar) = app_calendar.filter(|calendar| !calendars.contains(calendar)) {
+            calendars.push(calendar);
+        }
+        for calendar in calendars {
+            scheduled::remove_task_copies(&token, calendar, task_id)?;
+        }
+        Ok(())
+    }
+
+    pub fn habit_completed(client: &GoogleClient, event: &Event) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        api::patch_habit_completed(&token, event).map_err(describe_event_write_error)
+    }
+
+    pub fn event_location(
+        client: &GoogleClient,
+        calendar_id: &str,
+        event_id: &str,
+        location: &str,
+    ) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        api::patch_event_location(&token, calendar_id, event_id, location)
+            .map_err(describe_event_write_error)
+    }
+
+    pub fn event_time(
+        client: &GoogleClient,
+        calendar_id: &str,
+        event_id: &str,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+        notify: bool,
+    ) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        api::patch_event_time(&token, calendar_id, event_id, start, end, notify)
+            .map_err(describe_event_write_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_event(
+        client: &GoogleClient,
+        calendar_id: &str,
+        title: &str,
+        description: &str,
+        color_id: Option<&str>,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+        recurrence: &[String],
+        projects: &[u64],
+        all_day: bool,
+        options: Option<&event_options::EventOptions>,
+        meeting: Option<&meeting::Form>,
+    ) -> Result<api::Inserted, GoogleError> {
+        let token = client.access_token()?;
+        api::insert_event(
+            &token,
+            calendar_id,
+            title,
+            description,
+            color_id,
+            start,
+            end,
+            recurrence,
+            projects,
+            all_day,
+            options,
+            meeting,
+        )
+        .map_err(describe_event_write_error)
+    }
+
+    pub fn event_scope(
+        client: &GoogleClient,
+        original: &Event,
+        draft: &EditDraft,
+        scope: SaveScope,
+        description: &str,
+        color_id: Option<&str>,
+    ) -> Result<api::Saved, GoogleError> {
+        let token = client.access_token()?;
+        api::save_event_scope(&token, original, draft, scope, description, color_id)
+            .map_err(describe_event_write_error)
+    }
+
+    pub fn reply(
+        client: &GoogleClient,
+        calendar_id: &str,
+        event_id: &str,
+        email: &str,
+        response: meeting::Response,
+    ) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        api::reply_to_event(&token, calendar_id, event_id, email, response)
+            .map_err(describe_event_write_error)
+    }
+
+    pub fn delete_event_scope(
+        client: &GoogleClient,
+        calendar_id: &str,
+        event_id: &str,
+        scope: SaveScope,
+        notify: bool,
+    ) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        match api::delete_event_scope(&token, calendar_id, event_id, scope, notify) {
+            Ok(()) => Ok(()),
+            // Already gone is what a delete wants.
+            Err(error) if error.status == Some(404) => Ok(()),
+            Err(error) => Err(describe_event_write_error(error)),
+        }
     }
 }
 
@@ -3473,7 +3499,7 @@ mod tests {
         }
         assert!(!store.has_calendar_events_on(day));
         for event in &mut store.events {
-            event.id = event.id.trim_start_matches("task:").to_owned();
+            event.id = ids::bare_task(&event.id).to_owned();
             event.start += chrono::Duration::days(5);
             event.end += chrono::Duration::days(5);
         }
@@ -3531,7 +3557,7 @@ mod tests {
         ] {
             let previous = task.clone();
             let mut calls = Vec::new();
-            let failed = save_task_status(&mut database, &task, status, |updated| {
+            let failed = send::save_task_status(&mut database, &task, status, |updated| {
                 calls.push(tb::task_status(updated));
                 if calls.len() == 1 {
                     Err("Calendar is offline".into())
@@ -3539,11 +3565,14 @@ mod tests {
                     Ok(())
                 }
             });
-            assert!(failed.unwrap_err().contains("the task was restored"));
+            let failed = failed.unwrap_err();
+            assert!(failed.to_string().contains("the task was restored"));
+            // The message is new, but the cause decides whether to retry.
+            assert_eq!(failed.kind, google::Kind::Other);
             assert_eq!(calls, [status, tb::task_status(&previous)]);
             assert_eq!(database.lookup(&task).unwrap(), previous.details.task_data);
 
-            task = save_task_status(&mut database, &task, status, |updated| {
+            task = send::save_task_status(&mut database, &task, status, |updated| {
                 assert_eq!(updated.completed, status != TaskStatus::Active);
                 assert_eq!(tb::task_status(updated), status);
                 Ok(())
@@ -3952,16 +3981,17 @@ mod tests {
 
     #[test]
     fn a_read_only_token_is_explained_as_a_reconnect() {
-        assert!(
-            describe_task_write_error(google::GoogleError::from_status(
-                "Google Tasks",
-                403,
-                "Request had insufficient authentication scopes."
-            ))
-            .contains("Reconnect")
-        );
+        let scope = describe_task_write_error(google::GoogleError::from_status(
+            "Google Tasks",
+            403,
+            "Request had insufficient authentication scopes.",
+        ));
+        assert!(scope.to_string().contains("Reconnect"));
+        // The friendlier message keeps the kind the queue retries on.
+        assert_eq!(scope.kind, google::Kind::MissingScope);
         assert_eq!(
-            describe_task_write_error(google::GoogleError::from("Network down")),
+            describe_task_write_error(google::GoogleError::transport("", "Network down"))
+                .to_string(),
             "Network down"
         );
     }

@@ -126,7 +126,7 @@ pub fn CreateSheet(
                     day::create_task(task, due_day, &settings).map(|_| ())
                 }
                 Kind::Event if target.is_empty() => Err("Choose a calendar".to_owned()),
-                Kind::Event => day::create_event(&new, &target, &settings),
+                Kind::Event => day::create_event(&new, &target),
                 Kind::Block => day::create_time_block(&new, &settings),
             })
             .await;

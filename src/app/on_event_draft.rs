@@ -297,8 +297,6 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                     return Task::none();
                 }
             };
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
             let known_app = state.config.calendar.app_calendar.clone();
             if let Some(draft) = state.calendar.draft.as_mut() {
                 draft.saving = true;
@@ -311,8 +309,6 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 // calendar; an event is written to the calendar it was given.
                 let (id, calendar_id) = if draft.kind == calendar::DraftKind::TimeBlock {
                     calendar::create_time_block(
-                        &client_id,
-                        &client_secret,
                         known_app.as_deref(),
                         &draft.title,
                         &description,
@@ -323,8 +319,6 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                     )?
                 } else {
                     let created = calendar::create_event(
-                        &client_id,
-                        &client_secret,
                         &draft.calendar_id,
                         &draft.title,
                         &description,

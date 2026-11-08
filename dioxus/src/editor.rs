@@ -178,7 +178,6 @@ fn TaskEditor(
         Err(message) => error.set(Some(message)),
     };
 
-    let status_settings = context.settings.clone();
     let set_status = use_callback(move |status: tb::TaskStatus| {
         if busy() {
             return;
@@ -186,17 +185,8 @@ fn TaskEditor(
         busy.set(true);
         error.set(None);
         let current = task();
-        let settings = status_settings.clone();
         spawn(async move {
-            let result = worker(move || {
-                calendar::set_linked_task_status(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &current,
-                    status,
-                )
-            })
-            .await;
+            let result = worker(move || calendar::set_linked_task_status(&current, status)).await;
             busy.set(false);
             match result {
                 Ok(saved) => {
@@ -224,15 +214,9 @@ fn TaskEditor(
         let current = task();
         let settings = delete_settings.clone();
         spawn(async move {
-            let result = worker(move || {
-                calendar::delete_task(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &current,
-                    settings.app_calendar.as_deref(),
-                )
-            })
-            .await;
+            let result =
+                worker(move || calendar::delete_task(&current, settings.app_calendar.as_deref()))
+                    .await;
             busy.set(false);
             match result {
                 Ok(()) => {
@@ -661,7 +645,10 @@ fn EventEditor(
                 return;
             }
             let result = worker(move || {
-                calendar::habit_edit_draft(&settings.client_id, &settings.client_secret, &event)
+                calendar::habit_edit_draft(
+                    &calendar::GoogleClient::from_settings(&settings),
+                    &event,
+                )
             })
             .await;
             match result {
@@ -712,25 +699,16 @@ fn EventEditor(
         });
     });
 
-    let delete_settings = context.settings.clone();
     let delete = use_callback(move |scope: SaveScope| {
         if busy() {
             return;
         }
         let source = original();
-        let settings = delete_settings.clone();
         busy.set(true);
         error.set(None);
         spawn(async move {
             let result = worker(move || {
-                calendar::delete_event_scope(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &source.calendar_id,
-                    &source.id,
-                    scope,
-                    false,
-                )
+                calendar::delete_event_scope(&source.calendar_id, &source.id, scope, false)
             })
             .await;
             busy.set(false);
@@ -748,20 +726,17 @@ fn EventEditor(
         });
     });
 
-    let place_settings = context.settings.clone();
     let set_place = use_callback(move |place: Option<Place>| {
         if busy() {
             return;
         }
         let source = original();
-        let settings = place_settings.clone();
         busy.set(true);
         error.set(None);
         spawn(async move {
             let chosen = place.clone();
             let written = source.clone();
-            let result =
-                worker(move || day::save_event_place(&written, chosen.as_ref(), &settings)).await;
+            let result = worker(move || day::save_event_place(&written, chosen.as_ref())).await;
             busy.set(false);
             match result {
                 Ok(()) => {
@@ -783,7 +758,6 @@ fn EventEditor(
         });
     });
 
-    let complete_settings = context.settings.clone();
     let toggle_completed = use_callback(move |()| {
         if completing() {
             return;
@@ -791,19 +765,11 @@ fn EventEditor(
         let mut updated = original();
         updated.completed = !updated.completed;
         updated.details.habit_completed_at = updated.completed.then(timeslay_core::clock::now);
-        let settings = complete_settings.clone();
         completing.set(true);
         error.set(None);
         spawn(async move {
             let written = updated.clone();
-            let result = worker(move || {
-                calendar::set_habit_completed(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &written,
-                )
-            })
-            .await;
+            let result = worker(move || calendar::set_habit_completed(&written)).await;
             completing.set(false);
             match result {
                 Ok(()) => {
@@ -1170,7 +1136,6 @@ fn MeetingActions(event: Event, settings: CalendarSettings, on_saved: EventHandl
                         {
                             let email = email.clone();
                             let event = event.clone();
-                            let settings = settings.clone();
                             let chosen = answer() == Some(response);
                             rsx! {
                                 button {
@@ -1189,12 +1154,9 @@ fn MeetingActions(event: Event, settings: CalendarSettings, on_saved: EventHandl
                                         error.set(None);
                                         let email = email.clone();
                                         let event = event.clone();
-                                        let settings = settings.clone();
                                         spawn(async move {
                                             let result = worker(move || {
                                                 calendar::reply_to_event(
-                                                    &settings.client_id,
-                                                    &settings.client_secret,
                                                     &event.calendar_id,
                                                     &event.id,
                                                     &email,
@@ -2465,7 +2427,13 @@ mod tests {
         let html = render(habit);
         assert_offers(
             &html,
-            &["kind-chip", ">Habit<", "Mark as done", "Start day", "Repeat"],
+            &[
+                "kind-chip",
+                ">Habit<",
+                "Mark as done",
+                "Start day",
+                "Repeat",
+            ],
         );
         assert!(!html.contains("End Time"));
     }
@@ -2475,7 +2443,13 @@ mod tests {
         let html = render(event("b1", "blocks", "Deep work"));
         assert_offers(
             &html,
-            &["kind-chip", ">Time Block<", "Deep work", "End Time", ">Save<"],
+            &[
+                "kind-chip",
+                ">Time Block<",
+                "Deep work",
+                "End Time",
+                ">Save<",
+            ],
         );
     }
 

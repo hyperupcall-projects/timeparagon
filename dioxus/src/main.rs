@@ -344,14 +344,27 @@ fn App() -> Element {
             config_watch::generation(),
             timeslay_core::database_sync::generation(),
         );
+        // The queue and the notes are only read again when the database says
+        // they changed, which is one small query instead of two full reads.
+        let mut changes: Option<timeslay_core::local_changes::Counters> = None;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
             database_sync_status.set(timeslay_core::database_sync::status());
-            if let Ok(rows) = calendar::operations::list() {
+            let counters = timeslay_core::task_db::path()
+                .and_then(|path| timeslay_core::local_changes::read(&path).ok());
+            let moved = |part: fn(&timeslay_core::local_changes::Counters) -> i64| {
+                counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
+            };
+            if moved(|c| c.queue)
+                && let Ok(rows) = calendar::operations::list()
+            {
                 google_operations.set(rows);
             }
-            notes_store.reload_shared();
+            if moved(|c| c.notes) {
+                notes_store.reload_shared();
+            }
+            changes = counters;
             let generation = (
                 config_watch::generation(),
                 timeslay_core::database_sync::generation(),
@@ -501,7 +514,8 @@ fn App() -> Element {
         }
         div { class: "day-header", hidden: show_tracker(),
             h1 { class: "day-title", "{heading}" }
-            if !google_operations().is_empty() {span { class: "hint", role: "status", "Saving…" }}
+            if google_operations().iter().any(|operation| operation.pending()) {span { class: "hint", role: "status", "Saving…" }}
+            if google_operations().iter().any(|operation| !operation.pending()) {span { class: "hint", role: "status", "Some changes could not be saved" }}
             div { class: "day-controls",
                 {month_picker(selected_day, today, settings.first_day_of_week, month_open, month_shown, day_nav)}
                 button {
@@ -1264,7 +1278,13 @@ fn App() -> Element {
                                 div { key: "{operation.id}",
                                     p { "#{operation.id} · {operation.kind} · {operation.created_at}" }
                                     p { "{operation.entity} · Attempts: {operation.attempts}" }
-                                    if let Some(error)=operation.error {p { "{error}" }} else {p { "Waiting for Google" }}
+                                    if !operation.pending() {
+                                        p { "Could not be saved: {operation.error.clone().unwrap_or_default()}" }
+                                        div { class: "editor-row",
+                                            button { class: "btn", onclick: move |_| { let _ = calendar::operations::retry(operation.id); }, "Try again" }
+                                            button { class: "btn", onclick: move |_| { let _ = calendar::operations::discard(operation.id); }, "Discard" }
+                                        }
+                                    } else if let Some(error)=operation.error.clone() {p { "Will try again: {error}" }} else {p { "Waiting for Google" }}
                                     pre { "{operation.payload}" }
                                 }
                             }

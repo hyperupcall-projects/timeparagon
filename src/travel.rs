@@ -497,13 +497,10 @@ fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Mess
     state.calendar.set_location(id, &text);
     let save = queue_save(state);
 
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
     let id = id.to_owned();
-    let write = blocking::run(move || {
-        crate::calendar::set_event_location(&client_id, &client_secret, &calendar_id, &id, &text)
-    })
-    .map(|result| Message::Travel(Action::EventLocationSaved(result)));
+    let write =
+        blocking::run(move || crate::calendar::set_event_location(&calendar_id, &id, &text))
+            .map(|result| Message::Travel(Action::EventLocationSaved(result)));
 
     Task::batch([save, write])
 }

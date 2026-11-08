@@ -30,6 +30,7 @@ pub mod habits;
 pub mod inbox;
 pub mod integrations;
 pub mod ipc;
+pub mod local_poll;
 pub mod notes;
 pub mod notify;
 pub mod panel;

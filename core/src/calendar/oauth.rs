@@ -14,6 +14,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::google::{GoogleError, Kind};
+
 #[cfg(target_os = "android")]
 mod android_tokens;
 
@@ -241,10 +243,10 @@ pub fn refresh(
     client_id: &str,
     client_secret: &str,
     refresh_token: &str,
-) -> Result<Tokens, String> {
+) -> Result<Tokens, GoogleError> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
-        return Err("Google OAuth client ID is missing".to_owned());
+        return Err(GoogleError::auth("Google OAuth client ID is missing"));
     }
 
     let body = form(&[
@@ -269,7 +271,7 @@ pub fn ensure_access(
     client_id: &str,
     client_secret: &str,
     tokens: Tokens,
-) -> Result<Tokens, String> {
+) -> Result<Tokens, GoogleError> {
     if tokens.access_valid() {
         return Ok(tokens);
     }
@@ -328,7 +330,11 @@ fn exchange_code(
     })
 }
 
-fn post_token(body: &str) -> Result<TokenResponse, String> {
+/// Refusals from the token endpoint are [`Kind::Auth`]: a revoked or expired
+/// sign-in is fixed by connecting again, never by giving up on the edits that
+/// were waiting for it. Only a server-side failure is an ordinary HTTP error.
+fn post_token(body: &str) -> Result<TokenResponse, GoogleError> {
+    const CONTEXT: &str = "Google sign-in failed";
     let result = super::api::agent()
         .post(TOKEN_URL)
         .set("Content-Type", "application/x-www-form-urlencoded")
@@ -337,7 +343,7 @@ fn post_token(body: &str) -> Result<TokenResponse, String> {
     match result {
         Ok(response) => response
             .into_json()
-            .map_err(|error| format!("Google token response: {error}")),
+            .map_err(|error| GoogleError::transport("Google token response", error)),
         Err(ureq::Error::Status(code, response)) => {
             let detail = response
                 .into_json::<TokenError>()
@@ -349,9 +355,13 @@ fn post_token(body: &str) -> Result<TokenResponse, String> {
                     }
                 })
                 .unwrap_or_else(|_| format!("HTTP {code}"));
-            Err(format!("Google sign-in failed: {detail}"))
+            let mut error = GoogleError::from_status(CONTEXT, code, detail);
+            if !matches!(error.kind, Kind::RateLimited { .. }) && code < 500 {
+                error.kind = Kind::Auth;
+            }
+            Err(error)
         }
-        Err(error) => Err(format!("Google sign-in failed: {error}")),
+        Err(error) => Err(GoogleError::transport(CONTEXT, error)),
     }
 }
 

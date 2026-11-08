@@ -39,21 +39,11 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 .inbox
                 .invitations
                 .retain(|invitation| invitation.id != id && invitation.id != target);
-            let settings = state.config.calendar.clone();
             state.calendar.error = None;
-            blocking::run(move || {
-                calendar::reply_to_event(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &calendar_id,
-                    &target,
-                    &email,
-                    response,
-                )
-            })
-            .map(move |result| {
-                Message::Event(EventMessage::EventReplied(id.clone(), previous, result))
-            })
+            blocking::run(move || calendar::reply_to_event(&calendar_id, &target, &email, response))
+                .map(move |result| {
+                    Message::Event(EventMessage::EventReplied(id.clone(), previous, result))
+                })
         }
         EventMessage::EventReplied(_, _, Ok(())) => refresh_week_after_write(state),
         EventMessage::EventReplied(id, previous, Err(error)) => {
@@ -268,8 +258,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                     let id = id.clone();
                     blocking::run(move || {
                         calendar::habit_edit_draft(
-                            &settings.client_id,
-                            &settings.client_secret,
+                            &calendar::GoogleClient::from_settings(&settings),
                             &event,
                         )
                     })
@@ -389,20 +378,11 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 && attendance.can_manage()
                 && !attendance.guests.is_empty();
 
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
             let request_id = id.clone();
             state.calendar.error = None;
 
             blocking::run(move || {
-                calendar::delete_event_scope(
-                    &client_id,
-                    &client_secret,
-                    &calendar_id,
-                    &request_id,
-                    scope,
-                    notify,
-                )
+                calendar::delete_event_scope(&calendar_id, &request_id, scope, notify)
             })
             .map(move |result| Message::Event(EventMessage::EventDeleted(id.clone(), result)))
         }
@@ -474,20 +454,8 @@ fn write_event_time(
         state.calendar.fail_time_change(&id);
         return Task::none();
     };
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
     let request_id = id.clone();
     state.calendar.error = None;
-    blocking::run(move || {
-        calendar::set_event_time(
-            &client_id,
-            &client_secret,
-            &calendar_id,
-            &request_id,
-            start,
-            end,
-            notify,
-        )
-    })
-    .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
+    blocking::run(move || calendar::set_event_time(&calendar_id, &request_id, start, end, notify))
+        .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
 }

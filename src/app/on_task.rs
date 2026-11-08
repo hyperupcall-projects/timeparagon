@@ -66,16 +66,12 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
                 return Task::none();
             };
 
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
             let app_calendar = state.config.calendar.app_calendar.clone();
             state.calendar.error = None;
             state.timeblocking.busy.insert(id.clone());
 
-            blocking::run(move || {
-                calendar::delete_task(&client_id, &client_secret, &task, app_calendar.as_deref())
-            })
-            .map(move |result| Message::Task(TaskMessage::TaskDeleted(id.clone(), result)))
+            blocking::run(move || calendar::delete_task(&task, app_calendar.as_deref()))
+                .map(move |result| Message::Task(TaskMessage::TaskDeleted(id.clone(), result)))
         }
         TaskMessage::TaskDeleted(id, Ok(())) => {
             state.timeblocking.busy.remove_task(&id);
@@ -149,20 +145,17 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
                 timeblocking::apply_status(event, status);
             }
 
-            let client_id = state.config.calendar.client_id.clone();
-            let client_secret = state.config.calendar.client_secret.clone();
             state.calendar.error = None;
 
-            blocking::run(move || {
-                calendar::set_linked_task_status(&client_id, &client_secret, &task, status)
-            })
-            .map(move |result| {
-                Message::Task(TaskMessage::TaskCompletionSaved(
-                    id.clone(),
-                    previous,
-                    result,
-                ))
-            })
+            blocking::run(move || calendar::set_linked_task_status(&task, status)).map(
+                move |result| {
+                    Message::Task(TaskMessage::TaskCompletionSaved(
+                        id.clone(),
+                        previous,
+                        result,
+                    ))
+                },
+            )
         }
         TaskMessage::TaskCompletionSaved(id, _, Ok(task)) => {
             if let Some(event) = state.calendar.event_mut(&id) {

@@ -180,8 +180,7 @@ pub fn plan_tasks(
 pub fn run(apply: bool, minutes: i64, remove_tasks: bool) -> Result<Report, String> {
     let settings = Config::load().calendar;
     let existing = calendar::sync_habits(
-        &settings.client_id,
-        &settings.client_secret,
+        &calendar::GoogleClient::from_settings(&settings),
         settings.app_calendar.as_deref(),
     )?;
     let today = timeslay::clock::now().date_naive();
@@ -238,8 +237,7 @@ pub fn run(apply: bool, minutes: i64, remove_tasks: bool) -> Result<Report, Stri
         }
         for instance in &group.instances {
             match calendar::delete_task_instance(
-                &settings.client_id,
-                &settings.client_secret,
+                &calendar::GoogleClient::from_settings(&settings),
                 &list_id,
                 &instance.id,
             ) {

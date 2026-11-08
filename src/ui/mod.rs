@@ -995,13 +995,28 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 fn saving_indicator<'a>(state: &State) -> Element<'a, Message> {
     match &state.operations {
-        Ok(rows) if !rows.is_empty() => text(format!("Saving… ({} pending)", rows.len()))
-            .size(12)
-            .into(),
+        Ok(rows) => {
+            let pending = rows.iter().filter(|row| row.pending()).count();
+            let failed = rows.len() - pending;
+            let mut parts = Vec::new();
+            if pending > 0 {
+                parts.push(format!("Saving… ({pending} pending)"));
+            }
+            if failed > 0 {
+                parts.push(format!(
+                    "{failed} change{} could not be saved",
+                    if failed == 1 { "" } else { "s" }
+                ));
+            }
+            if parts.is_empty() {
+                Space::new().height(0).into()
+            } else {
+                text(parts.join(" · ")).size(12).into()
+            }
+        }
         Err(error) => text(format!("Cannot read operations: {error}"))
             .size(12)
             .into(),
-        _ => Space::new().height(0).into(),
     }
 }
 fn operations_view<'a>(state: &State) -> Element<'a, Message> {
@@ -1012,6 +1027,18 @@ fn operations_view<'a>(state: &State) -> Element<'a, Message> {
                 panel = panel.push(text("All changes saved to Google."));
             }
             for row in rows {
+                let status = if row.pending() {
+                    row.error
+                        .as_deref()
+                        .map_or("Waiting for Google".to_owned(), |error| {
+                            format!("Will try again: {error}")
+                        })
+                } else {
+                    format!(
+                        "Could not be saved: {}",
+                        row.error.as_deref().unwrap_or("Google refused it")
+                    )
+                };
                 panel = panel.push(
                     text(format!(
                         "#{} · {} · {}\n{} · Attempts: {}\n{}\n{}",
@@ -1020,11 +1047,26 @@ fn operations_view<'a>(state: &State) -> Element<'a, Message> {
                         row.created_at,
                         row.entity,
                         row.attempts,
-                        row.error.as_deref().unwrap_or("Waiting for Google"),
+                        status,
                         row.payload
                     ))
                     .size(13),
                 );
+                if !row.pending() {
+                    panel = panel.push(
+                        row![
+                            button(text("Try again").size(13))
+                                .on_press(Message::System(SystemMessage::OperationRetried(row.id)))
+                                .style(crate::ui::controls::secondary),
+                            button(text("Discard").size(13))
+                                .on_press(Message::System(SystemMessage::OperationDiscarded(
+                                    row.id
+                                )))
+                                .style(crate::ui::controls::danger),
+                        ]
+                        .spacing(8),
+                    );
+                }
             }
         }
         Err(error) => panel = panel.push(text(error.clone())),

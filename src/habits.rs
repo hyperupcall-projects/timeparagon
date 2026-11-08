@@ -336,6 +336,11 @@ pub struct Store {
     pub confirm_delete: Option<String>,
     /// Whether confirming also deletes the habit's calendar events.
     pub delete_events: bool,
+    /// Bumped by every local change that is saved, so a reload read before
+    /// the change can tell it is out of date.
+    revision: u64,
+    /// Saves started and not yet finished.
+    saves_in_flight: u32,
 }
 
 impl Store {
@@ -344,11 +349,40 @@ impl Store {
             return;
         };
         if let Ok(Some(library)) = crate::task_db::read_document(path, crate::task_db::keys::HABITS)
-            && library != self.library
         {
+            self.adopt_shared(library);
+        }
+    }
+
+    /// Takes habits read from the database, when they differ from these.
+    /// The caller makes sure the read is not older than a local change.
+    pub fn adopt_shared(&mut self, library: Library) {
+        if library != self.library {
             self.library = library;
             self.recompute();
         }
+    }
+
+    /// Where the habits are saved, when they are.
+    pub fn path(&self) -> Option<&std::path::Path> {
+        self.path.as_deref()
+    }
+
+    /// Changes with each local change that is saved.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Whether a save is still on its way to the database.
+    pub fn saving(&self) -> bool {
+        self.saves_in_flight > 0
+    }
+
+    /// Stands in for a local change being saved.
+    #[cfg(test)]
+    pub(crate) fn begin_save_for_test(&mut self) {
+        self.revision += 1;
+        self.saves_in_flight += 1;
     }
 
     /// Loads the saved habits. Saved habits that cannot be read are left alone
@@ -544,10 +578,12 @@ pub(crate) fn write_for_test(state: &State, path: &std::path::Path) {
     write(path, &state.habits.library).unwrap();
 }
 
-fn persist(state: &State) -> Task<Message> {
+fn persist(state: &mut State) -> Task<Message> {
     let Some(path) = state.habits.path.clone() else {
         return Task::none();
     };
+    state.habits.revision += 1;
+    state.habits.saves_in_flight += 1;
     let library = state.habits.library.clone();
     blocking::run(move || write(&path, &library).map_err(|error| error.to_string()))
         .map(|result| Message::Habits(Action::Persisted(result)))
@@ -675,6 +711,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             Task::none()
         }
         Action::Persisted(result) => {
+            state.habits.saves_in_flight = state.habits.saves_in_flight.saturating_sub(1);
             if let Err(error) = result {
                 log::warn!("could not save habits: {error}");
                 state.habits.error = Some(format!("Could not save habits: {error}"));
@@ -1203,10 +1240,8 @@ fn write_occurrence(
     event.details.habit_completed_at = completed.then(crate::clock::now);
     state.habits.completing.insert(id.clone());
     state.habits.error = None;
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
     blocking::run(move || {
-        calendar::set_habit_completed(&client_id, &client_secret, &event)?;
+        calendar::set_habit_completed(&event)?;
         Ok(event)
     })
     .map(move |result| Message::Habits(done(id.clone(), result)))
@@ -1264,24 +1299,17 @@ fn delete(state: &mut State, id: String) -> Task<Message> {
         return Task::done(Message::Habits(Action::Deleted(id, Ok(()))));
     }
     let delete_events = state.habits.delete_events;
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
+    let client = calendar::GoogleClient::from_settings(&state.config.calendar);
     state.habits.busy = true;
     state.habits.error = None;
     let result_id = id.clone();
     blocking::run(move || {
         for (calendar_id, event_id) in &events {
             if delete_events {
-                calendar::delete_habit(&client_id, &client_secret, calendar_id, event_id)?;
+                calendar::delete_habit(calendar_id, event_id)?;
             } else {
                 // A kept event must not bring the habit back on the next load.
-                calendar::link_habit_event(
-                    &client_id,
-                    &client_secret,
-                    calendar_id,
-                    event_id,
-                    None,
-                )?;
+                calendar::link_habit_event(&client, calendar_id, event_id, None)?;
             }
         }
         Ok(())
@@ -1338,20 +1366,13 @@ fn write_link(
     series_id: String,
     habit_id: Option<String>,
 ) -> Task<Message> {
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
+    let client = calendar::GoogleClient::from_settings(&state.config.calendar);
     state.habits.busy = true;
     state.habits.error = None;
     let event_id = series_id.clone();
     let link = habit_id.clone();
     blocking::run(move || {
-        calendar::link_habit_event(
-            &client_id,
-            &client_secret,
-            &calendar_id,
-            &event_id,
-            link.as_deref(),
-        )
+        calendar::link_habit_event(&client, &calendar_id, &event_id, link.as_deref())
     })
     .map(move |result| Message::Habits(Action::Linked(series_id.clone(), habit_id.clone(), result)))
 }
@@ -1548,13 +1569,10 @@ fn refresh(state: &mut State) -> Task<Message> {
         return Task::none();
     }
     state.habits.busy = true;
-    let client_id = state.config.calendar.client_id.clone();
-    let client_secret = state.config.calendar.client_secret.clone();
+    let client = calendar::GoogleClient::from_settings(&state.config.calendar);
     let app_calendar = state.config.calendar.app_calendar.clone();
-    blocking::run(move || {
-        calendar::sync_habit_listing(&client_id, &client_secret, app_calendar.as_deref())
-    })
-    .map(|result| Message::Habits(Action::Loaded(result)))
+    blocking::run(move || calendar::sync_habit_listing(&client, app_calendar.as_deref()))
+        .map(|result| Message::Habits(Action::Loaded(result)))
 }
 
 fn sort_series(series: &mut [Series]) {

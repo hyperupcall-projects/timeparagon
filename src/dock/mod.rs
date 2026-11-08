@@ -414,8 +414,7 @@ fn spawn_sync(
             loop {
                 let day = calendar::day_at(crate::clock::now(), hour);
                 let result = calendar::sync_day(
-                    &calendar.client_id,
-                    &calendar.client_secret,
+                    &calendar::GoogleClient::from_settings(&calendar),
                     &calendar.disabled,
                     day,
                     hour,

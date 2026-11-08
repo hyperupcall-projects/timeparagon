@@ -54,6 +54,7 @@ pub(crate) fn prepare(
             before: None,
             after: current,
             clock: 1,
+            ..Default::default()
         },
         Edit {
             id: "save".into(),
@@ -61,6 +62,7 @@ pub(crate) fn prepare(
             before: baseline,
             after: desired.clone(),
             clock: 2,
+            ..Default::default()
         },
     ];
     Ok(model::project(&edits).map_err(other)?.remove(key).flatten())

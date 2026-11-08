@@ -68,14 +68,22 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 
             Task::none()
         }
-        SystemMessage::DatabaseSyncPolled => {
-            if let Err(error) = state.calendar.apply_local_operations() {
-                log::warn!("Could not load committed edits: {error}");
+        SystemMessage::DatabaseSyncPolled => crate::local_poll::start(state),
+        SystemMessage::DatabasePolled(polled) => crate::local_poll::apply(state, polled),
+        SystemMessage::OperationRetried(id) => {
+            blocking::run(move || timeslay_core::calendar::operations::retry(id))
+                .map(|result| Message::System(SystemMessage::OperationChanged(result)))
+        }
+        SystemMessage::OperationDiscarded(id) => {
+            blocking::run(move || timeslay_core::calendar::operations::discard(id))
+                .map(|result| Message::System(SystemMessage::OperationChanged(result)))
+        }
+        SystemMessage::OperationChanged(result) => {
+            if let Err(error) = result {
+                state.calendar.error = Some(error);
             }
-            state.habits.reload_shared();
-            state.notes.reload_shared();
-            state.refresh_operations();
-            Task::none()
+            // The queue and the local copies it shows over Google's changed.
+            crate::local_poll::refresh_overlay(state)
         }
         SystemMessage::ConfigReloaded(config) => {
             // Only a config that parsed gets here, so the file is usable again.

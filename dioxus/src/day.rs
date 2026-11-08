@@ -6,6 +6,7 @@
 //! belongs to which block, and how overlaps share a column.
 
 use std::collections::{HashMap, HashSet};
+use timeslay_core::calendar::ids;
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
 use timeslay_core::calendar::first_day::FirstDayOfWeek;
@@ -277,15 +278,9 @@ impl NewEvent {
 }
 
 /// Blocking: callers run this on a worker thread.
-pub fn create_event(
-    new: &NewEvent,
-    calendar_id: &str,
-    settings: &CalendarSettings,
-) -> Result<(), String> {
+pub fn create_event(new: &NewEvent, calendar_id: &str) -> Result<(), String> {
     let (start, end) = new.range()?;
     calendar::create_event(
-        &settings.client_id,
-        &settings.client_secret,
         calendar_id,
         new.title.trim(),
         &new.description,
@@ -305,8 +300,6 @@ pub fn create_event(
 pub fn create_time_block(new: &NewEvent, settings: &CalendarSettings) -> Result<(), String> {
     let (start, end) = new.range()?;
     calendar::create_time_block(
-        &settings.client_id,
-        &settings.client_secret,
         settings.app_calendar.as_deref(),
         new.title.trim(),
         &calendar::event_description(&new.description, "Time Block", &[]),
@@ -330,8 +323,7 @@ pub struct AgendaRow {
 pub fn load_agenda(dates: &[NaiveDate], settings: &CalendarSettings) -> Result<Snapshot, String> {
     let first = *dates.first().ok_or("The range is empty")?;
     calendar::sync_range(
-        &settings.client_id,
-        &settings.client_secret,
+        &calendar::GoogleClient::from_settings(settings),
         &settings.disabled,
         first,
         dates,
@@ -617,7 +609,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 
     let mut events = snapshot.events.clone();
     for event in &mut events {
-        if event.calendar_id.starts_with("tasks:") && event.details.scheduled.is_none() {
+        if event.calendar_id.starts_with(ids::TASK_LIST) && event.details.scheduled.is_none() {
             event.color = settings
                 .task_color(&event.calendar_id)
                 .unwrap_or(calendar::colors::TASK);
@@ -789,7 +781,7 @@ fn calendar_name(snapshot: &Snapshot, id: &str) -> String {
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| {
-            id.strip_prefix("tasks:")
+            id.strip_prefix(ids::TASK_LIST)
                 .filter(|name| !name.is_empty())
                 .unwrap_or("Tasks")
                 .to_owned()
@@ -1137,30 +1129,9 @@ pub fn source_label(event: &Event, context: &EditContext) -> Source {
         .calendars
         .iter()
         .find(|calendar| calendar.id == event.calendar_id);
-    let managed = settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
-        || calendar.is_some_and(|calendar| CalendarSettings::is_app_calendar_name(&calendar.name));
-    let kind = if event.details.sleep.is_some() {
-        Some(("Sleep", settings.sleep_color()))
-    } else if event.details.habit {
-        Some(("Habit", settings.habit_color()))
-    } else if event.details.scheduled.is_some() {
-        Some(("Task", settings.task_event_color()))
-    } else if event.is_task() {
-        Some((
-            "Task",
-            settings
-                .task_color(&event.calendar_id)
-                .unwrap_or(calendar::colors::TASK),
-        ))
-    } else if managed {
-        Some(if event.all_day {
-            ("Event", settings.event_color())
-        } else {
-            ("Time Block", settings.time_block_color())
-        })
-    } else {
-        None
-    };
+    let kind = event
+        .kind(settings, &context.calendars)
+        .chip(event, settings);
     match kind {
         Some((name, color)) => Source::Kind { name, color },
         None => Source::Calendar(format!(
@@ -1388,9 +1359,7 @@ fn untriaged_in(
     calendars: &[calendar::Calendar],
 ) -> bool {
     let inbox = match &settings.inbox_list {
-        Some(chosen) => {
-            chosen.trim_start_matches("tasks:") == task.calendar_id.trim_start_matches("tasks:")
-        }
+        Some(chosen) => ids::bare_list(chosen) == ids::bare_list(&task.calendar_id),
         None => calendars.iter().any(|calendar| {
             calendar.id == task.calendar_id
                 && calendar.is_task_list()
@@ -1495,13 +1464,7 @@ pub fn save_event(
             .habit_id
             .as_deref()
             .ok_or("Open a habit to add an event to it")?;
-        calendar::create_habit(
-            &settings.client_id,
-            &settings.client_secret,
-            draft,
-            original.details.color_id.as_deref(),
-            habit_id,
-        )?;
+        calendar::create_habit(draft, original.details.color_id.as_deref(), habit_id)?;
         return Ok(());
     }
     let labelled_block = tb::is_block(original, settings);
@@ -1511,15 +1474,7 @@ pub fn save_event(
         draft.description.clone()
     };
     let color_id = None;
-    calendar::save_event_scope(
-        &settings.client_id,
-        &settings.client_secret,
-        original,
-        draft,
-        scope,
-        &description,
-        color_id,
-    )?;
+    calendar::save_event_scope(original, draft, scope, &description, color_id)?;
 
     let key = tb::block_key(original);
     if block_events(&context.events, settings)
@@ -1538,19 +1493,9 @@ pub fn save_event(
 /// config the iced app reads it from.
 ///
 /// Blocking: callers run this on a worker thread.
-pub fn save_event_place(
-    event: &Event,
-    place: Option<&Place>,
-    settings: &CalendarSettings,
-) -> Result<(), String> {
+pub fn save_event_place(event: &Event, place: Option<&Place>) -> Result<(), String> {
     let text = place.map(places::location_text).unwrap_or_default();
-    calendar::set_event_location(
-        &settings.client_id,
-        &settings.client_secret,
-        &event.calendar_id,
-        &event.id,
-        &text,
-    )?;
+    calendar::set_event_location(&event.calendar_id, &event.id, &text)?;
     timeslay_core::config::save_event_place(&event.id, place.map(|place| place.id))
         .map_err(|error| format!("Could not save the location: {error}"))
 }
@@ -1627,7 +1572,7 @@ mod tests {
         completed: bool,
     ) -> Event {
         let mut event = event(
-            &format!("task:{id}"),
+            &ids::event_id(id),
             "tasks:work",
             title,
             at(0, 0),

@@ -1,5 +1,6 @@
 //! Remote-backed task metadata and Google Tasks time-block operations.
 use crate::app::CalendarMessage;
+use crate::calendar::ids;
 use crate::{
     app::{Message, State},
     blocking,
@@ -8,6 +9,7 @@ use crate::{
 };
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone};
 use iced::Task;
+use timeslay_core::calendar::google::GoogleError;
 use timeslay_core::task_edit::{self, Change, clean_label};
 #[cfg(test)]
 use timeslay_core::task_edit::{Destination, schedule_with, unschedule_with};
@@ -336,7 +338,7 @@ pub fn task_list_name(state: &State, calendar_id: &str) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| {
             calendar_id
-                .strip_prefix("tasks:")
+                .strip_prefix(ids::TASK_LIST)
                 .filter(|id| !id.is_empty())
                 .unwrap_or("Tasks")
                 .to_owned()
@@ -346,7 +348,7 @@ pub fn task_list_name(state: &State, calendar_id: &str) -> String {
 /// Whether `calendar_id` is the list that holds backlog tasks.
 pub fn is_backlog_list(state: &State, calendar_id: &str) -> bool {
     if let Some(chosen) = &state.config.calendar.backlog_list {
-        return chosen.trim_start_matches("tasks:") == calendar_id.trim_start_matches("tasks:");
+        return ids::bare_list(chosen) == ids::bare_list(calendar_id);
     }
     let default = CalendarSettings::DEFAULT_BACKLOG_LIST;
     calendar_id
@@ -1733,7 +1735,7 @@ fn new_todo_event(
 ) -> Event {
     Event {
         id: format!("task:{}", created.id),
-        calendar_id: format!("tasks:{list_id}"),
+        calendar_id: ids::calendar_id(list_id),
         title: created.title.clone(),
         start: when,
         end: when + chrono::Duration::minutes(30),
@@ -1755,19 +1757,19 @@ fn triage_error(state: &State, id: &str) -> Option<String> {
     task_edit::triage_error(task, &state.config.calendar.triage)
 }
 
-pub(crate) fn access(settings: &CalendarSettings) -> Result<String, String> {
+pub(crate) fn access(settings: &CalendarSettings) -> Result<String, GoogleError> {
     // Unit tests must never reach the user's real Google account.
     #[cfg(test)]
     {
         let _ = settings;
-        Err("Google access is disabled in tests".into())
+        Err(GoogleError::auth("Google access is disabled in tests"))
     }
     #[cfg(not(test))]
     access_google(settings)
 }
 
 #[cfg(not(test))]
-fn access_google(settings: &CalendarSettings) -> Result<String, String> {
+fn access_google(settings: &CalendarSettings) -> Result<String, GoogleError> {
     task_edit::google_access(settings)
 }
 
@@ -1798,7 +1800,7 @@ fn save(
     change: Change,
     order: i64,
 ) -> Result<Event, String> {
-    task_edit::save(task, settings, change, order, access)
+    Ok(task_edit::save(task, settings, change, order, access)?)
 }
 
 fn save_and_reflow(

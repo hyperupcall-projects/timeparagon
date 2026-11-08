@@ -313,7 +313,7 @@ mod tests {
 
     fn task(title: &str, block: Option<&str>) -> Event {
         let mut task = morning(title);
-        task.id = format!("task:{title}");
+        task.id = crate::calendar::ids::event_id(title);
         task.calendar_id = "tasks:list".into();
         task.details.task_data = Some(crate::task_db::TaskData {
             id: 100,

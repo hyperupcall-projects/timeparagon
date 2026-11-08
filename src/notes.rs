@@ -33,6 +33,9 @@ pub struct Store {
     /// neither touches the network nor the user's cache.
     live: bool,
     cache_path: Option<PathBuf>,
+    /// Bumped by every save, so a reload read before it can tell it is out
+    /// of date.
+    revision: u64,
     /// The note open in the editor.
     pub open: Option<String>,
     pub tab: Tab,
@@ -69,6 +72,7 @@ impl Default for Store {
             confirm_delete: false,
             return_to: None,
             saving: false,
+            revision: 0,
             cache_stale: false,
             error: None,
         }
@@ -77,7 +81,7 @@ impl Default for Store {
 
 impl Store {
     pub fn reload_shared(&mut self) {
-        if self.cache_stale || self.saving {
+        if !self.accepts_shared() {
             return;
         }
         let Some(path) = &self.cache_path else {
@@ -85,8 +89,31 @@ impl Store {
         };
         if let Ok(Some(library)) =
             crate::task_db::read_document::<Library>(path, crate::task_db::keys::NOTES)
-            && library != self.library
         {
+            self.adopt_shared(library);
+        }
+    }
+
+    /// Changes with each save.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Where the notes are saved, when they are.
+    pub fn shared_path(&self) -> Option<&std::path::Path> {
+        self.cache_path.as_deref()
+    }
+
+    /// Whether notes read from the database may replace these: not while a
+    /// local edit is waiting to be saved or being saved, which a read could
+    /// predate.
+    pub fn accepts_shared(&self) -> bool {
+        self.live && !self.cache_stale && !self.saving
+    }
+
+    /// Takes notes read from the database, when they differ from these.
+    pub fn adopt_shared(&mut self, library: Library) {
+        if library != self.library {
             self.library = library;
             if self
                 .open
@@ -208,6 +235,7 @@ fn save_cache(store: &mut Store) -> Task<Message> {
     };
     store.cache_stale = false;
     store.saving = true;
+    store.revision += 1;
     let library = store.library.clone();
     blocking::run(move || library.save(&path).map_err(|error| error.to_string()))
         .map(|result| Message::Notes(Action::Saved(result)))

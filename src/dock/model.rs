@@ -393,7 +393,7 @@ mod tests {
         };
         let task = |id: &str, block: &str, order: i64| {
             let mut task = event(id, "tasks:list", at(day, 0, 0), 0);
-            task.id = format!("task:{id}");
+            task.id = crate::calendar::ids::event_id(id);
             task.all_day = true;
             task.details.description = format!(
                 "tt-timeblocking: {{\"block\":\"{block}\",\"minutes\":30,\"order\":{order}}}"

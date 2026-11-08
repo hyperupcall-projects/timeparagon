@@ -7,6 +7,7 @@
 pub(crate) mod creation;
 pub mod preview;
 
+use crate::calendar::ids;
 use chrono::{Duration, Local, NaiveDate};
 use iced::Task;
 use iced::widget::{Id, operation};
@@ -158,7 +159,7 @@ pub fn refresh_invitations(state: &mut State) -> Task<Message> {
     let request = state.inbox.invitation_requests;
     let settings = state.config.calendar.clone();
     blocking::run(move || {
-        calendar::sync_invitations(&settings.client_id, &settings.client_secret, &calendar)
+        calendar::sync_invitations(&calendar::GoogleClient::from_settings(&settings), &calendar)
     })
     .map(move |result| Message::Inbox(Action::InvitationsFetched(request, result)))
 }
@@ -166,7 +167,7 @@ pub fn refresh_invitations(state: &mut State) -> Task<Message> {
 /// Whether `calendar_id` is the list that collects new tasks.
 pub fn is_inbox_list(state: &State, calendar_id: &str) -> bool {
     if let Some(chosen) = &state.config.calendar.inbox_list {
-        return chosen.trim_start_matches("tasks:") == calendar_id.trim_start_matches("tasks:");
+        return ids::bare_list(chosen) == ids::bare_list(calendar_id);
     }
     state.inbox.created_list.as_deref() == Some(calendar_id)
         || state.calendar.calendars.iter().any(|calendar| {
@@ -246,7 +247,7 @@ fn sort_tasks(tasks: &mut Vec<&Event>, sort: InboxSort) {
 /// Whether `calendar_id` is the list that collects triaged tasks.
 pub fn is_triaged_list(state: &State, calendar_id: &str) -> bool {
     if let Some(chosen) = &state.config.calendar.triaged_list {
-        return chosen.trim_start_matches("tasks:") == calendar_id.trim_start_matches("tasks:");
+        return ids::bare_list(chosen) == ids::bare_list(calendar_id);
     }
     let default = crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST;
     calendar_id
@@ -1051,8 +1052,8 @@ mod tests {
 
     fn task(id: &str, list: &str, day: NaiveDate) -> Event {
         let mut task = calendar::sample_snapshot().events.remove(0);
-        task.id = format!("task:{id}");
-        task.calendar_id = format!("tasks:{list}");
+        task.id = ids::event_id(id);
+        task.calendar_id = ids::calendar_id(list);
         task.title = id.into();
         task.all_day = true;
         task.completed = false;

@@ -201,7 +201,6 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
                     state.calendar.error = Some(error);
                     return Task::none();
                 }
-                let settings = state.config.calendar.clone();
                 let color_id = state
                     .calendar
                     .event(&draft.id)
@@ -210,13 +209,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
                 state.habits.busy = true;
                 state.calendar.error = None;
                 let write = blocking::run(move || {
-                    calendar::create_habit(
-                        &settings.client_id,
-                        &settings.client_secret,
-                        &draft,
-                        color_id.as_deref(),
-                        &habit_id,
-                    )
+                    calendar::create_habit(&draft, color_id.as_deref(), &habit_id)
                 })
                 .map(|result| Message::Habits(crate::habits::Action::Saved(result)));
                 return Task::batch([created, write]);
@@ -239,21 +232,12 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
                 state.calendar.error = Some(error);
                 return Task::none();
             }
-            let settings = state.config.calendar.clone();
             state.calendar.error = None;
             if let Some(draft) = &mut state.calendar.edit_draft {
                 draft.saving = true;
             }
             blocking::run(move || {
-                calendar::save_event_scope(
-                    &settings.client_id,
-                    &settings.client_secret,
-                    &original,
-                    &draft,
-                    scope,
-                    &description,
-                    color_id,
-                )
+                calendar::save_event_scope(&original, &draft, scope, &description, color_id)
             })
             .map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
         }
