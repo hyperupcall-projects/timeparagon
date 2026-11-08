@@ -464,8 +464,8 @@ fn plan_day_shows_calendar_beside_each_task_list() -> Result<(), Error> {
             Size::new(420.0, 900.0),
             timeslay::ui::editor_window(&state),
         );
-        ui.find("Set Alarm")?;
-        ui.find("Menu")?;
+        ui.find("View")?;
+        ui.find("Actions")?;
         ui.find(format!(
             "{} ▾",
             calendar::month_day_label(state.calendar.day)
