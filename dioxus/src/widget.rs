@@ -224,7 +224,7 @@ pub fn notify() {
     if result.is_err()
         && let Ok(context) = std::panic::catch_unwind(ndk_context::android_context)
         && let Ok(vm) = unsafe { jni::JavaVM::from_raw(context.vm().cast()) }
-        && let Ok(mut env) = vm.attach_current_thread()
+        && let Ok(env) = vm.attach_current_thread()
     {
         // A Java exception must not poison later calls on this thread.
         let _ = env.exception_clear();
