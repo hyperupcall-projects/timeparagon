@@ -244,7 +244,7 @@ fn refresh() -> bool {
         return false;
     };
     let model = day::build_model(&snapshot, &config.calendar);
-    let travel = day::travel_boxes(&model, &config.travel);
+    let travel = day::travel_boxes(&model, &config.travel, config.appearance.distance_unit);
     write(&model, &travel, &config.calendar, snapshot.fetched_at);
     if config.reminders.any_enabled() {
         refresh_reminders(&config, snapshot, today);
@@ -381,7 +381,11 @@ mod tests {
             notice: None,
         };
         let model = day::build_model(&snapshot, &settings);
-        let travel = day::travel_boxes(&model, travel);
+        let travel = day::travel_boxes(
+            &model,
+            travel,
+            timeslay_core::places::DistanceUnit::Kilometers,
+        );
         widget_day(&model, &travel, &settings, snapshot.fetched_at)
     }
 

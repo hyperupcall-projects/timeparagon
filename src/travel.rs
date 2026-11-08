@@ -727,7 +727,10 @@ pub fn summary(state: &State, leg: Leg) -> Summary {
 pub fn short_label(state: &State, leg: Leg) -> String {
     let mode = state.config.travel.mode_for(leg.from, leg.to);
     match summary(state, leg) {
-        Summary::Ready(route) => format!("{mode} · {}", route_label(route)),
+        Summary::Ready(route) => format!(
+            "{mode} · {}",
+            route_label(route, state.config.appearance.distance_unit)
+        ),
         Summary::Loading | Summary::Unknown => format!("{mode} · calculating…"),
         Summary::Failed(_) => format!("{mode} · no route"),
         Summary::NoKey => "Add a Mapbox token in Settings".to_owned(),
@@ -778,7 +781,8 @@ pub fn compute_route(
 }
 
 /// The Directions request for a trip. Mapbox takes coordinates only, as
-/// `longitude,latitude` pairs.
+/// `longitude,latitude` pairs. Its route distance is always returned in meters;
+/// display units must not affect this request or the cache key.
 pub fn route_url(key: &str, from: &Place, to: &Place, mode: TravelMode) -> String {
     format!(
         "{DIRECTIONS_URL}/{}/{},{};{},{}?overview=false&access_token={}",
@@ -1412,13 +1416,22 @@ mod tests {
         assert_eq!(duration_label(61), "2 min");
         assert_eq!(duration_label(754), "13 min");
         assert_eq!(duration_label(3900), "1 h 05 min");
-        assert_eq!(distance_label(850), "850 m");
-        assert_eq!(distance_label(1234), "1.2 km");
         assert_eq!(
-            route_label(Route {
-                seconds: 600,
-                meters: 2000
-            }),
+            distance_label(850, crate::config::DistanceUnit::Kilometers),
+            "850 m"
+        );
+        assert_eq!(
+            distance_label(1234, crate::config::DistanceUnit::Kilometers),
+            "1.2 km"
+        );
+        assert_eq!(
+            route_label(
+                Route {
+                    seconds: 600,
+                    meters: 2000
+                },
+                crate::config::DistanceUnit::Kilometers
+            ),
             "10 min · 2.0 km"
         );
     }
@@ -1579,6 +1592,19 @@ mod tests {
         let _ = update(&mut state, Action::Routed(key, Ok(route)));
         assert_eq!(summary(&state, leg), Summary::Ready(route));
         assert_eq!(short_label(&state, leg), "Walk · 5 min · 400 m");
+
+        // Publish the freshly computed route before changing display settings.
+        let _ = reconcile(&mut state);
+        let cached = state.config.travel.routes.clone();
+        let _ = crate::app::update(
+            &mut state,
+            crate::app::Message::Settings(crate::app::SettingsMessage::DistanceUnitSelected(
+                crate::config::DistanceUnit::Miles,
+            )),
+        );
+        assert_eq!(short_label(&state, leg), "Walk · 5 min · 0.2 mi");
+        assert_eq!(summary(&state, leg), Summary::Ready(route));
+        assert_eq!(state.config.travel.routes, cached);
 
         // Another method is another trip.
         state.config.travel.set_mode(1, 2, TravelMode::Car);

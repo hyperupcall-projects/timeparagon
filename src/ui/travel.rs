@@ -214,7 +214,10 @@ fn connection_row<'a>(
     .width(Fill);
 
     let detail = match travel::summary(state, leg) {
-        Summary::Ready(route) => Some(travel::route_label(route)),
+        Summary::Ready(route) => Some(travel::route_label(
+            route,
+            state.config.appearance.distance_unit,
+        )),
         Summary::Loading => Some("Calculating…".to_owned()),
         Summary::Failed(_) => Some("No route".to_owned()),
         Summary::Unknown | Summary::NoKey => None,
@@ -699,7 +702,11 @@ fn leg_details<'a>(
 
     content = content.push(caption("Travel time"));
     content = content.push(match travel::summary(state, leg) {
-        Summary::Ready(route) => text(travel::route_label(route)).size(metrics.label() + 3.0),
+        Summary::Ready(route) => text(travel::route_label(
+            route,
+            state.config.appearance.distance_unit,
+        ))
+        .size(metrics.label() + 3.0),
         Summary::Loading => text("Calculating…").size(metrics.label()),
         Summary::Unknown => text("Not calculated yet").size(metrics.label()),
         Summary::NoKey => text(travel::NO_KEY)
