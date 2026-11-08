@@ -60,7 +60,7 @@ fn travel_is_toggled_from_the_calendar_menu() {
         let (mut state, ..) = state();
         state.main_size = Size::new(width, 4000.0);
 
-        // The day view's header keeps Set Alarm and Menu and drops Toggle
+        // The day view's header keeps View and Actions and drops Toggle
         // Travel.
         let mut header = Sim::with_size(
             Settings::default(),
@@ -68,17 +68,17 @@ fn travel_is_toggled_from_the_calendar_menu() {
             app::view(&state, iced::window::Id::unique()),
         );
         assert!(
-            header.find("Set Alarm").is_ok(),
-            "no Set Alarm at {width}px"
+            header.find("Actions").is_ok(),
+            "no Actions at {width}px"
         );
-        assert!(header.find("Menu").is_ok(), "no Menu at {width}px");
+        assert!(header.find("View").is_ok(), "no View at {width}px");
         assert!(
             header.find("Toggle Travel").is_err(),
             "Toggle Travel is still in the header at {width}px"
         );
         drop(header);
 
-        // Travel sits in the menu under the TimeSlay heading, after Sleep.
+        // Travel sits in the Calendars tab under the TimeSlay heading, after Sleep.
         state.calendar.menu_open = true;
         let mut ui = Sim::with_size(
             Settings::default(),
