@@ -692,8 +692,15 @@ fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
             timeslay::life::Tab::Implementation,
         )),
     );
-    let mut ui = render(&state, Size::new(200.0, 900.0));
-    for label in ["Objectives", "Habits", "Projects", "Work"] {
+    let mut ui = render(&state, Size::new(200.0, 1400.0));
+    for label in [
+        "Goals",
+        "Unassigned objectives",
+        "Unassigned habits",
+        "Projects",
+        "Work",
+        "Add project",
+    ] {
         assert!(
             ui.find(label).is_ok(),
             "{label:?} is missing from Implementation"

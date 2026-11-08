@@ -206,11 +206,28 @@ pub struct LifeArea {
     pub vision: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub goals: Vec<Goal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objectives: Vec<Objective>,
 }
 
 impl LifeArea {
     pub fn color(&self) -> Option<Color> {
         self.color.map(Color::from)
+    }
+
+    /// The goal `objective` is listed under: its own when that goal still
+    /// exists in this area, otherwise none.
+    pub fn objective_goal(&self, objective: &Objective) -> Option<u64> {
+        objective
+            .goal
+            .filter(|id| self.goals.iter().any(|goal| goal.id == *id))
+    }
+
+    /// Whether any objective of this area is carried out by `habit`.
+    pub fn has_habit(&self, habit: &str) -> bool {
+        self.objectives
+            .iter()
+            .any(|objective| objective.habits.iter().any(|h| h == habit))
     }
 }
 
@@ -223,6 +240,23 @@ pub struct Goal {
     pub description: String,
 }
 
+/// Something concrete that a life area works towards, usually in service of
+/// one of its goals, and carried out by habits.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Objective {
+    pub id: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The [`Goal`] of the same area it serves. Unset, or pointing at a goal
+    /// that is gone, means it is unassigned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<u64>,
+    /// Habits that carry it out, by habit id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub habits: Vec<String>,
+}
+
 fn personal_area() -> LifeArea {
     LifeArea {
         id: PERSONAL_AREA,
@@ -230,6 +264,7 @@ fn personal_area() -> LifeArea {
         color: None,
         vision: String::new(),
         goals: Vec::new(),
+        objectives: Vec::new(),
     }
 }
 
@@ -391,6 +426,7 @@ impl ProjectsSettings {
             color: None,
             vision: String::new(),
             goals: Vec::new(),
+            objectives: Vec::new(),
         });
         id
     }
@@ -411,6 +447,20 @@ impl ProjectsSettings {
             id,
             name,
             description: String::new(),
+        });
+        Some(id)
+    }
+
+    /// Adds an objective to an area, under `goal` if given, and returns its id.
+    pub fn add_objective(&mut self, area: u64, goal: Option<u64>, name: String) -> Option<u64> {
+        let area = self.area_mut(area)?;
+        let id = unique_id(area.objectives.iter().map(|objective| objective.id));
+        area.objectives.push(Objective {
+            id,
+            name,
+            description: String::new(),
+            goal,
+            habits: Vec::new(),
         });
         Some(id)
     }
