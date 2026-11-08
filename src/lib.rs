@@ -17,6 +17,7 @@ pub use timeslay_core::{
     task_db, task_input, todos,
 };
 
+pub mod activity;
 pub mod alarm;
 pub mod alarms;
 pub mod app;

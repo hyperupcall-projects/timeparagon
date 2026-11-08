@@ -327,6 +327,10 @@ pub struct State {
     /// Local edits still waiting for Google, as last read from the database.
     /// Refreshed on a timer, so drawing never touches SQLite.
     pub operations: Result<Vec<timeslay_core::calendar::operations::Operation>, String>,
+    /// Background work under way, and the log of what it has done.
+    pub activity: crate::activity::Activity,
+    /// Local edits not yet sent by database sync, as last read.
+    pub database_unsent: usize,
     /// Keyboard choice in the calendar quick-create popup; None means title entry.
     pub draft_kind_focus: Option<calendar::DraftKind>,
     /// Persistent cursor and selection state for new events, event edits and habits.
@@ -492,6 +496,8 @@ pub enum NavigationMessage {
     PlanDaySelected,
     ViewMenuToggled,
     MoreMenuToggled,
+    /// The log of background work, opened from the foot of the panel.
+    ActivityLogToggled,
 }
 
 /// The notepad page.
@@ -606,6 +612,8 @@ pub enum SystemMessage {
     OperationDiscarded(i64),
     /// A retry or discard finished.
     OperationChanged(Result<(), String>),
+    /// Time to show the next of several things under way.
+    ActivityTick,
     AudioStatusPolled,
 
     /// The system's light/dark tone, for the high contrast system theme.
@@ -880,6 +888,8 @@ impl State {
         Self {
             picker: None,
             operations: Ok(Vec::new()),
+            activity: crate::activity::Activity::default(),
+            database_unsent: 0,
             draft_kind_focus: None,
             task_description: text_editor::Content::new(),
             task_creation_window: false,
@@ -1019,6 +1029,53 @@ impl State {
     /// Rereads the queue of edits waiting for Google.
     pub fn refresh_operations(&mut self) {
         self.operations = timeslay_core::calendar::operations::list();
+        match &self.operations {
+            Ok(rows) => self.activity.observe_operations(rows),
+            Err(error) => self
+                .activity
+                .record(format!("Cannot read the Google queue: {error}"), true),
+        }
+    }
+
+    /// Background work under way now, in the order it is rotated through.
+    pub fn current_activities(&self) -> Vec<crate::activity::Current> {
+        use crate::activity::{Current, Kind};
+        let mut current = Vec::new();
+        // Writes Google refused for good no longer hold up the queue; they
+        // are logged and listed under Operations instead.
+        let pending: Vec<_> = match &self.operations {
+            Ok(rows) => rows.iter().filter(|row| row.pending()).collect(),
+            Err(_) => Vec::new(),
+        };
+        if !pending.is_empty() {
+            let label = if pending.iter().any(|row| row.error.is_some()) {
+                format!("Retrying save to cloud ({})", pending.len())
+            } else {
+                format!("Saving to cloud ({})", pending.len())
+            };
+            current.push(Current {
+                kind: Kind::SavingToCloud,
+                label,
+            });
+        }
+        if self.calendar_loading() {
+            current.push(Current {
+                kind: Kind::LoadingFromCloud,
+                label: "Loading from cloud".into(),
+            });
+        }
+        if self.database_unsent > 0 {
+            let label = if timeslay_core::database_sync::waiting() {
+                format!("Waiting for database sync ({})", self.database_unsent)
+            } else {
+                format!("Syncing database ({})", self.database_unsent)
+            };
+            current.push(Current {
+                kind: Kind::DatabaseSync,
+                label,
+            });
+        }
+        current
     }
 
     pub fn weekly(&self) -> bool {
@@ -1340,6 +1397,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     } else {
         Task::none()
     };
+    let activities = state.current_activities();
+    state.activity.observe(activities, Instant::now());
     Task::batch([task, editor, travel, fetch])
 }
 
@@ -1571,6 +1630,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         crate::travel::map::subscription(state),
         iced::time::every(std::time::Duration::from_secs(2))
             .map(|_| Message::System(SystemMessage::DatabaseSyncPolled)),
+        if state.activity.rotating() {
+            iced::time::every(std::time::Duration::from_millis(500))
+                .map(|_| Message::System(SystemMessage::ActivityTick))
+        } else {
+            Subscription::none()
+        },
         config::watch().map(|v0| Message::System(SystemMessage::ConfigReloaded(v0))),
         iced::system::theme_changes()
             .map(|mode| Message::System(SystemMessage::SystemThemeMode(mode))),
@@ -1911,6 +1976,14 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
         return match key.as_ref() {
             Key::Named(Named::Escape) => {
                 Some(Message::Navigation(NavigationMessage::MoreMenuToggled))
+            }
+            _ => None,
+        };
+    }
+    if state.activity.open {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => {
+                Some(Message::Navigation(NavigationMessage::ActivityLogToggled))
             }
             _ => None,
         };

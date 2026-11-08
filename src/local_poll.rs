@@ -48,6 +48,8 @@ pub struct Polled {
     habits_revision: u64,
     notes_revision: u64,
     notes: Option<Result<Option<timeslay_core::notes::Library>, String>>,
+    /// Local edits database sync has not sent yet.
+    database_unsent: usize,
 }
 
 /// Starts a poll unless one is already running.
@@ -112,6 +114,7 @@ pub fn start(state: &mut State) -> Task<Message> {
                     )
                     .map_err(|error| error.to_string())
                 }),
+            database_unsent: timeslay_core::database_sync::unsent_edits(),
         })
     })
     .map(|polled| Message::System(SystemMessage::DatabasePolled(polled.map(Box::new))))
@@ -131,7 +134,10 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
         habits_revision,
         notes_revision,
         notes,
+        database_unsent,
     } = *polled;
+    state.database_unsent = database_unsent;
+    state.activity.pull_database_log();
 
     match overlay {
         Some(Ok(overlay)) => {
@@ -143,8 +149,14 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
     }
 
     if let Some(operations) = operations {
-        if operations.is_ok() {
-            state.poll.queue = Some(counters.queue);
+        match &operations {
+            Ok(rows) => {
+                state.poll.queue = Some(counters.queue);
+                state.activity.observe_operations(rows);
+            }
+            Err(error) => state
+                .activity
+                .record(format!("Cannot read the Google queue: {error}"), true),
         }
         state.operations = operations;
     }
@@ -204,6 +216,7 @@ mod tests {
             habits_revision: revision,
             notes_revision: state.notes.revision(),
             notes: None,
+            database_unsent: 0,
         })
     }
 

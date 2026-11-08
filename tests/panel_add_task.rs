@@ -184,3 +184,59 @@ fn dock_map_input_region_covers_the_surface_and_returns_to_the_task_card() {
         }
     }
 }
+
+#[test]
+fn panel_footer_shows_logs_beside_the_plus_and_opens_the_log() {
+    let mut state = state(panel::Side::Left, 260.0);
+    let mut ui = Simulator::with_size(
+        Settings::default(),
+        state.main_size,
+        timeslay::ui::view(&state),
+    );
+    let status = ui.find(Id::new("activity-status")).unwrap().bounds();
+    let add = ui.find(Id::new("panel-add-task")).unwrap().bounds();
+    assert!(status.x + status.width <= add.x, "{status:?} {add:?}");
+    assert!((status.y - add.y).abs() < 1.0);
+    assert!(ui.find("Logs").is_ok());
+    ui.click(Id::new("activity-status")).unwrap();
+    for message in ui.into_messages() {
+        let _ = app::update(&mut state, message);
+    }
+    assert!(state.activity.open);
+
+    state
+        .activity
+        .record("Synced 3 events and 24 tasks from Google", false);
+    let mut ui = Simulator::with_size(
+        Settings::default(),
+        state.main_size,
+        timeslay::ui::view(&state),
+    );
+    assert!(ui.find(Id::new("activity-log")).is_ok());
+    assert!(ui.find("Synced 3 events and 24 tasks from Google").is_ok());
+}
+
+#[test]
+fn loading_shows_in_the_footer_without_moving_the_view() {
+    let mut state = state(panel::Side::Left, 260.0);
+    let footer = |state: &State| {
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            state.main_size,
+            timeslay::ui::view(state),
+        );
+        ui.find(Id::new("panel-footer")).unwrap().bounds()
+    };
+    let idle = footer(&state);
+    state.calendar.sync = calendar::SyncState::Syncing;
+    let _ = app::update(&mut state, Message::System(SystemMessage::ActivityTick));
+    assert_eq!(state.activity.label(), "Loading from cloud");
+    assert_eq!(footer(&state), idle);
+    let mut ui = Simulator::with_size(
+        Settings::default(),
+        state.main_size,
+        timeslay::ui::view(&state),
+    );
+    assert!(ui.find("Loading from cloud").is_ok());
+    assert!(ui.find("Loading...").is_err());
+}
