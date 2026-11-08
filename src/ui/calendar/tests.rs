@@ -2237,7 +2237,15 @@ fn the_event_pane_offers_a_calendar_dropdown_without_timeslay() {
         Size::new(400.0, 1200.0),
         event_editor(&state, &event, &metrics),
     );
-    ui.click(name.as_str()).unwrap();
+    // The title's chip also names the calendar, so aim for the dropdown
+    // beneath its "Calendar" caption instead.
+    assert!(ui.find(name.as_str()).is_ok());
+    let caption = ui.find("Calendar").unwrap().bounds();
+    ui.point_at(iced::Point::new(
+        caption.x + caption.width / 2.0,
+        caption.y + caption.height + 12.0,
+    ));
+    let _ = ui.simulate(iced_test::simulator::click());
     assert!(ui.into_messages().any(|message| matches!(
         message,
         Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled)
