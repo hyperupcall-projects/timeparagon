@@ -68,6 +68,7 @@ pub enum PlanTab {
     Schedule,
     Overdue,
     Inbox,
+    Today,
     Backlog,
 }
 
@@ -127,6 +128,8 @@ pub enum Screen {
     Overdue,
     /// Tasks that have not been triaged yet.
     Inbox,
+    /// Incomplete tasks dated today that still need a time slot.
+    Today,
     /// Tasks that have been triaged but not yet scheduled.
     Triaged,
     Backlog,
@@ -1036,7 +1039,7 @@ impl State {
             && self.view == CalendarView::Day
             && matches!(
                 self.screen,
-                Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+                Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
             )
     }
 
@@ -1450,6 +1453,7 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
             | Screen::Backlog
             | Screen::Overdue
             | Screen::Inbox
+            | Screen::Today
             | Screen::Triaged
             | Screen::Habits
     )
@@ -2060,6 +2064,7 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             | Screen::People
             | Screen::Overdue
             | Screen::Inbox
+            | Screen::Today
             | Screen::Triaged
     ) {
         return match key.as_ref() {
@@ -2077,7 +2082,7 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
             Key::Named(Named::Escape)
                 if matches!(
                     state.screen,
-                    Screen::Overdue | Screen::Inbox | Screen::Triaged
+                    Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged
                 ) && state.calendar.open_event.is_some() =>
             {
                 Some(Message::Event(EventMessage::EventClosed))
