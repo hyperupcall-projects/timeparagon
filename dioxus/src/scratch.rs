@@ -18,8 +18,10 @@ fn written(result: std::io::Result<()>, what: &str) -> Result<Config, String> {
     Ok(Config::load())
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Page {
+/// The page the sheet opens on.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum Page {
+    #[default]
     Todos,
     Notepad,
     BrainDump,
@@ -27,8 +29,13 @@ enum Page {
 }
 
 #[component]
-pub fn ScratchSheet(config: Signal<Config>, day: NaiveDate, on_close: EventHandler<()>) -> Element {
-    let mut page = use_signal(|| Page::Todos);
+pub fn ScratchSheet(
+    config: Signal<Config>,
+    day: NaiveDate,
+    #[props(default)] start: Page,
+    on_close: EventHandler<()>,
+) -> Element {
+    let mut page = use_signal(move || start);
     let tab = |label: &'static str, this: Page| {
         rsx! {
             button {

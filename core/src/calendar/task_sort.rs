@@ -20,6 +20,21 @@ impl InboxSort {
         Self::ModifiedAscending,
         Self::ModifiedDescending,
     ];
+
+    /// The name it is saved under in `config.toml`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::CreatedAscending => "created_ascending",
+            Self::CreatedDescending => "created_descending",
+            Self::ModifiedAscending => "modified_ascending",
+            Self::ModifiedDescending => "modified_descending",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|sort| sort.name() == name)
+    }
 }
 
 impl std::fmt::Display for InboxSort {

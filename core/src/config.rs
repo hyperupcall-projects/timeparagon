@@ -1014,6 +1014,27 @@ fn save_calendar_visibility_at(
     })
 }
 
+/// Saves the orders of the Inbox and Overdue lists, leaving the rest of the
+/// file alone.
+pub fn save_task_sorts(
+    inbox: crate::calendar::task_sort::InboxSort,
+    overdue: crate::calendar::task_sort::InboxSort,
+) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_task_sorts_at(&path, inbox, overdue)
+}
+
+fn save_task_sorts_at(
+    path: &std::path::Path,
+    inbox: crate::calendar::task_sort::InboxSort,
+    overdue: crate::calendar::task_sort::InboxSort,
+) -> io::Result<()> {
+    edit_calendar_table(path, |calendar| {
+        calendar.insert("inbox_sort".into(), inbox.name().into());
+        calendar.insert("overdue_sort".into(), overdue.name().into());
+    })
+}
+
 /// Saves which day weeks start on, leaving the rest of the file alone.
 pub fn save_first_day_of_week(
     first_day: crate::calendar::first_day::FirstDayOfWeek,
@@ -1416,6 +1437,24 @@ mod tests {
         let config: Config = toml::from_str(&text).unwrap();
         assert_eq!(config.calendar.sync_minutes, 30);
         assert_eq!(config.calendar.first_day_of_week, FirstDayOfWeek::Saturday);
+    }
+
+    #[test]
+    fn saving_the_task_sorts_reads_back_and_keeps_other_settings() {
+        use crate::calendar::task_sort::InboxSort;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "[calendar]\nsync_minutes = 30\n").unwrap();
+
+        for (inbox, overdue) in InboxSort::ALL.into_iter().zip(InboxSort::ALL.into_iter().rev()) {
+            save_task_sorts_at(&path, inbox, overdue).unwrap();
+            let config: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(config.calendar.sync_minutes, 30);
+            assert_eq!(config.calendar.inbox_sort, inbox);
+            assert_eq!(config.calendar.overdue_sort, overdue);
+            assert_eq!(InboxSort::parse(inbox.name()), Some(inbox));
+        }
     }
 
     #[test]
