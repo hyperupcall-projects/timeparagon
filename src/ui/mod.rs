@@ -23,6 +23,7 @@ pub mod people;
 pub mod projects;
 pub mod recurrence;
 pub mod reminders;
+mod rounded_clip;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;
@@ -450,7 +451,7 @@ fn window_frame<'a>(
         let body_radius = (radius - outer_width - inner_width).max(0.0);
         let inner_radius = (radius - outer_width).max(0.0);
 
-        let body = container(content)
+        let body = container(rounded_clip::rounded_clip(content, body_radius))
             .width(Fill)
             .height(Fill)
             .clip(true)
