@@ -557,6 +557,7 @@ impl Renderer {
         let (surface_width, surface_height) = (pixmap.width(), pixmap.height());
         let strip = PixelRect::from_logical(layout, layout.strip_rect(), 0.0);
         let mut damage = vec![strip];
+        clear_rect(pixmap, strip);
 
         if let Some(old) = self.last_card.take() {
             clear_rect(pixmap, old);
@@ -569,7 +570,14 @@ impl Renderer {
         // next leaves each ring visible on its own.
         let (x, y, w, h) = layout.strip_rect();
         if layout.border_outer > 0.0 {
-            fill_rect(pixmap, layout, (x, y, w, h), layout.border_outer_color, 1.0);
+            fill_rounded(
+                pixmap,
+                layout,
+                (x, y, w, h),
+                layout.border_radius,
+                layout.border_outer_color,
+                1.0,
+            );
         }
         if layout.border_inner > 0.0 {
             let inset = layout.border_outer;
@@ -596,6 +604,11 @@ impl Renderer {
             1.0,
         );
 
+        // Keep controls and event marks on their own layer so their square
+        // bounds cannot cover either rounded border ring.
+        let target = pixmap;
+        let mut content = Pixmap::new(surface_width, surface_height).expect("dock content pixmap");
+        let pixmap = &mut content;
         let now = scene.now_minute;
         for (index, segment) in scene.segments.iter().enumerate() {
             let hovered = scene.hovered == Some(index);
@@ -667,9 +680,18 @@ impl Renderer {
         paint_button(pixmap, layout, scene);
 
         paint_add(pixmap, layout, scene);
-        if layout.border_radius > 0.0
-            && let Some(path) = rounded_path(layout, layout.strip_rect(), layout.border_radius)
-            && let Some(mut mask) = tiny_skia::Mask::new(pixmap.width(), pixmap.height())
+        let content_radius =
+            (layout.border_radius - layout.border_outer - layout.border_inner).max(0.0);
+        if let Some(path) = rounded_path(
+            layout,
+            (
+                layout.content_x,
+                layout.content_y,
+                layout.content_width,
+                layout.content_height,
+            ),
+            content_radius,
+        ) && let Some(mut mask) = tiny_skia::Mask::new(pixmap.width(), pixmap.height())
         {
             mask.fill_path(
                 &path,
@@ -679,6 +701,16 @@ impl Renderer {
             );
             pixmap.apply_mask(&mask);
         }
+
+        target.draw_pixmap(
+            0,
+            0,
+            content.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        let pixmap = target;
 
         let card = if let Some(menu) = scene.menu {
             Some(self.paint_menu(layout, palette, menu, pixmap))
@@ -1259,6 +1291,93 @@ mod tests {
                 ..card.clone()
             },
             card,
+        }
+    }
+
+    #[test]
+    fn rounded_borders_survive_controls_and_repaints_on_every_edge() {
+        for side in [
+            DockSide::Left,
+            DockSide::Right,
+            DockSide::Top,
+            DockSide::Bottom,
+        ] {
+            for scale in [1, 2] {
+                let config = DockConfig {
+                    side,
+                    width: 30,
+                    border_radius: 15.0,
+                    border_outer_width: 2.0,
+                    border_inner_width: 2.0,
+                    ..DockConfig::default()
+                };
+                let layout = Layout::new(&config, 300, 300, scale);
+                let (width, height) = layout.pixel_size();
+                let mut pixmap = Pixmap::new(width, height).unwrap();
+                let scene = Scene {
+                    segments: &[],
+                    now_minute: Some(0.0),
+                    hovered: None,
+                    pinned: None,
+                    promoted: None,
+                    menu: None,
+                    day_offset_min: 0,
+                    hour_lines: true,
+                    button_hovered: false,
+                    add_hovered: false,
+                    back_label: "",
+                    side,
+                    palette: palette(),
+                };
+                let mut renderer = Renderer::default();
+                renderer.paint(&layout, &scene, &mut pixmap);
+                let first = pixmap.clone();
+                renderer.paint(&layout, &scene, &mut pixmap);
+                assert_eq!(
+                    first.data(),
+                    pixmap.data(),
+                    "repaint must not accumulate edge alpha"
+                );
+
+                // Build the expected border without any content. Controls
+                // must never change the pixels outside the content outline.
+                let mut border = Pixmap::new(width, height).unwrap();
+                let (x, y, w, h) = layout.strip_rect();
+                fill_rounded(
+                    &mut border,
+                    &layout,
+                    (x, y, w, h),
+                    15.0,
+                    layout.border_outer_color,
+                    1.0,
+                );
+                fill_rounded(
+                    &mut border,
+                    &layout,
+                    (x + 2.0, y + 2.0, w - 4.0, h - 4.0),
+                    13.0,
+                    layout.border_inner_color,
+                    1.0,
+                );
+                for (cx, cy) in [(x + 15.0, y + 15.0), (x + w - 15.0, y + h - 15.0)] {
+                    for py in ((cy - 15.0) as u32 * scale)..((cy + 15.0) as u32 * scale) {
+                        for px in ((cx - 15.0) as u32 * scale)..((cx + 15.0) as u32 * scale) {
+                            let dx = (px as f32 + 0.5) / scale as f32 - cx;
+                            let dy = (py as f32 + 0.5) / scale as f32 - cy;
+                            if dx * (cx - (x + w / 2.0)).signum() >= 0.0
+                                && dy * (cy - (y + h / 2.0)).signum() >= 0.0
+                                && dx.hypot(dy) > 13.0
+                            {
+                                assert_eq!(
+                                    pixmap.pixel(px, py),
+                                    border.pixel(px, py),
+                                    "{side:?} at {px},{py}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
