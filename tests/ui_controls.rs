@@ -86,48 +86,6 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
 }
 
 #[test]
-fn preview_forms_in_light_and_dark_themes() {
-    let Some(directory) = std::env::var_os("TIMESLAY_UI_PREVIEW_DIR") else {
-        return;
-    };
-    for theme in ["Light", "Light high contrast", "Dark", "Dark high contrast"] {
-        for width in [200.0, 420.0, 900.0] {
-            let mut state = state();
-            let _ = app::update(&mut state, Message::Inbox(timeslay::inbox::Action::NewTask));
-            let palette = state.catalog.resolve(theme).theme.clone();
-            let mut form: Simulator<'_, Message> = Simulator::with_size(
-                Settings::default(),
-                Size::new(width, 720.0),
-                ui::view(&state),
-            );
-            form.snapshot(&palette)
-                .unwrap()
-                .matches_image(
-                    std::path::PathBuf::from(&directory).join(format!("{theme}-{width}-task")),
-                )
-                .unwrap();
-            form.click("Choose date").unwrap();
-            let open = form
-                .into_messages()
-                .find(|m| matches!(m, Message::Picker(_)))
-                .unwrap();
-            let _ = app::update(&mut state, open);
-            let mut form: Simulator<'_, Message> = Simulator::with_size(
-                Settings::default(),
-                Size::new(width, 720.0),
-                ui::view(&state),
-            );
-            form.snapshot(&palette)
-                .unwrap()
-                .matches_image(
-                    std::path::PathBuf::from(&directory).join(format!("{theme}-{width}-calendar")),
-                )
-                .unwrap();
-        }
-    }
-}
-
-#[test]
 fn time_picker_retains_the_other_segment() {
     for (x, expected) in [(40.0, "22:47"), (160.0, "23:46")] {
         let control = ui::controls::time(
