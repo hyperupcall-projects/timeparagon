@@ -19,6 +19,7 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             )
         }
         NavigationMessage::PlanDaySelected => {
+            state.plan_view = CalendarView::Day;
             let was_planning = state.range_view_active();
             state.view = CalendarView::Day;
             let close = range_view_transition(state, was_planning, Task::none());
