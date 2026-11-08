@@ -67,10 +67,7 @@ fn travel_is_toggled_from_the_calendar_menu() {
             Size::new(width, 500.0),
             app::view(&state, iced::window::Id::unique()),
         );
-        assert!(
-            header.find("Actions").is_ok(),
-            "no Actions at {width}px"
-        );
+        assert!(header.find("Actions").is_ok(), "no Actions at {width}px");
         assert!(header.find("View").is_ok(), "no View at {width}px");
         assert!(
             header.find("Toggle Travel").is_err(),

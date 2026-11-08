@@ -134,7 +134,11 @@ pub fn overdue_tasks<'a>(
 }
 
 /// Whether `calendar_id` is the list that holds backlog tasks.
-pub fn is_backlog_list(settings: &CalendarSettings, calendars: &[Calendar], calendar_id: &str) -> bool {
+pub fn is_backlog_list(
+    settings: &CalendarSettings,
+    calendars: &[Calendar],
+    calendar_id: &str,
+) -> bool {
     if let Some(chosen) = &settings.backlog_list {
         return ids::bare_list(chosen) == ids::bare_list(calendar_id);
     }
@@ -532,7 +536,11 @@ fn task_card(
             fields.push(field("Location", plain(format!("📍 {}", place.name))));
         }
         if let Ok(Some(deadline)) = deadline::read_deadline(&task.details.description) {
-            let class = if tb::overdue(task) { "plan-missing" } else { "" };
+            let class = if tb::overdue(task) {
+                "plan-missing"
+            } else {
+                ""
+            };
             fields.push(field(
                 "Deadline",
                 rsx! { span { class: "{class}", "{deadline.value()}" } },
@@ -581,7 +589,10 @@ fn Invitations(
                 return Ok(Vec::new());
             };
             worker(move || {
-                calendar::sync_invitations(&calendar::GoogleClient::from_settings(&settings), &primary)
+                calendar::sync_invitations(
+                    &calendar::GoogleClient::from_settings(&settings),
+                    &primary,
+                )
             })
             .await
         }
@@ -875,7 +886,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        assert_eq!(titles(inbox_tasks(&events, &settings, &calendars)), ["Waiting"]);
+        assert_eq!(
+            titles(inbox_tasks(&events, &settings, &calendars)),
+            ["Waiting"]
+        );
         assert_eq!(titles(today_tasks(&events, &settings, now)), ["Planned"]);
         assert_eq!(titles(overdue_tasks(&events, &settings, now)), ["Late"]);
         assert_eq!(

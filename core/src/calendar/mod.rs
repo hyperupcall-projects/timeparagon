@@ -1489,12 +1489,11 @@ impl Store {
     }
 
     pub fn apply_snapshot(&mut self, mut snapshot: Snapshot) {
-        if let Some(path) = &self.day_cache {
-            if let Err(e) =
+        if let Some(path) = &self.day_cache
+            && let Err(e) =
                 operations::overlay(path, &mut snapshot.events, Some(snapshot.fetched_at))
-            {
-                log::warn!("{e}");
-            }
+        {
+            log::warn!("{e}");
         }
         snapshot
             .events
@@ -1538,12 +1537,11 @@ impl Store {
     /// Install a range fetch as ordinary per-day snapshots, retaining all tasks
     /// on each day just as a day fetch does.
     pub fn apply_week_snapshot(&mut self, mut snapshot: Snapshot, days: &[NaiveDate]) {
-        if let Some(path) = &self.day_cache {
-            if let Err(e) =
+        if let Some(path) = &self.day_cache
+            && let Err(e) =
                 operations::overlay(path, &mut snapshot.events, Some(snapshot.fetched_at))
-            {
-                log::warn!("{e}");
-            }
+        {
+            log::warn!("{e}");
         }
         self.visible_days.extend_from_slice(days);
         self.visible_days.sort_unstable();
@@ -2710,7 +2708,7 @@ pub fn save_event_scope(
     }
     operations::enqueue(
         operations::Job::Edit {
-            original: original.clone(),
+            original: Box::new(original.clone()),
             draft: draft.clone(),
             scope,
             description: description.into(),

@@ -1447,7 +1447,10 @@ mod tests {
         let path = directory.path().join("config.toml");
         fs::write(&path, "[calendar]\nsync_minutes = 30\n").unwrap();
 
-        for (inbox, overdue) in InboxSort::ALL.into_iter().zip(InboxSort::ALL.into_iter().rev()) {
+        for (inbox, overdue) in InboxSort::ALL
+            .into_iter()
+            .zip(InboxSort::ALL.into_iter().rev())
+        {
             save_task_sorts_at(&path, inbox, overdue).unwrap();
             let config: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(config.calendar.sync_minutes, 30);

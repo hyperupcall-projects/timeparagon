@@ -19,7 +19,7 @@ pub fn replaying() -> bool {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Job {
     Edit {
-        original: Event,
+        original: Box<Event>,
         draft: EditDraft,
         scope: SaveScope,
         description: String,
@@ -90,7 +90,7 @@ pub enum Job {
         habit: String,
     },
     CreateTask {
-        task: Event,
+        task: Box<Event>,
         notes: String,
         due: Option<NaiveDate>,
         metadata: Option<crate::timeblocking::Metadata>,
@@ -276,11 +276,27 @@ fn enqueue_in(
     }
     (|| -> rusqlite::Result<()> {
         tx.execute("INSERT INTO google_entities(id,event,acknowledged_at) VALUES(?1,?2,NULL) ON CONFLICT(id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL",params![entity,saved])?;
-        if event.is_none() {tx.execute("DELETE FROM google_task_records WHERE id=?1",[id])?;}
-        if let Some(event)=event {if event.is_task() {tx.execute("INSERT INTO google_task_records(id,event) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET event=excluded.event",params![event.id,serde_json::to_string(event).unwrap()])?;} if let Some(data)=&event.details.task_data {
-            tx.execute("INSERT INTO tasks(id,metadata,legacy_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata", params![data.id,serde_json::to_string(&data.metadata).unwrap(),data.legacy_key])?;
-            tx.execute("INSERT INTO task_aliases(source,task_id) VALUES(?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id",params![crate::timeblocking::block_key(event),data.id])?;
-        }}
+        if event.is_none() {
+            tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])?;
+        }
+        if let Some(event) = event {
+            if event.is_task() {
+                tx.execute(
+                    "INSERT INTO google_task_records(id,event) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET event=excluded.event",
+                    params![event.id, serde_json::to_string(event).unwrap()],
+                )?;
+            }
+            if let Some(data) = &event.details.task_data {
+                tx.execute(
+                    "INSERT INTO tasks(id,metadata,legacy_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
+                    params![data.id, serde_json::to_string(&data.metadata).unwrap(), data.legacy_key],
+                )?;
+                tx.execute(
+                    "INSERT INTO task_aliases(source,task_id) VALUES(?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id",
+                    params![crate::timeblocking::block_key(event), data.id],
+                )?;
+            }
+        }
         tx.execute("DELETE FROM google_operations WHERE entity=?1 AND kind=?2 AND error IS NOT NULL",params![entity,kind])?;
         tx.execute("INSERT INTO google_operations(kind,payload,entity,created_at,version) VALUES(?1,?2,?3,?4,?5)",params![kind,payload,entity,crate::clock::now().to_rfc3339(),JOB_VERSION])?;
         tx.commit()
@@ -738,31 +754,31 @@ fn remap(v: &mut serde_json::Value, a: &[(String, String, String)]) {
             for (id_key, calendar_key, prefix) in
                 [("id", "calendar_id", "task:"), ("task_id", "list_id", "")]
             {
-                if let Some(id) = obj.get(id_key).and_then(|v| v.as_str()).map(str::to_owned) {
-                    if let Some((_, remote, calendar)) = a.iter().find(|(local, remote, _)| {
+                if let Some(id) = obj.get(id_key).and_then(|v| v.as_str()).map(str::to_owned)
+                    && let Some((_, remote, calendar)) = a.iter().find(|(local, remote, _)| {
                         local != remote && (id == *local || id == ids::event_id(local))
-                    }) {
-                        let full = id.starts_with(ids::TASK);
-                        obj.insert(
-                            id_key.into(),
-                            if full {
-                                ids::event_id(remote)
-                            } else {
-                                remote.clone()
-                            }
-                            .into(),
-                        );
-                        let calendar = if prefix.is_empty() {
-                            ids::bare_list(calendar).to_owned()
+                    })
+                {
+                    let full = id.starts_with(ids::TASK);
+                    obj.insert(
+                        id_key.into(),
+                        if full {
+                            ids::event_id(remote)
                         } else {
-                            calendar.clone()
-                        };
-                        if obj.contains_key(calendar_key) {
-                            obj.insert(calendar_key.into(), calendar.clone().into());
+                            remote.clone()
                         }
-                        if obj.contains_key("calendar") {
-                            obj.insert("calendar".into(), calendar.into());
-                        }
+                        .into(),
+                    );
+                    let calendar = if prefix.is_empty() {
+                        ids::bare_list(calendar).to_owned()
+                    } else {
+                        calendar.clone()
+                    };
+                    if obj.contains_key(calendar_key) {
+                        obj.insert(calendar_key.into(), calendar.clone().into());
+                    }
+                    if obj.contains_key("calendar") {
+                        obj.insert("calendar".into(), calendar.into());
                     }
                 }
             }
@@ -1093,7 +1109,7 @@ pub fn create_task(
     task.details.task_data = Some(data);
     enqueue(
         Job::CreateTask {
-            task: task.clone(),
+            task: Box::new(task.clone()),
             notes: notes.into(),
             due,
             metadata,
@@ -1121,6 +1137,80 @@ pub(super) fn cache_tasks(events: &[Event], replace: bool) -> Result<(), String>
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// Advance acknowledged projections only from a fetch that began after the
+/// acknowledgement. Older concurrent fetches continue to see the newer row.
+pub(super) fn observe_range(
+    path: &std::path::Path,
+    events: &[Event],
+    first: NaiveDate,
+    last: NaiveDate,
+    fetched: DateTime<Local>,
+) -> Result<(), String> {
+    let mut db = task_db::Database::open(path)?;
+    let tx = db
+        .connection()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let records = {
+        let mut q=tx.prepare("SELECT id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL").map_err(|e|e.to_string())?;
+        q.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
+    };
+    for (key, json, ack) in records {
+        if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
+            continue;
+        }
+        let Some((_, id)) = key.split_once('\n') else {
+            continue;
+        };
+        let current = events.iter().find(|e| e.id == id);
+        let old = json
+            .as_ref()
+            .map(|j| serde_json::from_str::<Event>(j))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        let covered = current.is_some()
+            || old.as_ref().is_some_and(|e| {
+                e.is_task() || (e.start.date_naive() <= last && e.end.date_naive() >= first)
+            });
+        if covered {
+            if let Some(data) = current.and_then(|e| e.details.task_data.as_ref()) {
+                tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",params![data.id,serde_json::to_string(data).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            }
+            let json = current
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![key,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+        }
+    }
+    prune_observed(&tx, fetched).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// How long a local snapshot is kept after a Google fetch showed the item as
+/// Google has it. It only guards against a fetch that started before the edit
+/// was confirmed finishing after it, and no request takes anywhere near this.
+const OBSERVED_RETENTION: chrono::Duration = chrono::Duration::hours(1);
+
+/// Forgets local snapshots that a fetch has since shown Google agrees with.
+/// Without this every item ever edited kept a row that every poll re-read.
+fn prune_observed(tx: &rusqlite::Connection, now: DateTime<Local>) -> rusqlite::Result<usize> {
+    let cutoff = (now - OBSERVED_RETENTION).with_timezone(&Utc).to_rfc3339();
+    tx.execute(
+        "DELETE FROM google_entities WHERE observed_at IS NOT NULL AND observed_at < ?1 AND NOT EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=google_entities.id AND o.dead_at IS NULL)",
+        [cutoff],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,7 +1227,7 @@ mod tests {
         enqueue_in(
             path,
             Job::Edit {
-                original: event.clone(),
+                original: Box::new(event.clone()),
                 draft,
                 scope: SaveScope::Current,
                 description: String::new(),
@@ -1164,7 +1254,7 @@ mod tests {
         enqueue_in(
             path,
             Job::Edit {
-                original: event.clone(),
+                original: Box::new(event.clone()),
                 draft,
                 scope: SaveScope::Current,
                 description: String::new(),
@@ -1742,78 +1832,4 @@ mod tests {
         })
         .unwrap();
     }
-}
-
-/// Advance acknowledged projections only from a fetch that began after the
-/// acknowledgement. Older concurrent fetches continue to see the newer row.
-pub(super) fn observe_range(
-    path: &std::path::Path,
-    events: &[Event],
-    first: NaiveDate,
-    last: NaiveDate,
-    fetched: DateTime<Local>,
-) -> Result<(), String> {
-    let mut db = task_db::Database::open(path)?;
-    let tx = db
-        .connection()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    let records = {
-        let mut q=tx.prepare("SELECT id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL").map_err(|e|e.to_string())?;
-        q.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?
-    };
-    for (key, json, ack) in records {
-        if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
-            continue;
-        }
-        let Some((_, id)) = key.split_once('\n') else {
-            continue;
-        };
-        let current = events.iter().find(|e| e.id == id);
-        let old = json
-            .as_ref()
-            .map(|j| serde_json::from_str::<Event>(j))
-            .transpose()
-            .map_err(|e| e.to_string())?;
-        let covered = current.is_some()
-            || old.as_ref().is_some_and(|e| {
-                e.is_task() || (e.start.date_naive() <= last && e.end.date_naive() >= first)
-            });
-        if covered {
-            if let Some(data) = current.and_then(|e| e.details.task_data.as_ref()) {
-                tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",params![data.id,serde_json::to_string(data).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
-            }
-            let json = current
-                .map(serde_json::to_string)
-                .transpose()
-                .map_err(|e| e.to_string())?;
-            tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![key,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
-        }
-    }
-    prune_observed(&tx, fetched).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
-}
-
-/// How long a local snapshot is kept after a Google fetch showed the item as
-/// Google has it. It only guards against a fetch that started before the edit
-/// was confirmed finishing after it, and no request takes anywhere near this.
-const OBSERVED_RETENTION: chrono::Duration = chrono::Duration::hours(1);
-
-/// Forgets local snapshots that a fetch has since shown Google agrees with.
-/// Without this every item ever edited kept a row that every poll re-read.
-fn prune_observed(tx: &rusqlite::Connection, now: DateTime<Local>) -> rusqlite::Result<usize> {
-    let cutoff = (now - OBSERVED_RETENTION).with_timezone(&Utc).to_rfc3339();
-    tx.execute(
-        "DELETE FROM google_entities WHERE observed_at IS NOT NULL AND observed_at < ?1 AND NOT EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=google_entities.id AND o.dead_at IS NULL)",
-        [cutoff],
-    )
 }

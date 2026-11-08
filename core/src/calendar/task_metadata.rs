@@ -115,10 +115,10 @@ pub fn load(
     event: &super::Event,
     mut publish: impl FnMut(&TaskData) -> Result<(), String>,
 ) -> Result<TaskData, String> {
-    if !super::operations::replaying() {
-        if let Some(data) = database.pending_task_data(event)? {
-            return Ok(data);
-        }
+    if !super::operations::replaying()
+        && let Some(data) = database.pending_task_data(event)?
+    {
+        return Ok(data);
     }
     if let Some(mut data) = read(&event.details.description)? {
         // Tasks.move preserves notes but may change the native task ID. Repair

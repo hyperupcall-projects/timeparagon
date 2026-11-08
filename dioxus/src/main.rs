@@ -227,7 +227,7 @@ fn App() -> Element {
     let mut show_scratch = use_signal(|| None::<scratch::Page>);
     let mut show_more = use_signal(|| false);
     let mut show_operations = use_signal(|| false);
-    let mut google_operations = use_signal(|| Vec::<calendar::operations::Operation>::new());
+    let mut google_operations = use_signal(Vec::<calendar::operations::Operation>::new);
     calendar::operations::start();
     let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
     let search_state = use_signal(Search::default);
@@ -460,12 +460,11 @@ fn App() -> Element {
             .filter(|snapshot| snapshot.day == requested_day),
     };
     drop(resource);
-    if let (Some(snapshot), Some(path)) = (&mut snapshot, timeslay_core::task_db::path()) {
-        if let Err(error) =
+    if let (Some(snapshot), Some(path)) = (&mut snapshot, timeslay_core::task_db::path())
+        && let Err(error) =
             calendar::operations::overlay(&path, &mut snapshot.events, Some(snapshot.fetched_at))
-        {
-            eprintln!("Could not load local edits: {error}");
-        }
+    {
+        eprintln!("Could not load local edits: {error}");
     }
 
     let model = snapshot
@@ -617,51 +616,59 @@ fn App() -> Element {
 
     // View (Calendars and Filter) and Actions (Sync now), beside the picker.
     let view_lit = view_sheet().is_some() || searching;
-    let header_buttons = move || rsx! {
-        button {
-            class: if view_lit { "btn primary" } else { "btn" },
-            aria_expanded: view_sheet().is_some().to_string(),
-            onclick: move |_| {
-                calendars_error.set(None);
-                show_actions.set(false);
-                view_sheet.set(Some(ViewTab::Calendars));
-            },
-            "View"
-        }
-        div { class: "month-anchor",
+    let header_buttons = move || {
+        rsx! {
             button {
-                class: if show_actions() { "btn primary" } else { "btn" },
-                aria_expanded: show_actions().to_string(),
-                onclick: move |_| show_actions.set(!show_actions()),
-                "Actions"
+                class: if view_lit { "btn primary" } else { "btn" },
+                aria_expanded: view_sheet().is_some().to_string(),
+                onclick: move |_| {
+                    calendars_error.set(None);
+                    show_actions.set(false);
+                    view_sheet.set(Some(ViewTab::Calendars));
+                },
+                "View"
             }
-            if show_actions() {
-                div { class: "month-dismiss", onclick: move |_| show_actions.set(false) }
-                div { class: "actions-menu", role: "menu", aria_label: "Actions",
-                    button {
-                        class: "btn",
-                        disabled: pending || !signed_in(),
-                        onclick: move |_| {
-                            show_actions.set(false);
-                            revision.set(revision() + 1);
-                        },
-                        if pending { "Syncing…" } else { "Sync now" }
+            div { class: "month-anchor",
+                button {
+                    class: if show_actions() { "btn primary" } else { "btn" },
+                    aria_expanded: show_actions().to_string(),
+                    onclick: move |_| show_actions.set(!show_actions()),
+                    "Actions"
+                }
+                if show_actions() {
+                    div { class: "month-dismiss", onclick: move |_| show_actions.set(false) }
+                    div { class: "actions-menu", role: "menu", aria_label: "Actions",
+                        button {
+                            class: "btn",
+                            disabled: pending || !signed_in(),
+                            onclick: move |_| {
+                                show_actions.set(false);
+                                revision.set(revision() + 1);
+                            },
+                            if pending { "Syncing…" } else { "Sync now" }
+                        }
                     }
                 }
             }
         }
     };
-    let status = move || rsx! {
-        if google_operations().iter().any(|operation| operation.pending()) {span { class: "hint", role: "status", "Saving…" }}
-        if google_operations().iter().any(|operation| !operation.pending()) {span { class: "hint", role: "status", "Some changes could not be saved" }}
-        if pending {
-            p { class: "day-loading", "Loading..." }
+    let status = move || {
+        rsx! {
+            if google_operations().iter().any(|operation| operation.pending()) {span { class: "hint", role: "status", "Saving…" }}
+            if google_operations().iter().any(|operation| !operation.pending()) {span { class: "hint", role: "status", "Some changes could not be saved" }}
+            if pending {
+                p { class: "day-loading", "Loading..." }
+            }
         }
     };
     // The day's picker is labelled with the day in view, and is the way to
     // move between days.
     // Planning a day keeps the grid beside its lists where there is room.
-    let day_header_class = if page() == Page::Plan { "wide-only" } else { "" };
+    let day_header_class = if page() == Page::Plan {
+        "wide-only"
+    } else {
+        ""
+    };
     let day_header = {
         rsx! {
             div { class: "day-header {day_header_class}",
@@ -734,10 +741,18 @@ fn App() -> Element {
             // Planning a day shows its list, with the grid beside it only
             // where there is room; Do shows the grid alone.
             let lists = (page() == Page::Plan)
-                .then(|| snapshot.as_ref())
+                .then_some(snapshot.as_ref())
                 .flatten()
                 .map(|snapshot| {
-                    task_list(plan_tab(), snapshot, config, signed_in(), revision, editing, show_create)
+                    task_list(
+                        plan_tab(),
+                        snapshot,
+                        config,
+                        signed_in(),
+                        revision,
+                        editing,
+                        show_create,
+                    )
                 });
             let view = if lists.is_some() { "tasks" } else { "calendar" };
             rsx! {
@@ -2499,7 +2514,13 @@ mod sheet_tests {
         );
         assert_offers(
             &render_list(|| list_app(PlanTab::Inbox)),
-            &["Inbox", "Tasks waiting to be triaged", ">New task<", "Sort by", "Nothing to triage"],
+            &[
+                "Inbox",
+                "Tasks waiting to be triaged",
+                ">New task<",
+                "Sort by",
+                "Nothing to triage",
+            ],
         );
         assert_offers(
             &render_list(|| list_app(PlanTab::Today)),
@@ -2508,7 +2529,13 @@ mod sheet_tests {
         let backlog = render_list(|| list_app(PlanTab::Backlog));
         assert_offers(
             &backlog,
-            &["Backlog", "Search tasks", "No tasks on the Backlog list", "Next week or two", "Never"],
+            &[
+                "Backlog",
+                "Search tasks",
+                "No tasks on the Backlog list",
+                "Next week or two",
+                "Never",
+            ],
         );
         assert!(!backlog.contains("Sort by"));
     }
