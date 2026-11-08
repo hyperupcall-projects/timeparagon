@@ -1,0 +1,40 @@
+amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
+
+local linters = new Mapping<String, Step> {
+  ["clippy"] {
+    glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
+    exclude = List("vendor/**")
+    // Cargo must analyze whole crates, but the helper only edits selected files.
+    check = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+    fix = "python3 scripts/clippy-fix.py {{files}}"
+    check_first = false
+    exclusive = true
+  }
+  ["rustfmt"] {
+    glob = List("**/*.rs")
+    exclude = List("vendor/**")
+    depends = List("clippy")
+    // Without skip_children, formatting lib.rs/main.rs also formats other modules.
+    check = "rustfmt --edition 2024 --config skip_children=true --check {{files}}"
+    fix = "rustfmt --edition 2024 --config skip_children=true {{files}}"
+  }
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stage = true
+    stash = "git"
+    steps = linters
+  }
+  ["check"] {
+    fix = false
+    stage = false
+    steps = linters
+  }
+  ["fix"] {
+    fix = true
+    stage = false
+    steps = linters
+  }
+}
