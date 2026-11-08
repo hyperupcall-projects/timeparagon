@@ -863,10 +863,11 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
         state.view_menu_open = false;
     }
     let mut ui = render(&state, Size::new(180.0, 240.0));
-    let month = format!(
-        "{} ▾",
-        timeslay::calendar::month_day_label(state.calendar.day)
-    );
+    // The week view's picker is labelled with the range on screen, written
+    // short in a narrow window.
+    let days = state.config.calendar.week_dates(state.week_anchor);
+    let (first, last) = (days[0], *days.last().unwrap());
+    let month = format!("{} – {} ▾", first.format("%-m/%-d"), last.format("%-m/%-d"));
     let month = ui.find(month)?.bounds();
     assert!(month.y + month.height < 240.0, "month button {month:?}");
     drop(ui);
@@ -1301,5 +1302,68 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
             )?;
         }
     }
+    Ok(())
+}
+
+#[test]
+fn picker_dot_picks_today_and_title_names_the_month() -> Result<(), Error> {
+    let mut state = state();
+    state.overview_month_open = true;
+    state.overview_month = date(1);
+    let mut ui = render(&state, Size::new(900.0, 700.0));
+    assert!(ui.find(timeslay::calendar::month_heading(date(1))).is_ok());
+    let _ = ui.click("●")?;
+    let today = timeslay::calendar::day_at(
+        timeslay::clock::now(),
+        state.config.calendar.day_start_hour(),
+    );
+    assert!(ui.into_messages().any(|m| matches!(
+        m,
+        Message::Calendar(CalendarMessage::CalendarMonthDayPicked(MonthPicker::Overview, day))
+            if day == today
+    )));
+    Ok(())
+}
+
+#[test]
+fn picker_hover_survives_gaps_between_days_but_not_leaving_the_grid() -> Result<(), Error> {
+    let mut state = state();
+    state.overview_month_open = true;
+    state.overview_month = date(1);
+    let mut ui = render(&state, Size::new(900.0, 700.0));
+    let fourteen = ui.find("14")?.bounds();
+    let fifteen = ui.find("15")?.bounds();
+    let weekday = ui.find("M")?.bounds().center();
+    let gap = iced::Point::new(
+        (fourteen.x + fourteen.width + fifteen.x) / 2.0,
+        fifteen.center_y(),
+    );
+    let mut moved = |position| {
+        ui.point_at(position);
+        ui.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+            position,
+        })]);
+    };
+    moved(fifteen.center());
+    moved(gap);
+    let cleared = |messages: &[Message]| {
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::Calendar(CalendarMessage::WeekHover(None))))
+    };
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(!cleared(&messages), "a gap between days should keep the range");
+
+    let mut ui = render(&state, Size::new(900.0, 700.0));
+    let mut moved = |position| {
+        ui.point_at(position);
+        ui.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+            position,
+        })]);
+    };
+    moved(fifteen.center());
+    moved(weekday);
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(cleared(&messages), "the weekday row should go back to the view");
     Ok(())
 }

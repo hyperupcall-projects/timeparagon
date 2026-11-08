@@ -6,60 +6,58 @@ use iced::widget::column;
 /// The top of the calendar: the month picker and the way into the calendar
 /// menu.
 ///
-/// In a range view the heading sits between the month picker and the menu and
-/// takes whatever room is left over, so the whole range is readable even when
-/// the text is large. The settings are reached through the menu rather than
-/// from here, because a narrow window has room for one button beside the
-/// heading and not for two.
+/// In the day view the picker is labelled with the day in view; in the week
+/// view it is labelled with the range on screen, and the picker is the way to
+/// move through weeks. Every button sits at the left. The settings are reached
+/// through the menu rather than from here, because a narrow window has room
+/// for few buttons.
 pub(super) fn header<'a>(
     state: &'a State,
     metrics: &Metrics,
     weekly: bool,
 ) -> Element<'a, Message> {
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
-    let day = if weekly {
-        state.week_anchor
-    } else {
-        state.calendar.day
-    };
-    let heading = weekly.then(|| {
-        let days = state.config.calendar.week_dates(day);
-        let format = if metrics.breakpoint.is_compact() {
-            "%-m/%-d"
+    let (label, shows_today) = if weekly {
+        let days = state.config.calendar.week_dates(state.week_anchor);
+        let first = *days.first().unwrap();
+        let last = *days.last().unwrap();
+        let label = if metrics.breakpoint.is_compact() {
+            format!("{} – {}", first.format("%-m/%-d"), last.format("%-m/%-d"))
         } else {
-            "%b %-d"
+            format!(
+                "{} – {}",
+                calendar::month_day_label(first),
+                calendar::month_day_label(last)
+            )
         };
-        format!(
-            "{} – {}",
-            days.first().unwrap().format(format),
-            days.last().unwrap().format(format)
+        (label, days.contains(&today))
+    } else {
+        (
+            calendar::month_day_label(state.calendar.day),
+            state.calendar.day == today,
         )
-    });
+    };
 
     let month_open = if weekly {
         state.overview_month_open
     } else {
         state.calendar.month_open
     };
-    let month = button(
-        text(format!("{} ▾", calendar::month_day_label(day)))
-            .size(metrics.label())
-            .center(),
-    )
-    .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled(
-        if weekly {
-            MonthPicker::Overview
+    let month = button(text(format!("{label} ▾")).size(metrics.label()).center())
+        .on_press(Message::Calendar(CalendarMessage::CalendarMonthToggled(
+            if weekly {
+                MonthPicker::Overview
+            } else {
+                MonthPicker::Panel
+            },
+        )))
+        .style(if shows_today {
+            crate::ui::controls::subtle_primary
+        } else if month_open {
+            crate::ui::controls::primary
         } else {
-            MonthPicker::Panel
-        },
-    )))
-    .style(if day == today {
-        crate::ui::controls::subtle_primary
-    } else if month_open {
-        crate::ui::controls::primary
-    } else {
-        crate::ui::controls::secondary
-    });
+            crate::ui::controls::secondary
+        });
 
     // Alarm setting mode turns the day view into a place to click a time, so
     // the button that enters it is lit for as long as it lasts.
@@ -81,81 +79,17 @@ pub(super) fn header<'a>(
 
     let search = search_button(state, metrics);
 
-    let day: Option<Element<'a, Message>> = heading.map(|heading| {
-        let heading = text(heading)
-            .size(metrics.label() + 3.0)
-            .font(Font {
-                weight: Weight::Bold,
-                ..Font::DEFAULT
-            })
-            .center()
-            .width(Fill);
-        row![
-            nav_button(
-                "◀",
-                Message::Calendar(CalendarMessage::CalendarDayShift(-i64::from(
-                    state.config.calendar.weekly_step()
-                ))),
-                metrics
-            ),
-            heading,
-            nav_button(
-                "▶",
-                Message::Calendar(CalendarMessage::CalendarDayShift(i64::from(
-                    state.config.calendar.weekly_step()
-                ))),
-                metrics
-            ),
-        ]
-        .spacing(metrics.spacing)
-        .align_y(Alignment::Center)
-        .width(Fill)
-        .into()
-    });
-
-    if let Some(day) = day {
-        return match header_lines(metrics, true) {
-            // Narrower still, the four buttons do not fit on a line of their own.
-            3 => column![
-                day,
-                row![month, Space::new().width(Fill), set_alarm]
-                    .spacing(metrics.spacing)
-                    .align_y(Alignment::Center),
-                row![Space::new().width(Fill), search, menu]
-                    .spacing(metrics.spacing)
-                    .align_y(Alignment::Center),
-            ]
-            .spacing(metrics.spacing)
-            .into(),
-            // The month picker, Set Alarm, Search, Menu and the date do not fit
-            // side by side at a narrow width, so the date gets a line to itself
-            // and is never squeezed into a few letters per row.
-            2 => column![
-                day,
-                row![month, Space::new().width(Fill), set_alarm, search, menu]
-                    .spacing(metrics.spacing)
-                    .align_y(Alignment::Center),
-            ]
-            .spacing(metrics.spacing)
-            .into(),
-            _ => row![month, day, set_alarm, search, menu]
-                .spacing(metrics.spacing)
-                .align_y(Alignment::Center)
-                .into(),
-        };
-    }
-
-    if metrics.size.width >= TWO_LINE_HEADER {
-        row![month, Space::new().width(Fill), set_alarm, search, menu]
+    if header_lines(metrics, weekly) == 1 {
+        row![month, set_alarm, search, menu, Space::new().width(Fill)]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into()
     } else {
         column![
-            row![month, Space::new().width(Fill), set_alarm]
+            row![month, set_alarm, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
-            row![Space::new().width(Fill), search, menu]
+            row![search, menu, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
         ]
@@ -164,30 +98,21 @@ pub(super) fn header<'a>(
     }
 }
 
-/// The narrowest a calendar can be and still hold the month picker, the date,
-/// Set Alarm, Search and Menu on one line with the date readable.
-pub(super) const SINGLE_LINE_HEADER: f32 = 540.0;
+/// The narrowest a week view can be and still hold the range picker, Set
+/// Alarm, Search and Menu on one line.
+pub(super) const SINGLE_LINE_HEADER: f32 = 420.0;
 /// The narrowest a calendar can be and still hold all four buttons on one line.
 pub(super) const TWO_LINE_HEADER: f32 = 320.0;
 
-/// How many lines the header takes. A range view has a date heading that needs
-/// its own line in narrow windows; the day view has no heading, so it only
-/// splits its buttons below [`TWO_LINE_HEADER`].
+/// How many lines the header takes. The week view's picker carries a whole
+/// range, so its buttons split onto two lines sooner than the day view's.
 pub(super) fn header_lines(metrics: &Metrics, weekly: bool) -> u8 {
-    if !weekly {
-        return if metrics.size.width >= TWO_LINE_HEADER {
-            1
-        } else {
-            2
-        };
-    }
-    if metrics.size.width >= SINGLE_LINE_HEADER {
-        1
-    } else if metrics.size.width >= TWO_LINE_HEADER {
-        2
+    let single = if weekly {
+        SINGLE_LINE_HEADER
     } else {
-        3
-    }
+        TWO_LINE_HEADER
+    };
+    if metrics.size.width >= single { 1 } else { 2 }
 }
 
 /// A square button for stepping a day or a month at a time.
