@@ -15,6 +15,9 @@ pub enum Kind {
     /// A cache that a later sync can rebuild. Follows the umask, and is not
     /// flushed, since losing it to a crash only costs a re-fetch.
     Cache,
+    /// The user's own document, such as a note: follows the umask like any
+    /// file they make, and is on disk before the call returns.
+    Document,
 }
 
 /// Writes `bytes` to `path` through a temporary file beside it, so a crash
@@ -43,7 +46,7 @@ pub fn write_atomic_with(
     let mut builder = Builder::new();
     builder.prefix(&prefix).suffix(".tmp");
     #[cfg(unix)]
-    if kind == Kind::Cache {
+    if kind != Kind::Private {
         use std::os::unix::fs::PermissionsExt;
         // Requested at creation, so the kernel applies the umask.
         builder.permissions(fs::Permissions::from_mode(0o666));
@@ -53,11 +56,11 @@ pub fn write_atomic_with(
     let mut temporary = builder.tempfile_in(parent)?;
     temporary.write_all(bytes)?;
     finish(temporary.as_file())?;
-    if kind == Kind::Private {
+    if kind != Kind::Cache {
         temporary.as_file().sync_all()?;
     }
     temporary.persist(path).map_err(|error| error.error)?;
-    if kind == Kind::Private {
+    if kind != Kind::Cache {
         // The rename itself has to reach the disk as well.
         File::open(parent)?.sync_all()?;
     }

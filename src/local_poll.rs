@@ -4,9 +4,10 @@
 //! all write to the database behind the panel's back, so the panel looks every
 //! couple of seconds. That look used to happen on the UI thread and reread
 //! everything each time: the queued edits for every cached day, the whole
-//! habits and notes documents, and the queue. Now a worker thread reads the
-//! change counters (see [`timeslay_core::local_changes`]) and rereads only
-//! what moved, and the UI thread only applies the result.
+//! habits and notes, and the queue. Now a worker thread reads the change
+//! counters (see [`timeslay_core::local_changes`]) and a fingerprint of the
+//! notes directory, rereads only what moved, and the UI thread only applies
+//! the result.
 //!
 //! Because the read happens off the UI thread, the user can change something
 //! while it is in flight. A read is therefore only applied when nothing it
@@ -31,7 +32,8 @@ pub struct Poll {
     overlay: Option<i64>,
     queue: Option<i64>,
     habits: Option<i64>,
-    notes: Option<i64>,
+    /// The notes directory's [`timeslay_core::notes::fingerprint`].
+    notes: Option<u64>,
     /// Read the queued edits again even though their counter has not moved,
     /// because this process just wrote some and wants them shown at once.
     force_overlay: bool,
@@ -47,7 +49,8 @@ pub struct Polled {
     /// The habits' and notes' local revisions when the read started.
     habits_revision: u64,
     notes_revision: u64,
-    notes: Option<Result<Option<timeslay_core::notes::Library>, String>>,
+    notes: Option<Result<timeslay_core::notes::Library, String>>,
+    notes_fingerprint: u64,
     /// Local edits database sync has not sent yet.
     database_unsent: usize,
 }
@@ -64,7 +67,7 @@ pub fn start(state: &mut State) -> Task<Message> {
     let habits_path = state.habits.path().map(PathBuf::from);
     let notes_path = state
         .notes
-        .shared_path()
+        .directory()
         .filter(|_| state.notes.accepts_shared())
         .map(PathBuf::from);
     let previous = (
@@ -88,6 +91,9 @@ pub fn start(state: &mut State) -> Task<Message> {
         };
         let (overlay, queue, habits, notes) = previous;
         let moved = |seen: Option<i64>, now: i64| seen != Some(now);
+        let notes_fingerprint = notes_path
+            .as_deref()
+            .map_or(0, timeslay_core::notes::fingerprint);
         Some(Polled {
             counters,
             overlay: overlay_path
@@ -106,14 +112,11 @@ pub fn start(state: &mut State) -> Task<Message> {
             habits_revision,
             notes_revision,
             notes: notes_path
-                .filter(|_| moved(notes, counters.notes))
+                .filter(|_| notes != Some(notes_fingerprint))
                 .map(|path| {
-                    timeslay_core::task_db::read_document(
-                        &path,
-                        timeslay_core::task_db::keys::NOTES,
-                    )
-                    .map_err(|error| error.to_string())
+                    timeslay_core::notes::Library::read(&path).map_err(|error| error.to_string())
                 }),
+            notes_fingerprint,
             database_unsent: timeslay_core::database_sync::unsent_edits(),
         })
     })
@@ -134,6 +137,7 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
         habits_revision,
         notes_revision,
         notes,
+        notes_fingerprint,
         database_unsent,
     } = *polled;
     state.database_unsent = database_unsent;
@@ -178,10 +182,8 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
     match notes {
         Some(_) if !state.notes.accepts_shared() || state.notes.revision() != notes_revision => {}
         Some(Ok(library)) => {
-            if let Some(library) = library {
-                state.notes.adopt_shared(library);
-            }
-            state.poll.notes = Some(counters.notes);
+            state.notes.adopt_shared(library);
+            state.poll.notes = Some(notes_fingerprint);
         }
         Some(Err(error)) => log::warn!("could not reload notes: {error}"),
         None => {}
@@ -216,6 +218,7 @@ mod tests {
             habits_revision: revision,
             notes_revision: state.notes.revision(),
             notes: None,
+            notes_fingerprint: 0,
             database_unsent: 0,
         })
     }

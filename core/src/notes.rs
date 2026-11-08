@@ -1,9 +1,16 @@
-//! Markdown notes stored in SQLite and replicated through Turso.
-//! Local saves enter the database edit journal; the sync worker handles delivery.
+//! Markdown notes, one `.md` file per note in the directory set by
+//! `[notes] directory` in `config.toml`.
+//!
+//! A note's file name is its title. Its color and connections, when it has
+//! any, are kept in front matter at the top of the file (see [`files`]), so
+//! the directory reads well in any other Markdown editor. Nothing about notes
+//! is kept in the database; [`migrate_database`] moves notes an older build
+//! kept there into the directory.
 
+mod files;
 pub mod markdown;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::NaiveDate;
@@ -110,11 +117,9 @@ impl Link {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
-    /// The stable ID used by the editor and note connections.
+    /// The stable ID used by the editor while the app runs. It is not saved:
+    /// a note read from disk is identified by its file name.
     pub id: String,
-    /// Retained for existing Turso item identities; never used to access Drive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drive_id: Option<String>,
     pub title: String,
     #[serde(default)]
     pub body: String,
@@ -128,6 +133,13 @@ pub struct Note {
     /// Counts local edits.
     #[serde(default)]
     pub revision: u64,
+    /// The file it was last read from or saved to, within the directory.
+    #[serde(skip)]
+    pub file: Option<String>,
+    /// Front matter lines this app does not use, such as tags added in
+    /// another editor. They are written back as they were.
+    #[serde(skip)]
+    pub extra: String,
 }
 
 impl Note {
@@ -145,10 +157,19 @@ impl Note {
 
     /// Nothing the user would miss: an abandoned "New note".
     pub fn is_blank(&self) -> bool {
-        self.drive_id.is_none()
-            && self.title.trim().is_empty()
+        self.title.trim().is_empty()
             && self.body.trim().is_empty()
             && self.links.is_empty()
+            && self.extra.trim().is_empty()
+    }
+
+    /// Whether what is saved of the two is the same.
+    fn same_content(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.body == other.body
+            && self.color == other.color
+            && self.links == other.links
+            && self.extra == other.extra
     }
 }
 
@@ -162,26 +183,86 @@ pub fn local_id() -> String {
     )
 }
 
-/// The notes on this device. Deletions are recorded by the database journal.
+/// The configured notes directory, or `None` while none is set.
+pub fn directory() -> Option<PathBuf> {
+    crate::config::NotesSettings::load().path()
+}
+
+/// What a save did, for [`Library::saved`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Saved {
+    /// Each note's file after the save, by note id.
+    pub files: Vec<(String, String)>,
+    /// The files of deleted notes that are now gone.
+    pub removed: Vec<String>,
+}
+
+/// The notes in the directory.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Library {
     #[serde(default)]
     pub notes: Vec<Note>,
+    /// Files of deleted notes, removed by the next save.
+    #[serde(skip)]
+    pub removed: Vec<String>,
 }
 
 impl Library {
-    /// Loads the local database copy.
-    pub fn load(path: &Path) -> Self {
-        crate::task_db::read_document(path, crate::task_db::keys::NOTES)
-            .unwrap_or_else(|error| {
-                log::warn!("the saved notes could not be read: {error}");
-                None
-            })
-            .unwrap_or_default()
+    /// Reads the notes in `directory`. A directory that does not exist yet
+    /// has no notes.
+    pub fn load(directory: &Path) -> Self {
+        Self::read(directory).unwrap_or_else(|error| {
+            log::warn!(
+                "the notes in {} could not be read: {error}",
+                directory.display()
+            );
+            Self::default()
+        })
     }
 
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        crate::task_db::write_document(path, crate::task_db::keys::NOTES, self)
+    /// [`Self::load`], with the error.
+    pub fn read(directory: &Path) -> std::io::Result<Self> {
+        files::read(directory)
+    }
+
+    /// Writes every note to its file, renaming the files of retitled notes and
+    /// removing those of deleted ones. Files this library does not know about,
+    /// such as ones made in another editor since it was read, are left alone.
+    pub fn save(&self, directory: &Path) -> std::io::Result<Saved> {
+        files::write(self, directory)
+    }
+
+    /// Records what a save of a copy of this library did.
+    pub fn saved(&mut self, saved: &Saved) {
+        for (id, file) in &saved.files {
+            if let Some(note) = self.notes.iter_mut().find(|note| &note.id == id) {
+                note.file = Some(file.clone());
+            }
+        }
+        self.removed.retain(|file| !saved.removed.contains(file));
+    }
+
+    /// Carries what is only known in memory (ids, revisions, and the title as
+    /// typed rather than as the file name has it) from `previous` over to this
+    /// freshly read copy, matching notes by file.
+    pub fn adopt_identities(&mut self, previous: &Self) {
+        for note in &mut self.notes {
+            let Some(old) = previous
+                .notes
+                .iter()
+                .find(|old| old.file.is_some() && old.file == note.file)
+            else {
+                continue;
+            };
+            note.id = old.id.clone();
+            note.revision = old.revision;
+            if files::file_stem(&old.title) == note.title {
+                note.title = old.title.clone();
+            }
+            if note.same_content(old) {
+                note.modified_ms = old.modified_ms;
+            }
+        }
     }
 
     pub fn note(&self, id: &str) -> Option<&Note> {
@@ -193,13 +274,14 @@ impl Library {
         let id = local_id();
         self.notes.push(Note {
             id: id.clone(),
-            drive_id: None,
             title: title.to_owned(),
             body: String::new(),
             color: Pastel::default(),
             links,
             modified_ms: crate::clock::now().timestamp_millis(),
             revision: 1,
+            file: None,
+            extra: String::new(),
         });
         id
     }
@@ -215,12 +297,14 @@ impl Library {
         true
     }
 
-    /// Removes a note. Saving the library journals the deletion.
+    /// Removes a note. The next save removes its file.
     pub fn delete(&mut self, id: &str) {
         let Some(index) = self.notes.iter().position(|note| note.id == id) else {
             return;
         };
-        self.notes.remove(index);
+        if let Some(file) = self.notes.remove(index).file {
+            self.removed.push(file);
+        }
     }
 
     /// Connects a note to something, once.
@@ -264,6 +348,49 @@ impl Library {
     }
 }
 
+/// A cheap summary of the directory's Markdown files (their names, sizes and
+/// modification times), so a poll only rereads the notes when it changes.
+pub fn fingerprint(directory: &Path) -> u64 {
+    files::fingerprint(directory)
+}
+
+/// Moves the notes an older build kept in the database into `directory`, then
+/// removes every trace of them from the database: the document, its sync
+/// history (which the sync worker then also deletes from the server), and the
+/// freed pages. Safe to run again, including after an interrupted run: a note
+/// already written to the directory is not written twice. Returns how many
+/// notes were moved.
+pub fn migrate_database(database: &Path, directory: &Path) -> std::io::Result<usize> {
+    if !database.exists() {
+        return Ok(0);
+    }
+    let library: Option<Library> =
+        crate::task_db::read_document(database, crate::task_db::keys::NOTES)?;
+    let moved = match library {
+        Some(mut library) if !library.notes.is_empty() => {
+            library.notes.retain(|note| !note.is_blank());
+            files::claim_identical(&mut library, directory)?;
+            let saved = library.save(directory)?;
+            // The files keep the notes' own times, so they sort as before.
+            for (id, file) in &saved.files {
+                if let Some(note) = library.note(id) {
+                    files::set_modified(&directory.join(file), note.modified_ms);
+                }
+            }
+            library.notes.len()
+        }
+        _ => 0,
+    };
+    crate::database_sync::retire_document(database, crate::task_db::keys::NOTES)?;
+    if moved > 0 {
+        log::info!(
+            "moved {moved} notes from the database to {}",
+            directory.display()
+        );
+    }
+    Ok(moved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +402,21 @@ mod tests {
             title: "Read".into(),
             day: None,
         }
+    }
+
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Saves and records the save, as the apps do.
+    fn save(library: &mut Library, directory: &Path) {
+        let saved = library.save(directory).unwrap();
+        library.saved(&saved);
     }
 
     #[test]
@@ -302,39 +444,173 @@ mod tests {
     }
 
     #[test]
-    fn local_saves_and_deletions_enter_the_turso_journal() {
+    fn each_note_is_a_markdown_file_named_after_its_title() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("notes.sqlite3");
-        crate::task_db::Database::open(&path).unwrap();
         let mut library = Library::default();
-        let id = library.create("A", vec![habit()]);
-        library.save(&path).unwrap();
-        assert_eq!(Library::load(&path), library);
-        assert_eq!(crate::database_sync::history(&path).unwrap().len(), 1);
-        library.delete(&id);
-        library.save(&path).unwrap();
-        assert!(Library::load(&path).notes.is_empty());
-        assert_eq!(crate::database_sync::history(&path).unwrap().len(), 2);
+        let plain = library.create("Plain", Vec::new());
+        library.edit(&plain, |note| note.body = "# Hello\n\nworld\n".into());
+        let rich = library.create("Rich", vec![habit()]);
+        library.edit(&rich, |note| {
+            note.color = Pastel::Rose;
+            note.body = "text".into();
+        });
+        save(&mut library, directory.path());
+
+        assert_eq!(names(directory.path()), ["Plain.md", "Rich.md"]);
+        let plain_text = std::fs::read_to_string(directory.path().join("Plain.md")).unwrap();
+        assert_eq!(plain_text, "# Hello\n\nworld\n");
+        let rich_text = std::fs::read_to_string(directory.path().join("Rich.md")).unwrap();
+        assert_eq!(
+            rich_text,
+            "---\ncolor: rose\nlinks:\n  - {\"kind\":\"habit\",\"id\":\"h1\",\"title\":\"Read\"}\n---\ntext"
+        );
+
+        let mut read = Library::load(directory.path());
+        read.adopt_identities(&library);
+        assert_eq!(read.notes.len(), 2);
+        let again = read.note(&rich).unwrap();
+        assert_eq!(again.color, Pastel::Rose);
+        assert_eq!(again.links, vec![habit()]);
+        assert_eq!(again.body, "text");
+        assert_eq!(read.note(&plain).unwrap().body, "# Hello\n\nworld\n");
     }
 
     #[test]
-    fn existing_notes_keep_their_replication_identity_after_editing() {
+    fn renaming_moves_the_file_and_deleting_removes_it() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("notes.sqlite3");
-        crate::task_db::write_document_json(&path, crate::task_db::keys::NOTES,
-            r#"{"notes":[{"id":"local-1","drive_id":"imported-1","title":"A","body":"keep","dirty":true,"synced_ms":123}],"deleted":["gone"]}"#).unwrap();
-        let mut library = Library::load(&path);
+        let mut library = Library::default();
+        let id = library.create("", Vec::new());
+        save(&mut library, directory.path());
+        assert_eq!(names(directory.path()), ["Untitled.md"]);
+
+        library.edit(&id, |note| note.title = "Trip: plans/ideas".into());
+        save(&mut library, directory.path());
+        assert_eq!(names(directory.path()), ["Trip- plans-ideas.md"]);
+
+        // Reading it back keeps the title as typed.
+        let mut read = Library::load(directory.path());
+        read.adopt_identities(&library);
+        assert_eq!(read.note(&id).unwrap().title, "Trip: plans/ideas");
+
+        library.delete(&id);
+        save(&mut library, directory.path());
+        assert!(names(directory.path()).is_empty());
+        assert!(library.removed.is_empty());
+    }
+
+    #[test]
+    fn notes_with_the_same_title_and_other_files_are_kept_apart() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("Idea.md"), "made elsewhere").unwrap();
+        std::fs::write(directory.path().join("picture.png"), "not a note").unwrap();
+        let mut library = Library::default();
+        library.create("Idea", Vec::new());
+        library.create("Idea", Vec::new());
+        save(&mut library, directory.path());
+        assert_eq!(
+            names(directory.path()),
+            ["Idea 2.md", "Idea 3.md", "Idea.md", "picture.png"]
+        );
+        let text = std::fs::read_to_string(directory.path().join("Idea.md")).unwrap();
+        assert_eq!(text, "made elsewhere");
+        assert_eq!(Library::load(directory.path()).notes.len(), 3);
+    }
+
+    #[test]
+    fn front_matter_from_another_editor_is_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("Mixed.md"),
+            "---\ntags:\n  - life\ncolor: Mint\nlinks:\n  - kind: habit\n    id: h1\n    title: \"Read\"\n---\nbody\n",
+        )
+        .unwrap();
+        let mut library = Library::load(directory.path());
+        let note = &library.notes[0];
+        assert_eq!(note.color, Pastel::Mint);
+        assert_eq!(note.links, vec![habit()]);
+        assert_eq!(note.body, "body\n");
+        let id = note.id.clone();
+        library.edit(&id, |note| note.body = "changed\n".into());
+        save(&mut library, directory.path());
+        let text = std::fs::read_to_string(directory.path().join("Mixed.md")).unwrap();
+        assert!(text.contains("tags:\n  - life\n"), "{text}");
+        assert!(text.ends_with("---\nchanged\n"), "{text}");
+    }
+
+    #[test]
+    fn a_note_starting_with_a_rule_is_not_read_as_front_matter() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        let id = library.create("Rules", Vec::new());
+        library.edit(&id, |note| {
+            note.body = "---\nnot: front matter\n---\nend".into()
+        });
+        save(&mut library, directory.path());
+        let read = Library::load(directory.path());
+        assert_eq!(read.notes[0].body, "---\nnot: front matter\n---\nend");
+        assert!(read.notes[0].extra.is_empty());
+    }
+
+    #[test]
+    fn reading_again_matches_what_is_in_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        let id = library.create("Same", vec![habit()]);
+        library.edit(&id, |note| note.body = "x".into());
+        save(&mut library, directory.path());
+        let mut read = Library::load(directory.path());
+        read.adopt_identities(&library);
+        assert_eq!(read, library);
+        assert_ne!(fingerprint(directory.path()), 0);
+    }
+
+    #[test]
+    fn migration_moves_the_notes_out_of_the_database_and_its_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("timeslay.sqlite3");
+        let notes = directory.path().join("notes");
+        crate::task_db::Database::open(&database).unwrap();
+        crate::database_sync::enroll(&database).unwrap();
+        crate::task_db::write_document_json(&database, crate::task_db::keys::NOTES,
+            r#"{"notes":[{"id":"local-1","drive_id":"imported-1","title":"A","body":"keep","color":"sky","links":[{"kind":"habit","id":"h1","title":"Read"}],"modified_ms":1700000000000},{"id":"local-2","title":"","body":""}]}"#).unwrap();
+        crate::task_db::write_document_json(&database, crate::task_db::keys::HABITS, "{}").unwrap();
+        assert!(!crate::database_sync::history(&database).unwrap().is_empty());
+
+        assert_eq!(migrate_database(&database, &notes).unwrap(), 1);
+        assert_eq!(names(&notes), ["A.md"]);
+        let library = Library::load(&notes);
         assert_eq!(library.notes[0].body, "keep");
-        library.edit("local-1", |note| note.title = "Edited".into());
-        library.save(&path).unwrap();
-        let edits = crate::database_sync::history(&path).unwrap();
-        let projected = crate::database_sync::model::project(&edits).unwrap();
-        let notes: serde_json::Value =
-            serde_json::from_str(projected[crate::task_db::keys::NOTES].as_ref().unwrap()).unwrap();
-        assert_eq!(notes["notes"].as_array().unwrap().len(), 1);
-        assert_eq!(notes["notes"][0]["drive_id"], "imported-1");
-        assert_eq!(notes["notes"][0]["title"], "Edited");
-        assert_eq!(notes["notes"][0]["body"], "keep");
-        assert!(notes["notes"][0].get("dirty").is_none());
+        assert_eq!(library.notes[0].color, Pastel::Sky);
+        assert_eq!(library.notes[0].links, vec![habit()]);
+        assert_eq!(library.notes[0].modified_ms, 1_700_000_000_000);
+
+        let read: Option<Library> =
+            crate::task_db::read_document(&database, crate::task_db::keys::NOTES).unwrap();
+        assert!(read.is_none());
+        let history = crate::database_sync::history(&database).unwrap();
+        assert!(history.iter().all(|edit| edit.document != "notes"));
+        assert!(history.iter().any(|edit| edit.document == "habits"));
+        let raw = std::fs::read(&database).unwrap();
+        assert!(!raw.windows(4).any(|window| window == b"keep"));
+
+        // Running it again changes nothing.
+        assert_eq!(migrate_database(&database, &notes).unwrap(), 0);
+        assert_eq!(names(&notes), ["A.md"]);
+    }
+
+    #[test]
+    fn an_interrupted_migration_does_not_write_a_note_twice() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("timeslay.sqlite3");
+        let notes = directory.path().join("notes");
+        crate::task_db::write_document_json(&database, crate::task_db::keys::NOTES,
+            r#"{"notes":[{"id":"1","title":"A","body":"one"},{"id":"2","title":"A","body":"two"}]}"#).unwrap();
+        let library: Library =
+            crate::task_db::read_document(&database, crate::task_db::keys::NOTES)
+                .unwrap()
+                .unwrap();
+        library.save(&notes).unwrap();
+        assert_eq!(migrate_database(&database, &notes).unwrap(), 2);
+        assert_eq!(names(&notes), ["A 2.md", "A.md"]);
     }
 }

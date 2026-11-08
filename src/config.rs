@@ -46,6 +46,12 @@ pub struct Config {
     )]
     pub reminders: timeslay_core::reminders::ReminderSettings,
     pub database_sync: DatabaseSyncSettings,
+    /// Where the notes are kept. Left out of the file while unset.
+    #[serde(
+        default,
+        skip_serializing_if = "timeslay_core::config::NotesSettings::is_empty"
+    )]
+    pub notes: timeslay_core::config::NotesSettings,
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
     /// Places and travel. It is left out of the file until something is set,
