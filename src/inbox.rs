@@ -199,21 +199,12 @@ pub fn tasks(state: &State) -> Vec<&Event> {
 
 /// Incomplete date-only tasks for today that have no assigned block or time slot.
 pub fn today_tasks(state: &State) -> Vec<&Event> {
-    let today = crate::clock::now().date_naive();
+    let now = crate::clock::now();
     let mut tasks: Vec<_> = state
         .calendar
         .events
         .iter()
-        .filter(|event| {
-            let meta = tb::metadata(event);
-            event.is_task()
-                && !event.completed
-                && !meta.ignored
-                && event.all_day
-                && event.start.date_naive() == today
-                && meta.block.is_none()
-                && meta.schedule.is_none()
-        })
+        .filter(|event| tb::unslotted_on(event, now.date_naive(), now))
         .collect();
     sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
     tasks
@@ -1389,6 +1380,8 @@ mod tests {
                 ..Default::default()
             },
         });
+        let mut overdue = task("overdue", "inbox", today);
+        overdue.details.description = format!("DEADLINE: {} 00:00", today.pred_opt().unwrap());
         let mut event = task("event", "calendar", today);
         event.id = "event".into();
         event.calendar_id = "calendar".into();
@@ -1403,6 +1396,7 @@ mod tests {
             blocked,
             scheduled,
             ignored,
+            overdue,
             event,
         ];
         assert_eq!(
@@ -1411,6 +1405,11 @@ mod tests {
                 .map(|task| task.title.as_str())
                 .collect::<Vec<_>>(),
             ["a", "b"]
+        );
+        assert!(
+            overdue_tasks(&state)
+                .iter()
+                .any(|task| task.title == "overdue")
         );
     }
 

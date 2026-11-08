@@ -84,6 +84,7 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
     // Keep the day grid's scroll position when switching screens.
     state.calendar.menu_open = false;
     state.calendar.search.open = false;
+    state.calendar.actions_open = false;
     // Each task list opens its own selection in the details pane.
     let tasks_screen = |screen| {
         matches!(

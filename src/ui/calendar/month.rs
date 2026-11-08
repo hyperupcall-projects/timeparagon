@@ -233,7 +233,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     range_layers(state, metrics, content.into())
 }
 
-/// The month picker, Today, Search and Menu above a month-shaped grid, all at
+/// The month picker, Today, View and Actions above a month-shaped grid, all at
 /// the left. Moving through the calendar is done from the picker.
 pub(super) fn range_heading<'a>(
     state: &'a State,
@@ -251,23 +251,21 @@ pub(super) fn range_heading<'a>(
             today,
         )))
         .style(crate::ui::controls::secondary);
-    let search = search_button(state, metrics);
-    let menu = button(text("Menu").size(metrics.label()))
-        .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
-        .style(crate::ui::controls::secondary);
+    let view = view_button(state, metrics);
+    let actions = actions_button(state, metrics);
     if metrics.size.width < TWO_LINE_HEADER {
         column![
             row![title, today, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
-            row![search, menu, Space::new().width(Fill)]
+            row![view, actions, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
         ]
         .spacing(metrics.spacing)
         .into()
     } else {
-        row![title, today, search, menu, Space::new().width(Fill)]
+        row![title, today, view, actions, Space::new().width(Fill)]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into()
@@ -341,6 +339,8 @@ pub(super) fn range_layers<'a>(
         menu_overlay(state, metrics)
     } else if state.calendar.search.open {
         search_overlay(state, metrics)
+    } else if state.calendar.actions_open {
+        actions_overlay(state, metrics, false)
     } else {
         Space::new().width(0).height(0).into()
     };
@@ -567,11 +567,7 @@ pub(crate) fn event_kind(state: &State, event: &Event) -> (String, Color) {
 }
 
 /// A small pill naming an item's kind, in that kind's configured color.
-pub(crate) fn kind_chip<'a>(
-    kind: String,
-    color: Color,
-    metrics: &Metrics,
-) -> Element<'a, Message> {
+pub(crate) fn kind_chip<'a>(kind: String, color: Color, metrics: &Metrics) -> Element<'a, Message> {
     let ink = on_color(color);
     container(
         text(kind)
@@ -601,9 +597,12 @@ pub(crate) fn titled<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let (kind, color) = event_kind(state, event);
-    row![container(title).width(Fill), kind_chip(kind, color, metrics)]
-        .spacing(8)
-        .align_y(Alignment::Start)
-        .width(Fill)
-        .into()
+    row![
+        container(title).width(Fill),
+        kind_chip(kind, color, metrics)
+    ]
+    .spacing(8)
+    .align_y(Alignment::Start)
+    .width(Fill)
+    .into()
 }

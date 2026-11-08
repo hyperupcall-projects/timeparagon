@@ -196,6 +196,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             state.calendar.error = None;
             state.calendar.menu_open = false;
             state.calendar.search.open = false;
+            state.calendar.actions_open = false;
             let mut close_block = None;
             if let Some(event) = state.calendar.event(&id).cloned() {
                 let is_task = event.is_task();
