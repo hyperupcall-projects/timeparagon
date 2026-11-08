@@ -1,6 +1,6 @@
 //! The Life tab: a list of life areas, and a side panel for the one that is
-//! open, with its vision and goals in one tab and the objectives, habits and
-//! projects that carry it out in the other.
+//! open, with its vision and goals in one tab and, in the other, each goal's
+//! objectives and their habits, then what is unassigned, then the projects.
 
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Alignment, Color, Element, Fill, Length, Padding, Theme};
@@ -9,7 +9,7 @@ use timeslay_core::notes::Pastel;
 use crate::app::{Message, State};
 use crate::calendar::colors;
 use crate::config::{LifeArea, ProjectsSettings};
-use crate::life::{Action, Open, Tab, VisionMode};
+use crate::life::{Action, Open, ProjectEdit, Tab, VisionMode};
 
 use super::calendar::{color_circle, swatch_button};
 use super::layout::Metrics;
@@ -136,6 +136,7 @@ fn summary(state: &State, area: &LifeArea) -> String {
     };
     [
         plural(area.goals.len(), "goal", "goals"),
+        plural(area.objectives.len(), "objective", "objectives"),
         plural(project_count, "project", "projects"),
         plural(habit_count, "habit", "habits"),
     ]
@@ -222,7 +223,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
     let body = match open.tab {
         Tab::Vision => vision_tab(area, open, metrics),
-        Tab::Implementation => implementation_tab(state, area, metrics),
+        Tab::Implementation => implementation_tab(state, area, open, metrics),
     };
 
     container(
@@ -415,7 +416,260 @@ fn area_settings<'a>(
     content.into()
 }
 
+/// A habit offered in an objective's "add habit" picker.
+#[derive(Debug, Clone, PartialEq)]
+struct HabitChoice {
+    id: String,
+    name: String,
+}
+
+impl std::fmt::Display for HabitChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+/// A goal offered in an objective's "goal" picker; `None` is no goal.
+#[derive(Debug, Clone, PartialEq)]
+struct GoalChoice {
+    id: Option<u64>,
+    name: String,
+}
+
+impl std::fmt::Display for GoalChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
 fn implementation_tab<'a>(
+    state: &'a State,
+    area: &'a LifeArea,
+    open: &'a Open,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let gap = || Space::new().height(Length::Fixed(4.0));
+
+    // Goals, each with the objectives that serve it.
+    let mut goals = column![heading("Goals", metrics)].spacing(metrics.spacing);
+    for goal in &area.goals {
+        let mut words = column![
+            text(&goal.name)
+                .size(metrics.label() + 1.0)
+                .wrapping(text::Wrapping::WordOrGlyph)
+        ]
+        .spacing(2)
+        .width(Fill);
+        if !goal.description.trim().is_empty() {
+            words = words.push(
+                text(&goal.description)
+                    .size(metrics.label() - 1.0)
+                    .style(text::secondary)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+        let header = row![color_circle(area.color().unwrap_or(NO_COLOR)), words]
+            .spacing(8)
+            .align_y(Alignment::Center);
+        goals = goals.push(
+            container(
+                column![
+                    header,
+                    objective_list(state, area, open, Some(goal.id), metrics)
+                ]
+                .spacing(metrics.spacing),
+            )
+            .padding(10)
+            .width(Fill)
+            .style(super::controls::row_surface),
+        );
+    }
+    if area.goals.is_empty() {
+        goals = goals.push(label("No goals yet. Add them under Vision.", metrics));
+    }
+
+    let unassigned_objectives = column![
+        heading("Unassigned objectives", metrics),
+        objective_list(state, area, open, None, metrics),
+    ]
+    .spacing(metrics.spacing);
+
+    column![
+        goals,
+        gap(),
+        unassigned_objectives,
+        gap(),
+        unassigned_habits(state, area, metrics),
+        gap(),
+        project_list(state, area, open, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill)
+    .into()
+}
+
+/// The objectives under `goal` (or with none), and a box to add another.
+fn objective_list<'a>(
+    state: &'a State,
+    area: &'a LifeArea,
+    open: &'a Open,
+    goal: Option<u64>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let size = metrics.label();
+    let mut list = column![].spacing(metrics.spacing).width(Fill);
+    let mut any = false;
+    for objective in &area.objectives {
+        if area.objective_goal(objective) != goal {
+            continue;
+        }
+        any = true;
+        list = list.push(objective_card(state, area, objective, metrics));
+    }
+    if !any {
+        list = list.push(label(
+            if goal.is_some() {
+                "No objectives for this goal yet."
+            } else {
+                "No unassigned objectives."
+            },
+            metrics,
+        ));
+    }
+
+    let typed = open
+        .new_objective
+        .get(&goal)
+        .map(String::as_str)
+        .unwrap_or_default();
+    let input = crate::ui::controls::text_input("New objective", typed)
+        .on_input(move |name| msg(Action::NewObjective(goal, name)))
+        .on_submit(msg(Action::AddObjective(goal)))
+        .size(size)
+        .width(Fill);
+    let add = button(text("Add objective").size(size).center())
+        .on_press(msg(Action::AddObjective(goal)))
+        .style(crate::ui::controls::secondary);
+    list.push(row![input, add].spacing(6).align_y(Alignment::Center))
+        .into()
+}
+
+fn objective_card<'a>(
+    state: &'a State,
+    area: &'a LifeArea,
+    objective: &'a crate::config::Objective,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let size = metrics.label();
+    let id = objective.id;
+
+    let name = crate::ui::controls::text_input("Objective", &objective.name)
+        .on_input(move |name| msg(Action::ObjectiveName(id, name)))
+        .size(size)
+        .width(Fill);
+    let remove = button(text("Remove").size(size - 1.0))
+        .on_press(msg(Action::RemoveObjective(id)))
+        .style(crate::ui::controls::ghost);
+    let description = crate::ui::controls::text_input("Short description", &objective.description)
+        .on_input(move |description| msg(Action::ObjectiveDescription(id, description)))
+        .size(size - 1.0)
+        .width(Fill);
+
+    let mut goal_options = vec![GoalChoice {
+        id: None,
+        name: "No goal".to_owned(),
+    }];
+    goal_options.extend(area.goals.iter().map(|goal| GoalChoice {
+        id: Some(goal.id),
+        name: goal.name.clone(),
+    }));
+    let current_goal = area.objective_goal(objective);
+    let selected_goal = goal_options.iter().find(|c| c.id == current_goal).cloned();
+    let goal_picker = crate::ui::controls::pick_list(goal_options, selected_goal, move |to| {
+        msg(Action::ObjectiveGoal(id, to.id))
+    })
+    .text_size(size - 1.0);
+
+    let mut habits = column![].spacing(4).width(Fill);
+    for habit_id in &objective.habits {
+        let Some(habit) = state.habits.library.habit(habit_id) else {
+            continue;
+        };
+        let mut caption = habit.name.clone();
+        if habit.archived {
+            caption.push_str(" · Archived");
+        }
+        let habit_id = habit_id.clone();
+        habits = habits.push(
+            row![
+                habit_dot(habit.color),
+                text(caption)
+                    .size(size - 1.0)
+                    .wrapping(text::Wrapping::WordOrGlyph)
+                    .width(Fill),
+                button(text("×").size(size))
+                    .padding([0, 6])
+                    .on_press(msg(Action::RemoveHabit(id, habit_id)))
+                    .style(crate::ui::controls::ghost),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+    }
+
+    // Any existing habit not already here can be added; it moves out of
+    // whatever objective it served before.
+    let habit_options: Vec<HabitChoice> = state
+        .habits
+        .library
+        .habits
+        .iter()
+        .filter(|habit| !habit.archived && !objective.habits.contains(&habit.id))
+        .map(|habit| HabitChoice {
+            id: habit.id.clone(),
+            name: habit.name.clone(),
+        })
+        .collect();
+    let add_habit: Element<'a, Message> = if habit_options.is_empty() {
+        label(
+            if state.habits.library.habits.is_empty() {
+                "No habits yet. Create them in Habits."
+            } else {
+                "Every habit is already here."
+            },
+            metrics,
+        )
+        .into()
+    } else {
+        crate::ui::controls::pick_list(habit_options, None::<HabitChoice>, move |habit| {
+            msg(Action::AddHabit(id, habit.id))
+        })
+        .placeholder("Add habit…")
+        .text_size(size - 1.0)
+        .into()
+    };
+
+    container(
+        column![
+            row![name, remove].spacing(6).align_y(Alignment::Center),
+            description,
+            row![label("Goal", metrics), goal_picker]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            label("Habits", metrics),
+            habits,
+            add_habit,
+        ]
+        .spacing(4),
+    )
+    .padding(8)
+    .width(Fill)
+    .style(super::controls::row_surface)
+    .into()
+}
+
+/// Habits in this area that no objective of it is carried out by.
+fn unassigned_habits<'a>(
     state: &'a State,
     area: &'a LifeArea,
     metrics: &Metrics,
@@ -425,116 +679,225 @@ fn implementation_tab<'a>(
     let options = choices(projects);
     let current = options.iter().find(|choice| choice.id == area.id).cloned();
 
-    // A picker on each item moves it to another area.
-    let item = |dot: Element<'a, Message>,
-                name: String,
-                detail: Option<String>,
-                picker: Element<'a, Message>|
-     -> Element<'a, Message> {
-        let mut words = column![text(name).size(size).wrapping(text::Wrapping::WordOrGlyph)]
-            .spacing(2)
-            .width(Fill);
-        if let Some(detail) = detail {
+    let mut habits = column![heading("Unassigned habits", metrics)].spacing(6);
+    let mut any = false;
+    for habit in &state.habits.library.habits {
+        if projects.resolve_area(habit.area) != area.id || area.has_habit(&habit.id) {
+            continue;
+        }
+        any = true;
+        let id = habit.id.clone();
+        let picker = crate::ui::controls::pick_list(options.clone(), current.clone(), move |to| {
+            msg(Action::MoveHabit(id.clone(), to.id))
+        })
+        .text_size(size - 1.0);
+        let goal = habit.goal_label();
+        let detail = if habit.archived {
+            format!("{goal} · Archived")
+        } else {
+            goal
+        };
+        habits = habits.push(
+            container(
+                row![
+                    habit_dot(habit.color),
+                    column![
+                        text(&habit.name)
+                            .size(size)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                        text(detail)
+                            .size(size - 1.0)
+                            .style(text::secondary)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                    ]
+                    .spacing(2)
+                    .width(Fill),
+                    picker,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .padding([6, 8])
+            .width(Fill)
+            .style(super::controls::row_surface),
+        );
+    }
+    if !any {
+        habits = habits.push(label("No unassigned habits in this area.", metrics));
+    }
+    habits.into()
+}
+
+/// The area's projects, each opening to edit its name, color, directory and
+/// area, and a box to add another.
+fn project_list<'a>(
+    state: &'a State,
+    area: &'a LifeArea,
+    open: &'a Open,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let size = metrics.label();
+    let projects = &state.config.projects;
+    let options = choices(projects);
+    let current = options.iter().find(|choice| choice.id == area.id).cloned();
+
+    let mut list = column![heading("Projects", metrics)].spacing(6);
+    let mut any = false;
+    for project in projects.sorted() {
+        if projects.resolve_area(project.area) != area.id {
+            continue;
+        }
+        any = true;
+        let id = project.id;
+        let editing = open.project.as_ref().filter(|edit| edit.id == id);
+
+        let mut words = column![
+            text(&project.name)
+                .size(size)
+                .wrapping(text::Wrapping::WordOrGlyph)
+        ]
+        .spacing(2)
+        .width(Fill);
+        if let Some(directory) = &project.directory {
             words = words.push(
-                text(detail)
+                text(directory.display().to_string())
                     .size(size - 1.0)
                     .style(text::secondary)
                     .wrapping(text::Wrapping::WordOrGlyph),
             );
         }
-        container(
-            row![dot, words, picker]
-                .spacing(8)
-                .align_y(Alignment::Center),
+        let summary = button(
+            row![
+                color_circle(project.color().unwrap_or(NO_COLOR)),
+                words,
+                text(if editing.is_some() { "⌄" } else { "›" }).size(size + 2.0),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
         )
+        .on_press(msg(Action::EditProject(id)))
         .padding([6, 8])
         .width(Fill)
-        .style(super::controls::row_surface)
-        .into()
-    };
+        .style(super::controls::secondary);
 
-    // Objectives: the goals this area is working towards.
-    let mut objectives = column![heading("Objectives", metrics)].spacing(6);
-    for goal in &area.goals {
-        let description = (!goal.description.trim().is_empty()).then(|| goal.description.clone());
-        objectives = objectives.push(item(
-            color_circle(area.color().unwrap_or(NO_COLOR)),
-            goal.name.clone(),
-            description,
-            Space::new().into(),
-        ));
-    }
-    if area.goals.is_empty() {
-        objectives = objectives.push(label("No goals yet. Add them under Vision.", metrics));
-    }
-
-    let mut habits = column![heading("Habits", metrics)].spacing(6);
-    let mut any_habit = false;
-    for habit in &state.habits.library.habits {
-        if projects.resolve_area(habit.area) != area.id {
+        let Some(edit) = editing else {
+            list = list.push(summary);
             continue;
-        }
-        any_habit = true;
-        let id = habit.id.clone();
-        let picker = crate::ui::controls::pick_list(options.clone(), current.clone(), move |to| {
-            msg(Action::MoveHabit(id.clone(), to.id))
-        })
-        .text_size(size - 1.0)
-        .into();
-        habits = habits.push(item(
-            habit_dot(habit.color),
-            habit.name.clone(),
-            Some(habit.goal_label()).map(|goal| {
-                if habit.archived {
-                    format!("{goal} · Archived")
-                } else {
-                    goal
-                }
-            }),
-            picker,
-        ));
-    }
-    if !any_habit {
-        habits = habits.push(label("No habits in this area.", metrics));
-    }
+        };
 
-    let mut project_list = column![heading("Projects", metrics)].spacing(6);
-    let mut any_project = false;
-    for project in projects.sorted() {
-        if projects.resolve_area(project.area) != area.id {
-            continue;
-        }
-        any_project = true;
-        let id = project.id;
         let picker = crate::ui::controls::pick_list(options.clone(), current.clone(), move |to| {
             msg(Action::MoveProject(id, to.id))
         })
-        .text_size(size - 1.0)
-        .into();
-        project_list = project_list.push(item(
-            color_circle(project.color().unwrap_or(NO_COLOR)),
-            project.name.clone(),
-            project
-                .directory
-                .as_ref()
-                .map(|directory| directory.display().to_string()),
-            picker,
-        ));
+        .text_size(size - 1.0);
+        list = list.push(
+            container(
+                column![
+                    summary,
+                    project_editor(project, edit, picker.into(), metrics)
+                ]
+                .spacing(8),
+            )
+            .padding(4)
+            .width(Fill)
+            .style(super::controls::row_surface),
+        );
     }
-    if !any_project {
-        project_list = project_list.push(label("No projects in this area.", metrics));
+    if !any {
+        list = list.push(label("No projects in this area.", metrics));
     }
 
-    column![
-        objectives,
-        Space::new().height(Length::Fixed(4.0)),
-        habits,
-        Space::new().height(Length::Fixed(4.0)),
-        project_list,
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill)
-    .into()
+    let input =
+        crate::ui::controls::text_input("New project, e.g. School/Physics", &open.new_project)
+            .on_input(|name| msg(Action::NewProject(name)))
+            .on_submit(msg(Action::AddProject))
+            .size(size)
+            .width(Fill);
+    let add = button(text("Add project").size(size).center())
+        .on_press(msg(Action::AddProject))
+        .style(crate::ui::controls::secondary);
+    list = list.push(row![input, add].spacing(6).align_y(Alignment::Center));
+    if let Some(error) = &open.new_project_error {
+        list = list.push(text(error).size(size).style(text::danger));
+    }
+    list.into()
+}
+
+fn project_editor<'a>(
+    project: &'a crate::config::Project,
+    edit: &'a ProjectEdit,
+    area_picker: Element<'a, Message>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let size = metrics.label();
+    let name = crate::ui::controls::text_input("Project name", &edit.name)
+        .on_input(|name| msg(Action::ProjectName(name)))
+        .size(size)
+        .width(Fill);
+    let directory =
+        crate::ui::controls::text_input("Directory, e.g. ~/Projects/site", &edit.directory)
+            .on_input(|directory| msg(Action::ProjectDirectory(directory)))
+            .size(size)
+            .width(Fill);
+
+    let current = project.color();
+    let mut swatches = column![].spacing(6);
+    for chunk in colors::palette().chunks(if metrics.size.width < 300.0 { 3 } else { 6 }) {
+        let mut line = row![].spacing(6);
+        for &color in chunk {
+            line = line.push(swatch_button(
+                color,
+                current == Some(color),
+                msg(Action::ProjectColor(Some(color))),
+            ));
+        }
+        swatches = swatches.push(line);
+    }
+    let no_color = button(text("No color").size(size - 1.0).center())
+        .on_press(msg(Action::ProjectColor(None)))
+        .style(if current.is_none() {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        });
+
+    let mut content = column![label("Name", metrics), name].spacing(4).width(Fill);
+    if let Some(error) = &edit.name_error {
+        content = content.push(text(error).size(size).style(text::danger));
+    }
+    content = content
+        .push(label("Color", metrics))
+        .push(swatches)
+        .push(no_color)
+        .push(label("Directory", metrics))
+        .push(directory)
+        .push(label("Life area", metrics))
+        .push(area_picker);
+
+    content = if edit.confirm_remove {
+        content.push(
+            column![
+                text("Remove this project? Tasks filed under it lose their project.").size(size),
+                row![
+                    button(text("Remove").size(size))
+                        .on_press(msg(Action::ConfirmRemoveProject))
+                        .style(crate::ui::controls::danger),
+                    button(text("Keep").size(size))
+                        .on_press(msg(Action::CancelRemoveProject))
+                        .style(super::controls::secondary),
+                ]
+                .spacing(6),
+            ]
+            .spacing(4),
+        )
+    } else {
+        content.push(
+            button(text("Remove project").size(size))
+                .on_press(msg(Action::RemoveProject))
+                .style(crate::ui::controls::danger),
+        )
+    };
+
+    container(content).padding([4, 8]).width(Fill).into()
 }
 
 /// A habit's color, which depends on whether the theme is dark.

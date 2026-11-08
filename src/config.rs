@@ -19,7 +19,7 @@ use crate::hex::HexColor;
 use crate::todos::TodoList;
 
 pub use timeslay_core::config::{
-    CalendarSettings, DatabaseSyncSettings, Goal, LifeArea, PERSONAL_AREA, Project,
+    CalendarSettings, DatabaseSyncSettings, Goal, LifeArea, Objective, PERSONAL_AREA, Project,
     ProjectsSettings, TriageRequirements, WeekRange, config_path, project_dirs,
 };
 pub use timeslay_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
