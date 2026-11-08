@@ -665,7 +665,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
     );
     let (task_groups, tasks_hidden) = task_groups(&events, snapshot, settings, &block_refs);
 
-    let summary = day_summary(snapshot, &events, settings, &loaded_block_keys);
+    let summary = day_summary(snapshot, &events, settings);
 
     let today = calendar::day_at(timeslay_core::clock::now(), hour_start);
     let now_min = (day == today)
@@ -685,25 +685,11 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
     }
 }
 
-fn day_summary(
-    snapshot: &Snapshot,
-    events: &[Event],
-    settings: &CalendarSettings,
-    block_keys: &HashSet<String>,
-) -> DaySummary {
+fn day_summary(snapshot: &Snapshot, events: &[Event], settings: &CalendarSettings) -> DaySummary {
     let now = timeslay_core::clock::now();
     let tasks = || events.iter().filter(|event| event.is_task());
     let unslotted = tasks()
-        .filter(|task| task.all_day)
-        .filter(|task| calendar::event_enabled(&snapshot.calendars, task, settings))
-        .filter(|task| !managed_copy(task, settings, block_keys))
-        .filter(|task| {
-            let overdue = tb::overdue(task);
-            let on_day =
-                task.start.date_naive() != tb::UNDATED && task.start.date_naive() == snapshot.day;
-            (on_day || (!settings.hide_overdue_tasks && overdue))
-                && (overdue || tb::needs_slot(task, events))
-        })
+        .filter(|task| tb::unslotted_on(task, snapshot.day, now))
         .count();
 
     DaySummary {
@@ -1745,10 +1731,30 @@ mod tests {
         // The fixture's day is in the past, so every open task is past due.
         assert_eq!(summary.overdue, 3);
         assert_eq!(summary.inbox, 0);
-        // Like the desktop, this counts a finished task on the day too, and
-        // not one that only belongs to an earlier day.
-        assert_eq!(summary.unslotted, 2);
+        // Past-due and completed tasks do not also count as unslotted.
+        assert_eq!(summary.unslotted, 0);
         assert!(summary.needs_attention());
+    }
+
+    #[test]
+    fn the_summary_separates_today_unslotted_tasks_from_overdue_tasks() {
+        let today = timeslay_core::clock::now().date_naive();
+        let mut open = task("open", "Open", None, 1, 30, false);
+        open.start = calendar::at_clock(today, 0, 0);
+        open.end = open.start + Duration::days(1);
+        let mut late = open.clone();
+        late.id = "task:late".into();
+        late.details.description = format!("DEADLINE: {} 00:00", today.pred_opt().unwrap());
+        let mut finished = open.clone();
+        finished.id = "task:finished".into();
+        finished.completed = true;
+        let mut snapshot = snapshot(vec![open, late, finished]);
+        snapshot.day = today;
+
+        let summary = day_summary(&snapshot, &snapshot.events, &settings());
+
+        assert_eq!(summary.unslotted, 1);
+        assert_eq!(summary.overdue, 1);
     }
 
     #[test]

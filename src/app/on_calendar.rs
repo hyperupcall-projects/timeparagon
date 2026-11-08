@@ -215,15 +215,30 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             }
             // One sheet at a time, the same as the menu and the month pickers.
             state.calendar.menu_open = false;
+            state.calendar.actions_open = false;
             state.calendar.color_editor = None;
             state.calendar.month_open = false;
             state.overview_month_open = false;
             iced::widget::operation::focus(iced::widget::Id::new(ui::calendar::SEARCH_INPUT))
         }
+        CalendarMessage::CalendarActionsToggled => {
+            state.calendar.actions_open = !state.calendar.actions_open;
+            if state.calendar.actions_open {
+                // One sheet at a time, the same as the View sheet and the
+                // month pickers.
+                state.calendar.menu_open = false;
+                state.calendar.search.open = false;
+                state.calendar.color_editor = None;
+                state.calendar.month_open = false;
+                state.overview_month_open = false;
+            }
+            Task::none()
+        }
         CalendarMessage::CalendarMenuToggled => {
             state.calendar.menu_open = !state.calendar.menu_open;
             if state.calendar.menu_open {
                 state.calendar.search.open = false;
+                state.calendar.actions_open = false;
             }
             // Dismissing the menu also puts away any open color picker, so it
             // does not pop back up the next time the menu is opened.
@@ -476,6 +491,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 if !state.range_view_active() {
                     state.calendar.menu_open = false;
                     state.calendar.search.open = false;
+                    state.calendar.actions_open = false;
                 }
             }
             Task::none()
@@ -486,6 +502,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                 state.overview_month = calendar::first_of_month(state.week_anchor);
                 state.calendar.menu_open = false;
                 state.calendar.search.open = false;
+                state.calendar.actions_open = false;
             }
             Task::none()
         }

@@ -3,14 +3,14 @@
 use super::*;
 use iced::widget::column;
 
-/// The top of the calendar: the month picker and the way into the calendar
-/// menu.
+/// The top of the calendar: the month picker, View (the Calendars and Filter
+/// tabs) and Actions (Sync now and Set Alarm).
 ///
 /// In the day view the picker is labelled with the day in view; in the week
 /// view it is labelled with the range on screen, and the picker is the way to
 /// move through weeks. Every button sits at the left. The settings are reached
-/// through the menu rather than from here, because a narrow window has room
-/// for few buttons.
+/// through View and Actions rather than from here, because a narrow window has
+/// room for few buttons.
 pub(super) fn header<'a>(
     state: &'a State,
     metrics: &Metrics,
@@ -59,37 +59,20 @@ pub(super) fn header<'a>(
             crate::ui::controls::secondary
         });
 
-    // Alarm setting mode turns the day view into a place to click a time, so
-    // the button that enters it is lit for as long as it lasts.
-    let set_alarm = button(text("Set Alarm").size(metrics.label()).center())
-        .on_press(Message::Alarms(crate::alarms::Action::ModeToggled))
-        .style(if state.alarms.mode {
-            crate::ui::controls::primary
-        } else {
-            crate::ui::controls::secondary
-        });
-
-    let menu = button(text("Menu").size(metrics.label()).center())
-        .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
-        .style(if state.calendar.menu_open {
-            crate::ui::controls::primary
-        } else {
-            crate::ui::controls::secondary
-        });
-
-    let search = search_button(state, metrics);
+    let view = view_button(state, metrics);
+    let actions = actions_button(state, metrics);
 
     if header_lines(metrics, weekly) == 1 {
-        row![month, set_alarm, search, menu, Space::new().width(Fill)]
+        row![month, view, actions, Space::new().width(Fill)]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into()
     } else {
         column![
-            row![month, set_alarm, Space::new().width(Fill)]
+            row![month, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
-            row![search, menu, Space::new().width(Fill)]
+            row![view, actions, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
         ]
@@ -98,10 +81,10 @@ pub(super) fn header<'a>(
     }
 }
 
-/// The narrowest a week view can be and still hold the range picker, Set
-/// Alarm, Search and Menu on one line.
+/// The narrowest a week view can be and still hold the range picker, View
+/// and Actions on one line.
 pub(super) const SINGLE_LINE_HEADER: f32 = 420.0;
-/// The narrowest a calendar can be and still hold all four buttons on one line.
+/// The narrowest a calendar can be and still hold all three buttons on one line.
 pub(super) const TWO_LINE_HEADER: f32 = 320.0;
 
 /// How many lines the header takes. The week view's picker carries a whole
@@ -206,9 +189,15 @@ pub(super) fn all_day_row_on<'a>(
             || task_needs_slot(state, event, day)
             || crate::timeblocking::overdue(event)
     });
-    // Counted before the search narrows the list: this is a tally of the day,
-    // and a search does not slot anything in.
-    let unslotted = events.iter().filter(|event| event.is_task()).count();
+    // Use the Today list's rule, independently of calendar visibility and search.
+    // Overdue tasks have their own count and do not also need a slot here.
+    let now = crate::clock::now();
+    let unslotted = state
+        .calendar
+        .events_on(day)
+        .iter()
+        .filter(|event| crate::timeblocking::unslotted_on(event, day, now))
+        .count();
     events.retain(|event| {
         state
             .calendar

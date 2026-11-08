@@ -214,7 +214,7 @@ fn month_navigation_remains_reachable_at_small_widths() {
     let state = state();
     for width in [180.0, 260.0, 420.0, 1100.0] {
         let mut ui = render(&state, Size::new(width, 900.0));
-        for label in ["Month", "Today", "Menu", "August 2026 ▾"] {
+        for label in ["Month", "Today", "View", "August 2026 ▾"] {
             let bounds = ui.find(label).unwrap().bounds();
             assert!(
                 bounds.x >= 0.0 && bounds.x + bounds.width <= width + 0.5,

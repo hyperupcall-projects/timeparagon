@@ -541,6 +541,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.calendar.open_event = None;
             state.calendar.menu_open = false;
             state.calendar.search.open = false;
+            state.calendar.actions_open = false;
             state.calendar.month_open = false;
             state.overview_month_open = false;
             let unfocus = iced::advanced::widget::operate(
@@ -556,6 +557,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             state.calendar.detail_event = None;
             state.calendar.menu_open = false;
             state.calendar.search.open = false;
+            state.calendar.actions_open = false;
             return open(state, id);
         }
         Action::CloseView => {

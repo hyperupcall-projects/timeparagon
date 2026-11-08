@@ -138,6 +138,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         menu_overlay(state, metrics)
     } else if state.calendar.search.open {
         search_overlay(state, metrics)
+    } else if state.calendar.actions_open {
+        actions_overlay(state, metrics, true)
     } else {
         iced::widget::Space::new().width(0.0).height(0.0).into()
     };

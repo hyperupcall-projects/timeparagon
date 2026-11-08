@@ -1,31 +1,15 @@
-//! The Search popup, which narrows every calendar view down to what matches.
+//! The Filter tab of the View sheet, which narrows every calendar view down
+//! to what matches.
 
 use super::*;
 use crate::calendar::search::{Action, AvailabilityFilter};
 use iced::widget::column;
 
-/// The search bar, focused as the popup opens.
+/// The search bar, focused as the Filter tab opens.
 pub(crate) const SEARCH_INPUT: &str = "calendar-search";
-/// Wide enough for the time control, and narrow enough on a large window to
-/// leave the view beside it in sight, updating as the search changes.
-const POPUP_WIDTH: f32 = 380.0;
 
 fn message(action: Action) -> Message {
     Message::Calendar(CalendarMessage::CalendarSearch(action))
-}
-
-/// The way into the popup. It stays lit while a filter is on, because the
-/// filter stays on after the popup closes.
-pub(super) fn search_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
-    let search = &state.calendar.search;
-    button(text("Search").size(metrics.label()).center())
-        .on_press(message(Action::Toggle))
-        .style(if search.open || search.is_modified() {
-            crate::ui::controls::primary
-        } else {
-            crate::ui::controls::secondary
-        })
-        .into()
 }
 
 /// An entry in the location list, where nothing chosen means every location.
@@ -147,8 +131,6 @@ fn location_field<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
 
 pub(super) fn search_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let search = &state.calendar.search;
-    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
-        .on_press(message(Action::Toggle));
 
     let panel = column![
         crate::ui::controls::text_input("Search", &search.query)
@@ -208,29 +190,11 @@ pub(super) fn search_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element
     .spacing(metrics.spacing)
     .width(Fill);
 
-    let card = container(
-        crate::ui::controls::scrollable(container(panel).padding(iced::Padding {
-            right: 14.0,
-            ..iced::Padding::ZERO
-        }))
-        .height(Length::Shrink),
+    super::view_sheet(
+        state,
+        metrics,
+        super::ViewTab::Filter,
+        panel,
+        message(Action::Toggle),
     )
-    .max_height(
-        (state.main_size.height - header_offset(state, metrics) - metrics.padding * 2.0).max(120.0),
-    )
-    .max_width(POPUP_WIDTH)
-    .padding(metrics.padding)
-    .width(Fill)
-    .style(crate::ui::controls::surface);
-
-    let aligned = column![
-        Space::new().height(header_offset(state, metrics)),
-        container(iced::widget::opaque(card))
-            .padding(metrics.padding)
-            .width(Fill)
-            .align_x(iced::alignment::Horizontal::Right),
-    ]
-    .width(Fill);
-
-    stack![dismiss, aligned].into()
 }

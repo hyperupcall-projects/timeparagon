@@ -658,6 +658,8 @@ pub enum CalendarMessage {
     CalendarGridScrolled(f32, f32),
 
     CalendarMenuToggled,
+    /// The Actions button in the calendar header.
+    CalendarActionsToggled,
     CalendarSearch(calendar::search::Action),
     CalendarToggled(String, bool),
     /// Move a calendar-view source one position up (left) or down (right).
@@ -2204,6 +2206,9 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
                 None
             } else if state.calendar.search.open {
                 state.calendar.search.open = false;
+                None
+            } else if state.calendar.actions_open {
+                state.calendar.actions_open = false;
                 None
             } else if state.alarm_active {
                 Some(Message::System(SystemMessage::Dismiss))

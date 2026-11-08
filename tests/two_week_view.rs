@@ -69,7 +69,7 @@ fn shows_two_whole_weeks_starting_on_the_anchors_monday() {
     assert_eq!(dates[13], date(2026, 11, 8));
     let mut ui = render(&state, Size::new(1400.0, 1000.0));
     assert!(ui.find("Oct 26 – Nov 8, 2026 ▾").is_ok());
-    for label in ["2 Weeks", "MON", "SUN", "26", "Nov 1", "8", "Today", "Menu"] {
+    for label in ["2 Weeks", "MON", "SUN", "26", "Nov 1", "8", "Today", "View"] {
         assert!(ui.find(label).is_ok(), "missing {label}");
     }
     let clock = calendar::time_format::clock(
@@ -274,7 +274,7 @@ fn navigation_remains_reachable_at_small_widths() {
     let state = state(1);
     for width in [180.0, 260.0, 420.0, 1400.0] {
         let mut ui = render(&state, Size::new(width, 900.0));
-        for label in ["2 Weeks", "Today", "Menu", "Oct 26 – Nov 8, 2026 ▾"] {
+        for label in ["2 Weeks", "Today", "View", "Oct 26 – Nov 8, 2026 ▾"] {
             assert!(ui.find(label).is_ok(), "{label} missing at {width}");
         }
     }

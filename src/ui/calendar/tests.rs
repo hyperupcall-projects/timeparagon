@@ -1845,7 +1845,7 @@ fn search_action(state: &mut State, action: calendar::search::Action) {
 }
 
 #[test]
-fn search_sits_beside_menu_on_every_header_width() {
+fn view_sits_beside_actions_on_every_header_width() {
     let state = search_state();
     for width in [180.0, 260.0, 320.0, 539.0, 540.0, 900.0] {
         let metrics = Metrics::of(Size::new(width, 700.0));
@@ -1855,15 +1855,17 @@ fn search_sits_beside_menu_on_every_header_width() {
                 metrics.size,
                 header(&state, &metrics, weekly),
             );
-            assert!(ui.find("Search").is_ok(), "header at {width}");
-            assert!(ui.find("Menu").is_ok(), "header at {width}");
+            assert!(ui.find("View").is_ok(), "header at {width}");
+            assert!(ui.find("Actions").is_ok(), "header at {width}");
+            assert!(ui.find("Set Alarm").is_err(), "header at {width}");
         }
         let mut ui = iced_test::Simulator::with_size(
             Default::default(),
             metrics.size,
             range_heading(&state, "Oct 2026 ▾".into(), &metrics),
         );
-        assert!(ui.find("Search").is_ok(), "range heading at {width}");
+        assert!(ui.find("View").is_ok(), "range heading at {width}");
+        assert!(ui.find("Actions").is_ok(), "range heading at {width}");
     }
 }
 
@@ -1970,6 +1972,67 @@ fn search_popup_and_the_other_sheets_replace_each_other() {
     );
     assert!(state.calendar.menu_open);
     assert!(!state.calendar.search.open);
+}
+
+#[test]
+fn the_view_sheet_switches_tabs_and_actions_offers_sync_above_set_alarm() {
+    let mut state = search_state();
+    let metrics = Metrics::of(state.main_size);
+    let clicked = |element: Element<'_, Message>, label: &str| -> Vec<Message> {
+        let mut ui = iced_test::Simulator::with_size(Default::default(), metrics.size, element);
+        ui.click(label).unwrap();
+        ui.into_messages().collect()
+    };
+
+    // View opens on the Calendars tab, and Filter switches to the search.
+    assert!(matches!(
+        clicked(header(&state, &metrics, false), "View").as_slice(),
+        [Message::Calendar(CalendarMessage::CalendarMenuToggled)]
+    ));
+    let _ = crate::app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarMenuToggled),
+    );
+    let messages = clicked(menu_overlay(&state, &metrics), "Filter");
+    for message in messages {
+        let _ = crate::app::update(&mut state, message);
+    }
+    assert!(state.calendar.search.open);
+    assert!(!state.calendar.menu_open);
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        search_overlay(&state, &metrics),
+    );
+    assert!(ui.find("Calendars").is_ok());
+    drop(ui);
+
+    // Actions puts the View sheet away and holds Sync now above Set Alarm.
+    let _ = crate::app::update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarActionsToggled),
+    );
+    assert!(state.calendar.actions_open);
+    assert!(!state.calendar.search.open);
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        actions_overlay(&state, &metrics, true),
+    );
+    let sync = ui.find("Sync now").unwrap().bounds();
+    let alarm = ui.find("Set Alarm").unwrap().bounds();
+    assert!(sync.y < alarm.y, "Sync now sits above Set Alarm");
+    assert!((sync.width - alarm.width).abs() < 0.5, "the two look alike");
+    drop(ui);
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        menu_overlay(&state, &metrics),
+    );
+    assert!(
+        ui.find("Sync now").is_err(),
+        "sync has left the Calendars tab"
+    );
 }
 
 #[test]
@@ -2140,8 +2203,9 @@ fn clicking_a_popups_background_keeps_it_open_but_clicking_outside_closes_it() {
     let metrics = Metrics::of(state.main_size);
     // In each card's own padding, clear of every control.
     let top = header_offset(&state, &metrics) + metrics.padding + 2.0;
-    let search_inside = iced::Point::new(metrics.size.width - metrics.padding - 2.0, top);
-    let menu_inside = iced::Point::new(metrics.padding + 2.0, top);
+    // Both tabs share one card, hung at the left below the header.
+    let search_inside = iced::Point::new(metrics.padding * 2.0 + 2.0, top);
+    let menu_inside = search_inside;
     let outside = iced::Point::new(5.0, metrics.size.height - 5.0);
     let dismissed = |messages: &[Message]| {
         messages.iter().any(|message| {
@@ -2527,4 +2591,46 @@ fn a_compact_habit_checkbox_captures_the_click_inside_the_event_button() {
             );
         }
     }
+}
+
+#[test]
+fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
+    let mut state = State::blank();
+    let today = crate::clock::now().date_naive();
+    let mut task = calendar::sample_snapshot().events.remove(0);
+    task.id = "task:open".into();
+    task.calendar_id = "tasks:inbox".into();
+    task.title = "Open".into();
+    task.all_day = true;
+    task.completed = false;
+    task.start = calendar::at_clock(today, 0, 0);
+    task.end = task.start + chrono::Duration::days(1);
+    task.details = Default::default();
+    let mut overdue = task.clone();
+    overdue.id = "task:overdue".into();
+    overdue.details.description = format!("DEADLINE: {} 00:00", today.pred_opt().unwrap());
+    let mut done = task.clone();
+    done.id = "task:done".into();
+    done.completed = true;
+    let mut blocked = task.clone();
+    blocked.id = "task:blocked".into();
+    blocked.details.task_data = Some(crate::task_db::TaskData {
+        id: 101,
+        legacy_key: None,
+        metadata: crate::timeblocking::Metadata {
+            block: Some("missing-block".into()),
+            ..Default::default()
+        },
+    });
+    state.calendar.day = today;
+    state.calendar.events = vec![task, overdue, done, blocked];
+    assert_eq!(crate::inbox::today_tasks(&state).len(), 1);
+    assert_eq!(crate::inbox::overdue_tasks(&state).len(), 1);
+    let metrics = Metrics::of(Size::new(900.0, 700.0));
+    let mut ui = iced_test::Simulator::with_size(
+        iced_test::core::Settings::default(),
+        Size::new(900.0, 700.0),
+        header::all_day_row_on(&state, &metrics, today, false).unwrap(),
+    );
+    assert!(ui.find("1 overdue.  0 in inbox.  1 not slotted in").is_ok());
 }

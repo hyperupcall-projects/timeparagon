@@ -46,10 +46,11 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
 }
 
 /// Set Alarm has to be there, and has to work, at the narrowest size: it is
-/// the one way into alarm setting mode.
+/// the one way into alarm setting mode. It lives in the Actions popup.
 #[test]
 fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
-    let state = state();
+    let mut state = state();
+    state.calendar.actions_open = true;
     let mut ui = render(&state, Size::new(180.0, 240.0));
 
     let _ = ui.click("Set Alarm")?;
@@ -67,15 +68,15 @@ fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
     Ok(())
 }
 
-/// Set Alarm sits beside Menu at every width, and the old timer button and
-/// its status line are gone from the foot of the calendar.
+/// View and Actions sit in the header at every width, and the old timer
+/// button and its status line are gone from the foot of the calendar.
 #[test]
 fn set_alarm_replaces_the_timer_at_the_foot_of_the_calendar() {
     for width in WIDTHS {
         let state = state();
         let mut ui = render(&state, Size::new(width, 600.0));
 
-        for label in ["Set Alarm", "Menu"] {
+        for label in ["View", "Actions"] {
             assert!(ui.find(label).is_ok(), "{label:?} is missing at {width}px");
         }
         for label in ["Timer", "No target", "Go back"] {
@@ -107,7 +108,7 @@ fn alarm_mode_explains_itself() {
         ui.find("Click a time to set an alarm. Esc cancels.")
             .is_ok()
     );
-    assert!(ui.find("Set Alarm").is_ok());
+    assert!(ui.find("Actions").is_ok());
 }
 
 /// The popup offers what an alarm does, a way to remove it, and how far off it
@@ -319,7 +320,7 @@ fn rendering_never_panics_at_any_size() {
         Size::new(4_000.0, 4_000.0),
     ] {
         let mut ui = render(&state, size);
-        let _: Result<_, _> = ui.find("Set Alarm");
+        let _: Result<_, _> = ui.find("Actions");
     }
 }
 
@@ -394,7 +395,7 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
     let _: Result<_, _> = ui.find("nothing");
 }
 
-/// The calendar has to stay usable at 200px: the day heading, the menu, a
+/// The calendar has to stay usable at 200px: the day heading, View, a
 /// way to open Google Calendar even before anyone has signed in, and the way
 /// in to setting an alarm.
 #[test]
@@ -406,7 +407,7 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Menu", "Team offsite", "Set Alarm"] {
+    for label in ["View", "Team offsite", "Actions"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 }
@@ -429,7 +430,7 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
         );
     }
 
-    for label in ["Oct. 1 ▾", "Menu"] {
+    for label in ["Oct. 1 ▾", "View"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
     }
 
@@ -523,13 +524,14 @@ fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
 
     let mut ui = render(&state, Size::new(200.0, 500.0));
 
-    for label in ["Calendars", "Personal", "Work", "Tasks", "Sync now"] {
+    for label in ["Calendars", "Filter", "Personal", "Work", "Tasks"] {
         assert!(ui.find(label).is_ok(), "{label:?} is missing from the menu");
     }
     for label in [
         "Open Google Calendar",
         "Open in Google Calendar",
         "Dock to screen edge",
+        "Sync now",
     ] {
         assert!(ui.find(label).is_err(), "{label:?} is still in the menu");
     }
@@ -667,7 +669,7 @@ fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
     // The projects themselves are no longer listed on the page.
     assert!(ui.find("School/Calculus").is_err());
     assert!(ui.find("Add").is_ok());
-    assert!(ui.find("Set Alarm").is_err());
+    assert!(ui.find("Actions").is_err());
     assert!(ui.find(tab_label(200.0, 0)).is_ok());
     drop(ui);
 
@@ -2541,8 +2543,11 @@ fn start_and_stop_are_local_and_do_not_change_google_task_status() {
 fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(), Error> {
     let state = focus_state();
     let mut ui = render(&state, Size::new(900.0, 720.0));
-    let _ = ui.click("Set Alarm")?;
-    assert!(!ui.into_messages().any(|m| matches!(m, Message::Alarms(_))));
+    let _ = ui.click("Actions")?;
+    assert!(!ui.into_messages().any(|m| matches!(
+        m,
+        Message::Calendar(CalendarMessage::CalendarActionsToggled)
+    )));
     Ok(())
 }
 

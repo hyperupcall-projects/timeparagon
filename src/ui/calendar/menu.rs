@@ -186,16 +186,9 @@ fn zoom_section<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let dismiss = mouse_area(
-        container(iced::widget::Space::new())
-            .width(Fill)
-            .height(Fill),
-    )
-    .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled));
+    let dismiss = Message::Calendar(CalendarMessage::CalendarMenuToggled);
 
-    let mut panel = column![text("Calendars").size(metrics.label() + 1.0)]
-        .spacing(metrics.spacing)
-        .width(Fill);
+    let mut panel = column![].spacing(metrics.spacing).width(Fill);
 
     let sources = state.calendar.display_sources(&state.config.calendar);
     for (heading, is_tasks) in [("Google Calendars", false), ("Google Task Lists", true)] {
@@ -315,39 +308,181 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
         );
     }
 
+    view_sheet(state, metrics, ViewTab::Calendars, panel, dismiss)
+}
+
+/// The two tabs of the View sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ViewTab {
+    Calendars,
+    Filter,
+}
+
+/// Wide enough for the filter's time control, and narrow enough on a large
+/// window to leave the view beside it in sight, updating as it changes.
+const VIEW_SHEET_WIDTH: f32 = 380.0;
+
+/// The View button: the way into the Calendars and Filter tabs. It stays lit
+/// while a filter is on, because the filter stays on after the sheet closes.
+pub(super) fn view_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
+    let search = &state.calendar.search;
+    let open = state.calendar.menu_open || search.open;
+    // Each tab's own toggle closes it; with neither open, the sheet opens on
+    // the Calendars tab.
+    let message = if search.open {
+        Message::Calendar(CalendarMessage::CalendarSearch(
+            calendar::search::Action::Toggle,
+        ))
+    } else {
+        Message::Calendar(CalendarMessage::CalendarMenuToggled)
+    };
+    button(text("View").size(metrics.label()).center())
+        .on_press(message)
+        .style(if open || search.is_modified() {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        })
+        .into()
+}
+
+/// The Actions button, the way into Sync now and Set Alarm.
+pub(super) fn actions_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
+    button(text("Actions").size(metrics.label()).center())
+        .on_press(Message::Calendar(CalendarMessage::CalendarActionsToggled))
+        .style(if state.calendar.actions_open || state.alarms.mode {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        })
+        .into()
+}
+
+fn tab_button<'a>(
+    label: &'a str,
+    selected: bool,
+    message: Message,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    button(text(label).size(metrics.label()).center().width(Fill))
+        .width(Fill)
+        .on_press_maybe((!selected).then_some(message))
+        .style(if selected {
+            crate::ui::controls::primary
+        } else {
+            crate::ui::controls::secondary
+        })
+        .into()
+}
+
+/// The View sheet: the Calendars and Filter tabs over `panel`, the content
+/// of the tab in view, in a card that hangs below the header at the left.
+pub(super) fn view_sheet<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    tab: ViewTab,
+    panel: iced::widget::Column<'a, Message>,
+    dismiss: Message,
+) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill)).on_press(dismiss);
+
+    let tabs = row![
+        tab_button(
+            "Calendars",
+            tab == ViewTab::Calendars,
+            Message::Calendar(CalendarMessage::CalendarMenuToggled),
+            metrics,
+        ),
+        tab_button(
+            "Filter",
+            tab == ViewTab::Filter,
+            Message::Calendar(CalendarMessage::CalendarSearch(
+                calendar::search::Action::Toggle,
+            )),
+            metrics,
+        ),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+
+    let body = crate::ui::controls::scrollable(container(panel).padding(iced::Padding {
+        right: 14.0,
+        ..iced::Padding::ZERO
+    }))
+    .height(Length::Shrink);
+
+    let card = container(column![tabs, body].spacing(metrics.spacing))
+        .max_height(
+            (state.main_size.height - header_offset(state, metrics) - metrics.padding * 2.0)
+                .max(120.0),
+        )
+        .max_width(VIEW_SHEET_WIDTH)
+        .padding(metrics.padding)
+        .width(Fill)
+        .style(crate::ui::controls::surface);
+
+    let aligned = column![
+        // Keep the header row tappable; the sheet starts below it.
+        Space::new().height(header_offset(state, metrics)),
+        container(iced::widget::opaque(card))
+            .padding(metrics.padding)
+            .width(Fill),
+    ]
+    .width(Fill);
+
+    stack![dismiss, aligned].into()
+}
+
+/// How wide the Actions popup is: room for its labels and no more.
+const ACTIONS_WIDTH: f32 = 220.0;
+
+/// The Actions popup: Sync now above Set Alarm, as alike as two buttons.
+/// `alarm` is false where there is no grid to set an alarm on.
+pub(super) fn actions_overlay<'a>(
+    state: &'a State,
+    metrics: &Metrics,
+    alarm: bool,
+) -> Element<'a, Message> {
+    let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+        .on_press(Message::Calendar(CalendarMessage::CalendarActionsToggled));
+
     let sync_label = if state.calendar.is_busy() {
         "Syncing…"
     } else {
         "Sync now"
     };
-
-    let mut sync = button(text(sync_label).size(metrics.label()).center().width(Fill))
+    let sync = button(text(sync_label).size(metrics.label()).center().width(Fill))
         .width(Fill)
-        .style(crate::ui::controls::primary);
+        .on_press_maybe(
+            (state.calendar.is_signed_in() && !state.calendar.is_busy())
+                .then_some(Message::Calendar(CalendarMessage::CalendarSyncRequested)),
+        )
+        .style(crate::ui::controls::secondary);
 
-    if state.calendar.is_signed_in() && !state.calendar.is_busy() {
-        sync = sync.on_press(Message::Calendar(CalendarMessage::CalendarSyncRequested));
+    let mut panel = column![sync].spacing(metrics.spacing).width(Fill);
+    if alarm {
+        // Alarm setting mode turns the day view into a place to click a time,
+        // so the button that enters it is lit for as long as it lasts.
+        panel = panel.push(
+            button(text("Set Alarm").size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .on_press(Message::Alarms(crate::alarms::Action::ModeToggled))
+                .style(if state.alarms.mode {
+                    crate::ui::controls::primary
+                } else {
+                    crate::ui::controls::secondary
+                }),
+        );
     }
 
-    panel = panel.push(sync);
-
-    let card = container(
-        crate::ui::controls::scrollable(container(panel).padding(iced::Padding {
-            right: 14.0,
-            ..iced::Padding::ZERO
-        }))
-        .height(Length::Shrink),
-    )
-    .max_height(
-        (state.main_size.height - header_offset(state, metrics) - metrics.padding * 2.0).max(120.0),
-    )
-    .padding(metrics.padding)
-    .width(Length::Fill)
-    .style(crate::ui::controls::surface);
+    let card = container(panel)
+        .max_width(ACTIONS_WIDTH)
+        .padding(metrics.padding)
+        .width(Fill)
+        .style(crate::ui::controls::surface);
 
     let aligned = column![
-        // Keep the header row tappable; the sheet starts below it.
-        iced::widget::Space::new().height(header_offset(state, metrics)),
+        Space::new().height(header_offset(state, metrics)),
         container(iced::widget::opaque(card))
             .padding(metrics.padding)
             .width(Fill),

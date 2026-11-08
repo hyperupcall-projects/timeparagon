@@ -298,6 +298,24 @@ pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
     scheduled_past || deadline_past
 }
 
+/// An active date-only task still awaiting a slot on `day`.
+/// Past-due tasks belong in Overdue, even if they have no slot yet.
+pub fn unslotted_on(
+    event: &Event,
+    day: chrono::NaiveDate,
+    now: chrono::DateTime<chrono::Local>,
+) -> bool {
+    let meta = metadata(event);
+    event.is_task()
+        && !event.completed
+        && !meta.ignored
+        && event.all_day
+        && event.start.date_naive() == day
+        && meta.block.is_none()
+        && meta.schedule.is_none()
+        && !past_due(event, now)
+}
+
 /// A day task needs a slot unless its linked block is among the day's `events`.
 pub fn needs_slot(event: &Event, events: &[Event]) -> bool {
     metadata(event).block.as_ref().is_none_or(|key| {
