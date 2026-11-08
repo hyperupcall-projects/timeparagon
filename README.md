@@ -2,7 +2,7 @@
 
 Easily manage your life using a single app. It is designed to minimize friction and maximize your time spent in flow state.
 
-I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's completely vibe-coded and the source code sort of takes up 150,000 SLOC. 
+I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's completely vibe-coded and the source code sort of takes up 150,000 SLOC.
 
 ## Tour
 
@@ -81,29 +81,33 @@ Of course, there's also week, 2-week, and month views:
 		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
 		- But, also keep track of subtasks (TODO?).
 		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
-- **Manage Habits**
+- **Manage habits:**
 	- Like a regular calendar event, but colored differently and managed differently (UPDATE?).
 	- Distinguish between habits to do, and ones to avoid.
 	- Allow adding data to habits
 	- Allow connecting habit to specific objectives like weight loss (TODO).
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
+- **Track and direct your life:**
+	- Organize goals, objectives, and projects under a life area.
+	- **Set goals:**
+		- These are aspirational/abstract/high-level, there are multiple ways to achieve this, often having longer time horizons.
+	- **Set objectives:** (TODO)
+		- Connect objectives to goals.
+		- Otherwise called a SMART goal, or similar to OKRs.
+		- Tasks, certain amount of time per project. (TODO)
+		- Day, week, month, quarter, year. (TODO)
+	- Connect habits to objectives.
+	- **Manage projects:** (TODO)
+		- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
+		- View as list, kanban, or calendar (TODO).
+		- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
+		- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - **Notes:**
 	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
 	- Local/url (TODO).
 - **Project sessions:** (TODO)
 	- _Configure presets of applications and their positions for easy launching per project (TODO)._
-- **Set goals:** (TODO)
-	- Track long-term goals (year, decade).
-- **Set objectives:** (TODO)
-	- Implement your goals in a SMART way.
-	- Tasks, certain amount of time per project. (TODO)
-	- Day, week, month, quarter, year. (TODO)
-- **Manage projects:** (TODO)
-	- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
-	- View as list, kanban, or calendar (TODO).
-	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
-	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - **Remember people:**
 	- Browse and edit contacts from Google accounts and Google workspace directories.
 	- Associate people with events, tasks, and projects (TODO).

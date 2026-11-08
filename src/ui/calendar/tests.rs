@@ -1858,13 +1858,7 @@ fn search_sits_beside_menu_on_every_header_width() {
         let mut ui = iced_test::Simulator::with_size(
             Default::default(),
             metrics.size,
-            range_heading(
-                &state,
-                "Oct 2026 ▾".into(),
-                CalendarMessage::CalendarDayShift(-1),
-                CalendarMessage::CalendarDayShift(1),
-                &metrics,
-            ),
+            range_heading(&state, "Oct 2026 ▾".into(), &metrics),
         );
         assert!(ui.find("Search").is_ok(), "range heading at {width}");
     }

@@ -203,8 +203,6 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     let heading = range_heading(
         state,
         state.week_anchor.format("%B %Y ▾").to_string(),
-        CalendarMessage::CalendarViewMonthShift(-1),
-        CalendarMessage::CalendarViewMonthShift(1),
         metrics,
     );
     let mut content = column![
@@ -239,13 +237,11 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
     range_layers(state, metrics, content.into())
 }
 
-/// The month picker, the steps back and forward and the menu above a month-shaped
-/// grid.
+/// The month picker, Today, Search and Menu above a month-shaped grid, all at
+/// the left. Moving through the calendar is done from the picker.
 pub(super) fn range_heading<'a>(
     state: &'a State,
     label: String,
-    back: CalendarMessage,
-    forward: CalendarMessage,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
@@ -254,42 +250,28 @@ pub(super) fn range_heading<'a>(
             MonthPicker::Overview,
         )))
         .style(crate::ui::controls::secondary);
+    let today = button(text("Today").size(metrics.label()))
+        .on_press(Message::Calendar(CalendarMessage::CalendarDaySelected(
+            today,
+        )))
+        .style(crate::ui::controls::secondary);
     let search = search_button(state, metrics);
     let menu = button(text("Menu").size(metrics.label()))
         .on_press(Message::Calendar(CalendarMessage::CalendarMenuToggled))
         .style(crate::ui::controls::secondary);
-    let controls = row![
-        nav_button("◀", Message::Calendar(back), metrics),
-        button(text("Today").size(metrics.label()))
-            .on_press(Message::Calendar(CalendarMessage::CalendarDaySelected(
-                today
-            )))
-            .style(crate::ui::controls::secondary),
-        nav_button("▶", Message::Calendar(forward), metrics),
-    ]
-    .spacing(metrics.spacing)
-    .align_y(Alignment::Center);
     if metrics.size.width < TWO_LINE_HEADER {
         column![
-            title,
-            row![Space::new().width(Fill), search, menu]
+            row![title, today, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
-            controls
-        ]
-        .spacing(metrics.spacing)
-        .into()
-    } else if metrics.size.width < 500.0 {
-        column![
-            row![title, Space::new().width(Fill), search, menu]
+            row![search, menu, Space::new().width(Fill)]
                 .spacing(metrics.spacing)
                 .align_y(Alignment::Center),
-            controls
         ]
         .spacing(metrics.spacing)
         .into()
     } else {
-        row![title, controls, Space::new().width(Fill), search, menu]
+        row![title, today, search, menu, Space::new().width(Fill)]
             .spacing(metrics.spacing)
             .align_y(Alignment::Center)
             .into()
@@ -424,20 +406,26 @@ pub(super) fn month_overlay<'a>(
         _ => None,
     };
 
+    // The month on the left; on the right a month back, today, and a month
+    // forward. The dot picks today just as tapping its cell would.
     let title = row![
-        nav_button(
-            "◀",
-            Message::Calendar(CalendarMessage::CalendarMonthShift(picker, -1)),
-            metrics
-        ),
         text(calendar::month_heading(month))
             .size(metrics.label() + 1.0)
             .font(Font {
                 weight: Weight::Bold,
                 ..Font::DEFAULT
             })
-            .width(Fill)
-            .center(),
+            .width(Fill),
+        nav_button(
+            "◀",
+            Message::Calendar(CalendarMessage::CalendarMonthShift(picker, -1)),
+            metrics
+        ),
+        nav_button(
+            "●",
+            Message::Calendar(CalendarMessage::CalendarMonthDayPicked(picker, today)),
+            metrics
+        ),
         nav_button(
             "▶",
             Message::Calendar(CalendarMessage::CalendarMonthShift(picker, 1)),
@@ -482,13 +470,17 @@ pub(super) fn month_overlay<'a>(
         weeks.push(row(cells).spacing(PICKER_CELL_GAP).width(Fill).into());
     }
 
-    let panel = column![
-        title,
-        weekdays,
-        column(weeks).spacing(PICKER_CELL_GAP).width(Fill),
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
+    let mut grid: Element<'a, Message> = column(weeks).spacing(PICKER_CELL_GAP).width(Fill).into();
+    if preview.is_some() {
+        // Pointing at the weekday initials, the title or off the card goes
+        // back to the range in view.
+        grid = mouse_area(grid)
+            .on_exit(Message::Calendar(CalendarMessage::WeekHover(None)))
+            .into();
+    }
+    let panel = column![title, weekdays, grid]
+        .spacing(metrics.spacing)
+        .width(Fill);
 
     let width = PICKER_CELL_WIDTH * 7.0 + PICKER_CELL_GAP * 6.0 + metrics.padding * 2.0;
     let card = container(panel)
@@ -557,9 +549,10 @@ pub(super) fn day_cell<'a>(
         }
     });
     if preview.is_some() {
+        // Leaving a cell keeps its range: the gaps between cells are not a
+        // place to point at. Leaving the grid as a whole clears it.
         mouse_area(cell)
             .on_enter(Message::Calendar(CalendarMessage::WeekHover(Some(date))))
-            .on_exit(Message::Calendar(CalendarMessage::WeekHover(None)))
             .into()
     } else {
         cell.into()

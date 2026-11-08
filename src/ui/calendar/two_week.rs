@@ -71,13 +71,7 @@ pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
             last.format("%b %-d, %Y")
         )
     };
-    let heading = range_heading(
-        state,
-        label,
-        CalendarMessage::CalendarDayShift(-14),
-        CalendarMessage::CalendarDayShift(14),
-        &metrics,
-    );
+    let heading = range_heading(state, label, &metrics);
     let mut content = column![
         heading,
         text("Select a date to open its timeline, or an empty space to add an event.")
