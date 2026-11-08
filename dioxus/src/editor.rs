@@ -84,16 +84,11 @@ fn Sheet(
                     div { class: "modal-titles",
                         div { class: "modal-title-row",
                             h2 { class: "modal-title", "{title}" }
-                            if let day::Source::Kind { name, color } = &source {
-                                span {
-                                    class: "kind-chip",
-                                    style: "background: {css_color(*color)}; color: {css_color(on_color(*color))};",
-                                    "{name}"
-                                }
+                            span {
+                                class: "kind-chip",
+                                style: "background: {css_color(source.color)}; color: {css_color(on_color(source.color))};",
+                                "{source.name}"
                             }
-                        }
-                        if let day::Source::Calendar(name) = &source {
-                            div { class: "modal-sub", "{name}" }
                         }
                     }
                     button {
@@ -2388,7 +2383,8 @@ mod tests {
         assert_offers(
             &html,
             &[
-                "Calendar: Work",
+                "kind-chip",
+                ">Work<",
                 "Standup",
                 "Projects",
                 "Start Time",

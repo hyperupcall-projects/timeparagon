@@ -26,7 +26,6 @@ pub fn event_editor<'a>(
                 super::super::links::text(event.title.clone(), metrics.label() + 2.0),
                 metrics,
             ),
-            event_source(state, event, metrics),
             text(schedule_line(event, state.config.appearance.time_format))
                 .size(metrics.label())
                 .style(text::secondary),
@@ -114,7 +113,7 @@ pub fn event_editor<'a>(
     }
     let targets = state.calendar.move_targets(event, &state.config.calendar);
     let source: Option<Element<'a, Message>> = if targets.is_empty() {
-        event_source(state, event, metrics)
+        None
     } else {
         let options: Vec<CalendarChoice> = targets
             .into_iter()

@@ -223,8 +223,14 @@ impl EventKind {
         })
     }
 
-    /// The kind's chip: its name, in the color configured for it.
-    pub fn chip(self, event: &Event, settings: &CalendarSettings) -> Option<(&'static str, Color)> {
+    /// The kind's chip: its name, in the color configured for it. An event
+    /// from another calendar is named by its calendar, in the event's color.
+    pub fn chip(
+        self,
+        event: &Event,
+        settings: &CalendarSettings,
+        calendars: &[Calendar],
+    ) -> (String, Color) {
         let color = match self {
             Self::Sleep => settings.sleep_color(),
             Self::Habit => settings.habit_color(),
@@ -234,9 +240,15 @@ impl EventKind {
                 .unwrap_or(colors::TASK),
             Self::TimeBlock => settings.time_block_color(),
             Self::AppEvent => settings.event_color(),
-            Self::External => return None,
+            Self::External => {
+                let name = calendars
+                    .iter()
+                    .find(|calendar| calendar.id == event.calendar_id)
+                    .map_or(event.calendar_id.as_str(), |calendar| calendar.name.as_str());
+                return (name.to_owned(), event.display_color(settings));
+            }
         };
-        Some((self.label()?, color))
+        (self.label().unwrap_or_default().to_owned(), color)
     }
 }
 
