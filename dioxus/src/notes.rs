@@ -1,7 +1,7 @@
-//! Notes: Markdown documents stored locally and synced through Turso.
+//! Notes: Markdown files in the notes directory set in `config.toml`.
 //!
-//! The documents and how they sync are in `timeslay_core::notes`, the same as
-//! on the desktop. This is the phone's screen for them, and the section that
+//! The files are handled in `timeslay_core::notes`, the same as on the
+//! desktop. This is the phone's screen for them, and the section that
 //! shows a note's connections in the editors.
 
 use std::time::Duration;
@@ -18,6 +18,8 @@ use timeslay_core::timeblocking as tb;
 /// How long typing must pause before the local copy is written.
 const SAVE_AFTER: Duration = Duration::from_millis(400);
 const MAX_CANDIDATES: usize = 8;
+/// Shown while notes have nowhere to go.
+const NO_DIRECTORY: &str = "Notes are not saved: set a directory under [notes] in config.toml";
 
 /// The note an editor asked to open, shared through context.
 #[derive(Clone, Copy)]
@@ -27,6 +29,10 @@ pub struct NoteOpening(pub Signal<Option<String>>);
 #[derive(Clone, Copy, PartialEq)]
 pub struct NotesStore {
     pub library: Signal<Library>,
+    /// The notes directory, when one is set.
+    directory: Signal<Option<std::path::PathBuf>>,
+    /// The directory's fingerprint when it was last read.
+    fingerprint: Signal<Option<u64>>,
     pub error: Signal<Option<String>>,
     /// Counts edits, so only the last of a burst of typing starts a save.
     edits: Signal<u64>,
@@ -35,46 +41,76 @@ pub struct NotesStore {
 
 impl NotesStore {
     pub fn new() -> Self {
-        let library = timeslay_core::task_db::path()
-            .map(|path| Library::load(&path))
-            .unwrap_or_default();
+        let directory = notes::directory();
+        let mut error = None;
+        let library = match &directory {
+            Some(directory) => {
+                if let Some(database) = timeslay_core::task_db::path()
+                    && let Err(problem) = notes::migrate_database(&database, directory)
+                {
+                    eprintln!("Could not move the notes out of the database: {problem}");
+                    error = Some(format!("Could not move the old notes: {problem}"));
+                }
+                Library::load(directory)
+            }
+            None => {
+                error = Some(NO_DIRECTORY.to_owned());
+                Library::default()
+            }
+        };
         Self {
             library: Signal::new(library),
-            error: Signal::new(None),
+            directory: Signal::new(directory),
+            fingerprint: Signal::new(None),
+            error: Signal::new(error),
             edits: Signal::new(0),
             saved_edits: Signal::new(0),
         }
     }
 
+    /// Reads the directory again when its files changed.
     pub fn reload_shared(mut self) {
         if *self.edits.peek() != *self.saved_edits.peek() {
             return;
         }
-        let Some(path) = timeslay_core::task_db::path() else {
+        let Some(directory) = self.directory.peek().clone() else {
             return;
         };
-        if let Ok(Some(library)) = timeslay_core::task_db::read_document::<Library>(
-            &path,
-            timeslay_core::task_db::keys::NOTES,
-        ) && library != *self.library.peek()
-        {
-            self.library.set(library);
+        let fingerprint = notes::fingerprint(&directory);
+        if *self.fingerprint.peek() == Some(fingerprint) {
+            return;
         }
-    }
-    fn save_local(mut self) {
-        let Some(path) = timeslay_core::task_db::path() else {
-            return;
-        };
-        if let Err(error) = self.library.peek().save(&path) {
-            let mut message = self.error;
-            message.set(Some(format!("Could not save notes: {error}")));
-        } else {
-            self.error.set(None);
-            self.saved_edits.set(*self.edits.peek());
+        match Library::read(&directory) {
+            Ok(mut library) => {
+                library.adopt_identities(&self.library.peek());
+                if library != *self.library.peek() {
+                    self.library.set(library);
+                }
+                self.fingerprint.set(Some(fingerprint));
+            }
+            Err(error) => eprintln!("Could not reload notes: {error}"),
         }
     }
 
-    /// Saves after typing pauses. The database journal handles replication.
+    fn save_local(mut self) {
+        let Some(directory) = self.directory.peek().clone() else {
+            return;
+        };
+        let result = self.library.peek().save(&directory);
+        match result {
+            Ok(saved) => {
+                self.library.write().saved(&saved);
+                self.error.set(None);
+                self.saved_edits.set(*self.edits.peek());
+            }
+            Err(error) => {
+                let mut message = self.error;
+                message.set(Some(format!("Could not save notes: {error}")));
+            }
+        }
+    }
+
+    /// Saves after typing pauses.
     pub fn touched(mut self) {
         let edit = *self.edits.peek() + 1;
         self.edits.set(edit);

@@ -1,18 +1,21 @@
-//! The Notes screen: Markdown documents stored locally and synced through Turso.
+//! The Notes screen: Markdown files in the notes directory.
 //!
-//! The documents themselves and how they sync are in `timeslay_core::notes`.
+//! The files themselves are in `timeslay_core::notes`.
 //! This is what the app is in the middle of doing with them. It is unrelated
 //! to the notepad, which is the single page behind the "Note" tab.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::Task;
 use iced::widget::text_editor;
-use timeslay_core::notes::{self, Library, Link, LinkKind, Pastel};
+use timeslay_core::notes::{self, Library, Link, LinkKind, Pastel, Saved};
 
 use crate::app::{EventMessage, Message, NavigationMessage, Screen, State};
 use crate::blocking;
 use crate::calendar::Event;
+
+/// Shown while notes have nowhere to go.
+const NO_DIRECTORY: &str = "Notes are not saved: set a directory under [notes] in config.toml";
 
 /// How far either side of the day in view to look for things to connect.
 const SEARCH_DAYS: i64 = 30;
@@ -30,9 +33,10 @@ pub enum Tab {
 pub struct Store {
     pub library: Library,
     /// Set once the app is really running, so a state built by hand in a test
-    /// neither touches the network nor the user's cache.
+    /// never touches the user's files.
     live: bool,
-    cache_path: Option<PathBuf>,
+    /// The notes directory, when one is set.
+    directory: Option<PathBuf>,
     /// Bumped by every save, so a reload read before it can tell it is out
     /// of date.
     revision: u64,
@@ -62,7 +66,7 @@ impl Default for Store {
         Self {
             library: Library::default(),
             live: false,
-            cache_path: None,
+            directory: None,
             open: None,
             tab: Tab::default(),
             editor: text_editor::Content::new(),
@@ -84,13 +88,12 @@ impl Store {
         if !self.accepts_shared() {
             return;
         }
-        let Some(path) = &self.cache_path else {
+        let Some(directory) = &self.directory else {
             return;
         };
-        if let Ok(Some(library)) =
-            crate::task_db::read_document::<Library>(path, crate::task_db::keys::NOTES)
-        {
-            self.adopt_shared(library);
+        match Library::read(directory) {
+            Ok(library) => self.adopt_shared(library),
+            Err(error) => log::warn!("could not reload notes: {error}"),
         }
     }
 
@@ -99,41 +102,56 @@ impl Store {
         self.revision
     }
 
-    /// Where the notes are saved, when they are.
-    pub fn shared_path(&self) -> Option<&std::path::Path> {
-        self.cache_path.as_deref()
+    /// The notes directory, when one is set.
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref()
     }
 
-    /// Whether notes read from the database may replace these: not while a
+    /// Whether notes read from the directory may replace these: not while a
     /// local edit is waiting to be saved or being saved, which a read could
     /// predate.
     pub fn accepts_shared(&self) -> bool {
         self.live && !self.cache_stale && !self.saving
     }
 
-    /// Takes notes read from the database, when they differ from these.
-    pub fn adopt_shared(&mut self, library: Library) {
-        if library != self.library {
-            self.library = library;
-            if self
-                .open
-                .as_ref()
-                .is_some_and(|id| self.library.note(id).is_none())
-            {
-                self.close();
-            } else if self.open.is_some() {
-                self.load_editor();
-            }
+    /// Takes notes read from the directory, when they differ from these.
+    pub fn adopt_shared(&mut self, mut library: Library) {
+        library.adopt_identities(&self.library);
+        if library == self.library {
+            return;
+        }
+        self.library = library;
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|id| self.library.note(id).is_none())
+        {
+            self.close();
+        } else if self
+            .open_note()
+            .is_some_and(|note| note.body != self.editor.text())
+        {
+            self.load_editor();
         }
     }
 
-    /// Loads the notes and enables local saves.
-    pub fn go_live(&mut self, cache_path: Option<PathBuf>) {
+    /// Loads the notes from `directory` and enables saving there. Notes an
+    /// older build kept in the database at `database` are moved there first.
+    pub fn go_live(&mut self, directory: Option<PathBuf>, database: Option<&Path>) {
         self.live = true;
-        if let Some(path) = &cache_path {
-            self.library = Library::load(path);
+        match &directory {
+            Some(directory) => {
+                if let Some(database) = database
+                    && let Err(error) = notes::migrate_database(database, directory)
+                {
+                    log::warn!("could not move the notes out of the database: {error}");
+                    self.error = Some(format!("Could not move the old notes: {error}"));
+                }
+                self.library = Library::load(directory);
+            }
+            None => self.error = Some(NO_DIRECTORY.into()),
         }
-        self.cache_path = cache_path;
+        self.directory = directory;
     }
 
     pub fn saving(&self) -> bool {
@@ -178,7 +196,7 @@ impl Store {
 pub enum Action {
     /// Reload the local database copy.
     Refresh,
-    Saved(Result<(), String>),
+    Saved(Result<Saved, String>),
     /// The timer for saving local edits.
     Tick,
     New,
@@ -205,7 +223,7 @@ pub enum Action {
     DeleteConfirmed,
 }
 
-/// Saves pending edits or reloads changes delivered by the Turso worker.
+/// Saves pending edits or reloads changes made to the files elsewhere.
 pub fn refresh(state: &mut State) -> Task<Message> {
     if !state.notes.live {
         return Task::none();
@@ -230,14 +248,14 @@ fn save_cache(store: &mut Store) -> Task<Message> {
     if !store.live || !store.cache_stale || store.saving {
         return Task::none();
     }
-    let Some(path) = store.cache_path.clone() else {
+    let Some(directory) = store.directory.clone() else {
         return Task::none();
     };
     store.cache_stale = false;
     store.saving = true;
     store.revision += 1;
     let library = store.library.clone();
-    blocking::run(move || library.save(&path).map_err(|error| error.to_string()))
+    blocking::run(move || library.save(&directory).map_err(|error| error.to_string()))
         .map(|result| Message::Notes(Action::Saved(result)))
 }
 
@@ -287,7 +305,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::Saved(result) => {
             state.notes.saving = false;
             match result {
-                Ok(()) => {
+                Ok(saved) => {
+                    state.notes.library.saved(&saved);
                     state.notes.error = None;
                     save_cache(&mut state.notes)
                 }
@@ -731,27 +750,59 @@ mod tests {
     }
 
     #[test]
-    fn a_change_from_another_device_reaches_an_unedited_open_note() {
+    fn a_change_made_elsewhere_reaches_an_unedited_open_note() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("notes.sqlite3");
+        let path = directory.path().to_owned();
+        std::fs::write(path.join("A.md"), "old").unwrap();
         let mut state = state();
         state.screen = Screen::Notes;
-        let mut library = Library::default();
-        let id = library.create("A", Vec::new());
-        library.edit(&id, |note| note.body = "old".into());
-        library.save(&path).unwrap();
-        state.notes.go_live(Some(path.clone()));
+        state.notes.go_live(Some(path.clone()), None);
+        let id = state.notes.library.notes[0].id.clone();
         act(&mut state, Action::Open(id.clone()));
 
-        library.edit(&id, |note| note.body = "new".into());
-        library.save(&path).unwrap();
+        std::fs::write(path.join("A.md"), "new").unwrap();
         state.notes.reload_shared();
         assert_eq!(state.notes.editor.text().trim_end(), "new");
+        assert_eq!(state.notes.open.as_deref(), Some(id.as_str()));
 
-        library.delete(&id);
-        library.save(&path).unwrap();
+        std::fs::remove_file(path.join("A.md")).unwrap();
         state.notes.reload_shared();
         assert!(state.notes.open.is_none());
+    }
+
+    #[test]
+    fn editing_saves_to_the_file_and_renaming_renames_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_owned();
+        let mut state = state();
+        state.screen = Screen::Notes;
+        state.notes.go_live(Some(path.clone()), None);
+        act(&mut state, Action::New);
+        act(&mut state, Action::TitleChanged("Plans".into()));
+        act(
+            &mut state,
+            Action::Edited(text_editor::Action::Edit(text_editor::Edit::Insert('x'))),
+        );
+        let saved = state.notes.library.save(&path).unwrap();
+        act(&mut state, Action::Saved(Ok(saved)));
+        assert_eq!(
+            std::fs::read_to_string(path.join("Plans.md"))
+                .unwrap()
+                .trim_end(),
+            "x"
+        );
+
+        act(&mut state, Action::TitleChanged("Better plans".into()));
+        let saved = state.notes.library.save(&path).unwrap();
+        act(&mut state, Action::Saved(Ok(saved)));
+        assert!(!path.join("Plans.md").exists());
+        assert!(path.join("Better plans.md").exists());
+
+        // Reading the directory back changes nothing in the open note.
+        let id = state.notes.open.clone().unwrap();
+        state.notes.reload_shared();
+        assert_eq!(state.notes.open.as_deref(), Some(id.as_str()));
+        assert_eq!(state.notes.library.note(&id).unwrap().title, "Better plans");
     }
 
     #[test]

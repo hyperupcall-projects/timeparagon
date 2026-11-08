@@ -30,7 +30,6 @@ const QUEUE: &str = "google.queue";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Counters {
     pub habits: i64,
-    pub notes: i64,
     pub overlay: i64,
     pub queue: i64,
 }
@@ -97,7 +96,6 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
     };
     Ok(Counters {
         habits: value(&document(crate::task_db::keys::HABITS))?,
-        notes: value(&document(crate::task_db::keys::NOTES))?,
         overlay: value(OVERLAY)?,
         queue: value(QUEUE)?,
     })
@@ -116,19 +114,12 @@ mod tests {
         crate::task_db::write_document_json(&path, crate::task_db::keys::HABITS, "{}").unwrap();
         let after_habits = read(&path).unwrap();
         assert!(after_habits.habits > start.habits);
-        assert_eq!(after_habits.notes, start.notes);
         assert_eq!(after_habits.overlay, start.overlay);
 
-        crate::task_db::write_document_json(&path, crate::task_db::keys::NOTES, "{}").unwrap();
-        let after_notes = read(&path).unwrap();
-        assert!(after_notes.notes > after_habits.notes);
-        assert_eq!(after_notes.habits, after_habits.habits);
-
-        // Unrelated documents do not wake the habits or notes readers.
+        // Unrelated documents do not wake the habits reader.
         crate::task_db::write_document_json(&path, "routes", "[]").unwrap();
         let after_routes = read(&path).unwrap();
-        assert_eq!(after_routes.habits, after_notes.habits);
-        assert_eq!(after_routes.notes, after_notes.notes);
+        assert_eq!(after_routes.habits, after_habits.habits);
 
         let mut database = crate::task_db::Database::open(&path).unwrap();
         database

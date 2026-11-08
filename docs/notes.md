@@ -6,15 +6,32 @@ They replace the old Google Keep integration, which has been removed.
 
 ## Storage
 
-- Notes save automatically to `<data dir>/timeslay.sqlite3` and work offline.
-- Turso synchronizes them alongside habits and scratch data using the server URL
-  configured in **Settings → Database sync** on each device. A blank URL disables
-  sync; devices need network access to the configured server to exchange edits.
-- Existing local notes and their links are retained. The app no longer accesses
-  Drive; files previously stored there are left intact.
-- Fields merge independently, and every version is retained in the sync journal
-  for recovery if two devices edit the same text. Export versions with the
-  `database_history` example in `timeslay-core`.
+Each note is a Markdown file, `<title>.md`, in the directory set in
+`config.toml`:
+
+```toml
+[notes]
+directory = "~/Documents/Notes"
+```
+
+The setting is empty by default, and notes are not saved until it is set.
+
+- Editing a note in the app saves it to its file. Renaming the note renames the
+  file, and deleting the note deletes it.
+- Characters that cannot be in a file name (`/ \ : * ? " < > |`) become `-`. An
+  untitled note is `Untitled.md`. Notes with the same title are told apart as
+  `Title 2.md`, `Title 3.md` and so on.
+- A note's color (unless it is the default) and its connections are kept in
+  front matter at the top of the file, which other Markdown editors such as
+  Obsidian show as properties. Other front matter, such as tags, is kept.
+- Files changed, added, renamed or removed outside the app show up within a
+  couple of seconds. Other files in the directory are left alone.
+- Notes are not stored in the database or synced through Turso. To share them
+  between devices, sync the directory itself (with Syncthing, say).
+- Older builds kept notes in `<data dir>/timeslay.sqlite3`. On the first start
+  with a directory set, they are written to the directory and removed from the
+  database, including their sync history, which is also deleted from the sync
+  server.
 - A new, empty note is dropped when closed.
 
 ## Editing
@@ -53,12 +70,11 @@ a note is always dark, on every theme.
 
 ## Deleting and conflicts
 
-- Deleting a note asks for confirmation, then removes it from the local library.
-  The database journal replicates that deletion to other devices.
-- Fields merge independently across devices. Conflicting text revisions remain
-  in the sync journal and can be exported with the `database_history` example.
-- Notes are available in both the desktop and Android apps. Saving and sync do
-  not depend on Google sign-in.
+- Deleting a note asks for confirmation, then deletes its file.
+- An edit made in the app while the file was changed elsewhere overwrites that
+  change.
+- Notes are available in both the desktop and Android apps, each reading the
+  directory in its own `config.toml`. Saving does not depend on Google sign-in.
 
 ## Upgrading from Google Keep
 

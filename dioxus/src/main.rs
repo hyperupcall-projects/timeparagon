@@ -344,8 +344,9 @@ fn App() -> Element {
             config_watch::generation(),
             timeslay_core::database_sync::generation(),
         );
-        // The queue and the notes are only read again when the database says
-        // they changed, which is one small query instead of two full reads.
+        // The queue is only read again when the database says it changed,
+        // which is one small query instead of a full read, and the notes only
+        // when their directory's fingerprint moved.
         let mut changes: Option<timeslay_core::local_changes::Counters> = None;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -361,9 +362,7 @@ fn App() -> Element {
             {
                 google_operations.set(rows);
             }
-            if moved(|c| c.notes) {
-                notes_store.reload_shared();
-            }
+            notes_store.reload_shared();
             changes = counters;
             let generation = (
                 config_watch::generation(),

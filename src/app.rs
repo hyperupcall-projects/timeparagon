@@ -1322,7 +1322,9 @@ fn boot_state() -> State {
     state.calendar.apply_task_colors(&state.config.calendar);
     let database = crate::task_db::path();
     state.calendar.cache_days_in(database.clone());
-    state.notes.go_live(database.clone());
+    state
+        .notes
+        .go_live(timeslay_core::notes::directory(), database.as_deref());
     state.people.go_live(database.clone());
     state.travel.cache_in(database.clone());
 

@@ -32,15 +32,18 @@ use std::{
 
 const TABLE: &str = "timeslay_revisions_v1";
 /// The documents shared between devices. Everything else stays local.
-const SHARED_KEYS: [&str; 7] = [
+const SHARED_KEYS: [&str; 6] = [
     "habits",
-    "notes",
     "shared.todos",
     "shared.notepad",
     "shared.brain_dump",
     "shared.projects",
     "shared.task_work",
 ];
+/// Documents that used to be shared and no longer exist. Their edits, here or
+/// arriving from devices on older builds, are deleted locally and on the
+/// server. Notes are Markdown files now: see [`crate::notes`].
+const RETIRED_KEYS: [&str; 1] = ["notes"];
 /// Edits per document left unfolded, for recovery and so a fresh save always
 /// has recent history to merge against.
 const KEEP: usize = 20;
@@ -131,7 +134,6 @@ fn describe_edits(edits: &[&Edit]) -> String {
     for edit in edits {
         let kind = match edit.document.as_str() {
             "habits" => "habit",
-            "notes" => "note",
             "shared.todos" => "todo",
             "shared.notepad" => "notepad",
             "shared.brain_dump" => "brain dump",
@@ -351,6 +353,80 @@ fn shared(key: &str) -> bool {
     SHARED_KEYS.contains(&key)
 }
 
+/// Removes a document that is no longer kept in the database, with all of its
+/// history: its row, and every journaled edit and snapshot of it. Those are
+/// remembered as deleted but still on the server, so the next sync cycle
+/// deletes them there too. The database is then vacuumed so no copy of the
+/// contents is left in free pages. Does nothing when there is nothing left.
+pub fn retire_document(path: &Path, key: &str) -> io::Result<()> {
+    let mut db = open(path)?;
+    let tx = db
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(other)?;
+    let has_table = |name: &str| -> io::Result<bool> {
+        tx.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+            [name],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|found| found.is_some())
+        .map_err(other)
+    };
+    let journaled = has_table("timeslay_sync_control")?;
+    let mut ids = Vec::new();
+    if journaled {
+        install_snapshots(&tx).map_err(other)?;
+        for table in ["timeslay_sync_edits", "timeslay_sync_snapshots"] {
+            let mut q = tx
+                .prepare(&format!("SELECT id FROM {table} WHERE document=?1"))
+                .map_err(other)?;
+            for id in q
+                .query_map([key], |r| r.get::<_, String>(0))
+                .map_err(other)?
+            {
+                ids.push(id.map_err(other)?);
+            }
+        }
+    }
+    let has_document = has_table("documents")?
+        && tx
+            .query_row("SELECT 1 FROM documents WHERE key=?1", [key], |_| Ok(()))
+            .optional()
+            .map_err(other)?
+            .is_some();
+    if ids.is_empty() && !has_document {
+        return Ok(());
+    }
+    if has_document {
+        // Not journaled: the removal is not an edit to share, it is the end of
+        // the document.
+        if journaled {
+            tx.execute(
+                "UPDATE timeslay_sync_control SET projecting=1 WHERE singleton=1",
+                [],
+            )
+            .map_err(other)?;
+        }
+        tx.execute("DELETE FROM documents WHERE key=?1", [key])
+            .map_err(other)?;
+        if journaled {
+            tx.execute(
+                "UPDATE timeslay_sync_control SET projecting=0 WHERE singleton=1",
+                [],
+            )
+            .map_err(other)?;
+        }
+    }
+    let at = now();
+    for id in &ids {
+        delete_row(&tx, id, false, at)?;
+    }
+    tx.commit().map_err(other)?;
+    db.execute_batch("VACUUM").map_err(other)?;
+    Ok(())
+}
+
 /// Every ID this device knows: journaled, snapshotted or deleted.
 fn known_ids(db: &Connection) -> io::Result<HashSet<String>> {
     let mut known = HashSet::new();
@@ -420,6 +496,14 @@ fn apply(
             .map_err(other)?
     };
     for edit in incoming {
+        if RETIRED_KEYS.contains(&edit.document.as_str()) {
+            // Sent by a device on an older build: deleted on the server by
+            // this cycle, and never applied here.
+            if !tombstones.contains(&edit.id) {
+                delete_row(&tx, &edit.id, false, at)?;
+            }
+            continue;
+        }
         if !shared(&edit.document) || edit.clock < 1 {
             return Err(other("unsupported replicated record"));
         }

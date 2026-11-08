@@ -4,7 +4,8 @@ The mobile application is built around the day view, with the Habits tab as its
 own screen and the rest of the app in sheets over it:
 
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
-- Notes, with Markdown, colors, connections and Turso sync.
+- Notes, with Markdown, colors and connections, kept as Markdown files in the
+  `[notes] directory` set in `config.toml`.
 - Search and filters for the day.
 - Week, two-week and month agendas.
 - Overdue and Inbox filters on the Tasks tab.
@@ -17,7 +18,7 @@ own screen and the rest of the app in sheets over it:
 - Reminders for events, tasks, time blocks, habits, sleep and travel, with a
   sound per kind (see [docs/reminders.md](../docs/reminders.md)).
 
-Habits, notes, todos, the notepad, brain dumps, projects and work sessions sync
+Habits, todos, the notepad, brain dumps, projects and work sessions sync
 through the Turso server configured in **Settings → Database sync** on each
 device. The URL is stored in `[database_sync].url` in `config.toml`; a blank URL
 disables sync. Each device needs network access to that server. Changes save locally
@@ -50,7 +51,8 @@ Both apps share data and code via the `timeslay-core` crate:
 
 - the config at `~/.config/timeslay/config.toml`,
 - the local database at `~/.local/share/timeslay/timeslay.sqlite3`, which holds
-  tasks and time-block metadata, cached events, habits, notes and the scratch data,
+  tasks and time-block metadata, cached events, habits and the scratch data,
+- notes as Markdown files in the `[notes] directory` from the config,
 - on the desktop, the OAuth token in `~/.local/state/timeslay/secrets.json`,
   kept out of the database,
 - the calendar sync and Google Tasks code in `core/`.
@@ -163,8 +165,8 @@ the same relative layout as it does on desktop.
 
 ### Settings and data sync
 
-Turso is required for shared data sync, including notes, habits, todos and
-projects. `config.toml` stays local to each device. Both apps watch it and
+Turso is required for shared data sync, including habits, todos and
+projects. Notes are files and are not synced through Turso. `config.toml` stays local to each device. Both apps watch it and
 reload local edits; they do not upload or download settings through Google
 Drive, and Google sign-in does not request Drive access.
 

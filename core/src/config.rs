@@ -23,6 +23,7 @@ use iced_core::Color;
 #[serde(default)]
 pub struct Config {
     pub database_sync: DatabaseSyncSettings,
+    pub notes: NotesSettings,
     pub calendar: CalendarSettings,
     pub projects: ProjectsSettings,
     pub travel: crate::places::PlaceSettings,
@@ -53,6 +54,49 @@ impl DatabaseSyncSettings {
             .and_then(|text| toml::from_str::<Settings>(&text).ok())
             .unwrap_or_default()
             .database_sync
+    }
+}
+
+/// `[notes]`: where the notes are kept, one Markdown file each. Empty, the
+/// default, means nowhere: notes cannot be saved until it is set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotesSettings {
+    /// A directory; a leading `~/` is the home directory.
+    pub directory: String,
+}
+
+impl NotesSettings {
+    /// Reads only `[notes]`, without opening the local database.
+    pub fn load() -> Self {
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Settings {
+            notes: NotesSettings,
+        }
+        config_path()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|text| toml::from_str::<Settings>(&text).ok())
+            .unwrap_or_default()
+            .notes
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.directory.trim().is_empty()
+    }
+
+    /// The directory, or `None` while none is set.
+    pub fn path(&self) -> Option<PathBuf> {
+        let directory = self.directory.trim();
+        if directory.is_empty() {
+            return None;
+        }
+        if let Some(rest) = directory.strip_prefix("~/")
+            && let Some(home) = directories::BaseDirs::new()
+        {
+            return Some(home.home_dir().join(rest));
+        }
+        Some(PathBuf::from(directory))
     }
 }
 
