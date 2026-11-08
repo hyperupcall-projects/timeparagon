@@ -1,5 +1,6 @@
 //! Remote task metadata. SQLite is a cache; Google Tasks notes are authoritative.
 //! Values are JSON, one namespaced key per line, after a terminal `---`.
+use crate::calendar::ids;
 use crate::task_db::TaskData;
 use serde_json::{Map, Value, json};
 
@@ -123,8 +124,8 @@ pub fn load(
         // Tasks.move preserves notes but may change the native task ID. Repair
         // the link from the returned resource after an interrupted move.
         if let Some(link) = &mut data.metadata.schedule {
-            let list = event.calendar_id.trim_start_matches("tasks:");
-            let id = event.id.trim_start_matches("task:");
+            let list = ids::bare_list(&event.calendar_id);
+            let id = ids::bare_task(&event.id);
             if link.list_id != list || link.task_id != id {
                 link.list_id = list.to_owned();
                 link.task_id = id.to_owned();
@@ -145,9 +146,9 @@ pub fn load(
 pub fn save(token: &str, event: &super::Event, data: &TaskData) -> Result<(), String> {
     let list = event
         .calendar_id
-        .strip_prefix("tasks:")
+        .strip_prefix(ids::TASK_LIST)
         .ok_or("Invalid task list")?;
-    let id = event.id.strip_prefix("task:").ok_or("Invalid task ID")?;
+    let id = event.id.strip_prefix(ids::TASK).ok_or("Invalid task ID")?;
     let url = format!(
         "{}/{}/tasks/{}",
         super::api::TASKS,

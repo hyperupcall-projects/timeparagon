@@ -138,7 +138,7 @@ pub fn identified(settings: &CalendarSettings) -> Vec<Login> {
 /// Blocking.
 pub fn token(settings: &CalendarSettings, login: &Login) -> Result<String, String> {
     let email = match &login.which {
-        Which::Primary => return crate::timeblocking::access(settings),
+        Which::Primary => return Ok(crate::timeblocking::access(settings)?),
         Which::Extra(email) => email,
     };
     let stored = read()

@@ -19,6 +19,7 @@ pub mod fsutil;
 pub mod habit_edit;
 pub mod habits;
 pub mod hex;
+pub mod local_changes;
 pub mod notes;
 pub mod places;
 pub mod recurrence;

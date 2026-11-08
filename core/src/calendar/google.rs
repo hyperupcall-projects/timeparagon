@@ -55,6 +55,17 @@ impl GoogleError {
     }
 
     /// The call never got an answer that could be read.
+    /// No usable sign-in: not connected, or the stored one was refused. Fixed
+    /// by connecting again.
+    pub fn auth(detail: impl Into<String>) -> Self {
+        Self {
+            kind: Kind::Auth,
+            status: None,
+            context: String::new(),
+            detail: detail.into(),
+        }
+    }
+
     pub fn transport(context: &str, error: impl fmt::Display) -> Self {
         Self {
             kind: Kind::Transport,

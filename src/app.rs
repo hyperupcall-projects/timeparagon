@@ -444,6 +444,8 @@ pub struct State {
     pub inbox: crate::inbox::Inbox,
     /// Google accounts connected for the Gmail integration.
     pub accounts: crate::integrations::accounts::Accounts,
+    /// The look for changes other processes made to the database.
+    pub poll: crate::local_poll::Poll,
 }
 
 // Messages only live until the next update, so a large variant costs nothing lasting.
@@ -589,7 +591,15 @@ pub enum SystemMessage {
     ConfigSaved(Result<(), String>),
     SaveRequested,
     ConfigReloaded(Config),
+    /// Time to look for changes other processes made to the database.
     DatabaseSyncPolled,
+    /// What that look found, read on a worker thread.
+    DatabasePolled(Option<Box<crate::local_poll::Polled>>),
+    /// The Operations screen's buttons for a write Google refused for good.
+    OperationRetried(i64),
+    OperationDiscarded(i64),
+    /// A retry or discard finished.
+    OperationChanged(Result<(), String>),
     AudioStatusPolled,
 
     /// The system's light/dark tone, for the high contrast system theme.
@@ -928,6 +938,7 @@ impl State {
             habits: crate::habits::Store::default(),
             inbox: crate::inbox::Inbox::default(),
             accounts: crate::integrations::accounts::Accounts::load(),
+            poll: Default::default(),
         }
     }
 
@@ -2269,11 +2280,12 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
-    if let Err(error) = state.calendar.apply_local_operations() {
-        state.calendar.error = Some(error);
-    }
+    let overlay = crate::local_poll::refresh_overlay(state);
     state.timeblocking.revision += 1;
-    Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
+    Task::batch([
+        overlay,
+        Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested)),
+    ])
 }
 
 fn reconcile_completed_task(state: &mut State) -> Task<Message> {

@@ -4,6 +4,8 @@
 //! task's metadata, its Google Tasks entry and its scheduled calendar copy are
 //! written together, in an order that a failure part way through can recover from.
 
+use crate::calendar::google::GoogleError;
+use crate::calendar::ids;
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
 use crate::calendar::{self, Event};
@@ -15,16 +17,16 @@ pub const MAX_TITLE_CHARS: usize = 1024;
 
 /// How a write gets its Google access token. The iced app passes its own, so
 /// its unit tests can refuse to reach a real account.
-pub type Access = fn(&CalendarSettings) -> Result<String, String>;
+pub type Access = fn(&CalendarSettings) -> Result<String, GoogleError>;
 
 /// The token from the stored sign-in, refreshed if it has expired.
-pub fn google_access(settings: &CalendarSettings) -> Result<String, String> {
-    let tokens = calendar::oauth::load_tokens().ok_or("Not connected to Google")?;
+pub fn google_access(settings: &CalendarSettings) -> Result<String, GoogleError> {
     if !calendar::operations::replaying() {
+        let tokens = calendar::oauth::load_tokens()
+            .ok_or_else(|| GoogleError::auth("Not connected to Google"))?;
         return Ok(tokens.access_token);
     }
-    calendar::oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)
-        .map(|tokens| tokens.access_token)
+    calendar::GoogleClient::from_settings(settings).access_token()
 }
 
 /// The instants a task's due date and clock fields describe. An end before the
@@ -199,9 +201,11 @@ pub fn save(
     change: Change,
     order: i64,
     access: Access,
-) -> Result<Event, String> {
+) -> Result<Event, GoogleError> {
     if !calendar::operations::replaying() {
-        return calendar::operations::edit_task(task, settings, change, order);
+        return Ok(calendar::operations::edit_task(
+            task, settings, change, order,
+        )?);
     }
     let mut database = crate::task_db::open()?;
     let mut data = database.import(&task)?;
@@ -476,7 +480,7 @@ pub fn unschedule_with(
             .ok_or("Google did not return the moved task ID")?
             .to_owned();
         task.id = format!("task:{}", link.task_id);
-        task.calendar_id = format!("tasks:{destination}");
+        task.calendar_id = ids::calendar_id(&destination);
         task.details.link = response["webViewLink"]
             .as_str()
             .map(str::to_owned)
@@ -498,9 +502,9 @@ pub fn unschedule_with(
 pub fn task_url(task: &Event) -> Result<String, String> {
     let list = task
         .calendar_id
-        .strip_prefix("tasks:")
+        .strip_prefix(ids::TASK_LIST)
         .ok_or("Invalid task list")?;
-    let id = task.id.strip_prefix("task:").ok_or("Invalid task")?;
+    let id = task.id.strip_prefix(ids::TASK).ok_or("Invalid task")?;
     Ok(format!(
         "{}/{}/tasks/{}",
         calendar::api::TASKS,
@@ -652,7 +656,7 @@ pub fn create_inbox_task(
         &calendar::api::NewTask { title, notes, due },
     )?;
 
-    let calendar_id = format!("tasks:{list}");
+    let calendar_id = ids::calendar_id(&list);
     let start = calendar::at_clock(due.unwrap_or(UNDATED), 0, 0);
     let mut event = Event {
         id: format!("task:{}", created.id),

@@ -1,5 +1,6 @@
 //! Calendar-backed task times. Google Tasks owns the text and completion;
 //! Calendar owns start/end. IDs, rather than task titles, connect the two.
+use crate::calendar::ids;
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,8 +36,8 @@ impl Link {
             // Reserve once in SQLite, reuse for retries. A new scheduling
             // after an explicit deletion needs a fresh ID (Calendar tombstones IDs).
             event_id: format!("tt{:032x}", u128::from_be_bytes(entropy)),
-            list_id: task.calendar_id.trim_start_matches("tasks:").to_owned(),
-            task_id: task.id.trim_start_matches("task:").to_owned(),
+            list_id: ids::bare_list(&task.calendar_id).to_owned(),
+            task_id: ids::bare_task(&task.id).to_owned(),
             pending: true,
             block: None,
             order: 0,
@@ -211,6 +212,20 @@ pub fn merge(
 pub struct Error {
     pub status: Option<u16>,
     pub message: String,
+    /// The request never got an answer, so trying again may well work.
+    pub transport: bool,
+}
+
+/// Keeps what a retry needs to know: Google's status, or that there was none
+/// because the network failed.
+impl From<Error> for google::GoogleError {
+    fn from(error: Error) -> Self {
+        match error.status {
+            Some(status) => google::GoogleError::from_status("Google", status, error.message),
+            None if error.transport => google::GoogleError::transport("Google", error.message),
+            None => error.message.into(),
+        }
+    }
 }
 
 pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Result<Value, Error> {
@@ -222,6 +237,7 @@ pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Re
         return Err(Error {
             status: None,
             message: "Calendar metadata exceeds the 1024 character property limit".into(),
+            transport: false,
         });
     }
     let request = api::agent()
@@ -240,6 +256,7 @@ pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Re
         Ok(response) => response.into_json().map_err(|e| Error {
             status: None,
             message: format!("Google response: {e}"),
+            transport: true,
         }),
         Err(ureq::Error::Status(status, response)) => {
             let detail = google::Refusal::read(status, response).detail();
@@ -252,11 +269,13 @@ pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Re
             Err(Error {
                 status: Some(status),
                 message,
+                transport: false,
             })
         }
         Err(error) => Err(Error {
             status: None,
             message: format!("Google: {error}"),
+            transport: true,
         }),
     }
 }
@@ -430,7 +449,7 @@ impl Remote for Google<'_> {
     }
     fn backlog_list(&self, list: Option<&str>) -> Result<String, String> {
         match list {
-            Some(id) => Ok(id.trim_start_matches("tasks:").to_owned()),
+            Some(id) => Ok(ids::bare_list(id).to_owned()),
             None => find_or_create(
                 self.token,
                 api::TASK_LISTS,
@@ -442,7 +461,7 @@ impl Remote for Google<'_> {
     }
     fn triaged_list(&self, list: Option<&str>) -> Result<String, String> {
         match list {
-            Some(id) => Ok(id.trim_start_matches("tasks:").to_owned()),
+            Some(id) => Ok(ids::bare_list(id).to_owned()),
             None => find_or_create(
                 self.token,
                 api::TASK_LISTS,
@@ -483,7 +502,7 @@ pub const DEFAULT_LIST: &str = "Inbox";
 /// first time a task is added.
 pub fn inbox_destination(token: &str, list: Option<&str>) -> Result<String, String> {
     match list {
-        Some(id) => Ok(id.trim_start_matches("tasks:").to_owned()),
+        Some(id) => Ok(ids::bare_list(id).to_owned()),
         None => find_or_create(
             token,
             api::TASK_LISTS,
@@ -559,7 +578,7 @@ pub fn destinations(
         None => app_calendar(token)?,
     };
     let list = match list {
-        Some(id) => id.trim_start_matches("tasks:").to_owned(),
+        Some(id) => ids::bare_list(id).to_owned(),
         None => find_or_create(
             token,
             api::TASK_LISTS,
@@ -634,7 +653,7 @@ mod tests {
 
     fn make_task(id: &str, completed: bool) -> Event {
         let mut task = super::super::sample_snapshot().events.remove(1);
-        task.id = format!("task:{id}");
+        task.id = ids::event_id(id);
         task.calendar_id = "tasks:has-time".into();
         task.title = "Same title".into();
         task.completed = completed;
@@ -807,12 +826,14 @@ mod tests {
                 1 => Err(Error {
                     status: Some(404),
                     message: "missing".into(),
+                    transport: false,
                 }),
                 2 => {
                     assert_eq!(body["id"], "reserved-id");
                     Err(Error {
                         status: Some(409),
                         message: "already inserted".into(),
+                        transport: false,
                     })
                 }
                 _ => {
@@ -835,6 +856,7 @@ mod tests {
                 Err(Error {
                     status,
                     message: "refused".into(),
+                    transport: false,
                 })
             })
             .unwrap_err();

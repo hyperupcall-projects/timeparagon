@@ -574,54 +574,35 @@ pub(super) fn day_cell<'a>(
 /// configured for that kind, or `None` for an event on another calendar.
 pub(crate) fn event_kind(state: &State, event: &Event) -> Option<(&'static str, Color)> {
     let settings = &state.config.calendar;
-    let calendar = state
-        .calendar
-        .calendars
-        .iter()
-        .find(|calendar| calendar.id == event.calendar_id);
-    let managed = settings.app_calendar.as_deref() == Some(&event.calendar_id)
-        || calendar.is_some_and(|calendar| {
-            crate::config::CalendarSettings::is_app_calendar_name(&calendar.name)
-        });
-    if event.details.sleep.is_some() {
-        Some(("Sleep", settings.sleep_color()))
-    } else if event.details.habit {
-        Some(("Habit", settings.habit_color()))
-    } else if event.details.scheduled.is_some() {
-        Some(("Task", settings.task_event_color()))
-    } else if event.is_task() {
-        Some((
-            "Task",
-            settings
-                .task_color(&event.calendar_id)
-                .unwrap_or(colors::TASK),
-        ))
-    } else if managed {
-        Some(if event.all_day {
-            ("Event", settings.event_color())
-        } else {
-            ("Time Block", settings.time_block_color())
-        })
-    } else {
-        None
-    }
+    event
+        .kind(settings, &state.calendar.calendars)
+        .chip(event, settings)
 }
 
 /// A small pill naming an item's kind, in that kind's configured color.
-pub(crate) fn kind_chip<'a>(kind: &'static str, color: Color, metrics: &Metrics) -> Element<'a, Message> {
+pub(crate) fn kind_chip<'a>(
+    kind: &'static str,
+    color: Color,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
     let ink = on_color(color);
-    container(text(kind).size(metrics.label() - 1.0).color(ink).wrapping(text::Wrapping::None))
-        .padding([2.0, 8.0])
-        .style(move |_| container::Style {
-            background: Some(color.into()),
-            border: iced::Border {
-                color: timeslay_core::theme::EVENT_EDGE,
-                width: 1.0,
-                radius: 999.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    container(
+        text(kind)
+            .size(metrics.label() - 1.0)
+            .color(ink)
+            .wrapping(text::Wrapping::None),
+    )
+    .padding([2.0, 8.0])
+    .style(move |_| container::Style {
+        background: Some(color.into()),
+        border: iced::Border {
+            color: timeslay_core::theme::EVENT_EDGE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// An item's title with its kind chip pinned to the top-right, so the chip

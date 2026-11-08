@@ -187,13 +187,7 @@ fn write(
             let mut edit = calendar::EditDraft::from_event(&event);
             edit.rule = draft.rule;
             let habit = habit.ok_or("Choose a habit name")?;
-            let saved = calendar::create_habit(
-                &settings.client_id,
-                &settings.client_secret,
-                &edit,
-                None,
-                &habit,
-            )?;
+            let saved = calendar::create_habit(&edit, None, &habit)?;
             event.id = saved.id;
             event.calendar_id = saved.calendar_id;
             event.color = settings.habit_color();
@@ -202,8 +196,6 @@ fn write(
         }
         DraftKind::TimeBlock => {
             let (id, calendar) = calendar::create_time_block(
-                &settings.client_id,
-                &settings.client_secret,
                 settings.app_calendar.as_deref(),
                 &event.title,
                 &event.details.description,
@@ -218,8 +210,6 @@ fn write(
         }
         DraftKind::Event => {
             let saved = calendar::create_event(
-                &settings.client_id,
-                &settings.client_secret,
                 &event.calendar_id,
                 &event.title,
                 &event.details.description,

@@ -157,8 +157,7 @@ pub struct Series {
 
 fn load_series(settings: &CalendarSettings) -> Result<Vec<Series>, String> {
     let listing = calendar::sync_habit_listing(
-        &settings.client_id,
-        &settings.client_secret,
+        &calendar::GoogleClient::from_settings(settings),
         settings.app_calendar.as_deref(),
     )?;
     let mut series: Vec<Series> = listing
@@ -576,11 +575,10 @@ fn screen(
         },
         Page::Form(form) => form_page(ctx, &library, &form),
     };
-    let sync_settings = settings.clone();
     rsx! {
         div { class: "habits-screen",
             {content}
-            {day_dialog(ctx, &library, day_events, sync_settings)}
+            {day_dialog(ctx, &library, day_events)}
             {delete_confirmation(ctx, &library, settings)}
         }
     }
@@ -1307,8 +1305,7 @@ fn link(ctx: Ctx, settings: CalendarSettings, series: Series, habit_id: Option<S
         );
         let result = worker(move || {
             calendar::link_habit_event(
-                &settings.client_id,
-                &settings.client_secret,
+                &calendar::GoogleClient::from_settings(&settings),
                 &calendar_id,
                 &event_id,
                 link.as_deref(),
@@ -1785,13 +1782,7 @@ fn with_dialog(mut ui: Signal<Ui>, change: impl FnOnce(&mut DayDialog)) {
 /// Completes or reopens the occurrences loaded for `day` to match the habit,
 /// so recording a day also shows on the calendar. Local data stays the record:
 /// days that are not loaded, or a failed write, leave only the habit changed.
-fn sync_occurrences(
-    ctx: Ctx,
-    id: &str,
-    day: NaiveDate,
-    events: &[Event],
-    settings: CalendarSettings,
-) {
+fn sync_occurrences(ctx: Ctx, id: &str, day: NaiveDate, events: &[Event]) {
     let library = ctx.saved.peek().library.clone();
     let Some(habit) = library.habit(id) else {
         return;
@@ -1847,7 +1838,7 @@ fn sync_occurrences(
     spawn(async move {
         let result = worker(move || {
             for event in &writes {
-                calendar::set_habit_completed(&settings.client_id, &settings.client_secret, event)?;
+                calendar::set_habit_completed(event)?;
             }
             Ok(())
         })
@@ -1864,12 +1855,7 @@ fn sync_occurrences(
 
 /// Everything a day can record, opened by a tap on any of its marks. Nothing
 /// changes until it is saved.
-fn day_dialog(
-    ctx: Ctx,
-    library: &Library,
-    events: Vec<Event>,
-    settings: CalendarSettings,
-) -> Element {
+fn day_dialog(ctx: Ctx, library: &Library, events: Vec<Event>) -> Element {
     let mut ui = ctx.ui;
     let Some(dialog) = ui.read().day.clone() else {
         return rsx! {};
@@ -1998,7 +1984,7 @@ fn day_dialog(
         weekday_name(dialog.day),
         dialog.day.format("%b %-d")
     );
-    let mut save = move |events: &[Event], settings: CalendarSettings| {
+    let mut save = move |events: &[Event]| {
         let Some(dialog) = ui.peek().day.clone() else {
             return;
         };
@@ -2014,7 +2000,7 @@ fn day_dialog(
         match recorded {
             Ok(()) => {
                 ui.write().day = None;
-                sync_occurrences(ctx, &dialog.habit_id, dialog.day, events, settings);
+                sync_occurrences(ctx, &dialog.habit_id, dialog.day, events);
             }
             Err(error) => with_dialog(ui, |dialog| dialog.error = Some(error)),
         }
@@ -2040,7 +2026,7 @@ fn day_dialog(
                 }
                 div { class: "habit-dialog-actions",
                     button { class: "btn", onclick: move |_| ui.write().day = None, "Cancel" }
-                    button { class: "btn primary", onclick: move |_| save(&events, settings.clone()), "Save" }
+                    button { class: "btn primary", onclick: move |_| save(&events), "Save" }
                 }
             }
         }
@@ -2141,17 +2127,11 @@ fn delete_confirmation(ctx: Ctx, library: &Library, settings: CalendarSettings) 
                 worker(move || {
                     for (calendar_id, event_id) in &ids {
                         if delete_events {
-                            calendar::delete_habit(
-                                &settings.client_id,
-                                &settings.client_secret,
-                                calendar_id,
-                                event_id,
-                            )?;
+                            calendar::delete_habit(calendar_id, event_id)?;
                         } else {
                             // A kept event must not bring the habit back on the next load.
                             calendar::link_habit_event(
-                                &settings.client_id,
-                                &settings.client_secret,
+                                &calendar::GoogleClient::from_settings(&settings),
                                 calendar_id,
                                 event_id,
                                 None,

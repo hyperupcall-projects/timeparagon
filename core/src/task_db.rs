@@ -8,6 +8,7 @@
 //! This marker covers the old inline JSON, `ttid:` ids and SQLite-only metadata.
 //! It can all go once every device has synced a build that writes metadata to
 //! Google, and no task notes in the user's account start with `ttid:`.
+use crate::calendar::ids;
 use crate::{
     calendar::Event,
     timeblocking::{Metadata, legacy_id, legacy_metadata},
@@ -43,6 +44,36 @@ pub struct TaskData {
     pub legacy_key: Option<String>,
 }
 
+/// The schema this build sets up, kept in SQLite's `user_version`.
+///
+/// Version 1 is everything before versioning, which older builds still create
+/// with `IF NOT EXISTS`. A change to the schema bumps this and adds an
+/// idempotent step to [`Database::set_up`]; steps must stay additive, because
+/// an older build can still be running against the same file.
+pub const SCHEMA_VERSION: i64 = 2;
+
+fn schema_version(db: &Connection) -> Result<i64, String> {
+    db.query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(|e| e.to_string())
+}
+
+/// `ALTER TABLE … ADD COLUMN`, skipped when the column is already there.
+fn add_column(db: &Connection, table: &str, column: &str, definition: &str) -> Result<(), String> {
+    let exists = db
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1"
+        ))
+        .and_then(|mut q| q.exists([column]))
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        db.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub struct Database(Connection);
 impl Database {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -58,7 +89,27 @@ impl Database {
         }
         db.busy_timeout(Duration::from_secs(10))
             .map_err(|e| e.to_string())?;
-        db.execute_batch("PRAGMA foreign_keys = ON;
+        // Per connection, so it cannot be part of the one-off setup below.
+        db.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| e.to_string())?;
+        let memory = path == Path::new(":memory:");
+        // Setting up the schema is most of the cost of opening, and the apps
+        // open the database many times a minute. Once a file has been brought
+        // to the current version it is not set up again.
+        if memory || schema_version(&db)? < SCHEMA_VERSION {
+            Self::set_up(&db, path, memory)?;
+        }
+        Ok(Self(db))
+    }
+
+    /// Brings the file to [`SCHEMA_VERSION`]. Every step is idempotent, so two
+    /// processes doing this at once, or a crash half way, are both harmless.
+    fn set_up(db: &Connection, path: &Path, memory: bool) -> Result<(), String> {
+        // Immediate, so a second process waits here and then finds each step
+        // already done, instead of racing it.
+        let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        tx.execute_batch("
             CREATE TABLE IF NOT EXISTS counter (singleton INTEGER PRIMARY KEY CHECK(singleton=1), next_id INTEGER NOT NULL CHECK(next_id >= 100));
             INSERT OR IGNORE INTO counter VALUES (1,100);
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL, legacy_key TEXT UNIQUE);
@@ -72,7 +123,20 @@ impl Database {
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
-        if path != Path::new(":memory:") {
+        // Version 2: queued edits carry a payload version and can fail for
+        // good; observed Google snapshots can be pruned; change counters.
+        add_column(
+            &tx,
+            "google_operations",
+            "version",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        add_column(&tx, "google_operations", "dead_at", "TEXT")?;
+        add_column(&tx, "google_entities", "observed_at", "TEXT")?;
+        crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+
+        if !memory {
             let enrolled = db
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_control'",
@@ -82,11 +146,30 @@ impl Database {
                 .optional()
                 .map_err(|e| e.to_string())?
                 .is_some();
+            // Its own connection and transaction, so it runs after ours ends.
             if !enrolled {
                 crate::database_sync::enroll(path).map_err(|e| e.to_string())?;
             }
+            crate::database_sync::install_snapshots(db).map_err(|e| e.to_string())?;
+            // Readers no longer wait on a writer, so a poll on the UI thread
+            // cannot stall behind the sync worker's transaction. The mode is
+            // kept by the file. It cannot change while another connection is
+            // mid-transaction; that is retried on the next open.
+            match db.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)) {
+                Ok(mode) if mode.eq_ignore_ascii_case("wal") => {}
+                Ok(mode) => {
+                    log::warn!("database stayed in {mode} mode; will retry");
+                    return Ok(());
+                }
+                Err(error) => {
+                    log::warn!("could not switch the database to WAL: {error}");
+                    return Ok(());
+                }
+            }
         }
-        Ok(Self(db))
+        db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub(crate) fn connection(&mut self) -> &mut Connection {
@@ -97,7 +180,7 @@ impl Database {
     pub(crate) fn pending_task_data(&self, event: &Event) -> Result<Option<TaskData>, String> {
         let stable =
             crate::calendar::task_metadata::read(&event.details.description)?.map(|data| data.id);
-        let json:Option<String>=self.0.query_row("SELECT e.event FROM google_entities e WHERE (json_extract(e.event,'$.id')=?1 OR json_extract(e.event,'$.details.task_data.id')=?2) AND EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=e.id)",params![event.id,stable],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+        let json:Option<String>=self.0.query_row("SELECT e.event FROM google_entities e WHERE (json_extract(e.event,'$.id')=?1 OR json_extract(e.event,'$.details.task_data.id')=?2) AND EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=e.id AND o.dead_at IS NULL)",params![event.id,stable],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
         json.map(|json| {
             serde_json::from_str::<Event>(&json)
                 .map(|e| e.details.task_data)
@@ -245,7 +328,7 @@ impl Database {
             if event.is_task() {
                 let local:Option<String>=tx.query_row("SELECT COALESCE(json_extract(payload,'$.TaskEdit.task.id'),json_extract(payload,'$.Status.task.id'),json_extract(payload,'$.CreateTask.task.id')) FROM google_operations WHERE id=?1",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
                 if let Some(local) = local {
-                    tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local.trim_start_matches("task:"),event.id.trim_start_matches("task:"),event.calendar_id]).map_err(|e|e.to_string())?;
+                    tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![ids::bare_task(&local),ids::bare_task(&event.id),event.calendar_id]).map_err(|e|e.to_string())?;
                 }
             }
             tx.commit().map_err(|e| e.to_string())?;
@@ -410,7 +493,7 @@ mod tests {
     }
     fn event(id: &str) -> Event {
         let mut event = crate::calendar::sample_snapshot().events.remove(0);
-        event.id = format!("task:{id}");
+        event.id = ids::event_id(id);
         event.calendar_id = "tasks:test".into();
         event.details = Default::default();
         event

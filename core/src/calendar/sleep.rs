@@ -1,10 +1,11 @@
 //! Sleep is an ordinary Google event with private metadata and a separate UI source.
+use super::google::GoogleError;
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use iced_core::Color;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Event, Snapshot, api, oauth, scheduled, time_format};
+use super::{Event, Snapshot, api, scheduled, time_format};
 use crate::config::CalendarSettings;
 
 pub const SOURCE_ID: &str = "timeslay:sleep";
@@ -148,7 +149,7 @@ fn get(token: &str, calendar_id: &str, day: NaiveDate) -> Result<Option<Event>, 
         .map(|value| api::parse_sleep(value, calendar_id))
         .transpose()
 }
-fn write(token: &str, event: &Event, new: bool) -> Result<Event, String> {
+fn write(token: &str, event: &Event, new: bool) -> Result<Event, GoogleError> {
     let mut body = body(event)?;
     let url = if new {
         body["id"] = json!(event.id);
@@ -176,11 +177,11 @@ fn write(token: &str, event: &Event, new: bool) -> Result<Event, String> {
                     };
                 }
                 body.as_object_mut().unwrap().remove("id");
-                scheduled::request("POST", &url, token, Some(&body)).map_err(|e| e.message)?
+                scheduled::request("POST", &url, token, Some(&body))?
             }
-            Err(error) => return Err(error.message),
+            Err(error) => return Err(error.into()),
         };
-    api::parse_sleep(value, &event.calendar_id)
+    Ok(api::parse_sleep(value, &event.calendar_id)?)
 }
 
 /// Fetch one extra day to know tomorrow's first appointment, then reconcile
@@ -196,10 +197,9 @@ pub fn sync(
         .unwrap()
         .succ_opt()
         .ok_or("Invalid calendar date")?;
-    let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
-    let tokens = oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)?;
+    let token = super::GoogleClient::from_settings(settings).access_token()?;
     let mut snapshot = api::fetch_range(
-        &tokens.access_token,
+        &token,
         &settings.disabled,
         anchor,
         first.pred_opt().unwrap_or(first),
@@ -223,7 +223,7 @@ pub fn sync(
         let mut day = first;
         while day <= last {
             if let Err(error) = reconcile(
-                &tokens.access_token,
+                &token,
                 &calendar_id,
                 &mut snapshot.events,
                 day,
@@ -267,7 +267,7 @@ fn reconcile(
         rules,
         now,
         |day| get(token, calendar_id, day),
-        |event, new| write(token, event, new),
+        |event, new| write(token, event, new).map_err(String::from),
     )
 }
 
@@ -336,40 +336,49 @@ fn reconcile_with(
 
 /// Save user-entered times and confidence flags as a recorded night. Recorded
 /// nights are preserved during subsequent schedule/goal changes.
+/// Saves a night locally and queues it for Google.
 pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<Event, String> {
     if event.end <= event.start {
         return Err("Wake-up time must be after sleep start".into());
     }
-    if !super::operations::replaying() {
-        if new {
-            event.calendar_id = settings
-                .app_calendar
-                .clone()
-                .ok_or("Sync Google once to discover the TimeSlay calendar")?;
-            event.id = event_id(
-                event
-                    .details
-                    .sleep
-                    .as_ref()
-                    .ok_or("Missing sleep metadata")?
-                    .wake_date,
-            );
-        }
-        super::operations::enqueue(
-            super::operations::Job::Sleep {
-                event: event.clone(),
-                new,
-            },
-            Some(&event),
-            &event.calendar_id,
-            &event.id,
-        )?;
-        return Ok(event);
-    }
-    let tokens = oauth::load_tokens().ok_or("Not connected to Google Calendar")?;
-    let tokens = oauth::ensure_access(&settings.client_id, &settings.client_secret, tokens)?;
     if new {
-        event.calendar_id = scheduled::app_calendar(&tokens.access_token)?;
+        event.calendar_id = settings
+            .app_calendar
+            .clone()
+            .ok_or("Sync Google once to discover the TimeSlay calendar")?;
+        event.id = event_id(
+            event
+                .details
+                .sleep
+                .as_ref()
+                .ok_or("Missing sleep metadata")?
+                .wake_date,
+        );
+    }
+    super::operations::enqueue(
+        super::operations::Job::Sleep {
+            event: event.clone(),
+            new,
+        },
+        Some(&event),
+        &event.calendar_id,
+        &event.id,
+    )?;
+    Ok(event)
+}
+
+/// Sends a night queued by [`save`] to Google. Only the queue calls this.
+pub(crate) fn send(
+    client: &super::GoogleClient,
+    mut event: Event,
+    new: bool,
+) -> Result<Event, GoogleError> {
+    if event.end <= event.start {
+        return Err("Wake-up time must be after sleep start".into());
+    }
+    let token = client.access_token()?;
+    if new {
+        event.calendar_id = scheduled::app_calendar(&token)?;
         event.id = event_id(
             event
                 .details
@@ -380,15 +389,15 @@ pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<
         );
         // Opening a manually added night must not create a second copy.
         if let Some(existing) = get(
-            &tokens.access_token,
+            &token,
             &event.calendar_id,
             event.details.sleep.as_ref().unwrap().wake_date,
         )? {
             event.id = existing.id;
-            return write(&tokens.access_token, &event, false);
+            return write(&token, &event, false);
         }
     }
-    write(&tokens.access_token, &event, new)
+    write(&token, &event, new)
 }
 
 #[cfg(test)]
