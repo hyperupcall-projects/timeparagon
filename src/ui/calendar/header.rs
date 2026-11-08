@@ -219,14 +219,8 @@ pub(super) fn heading_with_alarm_hint<'a>(
     metrics: &Metrics,
     weekly: bool,
 ) -> Element<'a, Message> {
+    // Loading shows at the foot of the panel, where it moves nothing.
     let mut hint = column![];
-    if state.calendar_loading() {
-        hint = hint.push(
-            text("Loading...")
-                .size(metrics.label() - 1.0)
-                .style(text::secondary),
-        );
-    }
     if state.alarms.mode {
         hint = hint.push(
             text("Click a time to set an alarm. Esc cancels.")

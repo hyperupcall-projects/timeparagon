@@ -320,6 +320,9 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             }
             match result {
                 Ok(mut snapshot) => {
+                    state
+                        .activity
+                        .record(crate::activity::synced_text(&snapshot.events), false);
                     if let Some(notice) = state.timeblocking.sync_notice.take() {
                         snapshot.notice = Some(match snapshot.notice.take() {
                             Some(existing) => format!("{notice}\n{existing}"),
@@ -348,6 +351,9 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             }
         }
         CalendarMessage::CalendarSynced(Ok(mut snapshot)) => {
+            state
+                .activity
+                .record(crate::activity::synced_text(&snapshot.events), false);
             if let Some(notice) = state.timeblocking.sync_notice.take() {
                 snapshot.notice = Some(match snapshot.notice.take() {
                     Some(existing) => format!("{notice}\n{existing}"),
@@ -371,6 +377,9 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
         }
         CalendarMessage::CalendarSynced(Err(error)) => {
             log::warn!("calendar sync failed: {error}");
+            state
+                .activity
+                .record(format!("Google sync failed: {error}"), true);
             state.calendar.sync = SyncState::Idle;
             if matches!(error.as_str(), "Not connected to Google Calendar") {
                 state.calendar.connection = Connection::SignedOut;

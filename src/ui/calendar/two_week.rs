@@ -80,13 +80,9 @@ pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
     );
     let mut content = column![
         heading,
-        text(if state.calendar_loading() {
-            "Loading..."
-        } else {
-            "Select a date to open its timeline, or an empty space to add an event."
-        })
-        .size(metrics.label() - 1.0)
-        .style(text::secondary),
+        text("Select a date to open its timeline, or an empty space to add an event.")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
         grid,
     ]
     .spacing(metrics.spacing)

@@ -21,6 +21,100 @@ const SHARED: &str = "'habits','notes','shared.todos','shared.notepad','shared.b
 static STARTED: OnceLock<()> = OnceLock::new();
 static STATUS: Mutex<String> = Mutex::new(String::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// What sync did, at the level a person cares about, newest last.
+static LOG: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
+static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// How many entries [`LOG`] keeps.
+const LOG_LIMIT: usize = 100;
+
+/// One thing sync did, such as sending three edits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEntry {
+    /// Increases with every entry, so a reader can ask for what is new.
+    pub sequence: u64,
+    pub at: chrono::DateTime<chrono::Local>,
+    pub text: String,
+}
+
+/// Entries written after `sequence`, oldest first.
+pub fn log_since(sequence: u64) -> Vec<LogEntry> {
+    LOG.lock()
+        .map(|log| {
+            log.iter()
+                .filter(|entry| entry.sequence > sequence)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn log_activity(text: String) {
+    if let Ok(mut log) = LOG.lock() {
+        let sequence = LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+        log.push(LogEntry {
+            sequence,
+            at: crate::clock::now(),
+            text,
+        });
+        let excess = log.len().saturating_sub(LOG_LIMIT);
+        log.drain(..excess);
+    }
+}
+
+/// Local edits not yet sent to the sync server. Any process can ask, not
+/// only the one running sync.
+pub fn unsent_edits() -> usize {
+    crate::task_db::path()
+        .and_then(|path| {
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+        })
+        .and_then(|db| {
+            db.query_row(
+                "SELECT COUNT(*) FROM timeslay_sync_edits WHERE uploaded=0",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .ok()
+        })
+        .map_or(0, |count| usize::try_from(count).unwrap_or(0))
+}
+
+/// Whether sync is currently stuck: connecting, offline, or waiting to retry.
+/// Edits are kept locally meanwhile.
+pub fn waiting() -> bool {
+    let status = status();
+    status.starts_with("Database sync waiting")
+        || status.starts_with("Database sync offline")
+        || status.starts_with("Database sync connecting")
+        || status.starts_with("Database sync starting")
+}
+
+/// "3 habit and note edits": a count and what the edits were to.
+fn describe_edits(edits: &[&Edit]) -> String {
+    let mut kinds: Vec<&str> = Vec::new();
+    for edit in edits {
+        let kind = match edit.document.as_str() {
+            "habits" => "habit",
+            "notes" => "note",
+            "shared.todos" => "todo",
+            "shared.notepad" => "notepad",
+            "shared.brain_dump" => "brain dump",
+            "shared.projects" => "project",
+            "shared.task_work" => "task work",
+            _ => "data",
+        };
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    let what = match kinds.as_slice() {
+        [] => String::new(),
+        [one] => format!("{one} "),
+        [rest @ .., last] => format!("{} and {last} ", rest.join(", ")),
+    };
+    let plural = if edits.len() == 1 { "" } else { "s" };
+    format!("{} {what}edit{plural}", edits.len())
+}
 
 pub fn generation() -> u64 {
     crate::task_db::path()
@@ -44,12 +138,21 @@ pub fn status() -> String {
         .map(|s| s.clone())
         .unwrap_or_else(|_| "Database sync unavailable".into())
 }
-fn set_status(message: String) {
+/// Returns whether the status changed.
+fn set_status(message: String) -> bool {
     if let Ok(mut status) = STATUS.lock()
         && *status != message
     {
         log::info!("{message}");
         *status = message;
+        return true;
+    }
+    false
+}
+/// A failure goes in the log once, not on every retry.
+fn set_failure(message: String) {
+    if set_status(message.clone()) {
+        log_activity(message);
     }
 }
 fn other(e: impl std::fmt::Display) -> io::Error {
@@ -137,7 +240,9 @@ fn shared(key: &str) -> bool {
 }
 /// Ingest and materialize under the same writer lock as ordinary app saves.
 /// Saves made during the network request are included, rather than overwritten.
-fn apply(path: &Path, incoming: &[Edit], uploaded: &[Edit]) -> io::Result<bool> {
+/// Returns the incoming edits that were new here.
+fn apply<'a>(path: &Path, incoming: &'a [Edit], uploaded: &[Edit]) -> io::Result<Vec<&'a Edit>> {
+    let mut received = Vec::new();
     let mut db = open(path)?;
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -171,6 +276,7 @@ fn apply(path: &Path, incoming: &[Edit], uploaded: &[Edit]) -> io::Result<bool> 
                 params![edit.id, edit.document, edit.before, edit.after, edit.clock],
             )
             .map_err(other)?;
+            received.push(edit);
         }
     }
     let projection = model::project(&edits(&tx, false)?).map_err(other)?;
@@ -224,7 +330,7 @@ fn apply(path: &Path, incoming: &[Edit], uploaded: &[Edit]) -> io::Result<bool> 
     if changed {
         GENERATION.fetch_add(1, Ordering::Relaxed);
     }
-    Ok(changed)
+    Ok(received)
 }
 /// Export keeps every original and superseded version, including deletions.
 /// Useful for conflict recovery; it never opens or changes the native replica.
@@ -243,7 +349,7 @@ pub fn start() {
             .name("timeslay-database-sync".into())
             .spawn(run)
         {
-            set_status(format!("Database sync could not start: {e}"));
+            set_failure(format!("Database sync could not start: {e}"));
         }
     });
 }
@@ -289,7 +395,7 @@ fn run() {
         if let Err(e) = attempt
             && status() != "Database sync running in another TimeSlay process"
         {
-            set_status(format!("Database sync waiting; local data saved: {e}"));
+            set_failure(format!("Database sync waiting; local data saved: {e}"));
         }
         std::thread::sleep(Duration::from_secs(5));
     }
@@ -356,14 +462,28 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
                 incoming.push(edit);
             }
             drop(rows);
-            apply(path, &incoming, &pending)?;
+            let received = apply(path, &incoming, &pending)?;
             replica.checkpoint().await.map_err(other)?;
+            if !pending.is_empty() {
+                let sent: Vec<&Edit> = pending.iter().collect();
+                log_activity(format!("Sent {} to the cloud", describe_edits(&sent)));
+            }
+            if !received.is_empty() {
+                log_activity(format!(
+                    "Received {} from the cloud",
+                    describe_edits(&received)
+                ));
+            }
             Ok::<_, io::Error>(())
         };
         match tokio::time::timeout(Duration::from_secs(45), cycle).await {
-            Ok(Ok(())) => set_status("Database synced".into()),
+            Ok(Ok(())) => {
+                if set_status("Database synced".into()) {
+                    log_activity("Connected to database sync".into());
+                }
+            }
             Ok(Err(e)) => {
-                set_status(format!("Database sync offline; edits saved locally: {e}"));
+                set_failure(format!("Database sync offline; edits saved locally: {e}"));
             }
             Err(e) => return Err(other(e)),
         }
