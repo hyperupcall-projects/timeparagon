@@ -308,19 +308,14 @@ pub fn fetch_range(
     let (merged, changes) = super::scheduled::merge(events, task_events, &loaded_calendars);
     events = merged;
     if let Some(path) = crate::task_db::path() {
-        super::operations::overlay(&path, &mut events, Some(fetch_started))?;
+        reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
+            super::task_metadata::save(access_token, event, data)
+        })?;
         super::operations::observe_range(&path, &events, first, last, fetch_started)?;
     }
     super::operations::cache_tasks(&events, false)?;
-    let mut database = crate::task_db::open()?;
     for event in &events {
         if event.is_task() {
-            if let Some(data) = &event.details.task_data
-                && database.lookup(event)?.as_ref() != Some(data)
-            {
-                super::task_metadata::save(access_token, event, data)?;
-                database.save(event, data)?;
-            }
             if let Err(error) = super::deadline::check(&event.details.description) {
                 append_notice(&mut notice, &format!("{}: {error}", event.title));
             }
@@ -352,6 +347,27 @@ pub fn fetch_range(
         fetched_at: fetch_started,
         notice,
     })
+}
+
+/// Publish changes from the remote merge while events still carry Google IDs.
+/// The overlay substitutes stable local UI IDs and pending edits; neither may
+/// be sent directly to Google by this reconciliation pass.
+fn reconcile_task_metadata_and_overlay(
+    path: &std::path::Path,
+    events: &mut Vec<Event>,
+    fetched_at: DateTime<Local>,
+    mut publish: impl FnMut(&Event, &crate::task_db::TaskData) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut database = crate::task_db::Database::open(path)?;
+    for event in events.iter().filter(|event| event.is_task()) {
+        if let Some(data) = &event.details.task_data
+            && database.lookup(event)?.as_ref() != Some(data)
+        {
+            publish(event, data)?;
+            database.save(event, data)?;
+        }
+    }
+    super::operations::overlay(path, events, Some(fetched_at))
 }
 
 /// The id of the app's TimeSlay calendar: the remembered id while it still
@@ -2711,6 +2727,110 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 
 #[cfg(test)]
 mod tests {
+    fn mapped_task() -> (tempfile::TempDir, std::path::PathBuf, super::Event) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("timeslay.sqlite3");
+        let mut db = crate::task_db::Database::open(&path).unwrap();
+        let mut event = super::super::sample_snapshot().events.remove(0);
+        event.id = "task:google-id".into();
+        event.calendar_id = "tasks:google-list".into();
+        event.details = Default::default();
+        let data = db.import(&event).unwrap();
+        event.details.task_data = Some(data);
+        db.connection().execute(
+            "INSERT INTO google_id_map(local,remote,calendar) VALUES('local-id','google-id','tasks:google-list')",
+            [],
+        ).unwrap();
+        (dir, path, event)
+    }
+
+    #[test]
+    fn unchanged_remote_task_is_not_saved_under_its_local_ui_id() {
+        let (_dir, path, task) = mapped_task();
+        let mut events = vec![task];
+        super::reconcile_task_metadata_and_overlay(
+            &path,
+            &mut events,
+            crate::clock::now(),
+            |_, _| panic!("unchanged remote metadata must not be published"),
+        )
+        .unwrap();
+        assert_eq!(events[0].id, "task:local-id");
+        // The UI identity has no database alias; checking it after overlay was
+        // what triggered a spurious save to an invalid Google task ID.
+        assert!(
+            crate::task_db::Database::open(&path)
+                .unwrap()
+                .lookup(&events[0])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn remote_merge_is_saved_with_google_identity_before_pending_edits_are_overlaid() {
+        let (_dir, path, mut task) = mapped_task();
+        task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
+        let mut pending = task.clone();
+        pending.id = "task:local-id".into();
+        pending.details.task_data.as_mut().unwrap().metadata.minutes = 90;
+        let mut db = crate::task_db::Database::open(&path).unwrap();
+        db.connection()
+            .execute(
+                "INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+                rusqlite::params![
+                    "tasks:google-list\ntask:local-id",
+                    serde_json::to_string(&pending).unwrap()
+                ],
+            )
+            .unwrap();
+        let mut events = vec![task.clone()];
+        let mut sent = Vec::new();
+        super::reconcile_task_metadata_and_overlay(
+            &path,
+            &mut events,
+            crate::clock::now(),
+            |event, data| {
+                sent.push((
+                    event.id.clone(),
+                    event.calendar_id.clone(),
+                    data.metadata.minutes,
+                ));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sent,
+            [("task:google-id".into(), "tasks:google-list".into(), 45)]
+        );
+        assert_eq!(db.lookup(&task).unwrap(), task.details.task_data);
+        assert_eq!(events[0], pending);
+    }
+
+    #[test]
+    fn failed_remote_metadata_save_leaves_cache_and_identity_retryable() {
+        let (_dir, path, mut task) = mapped_task();
+        let db = crate::task_db::Database::open(&path).unwrap();
+        let before = db.lookup(&task).unwrap();
+        task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
+        let mut events = vec![task];
+        assert_eq!(
+            super::reconcile_task_metadata_and_overlay(
+                &path,
+                &mut events,
+                crate::clock::now(),
+                |event, _| {
+                    assert_eq!(event.id, "task:google-id");
+                    Err("offline".into())
+                }
+            ),
+            Err("offline".into())
+        );
+        assert_eq!(events[0].id, "task:google-id");
+        assert_eq!(db.lookup(&events[0]).unwrap(), before);
+    }
+
     #[test]
     fn color_cleanup_covers_all_pages_masters_and_exceptions_only_on_app_calendar() {
         let mut calls = Vec::new();

@@ -139,9 +139,6 @@ opt-level = 3
 
 [dev-dependencies]
 iced_test = "0.14"
-# Keeps tests away from the real database, config, Google account and sync
-# server (see `timeslay_core::config::isolated`).
-timeslay-core = { path = "core", features = ["test-isolation"] }
 
 # The iced application stays the root package. The Dioxus day view is a
 # separate crate beside it rather than a replacement, so the two can be built
