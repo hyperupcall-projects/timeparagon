@@ -14,6 +14,7 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
                     PlanTab::Schedule => Screen::Calendar,
                     PlanTab::Overdue => Screen::Overdue,
                     PlanTab::Inbox => Screen::Inbox,
+                    PlanTab::Today => Screen::Today,
                     PlanTab::Backlog => Screen::Backlog,
                 },
             )
@@ -23,7 +24,7 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             state.view = CalendarView::Day;
             let close = range_view_transition(state, was_planning, Task::none());
             let screen = match state.screen {
-                Screen::Overdue | Screen::Inbox | Screen::Backlog => state.screen,
+                Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Backlog => state.screen,
                 _ => Screen::Overdue,
             };
             Task::batch([
@@ -76,7 +77,7 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
     let tasks_screen = |screen| {
         matches!(
             screen,
-            Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+            Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
         )
     };
     if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {

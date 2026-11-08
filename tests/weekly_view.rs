@@ -668,6 +668,7 @@ fn plan_subtabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
             for (label, tab, screen) in [
                 ("Overdue", PlanTab::Overdue, Screen::Overdue),
                 ("Inbox", PlanTab::Inbox, Screen::Inbox),
+                ("Today", PlanTab::Today, Screen::Today),
                 ("Backlog", PlanTab::Backlog, Screen::Backlog),
                 ("Schedule", PlanTab::Schedule, Screen::Calendar),
             ] {
