@@ -304,6 +304,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             (Screen::BrainDump, _) => brain_dump::view(state, &metrics),
             (Screen::Overdue, _) => inbox::overdue(state, &main_metrics),
             (Screen::Inbox, _) => inbox::view(state, &main_metrics),
+            (Screen::Today, _) => inbox::today(state, &main_metrics),
             (Screen::Triaged, _) => inbox::triaged(state, &main_metrics),
             (Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
             (Screen::Life, _) => life::view(state, &metrics),
@@ -565,7 +566,7 @@ pub fn plan_view_label(state: &State) -> &'static str {
 }
 
 /// Task lists available beneath each planning period.
-pub const TASKS_LABELS: [&str; 3] = ["Overdue", "Inbox", "Backlog"];
+pub const TASKS_LABELS: [&str; 4] = ["Overdue", "Inbox", "Today", "Backlog"];
 
 /// The destinations kept inside the More menu.
 pub const MORE_LABELS: [&str; 6] = [
@@ -659,7 +660,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let tasks_open = !planning
         && matches!(
             state.screen,
-            Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+            Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
         );
     let more_active = state.more_menu_open
         || matches!(
@@ -760,6 +761,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         ("Schedule", PlanTab::Schedule, Screen::Calendar),
         ("Overdue", PlanTab::Overdue, Screen::Overdue),
         ("Inbox", PlanTab::Inbox, Screen::Inbox),
+        ("Today", PlanTab::Today, Screen::Today),
         ("Backlog", PlanTab::Backlog, Screen::Backlog),
     ]
     .into_iter()
@@ -795,7 +797,7 @@ fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
     let tasks_row = if state.range_view_active()
         || matches!(
             state.screen,
-            Screen::Overdue | Screen::Inbox | Screen::Triaged | Screen::Backlog
+            Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
         ) {
         TASKS_ROW_GAP + tab_height(metrics)
     } else {
@@ -897,7 +899,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             !state.range_view_active()
                 && matches!(
                     state.screen,
-                    Screen::Overdue | Screen::Inbox | Screen::Backlog
+                    Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Backlog
                 ),
             Message::Navigation(NavigationMessage::PlanDaySelected),
         ),
