@@ -4,6 +4,10 @@
 Unlike cargo clippy --fix, this never writes to other files in the workspace.
 Suggestions containing multiple edits are accepted or rejected as a group.
 Offsets in Rust diagnostics are UTF-8 byte offsets, not character offsets.
+
+Usage: clippy-fix.py [--all-targets] FILE...
+Without --all-targets only library and binary targets are compiled, which keeps
+the pre-commit hook from building every test, example and bench.
 """
 
 import json
@@ -12,7 +16,7 @@ import subprocess
 import sys
 
 
-CLIPPY = ["cargo", "clippy", "--workspace", "--all-targets", "--locked"]
+CLIPPY = ["cargo", "clippy", "--workspace", "--locked"]
 
 
 def suggestions(message):
@@ -68,12 +72,14 @@ def apply_fixes(messages, selected):
 
 
 def main():
-    selected = {Path(f).resolve() for f in sys.argv[1:]
-                if f.endswith(".rs") and Path(f).is_file() and not Path(f).is_symlink()}
+    args = sys.argv[1:]
+    clippy = CLIPPY + ["--all-targets"] if "--all-targets" in args else CLIPPY
+    selected = {Path(f).resolve() for f in args if f != "--all-targets"
+                and f.endswith(".rs") and Path(f).is_file() and not Path(f).is_symlink()}
     # Re-run after fixes so offsets stay valid and newly exposed suggestions can
     # be applied. A final strict check reports all remaining warnings/errors.
     for _ in range(4):
-        result = subprocess.run(CLIPPY + ["--message-format=json"],
+        result = subprocess.run(clippy + ["--message-format=json"],
                                 stdout=subprocess.PIPE, check=False)
         messages = []
         for line in result.stdout.splitlines():
@@ -86,7 +92,7 @@ def main():
             return result.returncode
         if not apply_fixes(messages, selected):
             break
-    return subprocess.run(CLIPPY + ["--", "-D", "warnings"], check=False).returncode
+    return subprocess.run(clippy + ["--", "-D", "warnings"], check=False).returncode
 
 
 if __name__ == "__main__":
