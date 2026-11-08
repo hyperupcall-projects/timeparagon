@@ -557,7 +557,7 @@ pub fn calendar_view_label(_state: &State) -> &'static str {
 
 /// The Plan button names the overview currently selected.
 pub fn plan_view_label(state: &State) -> &'static str {
-    match state.view {
+    match state.plan_view {
         CalendarView::Day => "Plan Day",
         CalendarView::Week => "Plan Week",
         CalendarView::TwoWeek => "Plan 2 Weeks",
@@ -622,8 +622,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
             .map(|label| label.chars().count())
             .sum::<usize>();
         // Six tabs, three within-group gaps, and gaps on both sides of each spacer.
-        let fixed = 12.0 * pad + 3.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 1.0;
-        ((available - fixed) / (chars as f32 * TAB_GLYPH_WIDTH)).min(max_size)
+        let fixed = 14.0 * pad + 3.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 7.0;
+        ((available - fixed) / ((chars + 1) as f32 * TAB_GLYPH_WIDTH)).min(max_size)
     };
     let full = size_for(&TAB_WIDEST_LABELS);
     if full >= TAB_FULL_MIN_SIZE.min(max_size) {
@@ -680,13 +680,33 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
         metrics,
         fit,
     );
-    let plan = tab(
-        labels[1],
-        state.view_menu_open || planning || tasks_open,
-        Message::Navigation(NavigationMessage::ViewMenuToggled),
-        metrics,
-        fit,
-    );
+    let plan_active = state.view_menu_open || planning || tasks_open;
+    let plan = container(
+        row![
+            button(
+                text(labels[1])
+                    .size(fit.size)
+                    .wrapping(text::Wrapping::None)
+                    .center()
+            )
+            .height(tab_height(metrics))
+            .padding(Padding::from([0.0, fit.pad]))
+            .on_press(plan_view_message(state.plan_view))
+            .style(view_half_style(plan_active)),
+            iced::widget::rule::vertical(1),
+            container(
+                button(text("▾").size(fit.size).center())
+                    .height(tab_height(metrics))
+                    .padding(Padding::from([0.0, fit.pad + 2.0]))
+                    .on_press(Message::Navigation(NavigationMessage::ViewMenuToggled))
+                    .style(view_half_style(plan_active)),
+            )
+            .id("plan-menu-toggle"),
+        ]
+        .height(tab_height(metrics))
+        .align_y(Center),
+    )
+    .style(view_button_style(plan_active));
     let life = tab(
         labels[2],
         state.screen == Screen::Life,
@@ -884,41 +904,30 @@ fn view_half_style(active: bool) -> impl Fn(&iced::Theme, button::Status) -> but
     }
 }
 
+/// Both halves use the same action for the remembered planning period.
+fn plan_view_message(view: CalendarView) -> Message {
+    match view {
+        CalendarView::Day => Message::Navigation(NavigationMessage::PlanDaySelected),
+        CalendarView::Week => Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+        CalendarView::TwoWeek => Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected),
+        CalendarView::Month => Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+    }
+}
+
 /// The Plan menu selects a planning range without toggling it off.
 fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
         .on_press(Message::Navigation(NavigationMessage::ViewMenuToggled));
 
     let mut panel = column![].spacing(2.0).width(Fill);
-    let week_active = state.range_view_active() && state.weekly();
-    let two_week_active = state.two_weekly();
-    let month_active = state.range_view_active() && state.monthly();
-    for (label, selected, message) in [
-        (
-            "Day",
-            !state.range_view_active()
-                && matches!(
-                    state.screen,
-                    Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Backlog
-                ),
-            Message::Navigation(NavigationMessage::PlanDaySelected),
-        ),
-        (
-            "Week",
-            week_active,
-            Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
-        ),
-        (
-            "2 Weeks",
-            two_week_active,
-            Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected),
-        ),
-        (
-            "Month",
-            month_active,
-            Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
-        ),
+    for (label, view) in [
+        ("Day", CalendarView::Day),
+        ("Week", CalendarView::Week),
+        ("2 Weeks", CalendarView::TwoWeek),
+        ("Month", CalendarView::Month),
     ] {
+        let selected = state.plan_view == view;
+        let message = plan_view_message(view);
         panel = panel.push(
             button(text(label).size(metrics.label()).center().width(Fill))
                 .width(Fill)

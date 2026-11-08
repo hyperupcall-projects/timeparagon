@@ -38,6 +38,9 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             let changed = state.view != view;
             state.week_hover = None;
             state.view = view;
+            if weekly {
+                state.plan_view = view;
+            }
             let close = range_view_transition(state, was_weekly, Task::none());
             if changed {
                 state.week_anchor = state.calendar.day;
@@ -62,6 +65,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             let changed = !state.monthly();
             state.week_hover = None;
             state.view = CalendarView::Month;
+            state.plan_view = CalendarView::Month;
             if changed {
                 state.week_anchor = state.calendar.day;
             }
@@ -77,6 +81,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             state.week_hover = None;
             state.two_week_more = None;
             state.view = CalendarView::TwoWeek;
+            state.plan_view = CalendarView::TwoWeek;
             if changed {
                 state.week_anchor = state.calendar.day;
             }

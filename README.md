@@ -2,6 +2,8 @@
 
 Easily manage your life using a single app. It is designed to minimize friction and maximize your time spent in flow state.
 
+I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and that it's completely vibe-coded, pushing almost 150,000 SLOC.
+
 ## Tour
 
 Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and edit events/tasks from this view:
@@ -106,8 +108,6 @@ Of course, there's also week, 2-week, and month views:
 	- Browse and edit contacts from Google accounts and Google workspace directories.
 	- Associate people with events, tasks, and projects (TODO).
 	- One-click contact methos for email, Slack (TODO).
-- Stores data in Google Calendar, Tasks and Contacts, and syncs app-specific data through Turso.
-	- Uses local database as cache to keep UI performant/responsive.
 - **Integrations:**
 	- Slack
 	- WebExtension
@@ -120,6 +120,6 @@ Of course, there's also week, 2-week, and month views:
 	- Location and exercise
 	- Food?
 
-## More
+## Documentation
 
 See [Documentation](./docs/index.md) for more details.
