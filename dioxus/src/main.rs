@@ -463,7 +463,13 @@ fn App() -> Element {
         .map(|snapshot| day::build_model(snapshot, &settings));
     let travel = model
         .as_ref()
-        .map(|model| day::travel_boxes(model, &config.read().travel))
+        .map(|model| {
+            day::travel_boxes(
+                model,
+                &config.read().travel,
+                config.read().appearance.distance_unit,
+            )
+        })
         .unwrap_or_default();
     let selected_day = current_day();
     let today = day::today(&settings);

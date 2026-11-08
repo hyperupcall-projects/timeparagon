@@ -1042,7 +1042,11 @@ pub fn capacity_label(minutes: i64) -> String {
 
 /// The trips on the grid, with the times the desktop app worked out and synced.
 /// Nothing is asked of Mapbox here.
-pub fn travel_boxes(model: &DayModel, travel: &PlaceSettings) -> Vec<TravelBox> {
+pub fn travel_boxes(
+    model: &DayModel,
+    travel: &PlaceSettings,
+    unit: places::DistanceUnit,
+) -> Vec<TravelBox> {
     if !travel.show {
         return Vec::new();
     }
@@ -1067,7 +1071,7 @@ pub fn travel_boxes(model: &DayModel, travel: &PlaceSettings) -> Vec<TravelBox> 
             Some(TravelBox {
                 event_id: hop.before,
                 label: match route {
-                    Some(route) => format!("{mode} · {}", places::route_label(route)),
+                    Some(route) => format!("{mode} · {}", places::route_label(route, unit)),
                     None => format!("{mode} · no time yet"),
                 },
                 minutes: route.map_or(0, |route| route.seconds.div_ceil(60)),
@@ -2285,13 +2289,17 @@ mod tests {
     fn a_trip_shows_the_synced_time_above_the_event_it_leads_to() {
         let snapshot = snapshot(vec![located("lecture", "Campus", 9)]);
         let model = build_model(&snapshot, &settings());
-        let boxes = travel_boxes(&model, &travel_settings());
+        let boxes = travel_boxes(&model, &travel_settings(), places::DistanceUnit::Kilometers);
 
         assert_eq!(boxes.len(), 1);
         assert_eq!(boxes[0].event_id, "lecture");
         assert_eq!(boxes[0].label, "Bike · 20 min · 5.3 km");
         assert_eq!(boxes[0].minutes, 20);
         assert_eq!(boxes[0].anchor_min, 9 * 60);
+        let miles = travel_boxes(&model, &travel_settings(), places::DistanceUnit::Miles);
+        assert_eq!(miles[0].label, "Bike · 20 min · 3.3 mi");
+        assert_eq!(miles[0].minutes, boxes[0].minutes);
+        assert_eq!(miles[0].anchor_min, boxes[0].anchor_min);
     }
 
     #[test]
@@ -2302,7 +2310,7 @@ mod tests {
             located("gym", "Gym", 11),
         ]);
         let model = build_model(&snapshot, &settings());
-        let boxes = travel_boxes(&model, &travel_settings());
+        let boxes = travel_boxes(&model, &travel_settings(), places::DistanceUnit::Kilometers);
 
         assert_eq!(boxes.len(), 2);
         assert_eq!(boxes[1].event_id, "gym");
@@ -2318,7 +2326,7 @@ mod tests {
             show: false,
             ..travel_settings()
         };
-        assert!(travel_boxes(&model, &travel).is_empty());
+        assert!(travel_boxes(&model, &travel, places::DistanceUnit::Kilometers).is_empty());
     }
 
     #[test]

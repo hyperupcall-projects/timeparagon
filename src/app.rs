@@ -507,6 +507,7 @@ pub enum SettingsMessage {
     DatabaseSyncUrlChanged(String),
     ThemeSelected(String),
     TimeFormatSelected(TimeFormat),
+    DistanceUnitSelected(config::DistanceUnit),
     FirstDayOfWeekSelected(calendar::first_day::FirstDayOfWeek),
     AlwaysOnTopToggled(bool),
     CalendarWidthChanged(f32),
