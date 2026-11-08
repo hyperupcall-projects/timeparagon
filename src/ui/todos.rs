@@ -5,10 +5,10 @@
 //! controls, which is what keeps reordering and indenting a one-tap affair
 //! rather than a mode to enter.
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
 use iced::{Center, Element, Fill, Length, Padding};
 
-use crate::app::{NavigationMessage};
+use crate::app::NavigationMessage;
 use crate::app::{Message, Screen, State};
 use crate::todos::Todo;
 
@@ -37,9 +37,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     } else {
         // The page already carries the title, so this row is only the way to
         // throw the whole list away.
-        body = body.push(
-            row![Space::new().width(Fill), clear_button(metrics)].align_y(Center),
-        );
+        body = body.push(row![Space::new().width(Fill), clear_button(metrics)].align_y(Center));
 
         for (index, todo) in state.config.todos.items().iter().enumerate() {
             body = body.push(item(state, index, todo, metrics));
@@ -52,7 +50,9 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // its own, so leaving either view is always the same gesture.
     column![
         text("Todos").size(metrics.label() + 3.0),
-        crate::ui::controls::scrollable(body).height(Fill).width(Fill),
+        crate::ui::controls::scrollable(body)
+            .height(Fill)
+            .width(Fill),
         go_back_button(metrics),
     ]
     .spacing(metrics.spacing)
@@ -65,7 +65,9 @@ fn go_back_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
     button(text("Go back").size(metrics.label()).center().width(Fill))
         .width(Fill)
         .height(metrics.icon_button())
-        .on_press(Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)))
+        .on_press(Message::Navigation(NavigationMessage::ScreenSelected(
+            Screen::Calendar,
+        )))
         .style(crate::ui::controls::secondary)
         .into()
 }
@@ -149,12 +151,17 @@ fn control<'a>(label: &'a str, message: Message, metrics: &Metrics) -> Element<'
 }
 
 fn add_button<'a>(metrics: &Metrics) -> Element<'a, Message> {
-    button(text("+ Add todo").size(metrics.label()).center().width(Fill))
-        .width(Fill)
-        .height(metrics.icon_button())
-        .on_press(Message::TodoAdded)
-        .style(crate::ui::controls::secondary)
-        .into()
+    button(
+        text("+ Add todo")
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+    )
+    .width(Fill)
+    .height(metrics.icon_button())
+    .on_press(Message::TodoAdded)
+    .style(crate::ui::controls::secondary)
+    .into()
 }
 
 /// The way to throw the whole scratchpad away.

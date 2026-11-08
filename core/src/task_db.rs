@@ -211,25 +211,24 @@ impl Database {
                 return serde_json::from_str(&json).map_err(|e| e.to_string());
             }
         }
-        if crate::calendar::operations::replaying() {
-            if let Some(data) = &event.details.task_data {
-                let mut data = data.clone();
-                let remote: Option<String> = self
-                    .0
-                    .query_row(
-                        "SELECT data FROM google_task_backend_state WHERE task_id=?1",
-                        [data.id],
-                        |r| r.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| e.to_string())?;
-                if let Some(remote) = remote {
-                    let remote: TaskData =
-                        serde_json::from_str(&remote).map_err(|e| e.to_string())?;
-                    data.metadata.schedule = remote.metadata.schedule;
-                }
-                return Ok(data);
+        if crate::calendar::operations::replaying()
+            && let Some(data) = &event.details.task_data
+        {
+            let mut data = data.clone();
+            let remote: Option<String> = self
+                .0
+                .query_row(
+                    "SELECT data FROM google_task_backend_state WHERE task_id=?1",
+                    [data.id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if let Some(remote) = remote {
+                let remote: TaskData = serde_json::from_str(&remote).map_err(|e| e.to_string())?;
+                data.metadata.schedule = remote.metadata.schedule;
             }
+            return Ok(data);
         }
         if let Some(data) = crate::calendar::task_metadata::read(&event.details.description)? {
             self.cache_remote(event, &data)?;

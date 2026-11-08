@@ -113,7 +113,9 @@ pub fn AgendaDays(
             let mut days = day::agenda(snapshot, dates, &settings);
             for (_, rows) in &mut days {
                 rows.retain(|row| {
-                    filter.as_ref().is_none_or(|filter| shows(filter, &row.event))
+                    filter
+                        .as_ref()
+                        .is_none_or(|filter| shows(filter, &row.event))
                         && search.shows(&row.event, &snapshot.events, &settings)
                 });
             }

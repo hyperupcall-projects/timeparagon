@@ -1278,7 +1278,8 @@ mod tests {
                 name: "Personal".into(),
             };
             // The named default remains selectable before Google has created it.
-            let (options, selected) = task_list_options(&[custom.clone()], default_name, None);
+            let (options, selected) =
+                task_list_options(std::slice::from_ref(&custom), default_name, None);
             assert_eq!(options.len(), 2);
             let selected = selected.unwrap();
             assert_eq!(selected.name, default_name);

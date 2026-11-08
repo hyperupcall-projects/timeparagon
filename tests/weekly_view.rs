@@ -1352,7 +1352,10 @@ fn picker_hover_survives_gaps_between_days_but_not_leaving_the_grid() -> Result<
             .any(|m| matches!(m, Message::Calendar(CalendarMessage::WeekHover(None))))
     };
     let messages: Vec<_> = ui.into_messages().collect();
-    assert!(!cleared(&messages), "a gap between days should keep the range");
+    assert!(
+        !cleared(&messages),
+        "a gap between days should keep the range"
+    );
 
     let mut ui = render(&state, Size::new(900.0, 700.0));
     let mut moved = |position| {
@@ -1364,6 +1367,9 @@ fn picker_hover_survives_gaps_between_days_but_not_leaving_the_grid() -> Result<
     moved(fifteen.center());
     moved(weekday);
     let messages: Vec<_> = ui.into_messages().collect();
-    assert!(cleared(&messages), "the weekday row should go back to the view");
+    assert!(
+        cleared(&messages),
+        "the weekday row should go back to the view"
+    );
     Ok(())
 }

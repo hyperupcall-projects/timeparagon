@@ -208,13 +208,12 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
             if let Ok(mut statement) = database
                 .connection()
                 .prepare("SELECT event FROM google_task_records")
+                && let Ok(rows) = statement.query_map([], |r| r.get::<_, String>(0))
             {
-                if let Ok(rows) = statement.query_map([], |r| r.get::<_, String>(0)) {
-                    for row in rows.flatten() {
-                        if let Ok(task) = serde_json::from_str::<Event>(&row) {
-                            events.retain(|e| e.id != task.id);
-                            events.push(task);
-                        }
+                for row in rows.flatten() {
+                    if let Ok(task) = serde_json::from_str::<Event>(&row) {
+                        events.retain(|e| e.id != task.id);
+                        events.push(task);
                     }
                 }
             }

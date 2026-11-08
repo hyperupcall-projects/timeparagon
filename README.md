@@ -2,7 +2,7 @@
 
 Easily manage your life using a single app. It is designed to minimize friction and maximize your time spent in flow state.
 
-I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's completely vibe-coded and the source code sort of takes up 150,000 SLOC.
+I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's completely vibe-coded and the source code sort of takes up about 150,000 SLOC.
 
 ## Tour
 

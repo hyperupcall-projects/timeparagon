@@ -1109,9 +1109,10 @@ pub struct Source {
 /// How the editor describes where an item comes from, like the iced details pane.
 pub fn source_label(event: &Event, context: &EditContext) -> Source {
     let settings = &context.settings;
-    let (name, color) = event
-        .kind(settings, &context.calendars)
-        .chip(event, settings, &context.calendars);
+    let (name, color) =
+        event
+            .kind(settings, &context.calendars)
+            .chip(event, settings, &context.calendars);
     Source { name, color }
 }
 
