@@ -567,17 +567,19 @@ pub(super) fn day_cell<'a>(
 }
 
 /// The app-specific kind of an item ("Habit", "Task", …) and the color
-/// configured for that kind, or `None` for an event on another calendar.
-pub(crate) fn event_kind(state: &State, event: &Event) -> Option<(&'static str, Color)> {
+/// configured for that kind, or for an event on another calendar, that
+/// calendar's name and the event's color.
+pub(crate) fn event_kind(state: &State, event: &Event) -> (String, Color) {
     let settings = &state.config.calendar;
+    let calendars = &state.calendar.calendars;
     event
-        .kind(settings, &state.calendar.calendars)
-        .chip(event, settings)
+        .kind(settings, calendars)
+        .chip(event, settings, calendars)
 }
 
 /// A small pill naming an item's kind, in that kind's configured color.
 pub(crate) fn kind_chip<'a>(
-    kind: &'static str,
+    kind: String,
     color: Color,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
@@ -609,42 +611,10 @@ pub(crate) fn titled<'a>(
     title: impl Into<Element<'a, Message>>,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let title = container(title).width(Fill);
-    match event_kind(state, event) {
-        Some((kind, color)) => row![title, kind_chip(kind, color, metrics)]
-            .spacing(8)
-            .align_y(Alignment::Start)
-            .width(Fill)
-            .into(),
-        None => title.into(),
-    }
-}
-
-/// The calendar an item belongs to, shown beneath its title when it has no
-/// app-specific kind (that goes in a chip beside the title instead).
-pub(crate) fn event_source<'a>(
-    state: &State,
-    event: &Event,
-    metrics: &Metrics,
-) -> Option<Element<'a, Message>> {
-    if event_kind(state, event).is_some() {
-        return None;
-    }
-    let calendar = state
-        .calendar
-        .calendars
-        .iter()
-        .find(|calendar| calendar.id == event.calendar_id);
-    let label = format!(
-        "Calendar: {}",
-        calendar.map_or(event.calendar_id.as_str(), |calendar| calendar
-            .name
-            .as_str())
-    );
-    Some(
-        text(label)
-            .size(metrics.label())
-            .style(text::secondary)
-            .into(),
-    )
+    let (kind, color) = event_kind(state, event);
+    row![container(title).width(Fill), kind_chip(kind, color, metrics)]
+        .spacing(8)
+        .align_y(Alignment::Start)
+        .width(Fill)
+        .into()
 }
