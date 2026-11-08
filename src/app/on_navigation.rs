@@ -48,6 +48,15 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
             state.more_menu_open = !state.more_menu_open;
             if state.more_menu_open {
                 state.view_menu_open = false;
+                state.activity.open = false;
+            }
+            Task::none()
+        }
+        NavigationMessage::ActivityLogToggled => {
+            state.activity.open = !state.activity.open;
+            if state.activity.open {
+                state.view_menu_open = false;
+                state.more_menu_open = false;
             }
             Task::none()
         }
@@ -66,6 +75,7 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
     // Choosing a destination puts the dropdown menus away.
     state.view_menu_open = false;
     state.more_menu_open = false;
+    state.activity.open = false;
     // Alarm setting belongs to the day view, so leaving it ends both.
     state.alarms.mode = false;
     state.alarms.editor = None;

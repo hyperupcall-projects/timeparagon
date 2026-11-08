@@ -75,6 +75,12 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             state.habits.reload_shared();
             state.notes.reload_shared();
             state.refresh_operations();
+            state.database_unsent = timeslay_core::database_sync::unsent_edits();
+            state.activity.pull_database_log();
+            Task::none()
+        }
+        SystemMessage::ActivityTick => {
+            state.activity.tick(Instant::now());
             Task::none()
         }
         SystemMessage::ConfigReloaded(config) => {
