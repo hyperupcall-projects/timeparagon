@@ -1,8 +1,8 @@
 //! TimeSlay's Dioxus app.
 //!
-//! The navigation is the desktop's: Do is the day's calendar, Plan plans a
-//! day, week, two weeks or month with the Overdue, Inbox, Today and Backlog
-//! lists beneath it, Note opens the notepad, More the other pages, and
+//! Do is the day's calendar, Plan shows a day, week, two weeks or month,
+//! Tasks holds the Overdue, Inbox, Today and Backlog lists,
+//! Note opens the notepad, More the other pages, and
 //! Settings the settings. Tapping an item opens a sheet that edits it; a time
 //! block first lists its assigned tasks.
 
@@ -33,7 +33,7 @@ use timeslay_core::theme as look;
 use timeslay_core::timeblocking as tb;
 
 use day::{DayModel, EditContext, Theme, TimeBlock, TimedEvent};
-use plan::{PlanTab, PlanView};
+use plan::{PlanView, TaskTab};
 
 /// Height of one hour on the timeline, in pixels.
 const HOUR_HEIGHT: f32 = 60.0;
@@ -188,10 +188,10 @@ fn App() -> Element {
     let mut selected_block = use_signal(|| None::<String>);
     let mut editing = use_signal(|| None::<Event>);
     let block_writing = use_signal(|| false);
-    // Where the navigation is: Do, Plan (with its period and list) or Habits.
+    // The calendar, planning period, task lists or Habits.
     let mut page = use_signal(|| Page::Do);
     let plan_view = use_signal(|| PlanView::Day);
-    let plan_tab = use_signal(|| PlanTab::Overdue);
+    let task_tab = use_signal(|| TaskTab::Overdue);
     let mut plan_menu_open = use_signal(|| false);
     // The day the range being planned holds.
     let mut week_anchor = use_signal(|| *current_day.peek());
@@ -393,7 +393,7 @@ fn App() -> Element {
         // Retry when the grid comes into view, if the day loaded on another page.
         let _ = page();
         let _ = plan_view();
-        let _ = plan_tab();
+        let _ = task_tab();
         let pending = matches!(*data.state().read(), UseResourceState::Pending);
         let loaded_day = match data.read().as_ref() {
             Some(Ok(snapshot)) => Some(snapshot.day),
@@ -513,7 +513,6 @@ fn App() -> Element {
     let plan_nav = PlanNav {
         page,
         view: plan_view,
-        tab: plan_tab,
         menu_open: plan_menu_open,
         week_anchor,
         current_day,
@@ -530,23 +529,19 @@ fn App() -> Element {
         show_settings.set(true);
     };
 
-    let planning_range = page() == Page::Plan && plan_view().range().is_some();
     let plan_active = plan_menu_open() || page() == Page::Plan;
     let more_active = show_more()
         || page() == Page::Habits
         || show_notes()
         || show_operations()
         || matches!(show_scratch(), Some(scratch::Page::BrainDump));
-    let plan_tabs = PlanTab::ALL
-        .into_iter()
-        .filter(|tab| planning_range || *tab != PlanTab::Schedule)
-        .map(|tab| {
-            let mut plan_tab = plan_tab;
-            nav_tab(tab.label(), plan_tab() == tab, "", move |_| {
-                plan_menu_open.set(false);
-                plan_tab.set(tab);
-            })
-        });
+    let task_tabs = TaskTab::ALL.into_iter().map(|tab| {
+        let mut task_tab = task_tab;
+        nav_tab(tab.label(), task_tab() == tab, "", move |_| {
+            plan_menu_open.set(false);
+            task_tab.set(tab);
+        })
+    });
     let plan_menu = plan_menu_open().then(|| {
         rsx! {
             div { class: "menu-dismiss", onclick: move |_| plan_menu_open.set(false) }
@@ -565,8 +560,7 @@ fn App() -> Element {
         }
     });
 
-    // One card at the top, as on the desktop: Do and Plan, then Note, More
-    // and Settings, with Plan's lists on a second row while planning.
+    // Tasks owns the list navigation beneath the main row.
     let topbar = rsx! {
         header { class: "nav-card",
             div { class: "nav-row",
@@ -590,6 +584,10 @@ fn App() -> Element {
                         "▾"
                     }
                 }
+                {nav_tab("Tasks", page() == Page::Tasks, "", move |_| {
+                    plan_menu_open.set(false);
+                    page.set(Page::Tasks);
+                })}
                 div { class: "spacer" }
                 {nav_tab("Note", show_scratch() == Some(scratch::Page::Notepad), "", move |_| {
                     plan_menu_open.set(false);
@@ -607,8 +605,8 @@ fn App() -> Element {
                     span { class: "label-short", "Set" }
                 }
             }
-            if page() == Page::Plan {
-                div { class: "nav-row plan-tabs", {plan_tabs} }
+            if page() == Page::Tasks {
+                div { class: "nav-row task-tabs", {task_tabs} }
             }
             {plan_menu}
         }
@@ -663,8 +661,8 @@ fn App() -> Element {
     };
     // The day's picker is labelled with the day in view, and is the way to
     // move between days.
-    // Planning a day keeps the grid beside its lists where there is room.
-    let day_header_class = if page() == Page::Plan {
+    // Tasks keeps the grid beside its lists where there is room.
+    let day_header_class = if page() == Page::Tasks {
         "wide-only"
     } else {
         ""
@@ -738,14 +736,13 @@ fn App() -> Element {
 
     let body: Element = match &model {
         Some(model) => {
-            // Planning a day shows its list, with the grid beside it only
-            // where there is room; Do shows the grid alone.
-            let lists = (page() == Page::Plan)
+            // Tasks shows its list, with the grid beside it on wide windows.
+            let lists = (page() == Page::Tasks)
                 .then_some(snapshot.as_ref())
                 .flatten()
                 .map(|snapshot| {
                     task_list(
-                        plan_tab(),
+                        task_tab(),
                         snapshot,
                         config,
                         signed_in(),
@@ -888,19 +885,8 @@ fn App() -> Element {
         }
     };
 
-    // A week, two weeks or a month: the Schedule tab lists the range, and
-    // the other tabs are the same lists as planning a day.
+    // Plan always shows the selected period; task lists live on Tasks.
     let range_page = plan_view().range().filter(|_| page() == Page::Plan).map(|range| {
-        if plan_tab() != PlanTab::Schedule {
-            return match &snapshot {
-                Some(snapshot) => rsx! {
-                    div { class: "plan-page",
-                        {task_list(plan_tab(), snapshot, config, signed_in(), revision, editing, show_create)}
-                    }
-                },
-                None => body.clone(),
-            };
-        }
         let anchor = week_anchor();
         let shown = agenda::dates(range, anchor, &settings);
         let shows_today = shown.contains(&today);
@@ -1597,8 +1583,10 @@ impl DayNav {
 enum Page {
     /// The day's calendar.
     Do,
-    /// The period being planned and its lists.
+    /// The period being planned.
     Plan,
+    /// Overdue, Inbox, Today and Backlog.
+    Tasks,
     Habits,
 }
 
@@ -1614,38 +1602,28 @@ enum ViewTab {
 struct PlanNav {
     page: Signal<Page>,
     view: Signal<PlanView>,
-    tab: Signal<PlanTab>,
     menu_open: Signal<bool>,
     week_anchor: Signal<NaiveDate>,
     current_day: Signal<NaiveDate>,
 }
 
 impl PlanNav {
-    /// Coming to a range from anywhere else opens on its Schedule, starting
-    /// from the day in view; moving between ranges keeps the list on show.
-    /// Planning a day keeps the list on show, or opens Overdue.
+    /// Open the selected period, starting a range from the day in view.
     fn choose(mut self, view: PlanView) {
         let was_range = *self.page.peek() == Page::Plan && self.view.peek().range().is_some();
         let changed = *self.view.peek() != view;
         self.menu_open.set(false);
         self.view.set(view);
-        if view.range().is_some() {
-            if !was_range {
-                self.tab.set(PlanTab::Schedule);
-            }
-            if changed || !was_range {
-                self.week_anchor.set(*self.current_day.peek());
-            }
-        } else if *self.tab.peek() == PlanTab::Schedule {
-            self.tab.set(PlanTab::Overdue);
+        if view.range().is_some() && (changed || !was_range) {
+            self.week_anchor.set(*self.current_day.peek());
         }
         self.page.set(Page::Plan);
     }
 }
 
-/// One of Plan's lists, over everything loaded with its local edits.
+/// One of the task lists, over everything loaded with its local edits.
 fn task_list(
-    tab: PlanTab,
+    tab: TaskTab,
     snapshot: &calendar::Snapshot,
     config: Signal<timeslay_core::config::Config>,
     signed_in: bool,
@@ -2490,7 +2468,7 @@ mod sheet_tests {
         render(app)
     }
 
-    fn list_app(tab: PlanTab) -> Element {
+    fn list_app(tab: TaskTab) -> Element {
         let start = Local.with_ymd_and_hms(2026, 11, 4, 0, 0, 0).unwrap();
         let snapshot = calendar::Snapshot {
             calendars: Vec::new(),
@@ -2507,13 +2485,50 @@ mod sheet_tests {
     }
 
     #[test]
-    fn each_plan_list_has_the_desktops_heading_and_empty_note() {
+    fn plan_opens_each_period_from_tasks_and_preserves_range_navigation() {
+        fn app() -> Element {
+            let mut page = use_signal(|| Page::Tasks);
+            let view = use_signal(|| PlanView::Day);
+            let mut menu_open = use_signal(|| true);
+            let mut week_anchor = use_signal(|| today() - chrono::Duration::days(7));
+            let current_day = use_signal(today);
+            use_hook(move || {
+                let nav = PlanNav {
+                    page,
+                    view,
+                    menu_open,
+                    week_anchor,
+                    current_day,
+                };
+                for period in PlanView::ALL {
+                    page.set(Page::Tasks);
+                    menu_open.set(true);
+                    nav.choose(period);
+                    assert_eq!(*page.peek(), Page::Plan);
+                    assert_eq!(*view.peek(), period);
+                    assert!(!*menu_open.peek());
+                    if period.range().is_some() {
+                        assert_eq!(*week_anchor.peek(), today());
+                        let next = today() + chrono::Duration::days(7);
+                        week_anchor.set(next);
+                        nav.choose(period);
+                        assert_eq!(*week_anchor.peek(), next);
+                    }
+                }
+            });
+            rsx! { div {} }
+        }
+        render(app);
+    }
+
+    #[test]
+    fn each_task_list_has_the_desktops_heading_and_empty_note() {
         assert_offers(
-            &render_list(|| list_app(PlanTab::Overdue)),
+            &render_list(|| list_app(TaskTab::Overdue)),
             &["Overdue", "Sort by", "Manual order", "Nothing overdue"],
         );
         assert_offers(
-            &render_list(|| list_app(PlanTab::Inbox)),
+            &render_list(|| list_app(TaskTab::Inbox)),
             &[
                 "Inbox",
                 "Tasks waiting to be triaged",
@@ -2523,10 +2538,10 @@ mod sheet_tests {
             ],
         );
         assert_offers(
-            &render_list(|| list_app(PlanTab::Today)),
+            &render_list(|| list_app(TaskTab::Today)),
             &["Today", "No tasks left to slot in today"],
         );
-        let backlog = render_list(|| list_app(PlanTab::Backlog));
+        let backlog = render_list(|| list_app(TaskTab::Backlog));
         assert_offers(
             &backlog,
             &[

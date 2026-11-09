@@ -7,7 +7,7 @@ own screen and the rest of the app in sheets over it:
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   `[notes] directory` set in `config.toml`.
 - Search and filters for the day.
-- The desktop's navigation: **Do**, **Plan** (Day, Week, 2 Weeks or Month)
+- **Do**, **Plan** (Day, Week, 2 Weeks or Month), **Tasks**
   with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
   **More** and **Settings**.
 - Joining meetings and answering invitations.
@@ -178,15 +178,15 @@ scopes does not revoke existing tokens.
 
 ### Layout
 
-The navigation card matches the desktop's. **Do** shows the day's calendar,
+**Do** shows the day's calendar,
 with the day picker, **View** (the Calendars and Filter tabs) and **Actions**
 (Sync now) at the left; the picker's ● goes back to today. **Plan** plans the
 period named on it, and its ▾ chooses Day, Week, 2 Weeks or Month. Planning
-shows the Overdue, Inbox, Today and Backlog lists beneath the navigation, plus
-**Schedule** (the range, as a list of days) while planning a week, two weeks
-or a month. The lists take the same tasks as the desktop's and save the same
+shows the selected period: the day calendar or a list of days for a week,
+two weeks or a month. **Tasks** shows the Overdue, Inbox, Today and Backlog
+lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
-place of dragging. At widths above 820px, planning a day keeps the grid beside
+place of dragging. At widths above 820px, Tasks keeps the grid beside
 its list. **Note** opens the notepad, and **More** holds Habits, Notes, Brain
 dump, Todos and projects, and Operations. Life stays on the desktop.
 
