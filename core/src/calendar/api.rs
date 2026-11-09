@@ -1237,7 +1237,7 @@ fn task_item_url(list_id: &str, task_id: &str) -> String {
     )
 }
 
-fn task_list_ids(access_token: &str) -> Result<Vec<String>, String> {
+fn task_list_ids(access_token: &str) -> Result<Vec<String>, GoogleError> {
     let mut url = format!("{TASK_LISTS}?maxResults=100");
     let mut ids = Vec::new();
     loop {
@@ -1266,9 +1266,11 @@ enum TaskPresence {
 fn live_list<'a>(
     preferred: &'a str,
     lists: &'a [String],
-    mut presence: impl FnMut(&str) -> Result<TaskPresence, String>,
-) -> Result<Option<&'a str>, String> {
-    if presence(preferred)? == TaskPresence::Live {
+    mut presence: impl FnMut(&str) -> Result<TaskPresence, GoogleError>,
+) -> Result<Option<&'a str>, GoogleError> {
+    // Cached or locally created tasks can still name a placeholder or a
+    // deleted list. Only query IDs belonging to the connected account.
+    if lists.iter().any(|list| list == preferred) && presence(preferred)? == TaskPresence::Live {
         return Ok(Some(preferred));
     }
     for list in lists {
@@ -1282,7 +1284,11 @@ fn live_list<'a>(
     Ok(None)
 }
 
-fn task_presence(access_token: &str, list_id: &str, task_id: &str) -> Result<TaskPresence, String> {
+fn task_presence(
+    access_token: &str,
+    list_id: &str,
+    task_id: &str,
+) -> Result<TaskPresence, GoogleError> {
     match lookup_task(access_token, list_id, task_id)? {
         Some(task) if !task.deleted => Ok(TaskPresence::Live),
         _ => Ok(TaskPresence::Gone),
@@ -3383,6 +3389,31 @@ mod tests {
         );
         assert!(!lists["low-priority"].items.contains_key("shopping"));
         assert!(lists["time-blocked"].items.contains_key("shopping"));
+    }
+
+    #[test]
+    fn deletion_skips_a_placeholder_or_deleted_list() {
+        let lists = vec!["real-list".to_owned()];
+        for preferred in ["inbox", "deleted-list"] {
+            let found = live_list(preferred, &lists, |list| {
+                assert_eq!(list, "real-list");
+                Ok(TaskPresence::Live)
+            })
+            .unwrap();
+            assert_eq!(found, Some("real-list"));
+        }
+        assert_eq!(
+            live_list("inbox", &[], |_| panic!("no valid lists")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn deletion_lookup_preserves_google_error_classification() {
+        let error = GoogleError::from_status("Google Tasks", 400, "Invalid task list ID");
+        let actual =
+            live_list("real-list", &["real-list".into()], |_| Err(error.clone())).unwrap_err();
+        assert_eq!(actual, error);
     }
 
     #[test]
