@@ -739,10 +739,10 @@ mod tests {
         };
         let mut state = State::blank();
         state.screen = Screen::People;
-        let mut personal = people::Book::for_tests(Login::extra("me@gmail.com"));
+        let mut personal = people::Book::idle(Login::extra("me@gmail.com"));
         personal.groups = vec![family.clone()];
         personal.contacts = vec![contact("people/1", "Ada", "Likes tea", &[family])];
-        let mut work = people::Book::for_tests(Login::extra("me@csumb.edu"));
+        let mut work = people::Book::idle(Login::extra("me@csumb.edu"));
         work.contacts = vec![contact("people/2", "Grace", "", &[])];
         work.directory = vec![contact("people/3", "Hedy", "", &[])];
         state.people.books = vec![personal, work];

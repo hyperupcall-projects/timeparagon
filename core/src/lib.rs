@@ -21,6 +21,7 @@ pub mod habits;
 pub mod hex;
 pub mod local_changes;
 pub mod notes;
+pub mod people;
 pub mod places;
 pub mod recurrence;
 pub mod reminders;

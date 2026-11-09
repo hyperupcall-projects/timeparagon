@@ -130,11 +130,7 @@ fn an_untouched_contact_has_nothing_to_save() {
     let mut draft = draft();
     assert!(!draft.dirty());
     // Blank lines and stray spaces are not edits.
-    draft.emails.push(Entry {
-        value: "  ".to_owned(),
-        kind: String::new(),
-        source: None,
-    });
+    draft.emails.push(Entry::new("  ", ""));
     draft.given = "Ada ".to_owned();
     assert!(!draft.dirty());
 }
@@ -177,11 +173,7 @@ fn lines_are_edited_added_and_removed_in_place() {
     let mut draft = draft();
     draft.emails[1].value = "ada@new.example".to_owned();
     draft.emails.remove(0);
-    draft.phones.push(Entry {
-        value: "555-0101".to_owned(),
-        kind: "work".to_owned(),
-        source: None,
-    });
+    draft.phones.push(Entry::new("555-0101", "work"));
     draft.phones[0].kind = "home".to_owned();
     let (fields, body) = draft.patch();
     assert_eq!(fields, ["emailAddresses", "phoneNumbers"]);
@@ -226,14 +218,14 @@ fn a_rewritten_address_forgets_its_old_parts_and_a_relabeled_one_keeps_them() {
 #[test]
 fn notes_are_replaced_and_cleared() {
     let mut draft = draft();
-    draft.notes = text_editor::Content::with_text("New note");
+    draft.set_notes("New note");
     let (fields, body) = draft.patch();
     assert_eq!(fields, ["biographies"]);
     assert_eq!(
         body["biographies"],
         json!([{ "value": "New note", "contentType": "TEXT_PLAIN" }])
     );
-    draft.notes = text_editor::Content::new();
+    draft.set_notes("");
     assert_eq!(draft.patch().1["biographies"], json!([]));
 }
 
@@ -241,7 +233,7 @@ fn notes_are_replaced_and_cleared() {
 fn notes_can_be_added_to_a_contact_without_any() {
     let contact = Contact::parse(json!({ "resourceName": "people/a" }), &[]).unwrap();
     let mut draft = Draft::new(&Login::extra("me@example.org"), &contact, false);
-    draft.notes = text_editor::Content::with_text("First note");
+    draft.set_notes("First note");
     assert_eq!(
         draft.patch().1["biographies"],
         json!([{ "value": "First note", "contentType": "TEXT_PLAIN" }])
@@ -525,7 +517,7 @@ fn every_contact_fetched_is_cached_and_read_back() {
     assert_eq!(books[0].account(), "me@example.org");
     assert_eq!(books[0].contacts[0].name, "Ada Lovelace");
     assert_eq!(books[0].contacts[0].labels, ["Book club"]);
-    assert_eq!(books[0].contacts[0].person, person());
+    assert_eq!(books[0].contacts[0].person(), &person());
     assert_eq!(books[0].contacts[1].name, "Alan Turing");
     assert!(!books[0].loading);
 }
@@ -564,7 +556,7 @@ fn an_edit_is_cached_as_google_returned_it_not_as_it_was_typed() {
             .first()
             .is_some_and(|b| b.contacts[0].name == "Augusta Lovelace")
     });
-    assert_eq!(books[0].contacts[0].person, returned);
+    assert_eq!(books[0].contacts[0].person(), &returned);
     assert_eq!(state.people.draft.as_ref().unwrap().given, "Augusta");
 }
 
@@ -627,7 +619,7 @@ fn signing_an_account_out_removes_it_from_the_cache() {
     state
         .people
         .books
-        .push(Book::for_tests(Login::primary("main@example.org")));
+        .push(Book::idle(Login::primary("main@example.org")));
     let _ = update(&mut state, Action::Open(target("people/c1", false)));
 
     let _ = forget_account(&mut state, "ME@example.org");
@@ -657,7 +649,7 @@ fn an_account_no_longer_signed_in_leaves_the_cache_at_the_next_refresh() {
 #[test]
 fn offline_the_calendar_account_keeps_its_cached_contacts() {
     let mut state = State::blank();
-    let mut book = Book::for_tests(Login::primary("main@example.org"));
+    let mut book = Book::idle(Login::primary("main@example.org"));
     book.contacts = vec![contact()];
     state.people.books.push(book);
     state.people.generation = 1;
@@ -672,7 +664,7 @@ fn offline_the_calendar_account_keeps_its_cached_contacts() {
 #[test]
 fn a_different_calendar_account_does_not_inherit_the_cached_contacts() {
     let mut state = State::blank();
-    let mut book = Book::for_tests(Login::primary("old@example.org"));
+    let mut book = Book::idle(Login::primary("old@example.org"));
     book.contacts = vec![contact()];
     state.people.books.push(book);
     state.people.generation = 1;
@@ -747,7 +739,7 @@ fn guests_are_found_once_across_accounts_and_can_be_left_out() {
 }
 
 fn store_with_book_for_guests() -> Store {
-    let mut book = Book::for_tests(Login::extra("me@example.com"));
+    let mut book = Book::idle(Login::extra("me@example.com"));
     book.contacts = vec![contact()];
     Store {
         books: vec![book],
