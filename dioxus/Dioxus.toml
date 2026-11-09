@@ -18,3 +18,4 @@ long_description = "Slay the day with TimeSlay"
 min_sdk = 24
 target_sdk = 34
 compile_sdk = 34
+proguard_rules = ["android/notes-storage.pro"]
