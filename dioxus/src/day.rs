@@ -1718,6 +1718,7 @@ mod tests {
         let mut late = task("d", "Late", None, 4, 30, false);
         late.start = at(0, 0) - Duration::days(400);
         late.end = late.start + Duration::days(1);
+        late.details.description = format!("DUE: {}", late.start.date_naive());
         let model = build_model(&snapshot(vec![late]), &settings());
         assert!(model.task_groups[0].tasks[0].overdue);
         assert!(!model.task_groups[0].tasks[0].inbox);
@@ -1740,15 +1741,16 @@ mod tests {
         let mut late = task("d", "Late", None, 4, 30, false);
         late.start = at(0, 0) - Duration::days(400);
         late.end = late.start + Duration::days(1);
+        late.details.description = format!("DUE: {}", late.start.date_naive());
         let snapshot = snapshot(vec![block, slotted, unslotted, finished, late]);
 
         let summary = build_model(&snapshot, &settings()).summary;
 
-        // The fixture's day is in the past, so every open task is past due.
-        assert_eq!(summary.overdue, 3);
+        // Only the explicit deadline is overdue; planning dates are independent.
+        assert_eq!(summary.overdue, 1);
         assert_eq!(summary.inbox, 0);
-        // Past-due and completed tasks do not also count as unslotted.
-        assert_eq!(summary.unslotted, 0);
+        // The date-only open task still needs a slot on the fixture day.
+        assert_eq!(summary.unslotted, 1);
         assert!(summary.needs_attention());
     }
 

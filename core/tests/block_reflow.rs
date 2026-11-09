@@ -78,3 +78,72 @@ fn adding_four_tasks_keeps_all_four_assigned_after_automatic_layout() {
     .unwrap();
     assert!(timeblocking::metadata(&moved).block.is_none());
 }
+
+#[test]
+fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete() {
+    let settings = CalendarSettings::default();
+    let mut block = calendar::sample_snapshot().events.remove(0);
+    block.id = "reload-lifecycle-block".into();
+    block.calendar_id = "app".into();
+    block.all_day = false;
+    let key = timeblocking::block_key(&block);
+    // These are the same shared calls used by the Planned Tasks plus button.
+    let task = task_edit::create_inbox_task(
+        &settings,
+        "",
+        "Lifecycle task",
+        "",
+        Some(block.start.date_naive()),
+        None,
+    )
+    .unwrap();
+    let id = task.id.clone();
+    task_edit::save_and_reflow(
+        task,
+        settings.clone(),
+        task_edit::Change::Block(key.clone(), block.start, block.end),
+        1,
+        vec![block.clone()],
+        vec![],
+        |_| Ok("offline".into()),
+    )
+    .unwrap();
+
+    let path = timeslay_core::task_db::path().unwrap();
+    let reload = || {
+        let mut restored = Vec::new();
+        calendar::operations::load_overlay(&path)
+            .unwrap()
+            .apply(&mut restored, None);
+        restored.into_iter().find(|event| event.id == id)
+    };
+    let restored = reload().expect("task survives reopening the database");
+    assert_eq!(
+        timeblocking::metadata(&restored).block.as_deref(),
+        Some(key.as_str())
+    );
+    assert!(!restored.all_day);
+    assert_eq!(restored.start, block.start);
+
+    block.start += Duration::hours(2);
+    block.end += Duration::hours(2);
+    task_edit::reflow(&block, &[restored], &settings, |_| Ok("offline".into())).unwrap();
+    let moved = reload().unwrap();
+    assert_eq!(moved.start, block.start);
+    assert_eq!(
+        timeblocking::metadata(&moved).block.as_deref(),
+        Some(key.as_str())
+    );
+    assert!(!timeblocking::overdue(&moved));
+
+    calendar::delete_event(&block.calendar_id, &block.id).unwrap();
+    let released = reload().expect("deleting the container preserves its task");
+    assert!(released.all_day);
+    assert_eq!(released.start.date_naive(), block.start.date_naive());
+    assert!(timeblocking::metadata(&released).block.is_none());
+    calendar::delete_task(&released, None).unwrap();
+    assert!(
+        reload().is_none(),
+        "task deletion survives reopening the database"
+    );
+}

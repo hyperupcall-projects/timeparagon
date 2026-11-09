@@ -178,8 +178,9 @@ impl Database {
 
     /// Queued metadata remains authoritative while Google refreshes in parallel.
     pub(crate) fn pending_task_data(&self, event: &Event) -> Result<Option<TaskData>, String> {
-        let stable =
-            crate::calendar::task_metadata::read(&event.details.description)?.map(|data| data.id);
+        let stable = event.details.task_data.as_ref().map(|data| data.id).or(
+            crate::calendar::task_metadata::read(&event.details.description)?.map(|data| data.id),
+        );
         let json:Option<String>=self.0.query_row("SELECT e.event FROM google_entities e WHERE (json_extract(e.event,'$.id')=?1 OR json_extract(e.event,'$.details.task_data.id')=?2) AND EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=e.id AND o.dead_at IS NULL)",params![event.id,stable],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
         json.map(|json| {
             serde_json::from_str::<Event>(&json)

@@ -271,6 +271,7 @@ pub fn fetch_range(
         }
         Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
     })?;
+    let tasks_loaded = task_result.is_ok();
     let (task_calendars, task_events, mut notice) = match task_result {
         Ok(tasks) => tasks,
         Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
@@ -319,7 +320,7 @@ pub fn fetch_range(
             &format!("Could not repeat time block tasks: {error}"),
         );
     }
-    super::operations::cache_tasks(&events, false)?;
+    super::operations::cache_tasks(&events, tasks_loaded)?;
     for event in &events {
         if event.is_task() {
             if let Err(error) = super::deadline::check(&event.details.description) {
@@ -366,6 +367,11 @@ fn reconcile_task_metadata_and_overlay(
 ) -> Result<(), String> {
     let mut database = crate::task_db::Database::open(path)?;
     for event in events.iter().filter(|event| event.is_task()) {
+        // A concurrent Calendar response must not publish its older membership
+        // over an edit still waiting in the durable queue.
+        if database.pending_task_data(event)?.is_some() {
+            continue;
+        }
         if let Some(data) = &event.details.task_data
             && database.lookup(event)?.as_ref() != Some(data)
         {
@@ -1120,7 +1126,6 @@ fn fetch_tasks(access_token: &str, day: NaiveDate) -> Result<FetchedTasks, Googl
         events.extend(fetch_task_items(access_token, &list.id, &id, color, day)?);
     }
 
-    super::operations::cache_tasks(&events, true)?;
     Ok((calendars, events, None))
 }
 
@@ -2828,6 +2833,38 @@ mod tests {
         );
         assert_eq!(db.lookup(&task).unwrap(), task.details.task_data);
         assert_eq!(events[0], pending);
+    }
+
+    #[test]
+    fn refresh_cannot_publish_stale_metadata_while_an_edit_is_queued() {
+        let (_dir, path, mut remote) = mapped_task();
+        let mut pending = remote.clone();
+        pending.id = "task:local-id".into();
+        pending.details.task_data.as_mut().unwrap().metadata.block = Some("app/new-block".into());
+        let mut db = crate::task_db::Database::open(&path).unwrap();
+        db.connection()
+            .execute(
+                "INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+                rusqlite::params![
+                    "tasks:google-list\ntask:local-id",
+                    serde_json::to_string(&pending).unwrap()
+                ],
+            )
+            .unwrap();
+        db.connection().execute("INSERT INTO google_operations(kind,payload,entity,created_at) VALUES('Edit task','{}',?1,?2)", rusqlite::params!["tasks:google-list\ntask:local-id", crate::clock::now().to_rfc3339()]).unwrap();
+        remote.details.task_data.as_mut().unwrap().metadata.minutes = 45;
+        let mut events = vec![remote];
+        super::reconcile_task_metadata_and_overlay(
+            &path,
+            &mut events,
+            crate::clock::now(),
+            |_, _| panic!("pending edits must not be overwritten by reconciliation"),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::timeblocking::metadata(&events[0]).block.as_deref(),
+            Some("app/new-block")
+        );
     }
 
     #[test]
