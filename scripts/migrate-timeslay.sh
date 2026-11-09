@@ -91,7 +91,7 @@ if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/nu
     done
 fi
 
-# Refuse manual GUI/helper/Slack processes rather than killing unrelated Node
+# Refuse manual GUI/Slack processes rather than killing unrelated Node
 # or Chromium processes. Print PIDs only, never command lines with secrets.
 python3 - "$repo" "$data" <<'PY'
 import os, pathlib, sys
@@ -103,17 +103,13 @@ for proc in pathlib.Path('/proc').glob('[0-9]*'):
         exe = pathlib.Path(os.readlink(proc/'exe')).name.removesuffix(' (deleted)')
         args = (proc/'cmdline').read_bytes().decode(errors='replace').split('\0')
         cwd = os.readlink(proc/'cwd')
-        profiles = [f'{data}/{name}/{bridge}/chrome-profile'
-                    for name in ('time-slay', 'timeslay')
-                    for bridge in ('keep-bridge', 'tasks-bridge')]
-        if (exe in ('time-slay', 'timeslay', 'keep-bridge', 'tasks-bridge')
-            or any(profile in arg for profile in profiles for arg in args)
+        if (exe in ('time-slay', 'timeslay')
             or (exe == 'node' and any('app.ts' in arg for arg in args)
                 and cwd in (f'{repo}/slack', f'{data}/time-slay/slack', f'{data}/timeslay/slack'))):
             busy.append(proc.name)
     except (OSError, PermissionError): pass
 if busy:
-    sys.exit('Close the app, old browser helpers, and manual Slack bridge, then rerun. PIDs: ' + ', '.join(busy))
+    sys.exit('Close the app and manual Slack bridge, then rerun. PIDs: ' + ', '.join(busy))
 PY
 
 # Back up data and installation metadata, preserving mode and timestamps.

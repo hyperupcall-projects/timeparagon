@@ -65,10 +65,6 @@ rm -f "$config_home/systemd/user/timeslay-database-sync.service"
 rm -rf "$prefix/lib/timeslay/cef"
 rm -f "$prefix/bin/timeslay-panel"
 rm -f "$prefix/bin/timeslay-dock"
-# Earlier versions installed a browser helper for Google Keep.
-rm -f "$prefix/bin/keep-bridge"
-# Also clean up a helper installed before the rename.
-rm -f "$prefix/bin/tasks-bridge"
 say "Removed binaries, desktop entry, icon and systemd units."
 
 # --- Remove the KWin window rule -------------------------------------------
