@@ -115,6 +115,8 @@ pub enum Change {
     Block(String, DateTime<Local>, DateTime<Local>),
     Reorder(Option<String>, i64, NaiveDate),
     Time(DateTime<Local>, DateTime<Local>),
+    /// Automatic layout changes times without changing membership or estimate.
+    Reflow(DateTime<Local>, DateTime<Local>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -358,6 +360,18 @@ pub fn save(
                 start + chrono::Duration::minutes(i64::from(minutes)),
             )?;
         }
+        Change::Reflow(start, end) => {
+            let token = access(settings)?;
+            schedule(
+                &mut task,
+                &mut data,
+                &mut database,
+                settings,
+                &token,
+                start,
+                end,
+            )?;
+        }
         Change::Time(start, end) => {
             data.metadata.block = None;
             let token = access(settings)?;
@@ -526,7 +540,7 @@ pub fn schedule(
         *task = calendar::operations::edit_task(
             task.clone(),
             settings,
-            Change::Time(start, end),
+            Change::Reflow(start, end),
             data.metadata.order,
         )?;
         *data = task.details.task_data.clone().ok_or("Missing task data")?;

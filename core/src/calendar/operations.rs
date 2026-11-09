@@ -530,7 +530,7 @@ fn backoff(attempts: i64) -> i64 {
 /// retried for as long as it takes, so edits made offline or while signed out
 /// are never lost. A refusal that will not change (the item is gone, the
 /// request is invalid, permission is denied) is given up on at once, so it
-/// stops holding up the writes queued behind it. An error from a layer that
+/// stops holding up later writes for the same item. An error from a layer that
 /// does not say which it was is retried patiently first.
 fn disposition(error: &google::GoogleError, attempts: i64, age_seconds: i64) -> Disposition {
     use google::Kind;
@@ -584,12 +584,10 @@ fn drain_one() -> Result<(), String> {
 /// and the calendar or task list it is on.
 type Mapping = Option<(String, String, String)>;
 
-/// Sends the oldest write that has not been given up on, if it is due.
+/// Sends the oldest due write with no earlier pending write for its item.
 ///
-/// Writes go strictly in order, so an edit never reaches Google before the
-/// creation of the item it edits. A write being retried therefore holds up
-/// the ones behind it, which is why one that can never succeed is given up
-/// on (see [`disposition`]) and set aside with its error for the user.
+/// Preserve order for each item, so edits cannot overtake its creation or
+/// move. A failed write waiting to retry does not hold up unrelated items.
 fn drain_in(
     path: &std::path::Path,
     run: impl FnOnce(Job) -> Result<Mapping, google::GoogleError>,
@@ -599,10 +597,11 @@ fn drain_in(
         .connection()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    let now = crate::clock::utc_now().timestamp();
     let item: Option<(i64, String, String, i64, i64, i64, String)> = tx
         .query_row(
-            "SELECT id,payload,entity,lease_until,version,attempts,created_at FROM google_operations WHERE dead_at IS NULL ORDER BY id LIMIT 1",
-            [],
+            "SELECT op.id,op.payload,op.entity,op.lease_until,op.version,op.attempts,op.created_at FROM google_operations op WHERE op.dead_at IS NULL AND op.lease_until<=?1 AND NOT EXISTS(SELECT 1 FROM google_operations earlier WHERE earlier.entity=op.entity AND earlier.id<op.id AND earlier.dead_at IS NULL) ORDER BY op.id LIMIT 1",
+            [now],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         )
         .optional()
@@ -610,7 +609,6 @@ fn drain_in(
     let Some((id, payload, entity, lease, version, attempts, created_at)) = item else {
         return Ok(());
     };
-    let now = crate::clock::utc_now().timestamp();
     if lease > now {
         return Ok(());
     }
@@ -999,7 +997,7 @@ pub fn edit_task(
         Change::Deadline(v) => {
             task.details.description = deadline::write(&task.details.description, *v)
         }
-        Change::Time(start, end) | Change::Block(_, start, end) => {
+        Change::Time(start, end) | Change::Block(_, start, end) | Change::Reflow(start, end) => {
             task.start = *start;
             task.end = *end;
             task.all_day = false;
@@ -1015,7 +1013,7 @@ pub fn edit_task(
                     } else {
                         data.metadata.minutes
                     }));
-            } else {
+            } else if matches!(change, Change::Time(_, _)) {
                 data.metadata.block = None;
                 let moved = !original.all_day && *end - *start == original.end - original.start;
                 if moved && data.metadata.minutes > 0 {
@@ -1288,6 +1286,64 @@ mod tests {
         }
         sent
     }
+    #[test]
+    fn retrying_an_item_does_not_block_other_items_or_reorder_its_edits() {
+        let (_dir, path) = db();
+        let event = edit(&path, "first edit");
+        drain_in(&path, |_| Err("temporary failure".into())).unwrap();
+        let mut draft = EditDraft::from_event(&event);
+        draft.title = "later edit of same item".into();
+        // A different scope is not coalesced with the failed edit.
+        enqueue_in(
+            &path,
+            Job::Edit {
+                original: Box::new(event.clone()),
+                draft,
+                scope: SaveScope::All,
+                description: String::new(),
+                color: None,
+            },
+            Some(&event),
+            &event.calendar_id,
+            &event.id,
+        )
+        .unwrap();
+        edit_other(&path, "unrelated", "unrelated edit");
+
+        let mut sent = Vec::new();
+        drain_in(&path, |job| {
+            if let Job::Edit { draft, .. } = job {
+                sent.push(draft.title);
+            }
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(sent, ["unrelated edit"]);
+        assert_eq!(list_in(&path).unwrap().len(), 2);
+        drain_in(&path, |_| panic!("same item must wait for its first write")).unwrap();
+        assert_eq!(
+            titles_sent(&path),
+            ["first edit", "later edit of same item"]
+        );
+    }
+
+    #[test]
+    fn invalid_google_task_list_is_skipped_as_a_permanent_failure() {
+        let (_dir, path) = db();
+        edit(&path, "invalid list");
+        edit_other(&path, "valid", "valid edit");
+        drain_in(&path, |_| {
+            Err(google::GoogleError::from_status(
+                "Google Tasks",
+                400,
+                "Invalid task list ID",
+            ))
+        })
+        .unwrap();
+        assert!(!list_in(&path).unwrap()[0].pending());
+        assert_eq!(titles_sent(&path), ["valid edit"]);
+    }
+
     #[test]
     fn a_refusal_that_will_not_change_is_set_aside_and_unblocks_the_queue() {
         let (_dir, path) = db();
