@@ -96,6 +96,8 @@ pub fn clean_label(input: &str) -> Result<String, &'static str> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Change {
+    Inherit(crate::timeblocking::InheritedMetadata),
+    ReleaseInheritance,
     Description(String),
     Title(String),
     Estimate(u32),
@@ -119,6 +121,29 @@ pub enum Change {
     Reflow(DateTime<Local>, DateTime<Local>),
 }
 
+pub fn validate_child_edit(task: &Event, change: &Change) -> Result<(), String> {
+    if metadata(task)
+        .inherited
+        .as_ref()
+        .is_some_and(|v| v.fields.force)
+        && matches!(
+            change,
+            Change::Projects(_)
+                | Change::Labels(_)
+                | Change::Priority(_)
+                | Change::Location(_)
+                | Change::Deadline(_)
+                | Change::Day(_)
+                | Change::ClearSchedule
+                | Change::Time(_, _)
+                | Change::BacklogSection(_)
+        )
+    {
+        return Err("Metadata is inherited from the time block. Edit it in Focus & Plan.".into());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn save_and_reflow(
     task: Event,
@@ -132,6 +157,28 @@ pub fn save_and_reflow(
     let original_id = task.id.clone();
     let old_block = metadata(&task).block;
     let saved = save(task, &settings, change, order, access)?;
+    let mut saved = saved;
+    if let Some(block) = blocks
+        .iter()
+        .find(|b| metadata(&saved).block.as_deref() == Some(&block_key(b)))
+        && block.details.options.child_metadata.force
+    {
+        saved = save(
+            saved,
+            &settings,
+            Change::Inherit(crate::timeblocking::inherited_metadata(block)),
+            order,
+            access,
+        )?;
+    }
+    if metadata(&saved).inherited.is_some()
+        && !blocks.iter().any(|b| {
+            metadata(&saved).block.as_deref() == Some(&block_key(b))
+                && b.details.options.child_metadata.force
+        })
+    {
+        saved = save(saved, &settings, Change::ReleaseInheritance, order, access)?;
+    }
     let new_block = metadata(&saved).block;
     related.retain(|e| e.id != original_id);
     related.push(saved.clone());
@@ -168,7 +215,12 @@ pub fn reflow(
     let mut start = block.start;
     let mut changed = Vec::new();
     let mut token = None;
-    for task in tasks {
+    for mut task in tasks {
+        let inherited = crate::timeblocking::inherited_metadata(block);
+        if inherited.fields.force && metadata(&task).inherited.as_deref() != Some(&inherited) {
+            task = save(task, settings, Change::Inherit(inherited), 0, access)?;
+            changed.push(task.clone());
+        }
         let minutes = metadata(&task).minutes;
         let end =
             start + chrono::Duration::minutes(i64::from(if minutes == 0 { 30 } else { minutes }));
@@ -204,6 +256,7 @@ pub fn save(
     order: i64,
     access: Access,
 ) -> Result<Event, GoogleError> {
+    validate_child_edit(&task, &change)?;
     if !calendar::operations::replaying() {
         return Ok(calendar::operations::edit_task(
             task, settings, change, order,
@@ -218,8 +271,49 @@ pub fn save(
         task.calendar_id = format!("tasks:{}", link.list_id);
         task.details.scheduled = Some(link.clone());
     }
+    if matches!(
+        change,
+        Change::Unassign
+            | Change::Day(_)
+            | Change::ClearSchedule
+            | Change::Backlog(_)
+            | Change::Inbox
+            | Change::Triaged
+    ) {
+        data.metadata.inherited = None;
+    }
     task.details.description = description(&task.details.description);
     match change {
+        Change::ReleaseInheritance => {
+            data.metadata.inherited = None;
+            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
+            database.save(&task, &data)?;
+        }
+        Change::Inherit(inherited) => {
+            crate::timeblocking::apply_inherited(&mut task, &mut data, inherited);
+            let token = access(settings)?;
+            let due = data
+                .metadata
+                .inherited
+                .as_ref()
+                .and_then(|v| v.fields.due)
+                .map(|d| format!("{}T00:00:00Z", d.date));
+            calendar::api::patch(&task_url(&task)?, &token,
+                &serde_json::json!({"notes": calendar::task_metadata::write(&task.details.description, &data)?, "due": due}).to_string(), "Inherit time block metadata")?;
+            task.details.task_data = Some(data.clone());
+            if let Some(link) = &data.metadata.schedule
+                && !link.pending
+            {
+                calendar::scheduled::request(
+                    "PATCH",
+                    &link.event_url(),
+                    &token,
+                    Some(&calendar::scheduled::content(&task, link)),
+                )
+                .map_err(|e| e.message)?;
+            }
+            database.save(&task, &data)?;
+        }
         // Tasks own the name. A scheduled block copies that name onto its calendar event.
         Change::Title(title) => {
             let token = access(settings)?;
@@ -627,8 +721,12 @@ pub fn schedule_with(
         database.save(task, data)?;
         remote.save_metadata(task, data)?;
     }
-    // The native Tasks date is the planned day, never the description deadline.
-    remote.set_day(&link, Some(start.date_naive()))?;
+    // Forced due dates stay independent of the child's position within the block.
+    let due = match &data.metadata.inherited {
+        Some(inherited) => inherited.fields.due.map(|due| due.date),
+        None => Some(start.date_naive()),
+    };
+    remote.set_day(&link, due)?;
     task.details.task_data = Some(data.clone());
     remote.save_event(task, &link, start, end).map_err(|e| {
         format!("Task saved, but its calendar block could not be saved: {e}. Sync or retry.")

@@ -2719,6 +2719,41 @@ pub fn save_event_scope(
         &original.calendar_id,
         &original.id,
     )?;
+    if event.details.options.child_metadata.force || original.details.options.child_metadata.force {
+        let tasks: Vec<Event> = {
+            let mut db = crate::task_db::open()?;
+            let mut q = db
+                .connection()
+                .prepare("SELECT event FROM google_task_records")
+                .map_err(|e| e.to_string())?;
+            let rows = q
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.map(|row| {
+                serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+            })
+            .collect::<Result<_, _>>()?
+        };
+        let key = crate::timeblocking::block_key(original);
+        let inherited = crate::timeblocking::inherited_metadata(&event);
+        for task in tasks
+            .into_iter()
+            .filter(|t| crate::timeblocking::metadata(t).block.as_deref() == Some(&key))
+        {
+            crate::task_edit::save(
+                task,
+                &CalendarSettings::default(),
+                if event.details.options.child_metadata.force {
+                    crate::task_edit::Change::Inherit(inherited.clone())
+                } else {
+                    crate::task_edit::Change::ReleaseInheritance
+                },
+                0,
+                crate::task_edit::google_access,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(api::Saved {
         link: original.details.link.clone(),
         zoom_needed: false,

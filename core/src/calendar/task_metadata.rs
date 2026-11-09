@@ -52,6 +52,7 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
     let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
     let legacy_key = fields.remove("legacy_key").unwrap_or(Value::Null);
     let allowed = [
+        "inherited",
         "backlog_section",
         "block",
         "minutes",

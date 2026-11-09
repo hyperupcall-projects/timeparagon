@@ -220,6 +220,19 @@ pub fn event_editor<'a>(
         body = body.push(labels);
     }
 
+    if crate::timeblocking::is_block(event, &state.config.calendar) {
+        body = body.push(super::super::timeblocking::propagation_controls(
+            state, event, metrics,
+        ));
+        body = body.push(super::super::recurrence::editor(
+            &draft.rule,
+            draft.start.date_naive(),
+            state.config.calendar.first_day_of_week,
+            metrics,
+            false,
+            |v| Message::EventEdit(EventEditMessage::EventEditRecurrence(v)),
+        ));
+    }
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }

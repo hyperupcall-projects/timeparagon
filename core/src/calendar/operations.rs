@@ -968,6 +968,7 @@ pub fn edit_task(
     change: task_edit::Change,
     order: i64,
 ) -> Result<Event, String> {
+    task_edit::validate_child_edit(&task, &change)?;
     let original = task.clone();
     let mut db = task_db::open()?;
     let mut data = task
@@ -978,6 +979,10 @@ pub fn edit_task(
         .unwrap_or_else(|| db.import(&task))?;
     use task_edit::Change;
     match &change {
+        Change::ReleaseInheritance => data.metadata.inherited = None,
+        Change::Inherit(inherited) => {
+            crate::timeblocking::apply_inherited(&mut task, &mut data, inherited.clone())
+        }
         Change::Title(v) => task.title = v.clone(),
         Change::Description(v) => {
             let deadline = deadline::read_deadline(&task.details.description)?;
@@ -1043,6 +1048,7 @@ pub fn edit_task(
             task.all_day = true;
             data.metadata.schedule = None;
             data.metadata.block = None;
+            data.metadata.inherited = None;
             task.details.scheduled = None;
             let list = match &change {
                 Change::Inbox => settings.inbox_list.as_deref(),

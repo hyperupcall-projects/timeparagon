@@ -112,6 +112,15 @@ pub fn content(task: &Event, link: &Link) -> Value {
             "ttDeadline": super::deadline::read_deadline(&task.details.description).ok().flatten().map(|d| d.value()).unwrap_or_default(),
         }},
     });
+    if let Some(inherited) = crate::timeblocking::metadata(task).inherited {
+        // Reuse the already validated parent's notification settings.
+        let _ = inherited.options.write(&mut body);
+        let _ = super::projects::write(&mut body, &inherited.projects);
+        body["extendedProperties"]["private"]["ttLabels"] =
+            serde_json::to_string(&inherited.labels)
+                .unwrap_or_default()
+                .into();
+    }
     body["colorId"] = Value::Null;
     body
 }
