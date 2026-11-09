@@ -849,7 +849,13 @@ mod tests {
         let events = vec![
             task("waiting", "tasks:inbox", "Waiting", tb::UNDATED),
             task("planned", "tasks:inbox", "Planned", today),
-            task("late", "tasks:work", "Late", today - Duration::days(3)),
+            Event {
+                details: calendar::Details {
+                    description: format!("DUE: {}", today - Duration::days(3)),
+                    ..Default::default()
+                },
+                ..task("late", "tasks:work", "Late", today - Duration::days(3))
+            },
             task("parked", "tasks:backlog", "Parked", tb::UNDATED),
             Event {
                 completed: true,

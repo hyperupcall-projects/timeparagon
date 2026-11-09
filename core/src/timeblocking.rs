@@ -345,30 +345,19 @@ pub fn on_today(event: &Event) -> bool {
 }
 
 pub fn overdue(event: &Event) -> bool {
+    past_due(event, crate::clock::now())
+}
+
+/// Whether an open task's explicit deadline has passed. A planned date or
+/// start time is a scheduling choice, not a deadline.
+pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
     event.is_task()
         && !event.completed
+        && !metadata(event).ignored
         && calendar::deadline::read_deadline(&event.details.description)
             .ok()
             .flatten()
-            .is_some_and(|deadline| deadline.is_past(crate::clock::now().naive_local()))
-}
-
-/// Whether an open task's planned time or deadline has passed.
-pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
-    if !event.is_task() || event.completed || metadata(event).ignored {
-        return false;
-    }
-    let scheduled_past = event.start.date_naive() != UNDATED
-        && if event.all_day {
-            event.start.date_naive() < now.date_naive()
-        } else {
-            event.start < now
-        };
-    let deadline_past = calendar::deadline::read_deadline(&event.details.description)
-        .ok()
-        .flatten()
-        .is_some_and(|deadline| deadline.is_past(now.naive_local()));
-    scheduled_past || deadline_past
+            .is_some_and(|deadline| deadline.is_past(now.naive_local()))
 }
 
 /// An active date-only task still awaiting a slot on `day`.
@@ -401,6 +390,26 @@ pub fn needs_slot(event: &Event, events: &[Event]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planning_in_the_past_is_not_a_deadline() {
+        let now = crate::clock::now();
+        let mut task = calendar::sample_snapshot().events.remove(0);
+        task.id = "task:planned".into();
+        task.calendar_id = "tasks:list".into();
+        task.completed = false;
+        task.details = Default::default();
+        task.start = now - chrono::Duration::days(2);
+        task.end = task.start + chrono::Duration::minutes(30);
+        for all_day in [true, false] {
+            task.all_day = all_day;
+            assert!(!past_due(&task, now));
+        }
+        task.details.description = format!("DUE: {}", now.date_naive().pred_opt().unwrap());
+        assert!(past_due(&task, now));
+        task.completed = true;
+        assert!(!past_due(&task, now));
+    }
 
     #[test]
     fn forced_metadata_replaces_old_values_and_keeps_child_identity() {

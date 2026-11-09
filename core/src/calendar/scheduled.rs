@@ -160,6 +160,29 @@ pub fn merge(
             format!("tasks:{}", link.list_id),
             format!("task:{}", link.task_id),
         );
+        // Task metadata owns membership and mirror identity. Calendar owns
+        // only the interval: a stale/duplicate mirror cannot reassign a task.
+        let authoritative = tasks.get(&key).and_then(|task| {
+            let data = task.details.task_data.as_ref()?;
+            (data.metadata.schedule.is_some()
+                || super::task_metadata::read(&task.details.description)
+                    .ok()
+                    .flatten()
+                    .is_some())
+            .then_some(&data.metadata)
+        });
+        if let Some(meta) = authoritative
+            && meta.schedule.as_ref().is_none_or(|expected| {
+                expected.calendar_id != link.calendar_id || expected.event_id != link.event_id
+            })
+        {
+            continue;
+        }
+        let mut merged_link = link.clone();
+        if let Some(meta) = authoritative {
+            merged_link.block = meta.block.clone();
+            merged_link.order = meta.order;
+        }
         if !seen.insert(key.clone()) {
             continue;
         }
@@ -178,18 +201,20 @@ pub fn merge(
             task.end = task.start + chrono::Duration::minutes(i64::from(minutes));
         }
         task.color = event.color;
-        task.details.scheduled = Some(link.clone());
+        task.details.scheduled = Some(merged_link.clone());
         if let Some(data) = &mut task.details.task_data {
-            data.metadata.block = link.block.clone();
-            data.metadata.order = link.order;
-            data.metadata.schedule = Some(link.clone());
+            data.metadata.block = merged_link.block.clone();
+            data.metadata.order = merged_link.order;
+            data.metadata.schedule = Some(merged_link.clone());
         }
-        let body = content(&task, link);
+        let body = content(&task, &merged_link);
         if body["summary"].as_str() != Some(event.title.as_str())
             || body["description"].as_str() != Some(event.details.description.as_str())
             || task.completed != event.completed
+            || merged_link.block != link.block
+            || merged_link.order != link.order
         {
-            changes.push((link.clone(), body));
+            changes.push((merged_link, body));
         }
         result.push(task);
     }
@@ -718,6 +743,34 @@ mod tests {
             Some("work/block")
         );
         assert!(events.iter().find(|e| e.id == "task:two").unwrap().all_day);
+    }
+
+    #[test]
+    fn stale_calendar_membership_cannot_overwrite_task_assignment() {
+        let mut task = make_task("one", false);
+        let mut current = mirror(&task);
+        let link = current.details.scheduled.as_ref().unwrap().clone();
+        let data = task.details.task_data.as_mut().unwrap();
+        data.metadata.schedule = Some(link.clone());
+        data.metadata.block = Some("work/new-block".into());
+        data.metadata.order = 456;
+        // An obsolete mirror happens to arrive first in Google's response.
+        let mut stale = current.clone();
+        stale.details.scheduled.as_mut().unwrap().event_id = "obsolete".into();
+        stale.start += chrono::Duration::hours(3);
+        current.start += chrono::Duration::hours(1);
+        let expected_start = current.start;
+        let (events, changes) = merge(vec![stale, current], vec![task], &Default::default());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].start, expected_start);
+        let meta = crate::timeblocking::metadata(&events[0]);
+        assert_eq!(meta.block.as_deref(), Some("work/new-block"));
+        assert_eq!(meta.order, 456);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes[0].1["extendedProperties"]["private"]["ttBlock"],
+            "work/new-block"
+        );
     }
 
     #[test]

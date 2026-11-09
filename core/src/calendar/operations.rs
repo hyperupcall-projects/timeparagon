@@ -224,6 +224,69 @@ fn enqueue_in(
     calendar: &str,
     id: &str,
 ) -> Result<(), String> {
+    let mut db = task_db::Database::open(path)?;
+    let tx = db
+        .connection()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    enqueue_tx(&tx, &job, event, calendar, id)?;
+    if let Job::Delete { calendar, id, .. } = &job {
+        // Removing a container releases its children; deleting the container
+        // and recording all child edits is one local transaction.
+        let block = format!("{calendar}/{id}");
+        let children = {
+            let mut q = tx
+                .prepare("SELECT event FROM google_task_records")
+                .map_err(|e| e.to_string())?;
+            q.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .map(|row| {
+                    serde_json::from_str::<Event>(&row.map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for original in children
+            .into_iter()
+            .filter(|child| crate::timeblocking::metadata(child).block.as_deref() == Some(&block))
+        {
+            let mut released = original.clone();
+            let data = released
+                .details
+                .task_data
+                .as_mut()
+                .ok_or("Assigned task has no metadata")?;
+            data.metadata.block = None;
+            data.metadata.schedule = None;
+            data.metadata.inherited = None;
+            data.metadata.repeat_source = None;
+            released.details.scheduled = None;
+            released.all_day = true;
+            released.start = at_clock(original.start.date_naive(), 0, 0);
+            released.end = released.start + chrono::Duration::days(1);
+            enqueue_tx(
+                &tx,
+                &Job::TaskEdit {
+                    task: original.clone(),
+                    change: task_edit::Change::Unassign,
+                    order: 0,
+                },
+                Some(&released),
+                &original.calendar_id,
+                &original.id,
+            )?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn enqueue_tx(
+    tx: &rusqlite::Connection,
+    job: &Job,
+    event: Option<&Event>,
+    calendar: &str,
+    id: &str,
+) -> Result<(), String> {
     let mut entity = key(calendar, id);
     let mut kind = match &job {
         Job::Edit { .. } => "Edit event",
@@ -257,11 +320,6 @@ fn enqueue_in(
     let saved = event
         .map(serde_json::to_string)
         .transpose()
-        .map_err(|e| e.to_string())?;
-    let mut db = task_db::Database::open(path)?;
-    let tx = db
-        .connection()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     if let Some(existing) = tx
         .query_row(
@@ -299,7 +357,7 @@ fn enqueue_in(
         }
         tx.execute("DELETE FROM google_operations WHERE entity=?1 AND kind=?2 AND error IS NOT NULL",params![entity,kind])?;
         tx.execute("INSERT INTO google_operations(kind,payload,entity,created_at,version) VALUES(?1,?2,?3,?4,?5)",params![kind,payload,entity,crate::clock::now().to_rfc3339(),JOB_VERSION])?;
-        tx.commit()
+        Ok(())
     })().map_err(|e|e.to_string())?;
     Ok(())
 }
@@ -326,6 +384,10 @@ struct OverlayEntity {
 pub fn load_overlay(database: &std::path::Path) -> Result<Overlay, String> {
     let mut db = task_db::Database::open(database)?;
     let tx = db.connection().transaction().map_err(|e| e.to_string())?;
+    read_overlay(&tx)
+}
+
+fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
     let mut aliases = HashMap::new();
     {
         let mut q = tx
@@ -1179,12 +1241,26 @@ pub fn create_task(
 }
 
 pub(super) fn cache_tasks(events: &[Event], replace: bool) -> Result<(), String> {
-    let mut db = task_db::open()?;
+    cache_tasks_in(
+        &task_db::path().ok_or("Cannot locate database")?,
+        events,
+        replace,
+    )
+}
+
+fn cache_tasks_in(path: &std::path::Path, events: &[Event], replace: bool) -> Result<(), String> {
+    let mut db = task_db::Database::open(path)?;
     let tx = db
         .connection()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    // Re-read the durable overlay under the write transaction. A UI edit or
+    // deletion may have committed since this fetch applied its first overlay.
+    let mut events = events.to_vec();
+    read_overlay(&tx)?.apply(&mut events, None);
     if replace {
+        tx.execute("INSERT INTO documents(key,value) VALUES('calendar_task_snapshot','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])
+            .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM google_task_records", [])
             .map_err(|e| e.to_string())?;
     }
@@ -1784,6 +1860,101 @@ mod tests {
         drain_in(&path, |_| Ok(None)).unwrap();
         assert_eq!(count(&path), 0);
     }
+    #[test]
+    fn deleting_a_block_releases_children_durably_and_atomically() {
+        let (_dir, path) = db();
+        let block = super::super::sample_snapshot().events.remove(0);
+        let mut child = block.clone();
+        child.id = "task:child".into();
+        child.calendar_id = "tasks:list".into();
+        let mut database = task_db::Database::open(&path).unwrap();
+        let mut data = database.import(&child).unwrap();
+        data.metadata.block = Some(crate::timeblocking::block_key(&block));
+        child.details.task_data = Some(data);
+        cache_tasks_in(&path, &[child.clone()], true).unwrap();
+        let delete = Job::Delete {
+            calendar: block.calendar_id.clone(),
+            id: block.id.clone(),
+            scope: SaveScope::Current,
+            notify: false,
+        };
+        database.connection().execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON google_operations WHEN NEW.kind='Edit task Unassign' BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+        assert!(enqueue_in(&path, delete.clone(), None, &block.calendar_id, &block.id).is_err());
+        assert_eq!(count(&path), 0);
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_child")
+            .unwrap();
+        enqueue_in(&path, delete, None, &block.calendar_id, &block.id).unwrap();
+        assert_eq!(count(&path), 2);
+        let mut restored = vec![block.clone(), child];
+        overlay(&path, &mut restored, None).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert!(restored[0].all_day);
+        assert!(crate::timeblocking::metadata(&restored[0]).block.is_none());
+        assert_eq!(restored[0].start.date_naive(), block.start.date_naive());
+    }
+
+    #[test]
+    fn complete_task_cache_keeps_times_and_cannot_overwrite_edits_or_deletions() {
+        let (_dir, path) = db();
+        let mut task = super::super::sample_snapshot().events.remove(0);
+        task.id = "task:cached".into();
+        task.calendar_id = "tasks:list".into();
+        task.all_day = false;
+        cache_tasks_in(&path, &[task.clone()], true).unwrap();
+        // A stale fetch finishes after an edit has already committed.
+        let mut edited = task.clone();
+        edited.title = "new local title".into();
+        enqueue_in(
+            &path,
+            Job::Status {
+                task: task.clone(),
+                status: crate::timeblocking::TaskStatus::Active,
+            },
+            Some(&edited),
+            &task.calendar_id,
+            &task.id,
+        )
+        .unwrap();
+        cache_tasks_in(&path, &[task.clone()], true).unwrap();
+        let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+        let restored = restored.iter().find(|e| e.id == task.id).unwrap();
+        assert_eq!(restored.title, edited.title);
+        assert!(!restored.all_day);
+        enqueue_in(
+            &path,
+            Job::DeleteTask {
+                task: task.clone(),
+                calendar: None,
+            },
+            None,
+            &task.calendar_id,
+            &task.id,
+        )
+        .unwrap();
+        cache_tasks_in(&path, &[task.clone()], true).unwrap();
+        let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+        assert!(!restored.iter().any(|e| e.id == task.id));
+    }
+
+    #[test]
+    fn complete_task_snapshot_supersedes_task_copies_in_old_months() {
+        let (_dir, path) = db();
+        let mut task = super::super::sample_snapshot().events.remove(0);
+        task.id = "task:deleted-remotely".into();
+        task.calendar_id = "tasks:list".into();
+        let day = task.start.date_naive();
+        super::super::day_cache::save(&path, day, &[task.clone()], 0).unwrap();
+        cache_tasks_in(&path, &[], true).unwrap();
+        assert!(
+            !super::super::day_cache::load(&path, day, 0)
+                .unwrap()
+                .iter()
+                .any(Event::is_task)
+        );
+    }
+
     #[test]
     fn failed_upload_keeps_both_the_transaction_and_local_value() {
         let (_dir, path) = db();

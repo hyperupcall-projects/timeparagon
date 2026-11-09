@@ -183,10 +183,22 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
 
     match serde_json::from_str::<SavedMonth>(&text) {
         Ok(saved) => {
+            // Once a complete task snapshot exists, month rows are calendar
+            // caches only. Their old task copies must never resurrect deletions
+            // or override a moved task's canonical record.
+            let canonical_tasks: bool = database
+                .connection()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM documents WHERE key='calendar_task_snapshot')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
             let mut events: Vec<Event> = saved
                 .events
                 .into_iter()
                 .map(Event::from)
+                .filter(|event| !canonical_tasks || !event.is_task())
                 .map(|mut event| {
                     // LEGACY_METADATA_COMPAT: only old snapshots missing task
                     // metadata need the task tables.
