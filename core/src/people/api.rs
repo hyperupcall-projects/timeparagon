@@ -46,7 +46,7 @@ impl Problem {
         }
     }
 
-    fn other(message: impl Into<String>) -> Self {
+    pub fn other(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             reconnect: false,
@@ -62,7 +62,8 @@ pub enum Directory {
     None,
 }
 
-fn describe(error: GoogleError) -> Problem {
+/// Words a failed call for the person using the app.
+pub fn describe(error: GoogleError) -> Problem {
     let lower = error.detail.to_lowercase();
     match error.kind {
         Kind::MissingScope => {
@@ -200,6 +201,34 @@ pub fn create(token: &str, body: &Value) -> Result<Value, Problem> {
         token,
         body,
     )
+}
+
+const PROFILE: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+
+/// The address a token belongs to, from Gmail's own profile call: every account
+/// here has been granted read-only Gmail. Blocking.
+pub fn profile_email(access_token: &str) -> Result<String, String> {
+    let result = api::agent()
+        .get(PROFILE)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("Accept", "application/json")
+        .call();
+    match result {
+        Ok(response) => {
+            let body: Value = response
+                .into_json()
+                .map_err(|error| format!("Gmail response: {error}"))?;
+            body["emailAddress"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "Gmail did not say which account this is".to_owned())
+        }
+        Err(ureq::Error::Status(403, _)) => {
+            Err("Turn on the Gmail API for your Google Cloud project, then try again".to_owned())
+        }
+        Err(ureq::Error::Status(status, _)) => Err(format!("Gmail: HTTP {status}")),
+        Err(error) => Err(format!("Gmail: {error}")),
+    }
 }
 
 /// The people in the account's Workspace domain whose fields start with `query`.

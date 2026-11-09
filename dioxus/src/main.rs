@@ -13,6 +13,7 @@ mod editor;
 mod habits;
 mod habits_charts;
 mod notes;
+mod people;
 mod plan;
 mod reminders;
 mod scratch;
@@ -226,6 +227,9 @@ fn App() -> Element {
     let mut show_agenda = use_signal(|| false);
     let mut show_scratch = use_signal(|| None::<scratch::Page>);
     let mut show_more = use_signal(|| false);
+    let mut show_people = use_signal(|| false);
+    // Kept while the app runs, so the sheet reopens on what it showed.
+    let people_store = use_signal(people::Store::live);
     let mut show_operations = use_signal(|| false);
     let mut google_operations = use_signal(Vec::<calendar::operations::Operation>::new);
     calendar::operations::start();
@@ -1072,6 +1076,14 @@ fn App() -> Element {
                             class: "btn",
                             onclick: move |_| {
                                 show_more.set(false);
+                                show_people.set(true);
+                            },
+                            "People"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
                                 show_scratch.set(Some(scratch::Page::BrainDump));
                             },
                             "Brain dump"
@@ -1088,6 +1100,28 @@ fn App() -> Element {
                         p { class: "hint", "{database_sync_status}" }
                     }
                 }
+            }
+        }
+    });
+
+    let people_settings = settings.clone();
+    let people_sheet = show_people().then(|| {
+        let connect_settings = people_settings.clone();
+        rsx! {
+            people::PeopleSheet {
+                store: people_store,
+                settings: people_settings,
+                connecting,
+                on_reconnect: move |()| {
+                    begin_connect(
+                        connect_settings.clone(),
+                        connecting,
+                        connect_error,
+                        signed_in,
+                        revision,
+                    );
+                },
+                on_close: move |()| show_people.set(false),
             }
         }
     });
@@ -1486,6 +1520,7 @@ fn App() -> Element {
             {create_sheet}
             {scratch_sheet}
             {more_sheet}
+            {people_sheet}
             if show_operations() {
                 div { class: "modal-backdrop", onclick: move |_| show_operations.set(false),
                     div { class: "modal", onclick: move |event| event.stop_propagation(),
