@@ -129,10 +129,6 @@ if [ -x "$sync_built" ]; then
     sync_installed=1
 fi
 
-
-# Retire the browser helpers that earlier versions installed.
-rm -f "$bin_dir/keep-bridge" "$bin_dir/tasks-bridge"
-
 # --- Install the desktop entry and icon ------------------------------------
 mkdir -p "$app_dir" "$icon_dir"
 sed "s|@EXEC@|$binary|g" "$script_dir/timeslay.desktop.in" \

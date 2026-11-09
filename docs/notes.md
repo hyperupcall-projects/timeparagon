@@ -2,7 +2,6 @@
 
 Notes are Markdown documents listed under **More → Notes**. They are separate
 from the notepad behind the **Note** tab.
-They replace the old Google Keep integration, which has been removed.
 
 ## Storage
 
@@ -36,10 +35,6 @@ The setting is empty by default, and notes are not saved until it is set.
   couple of seconds. Other files in the directory are left alone.
 - Notes are not stored in the database or synced through Turso. To share them
   between devices, sync the directory itself (with Syncthing, say).
-- Older builds kept notes in `<data dir>/timeslay.sqlite3`. On the first start
-  with a directory set, they are written to the directory and removed from the
-  database, including their sync history, which is also deleted from the sync
-  server.
 - A new, empty note is dropped when closed.
 
 ## Editing
@@ -87,14 +82,3 @@ a note is always dark, on every theme.
   file with the system's associated application. On Android, the app receives
   access to that document. Changes made there appear after returning to TimeSlay.
   An installed app that handles Markdown or plain text is needed.
-
-## Upgrading from Google Keep
-
-Keep notes are not migrated. The removed integration can leave data on disk,
-which is not deleted automatically:
-
-- The helper's Chrome profile, which may hold a Google session. It is probably
-  at `~/.local/share/timeslay/keep-bridge/chrome-profile`.
-- The old cache at `~/.cache/timeslay/keep`.
-
-The installer and uninstaller remove the old `keep-bridge` binary.
