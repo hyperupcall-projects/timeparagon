@@ -84,13 +84,7 @@ pub struct Appearance {
     /// The name of the selected theme, matching what the picker shows. It may
     /// be one of the catalog's names or one of the follow-the-system choices.
     pub theme: String,
-    /// Legacy setting from when following the system was a toggle. Old configs
-    /// still carry it, so it is read and migrated to [`crate::theme::SYSTEM`]
-    /// when the config is parsed, then dropped on the next save.
-    #[serde(default, skip_serializing)]
-    pub follow_system: bool,
     /// Display format for clock times throughout the application.
-    #[serde(alias = "use_24_hour")]
     pub time_format: TimeFormat,
 }
 
@@ -99,7 +93,6 @@ impl Default for Appearance {
         Self {
             theme: "Light".to_owned(),
             distance_unit: DistanceUnit::default(),
-            follow_system: false,
             time_format: TimeFormat::TwentyFourHour,
         }
     }
@@ -169,10 +162,6 @@ pub struct Window {
     pub width: f32,
     pub height: f32,
     pub always_on_top: bool,
-    /// Legacy combined window width. Retained for config compatibility; floating
-    /// editors use `views.time_block_width` instead.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_block_width: Option<f32>,
 }
 
 impl Default for Window {
@@ -181,7 +170,6 @@ impl Default for Window {
             width: 260.0,
             height: 340.0,
             always_on_top: false,
-            time_block_width: None,
         }
     }
 }
@@ -214,11 +202,7 @@ pub struct ViewSettings {
     pub dock_reserve_space: bool,
     /// Reserve the side panel independently of the dock.
     pub panel_reserve_space: bool,
-    /// Space between the dock and the left and right screen edges, in logical
-    /// pixels. A top or bottom dock uses it at both ends; a side dock uses it
-    /// as the gap from the edge it hugs.
-    pub dock_margin: f32,
-    /// Independent horizontal gaps; absent values inherit the legacy dock margin.
+    /// Independent horizontal gaps between the dock and each screen edge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dock_left_margin: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,7 +218,6 @@ pub struct ViewSettings {
     /// Colour of the dock's inner border.
     pub dock_border_inner_color: HexColor,
     /// Shared outer border depth for the dock and application windows.
-    /// The panel-prefixed keys are retained for saved-config compatibility.
     pub panel_border_outer_width: f32,
     /// Shared outer border color.
     pub panel_border_outer_color: HexColor,
@@ -335,7 +318,6 @@ impl Default for ViewSettings {
             dock_border_radius: 0.0,
             panel_border_radius: None,
             dock_width: 10.0,
-            dock_margin: 0.0,
             dock_left_margin: None,
             dock_right_margin: None,
             dock_side: DockSide::Left,
@@ -430,29 +412,16 @@ impl ViewSettings {
         }
     }
 
-    /// The gap between the dock and the left and right screen edges.
-    pub fn dock_margin(&self) -> f32 {
-        if self.dock_margin.is_finite() {
-            self.dock_margin.clamp(0.0, Self::MAX_DOCK_MARGIN)
-        } else {
-            Self::default().dock_margin
-        }
-    }
-
     pub fn dock_left_margin(&self) -> f32 {
-        self.dock_left_margin.filter(|v| v.is_finite()).map_or_else(
-            || self.dock_margin(),
-            |v| v.clamp(0.0, Self::MAX_DOCK_MARGIN),
-        )
+        self.dock_left_margin
+            .filter(|v| v.is_finite())
+            .map_or_else(|| 0.0, |v| v.clamp(0.0, Self::MAX_DOCK_MARGIN))
     }
 
     pub fn dock_right_margin(&self) -> f32 {
         self.dock_right_margin
             .filter(|v| v.is_finite())
-            .map_or_else(
-                || self.dock_margin(),
-                |v| v.clamp(0.0, Self::MAX_DOCK_MARGIN),
-            )
+            .map_or_else(|| 0.0, |v| v.clamp(0.0, Self::MAX_DOCK_MARGIN))
     }
 
     /// A border thickness, clamped to the range the settings offer.
@@ -515,7 +484,8 @@ impl std::fmt::Display for MapApp {
 }
 
 /// Places, the Mapbox access token, and how trips between places are made.
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TravelSettings {
     /// A Mapbox access token (public, `pk.`) that may use the Search Box and
     /// Directions APIs.
@@ -540,40 +510,6 @@ pub struct TravelSettings {
     /// The trips worked out so far, for the devices that do not work them out.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<SavedRoute>,
-}
-
-// Read the old start/end settings once, then save only Home. Keep all saved
-// places, including the former end location, available to tasks and events.
-impl<'de> Deserialize<'de> for TravelSettings {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Default, Deserialize)]
-        #[serde(default)]
-        struct Stored {
-            api_key: String,
-            home: Option<u64>,
-            start: Option<u64>,
-            end: Option<u64>,
-            default_mode: TravelMode,
-            map_app: MapApp,
-            show: bool,
-            places: Vec<Place>,
-            modes: Vec<RouteMode>,
-            event_places: std::collections::BTreeMap<String, u64>,
-            routes: Vec<SavedRoute>,
-        }
-        let stored = Stored::deserialize(deserializer)?;
-        Ok(Self {
-            api_key: stored.api_key,
-            home: stored.home.or(stored.start).or(stored.end),
-            default_mode: stored.default_mode,
-            map_app: stored.map_app,
-            show: stored.show,
-            places: stored.places,
-            modes: stored.modes,
-            event_places: stored.event_places,
-            routes: stored.routes,
-        })
-    }
 }
 
 impl TravelSettings {
@@ -646,7 +582,6 @@ impl Config {
     /// Reads the config, with the shared data from the database, falling back
     /// to defaults for anything unreadable.
     pub fn load() -> Self {
-        // First, so data an older build left in the file has moved before it is read.
         let database = crate::task_db::path();
         let Some(path) = config_path() else {
             log::warn!("no config directory available; using defaults");
@@ -694,14 +629,10 @@ impl Config {
         contents: &str,
         mut ignored: impl FnMut(String),
     ) -> Result<Self, toml::de::Error> {
-        let mut config: Self =
+        let config: Self =
             serde_ignored::deserialize(toml::de::Deserializer::parse(contents)?, |path| {
                 ignored(path.to_string());
             })?;
-        if config.appearance.follow_system {
-            config.appearance.theme = crate::theme::SYSTEM.to_owned();
-            config.appearance.follow_system = false;
-        }
         Ok(config)
     }
 
@@ -1052,16 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn the_legacy_follow_system_setting_becomes_the_system_theme() {
-        let config = Config::parse("[appearance]\ntheme = \"Dark\"\nfollow_system = true").unwrap();
-
-        assert_eq!(config.appearance.theme, crate::theme::SYSTEM);
-        assert!(!config.appearance.follow_system);
-        assert!(!toml::to_string(&config).unwrap().contains("follow_system"));
-    }
-
-    #[test]
-    fn view_settings_keep_legacy_widths_and_round_trip_custom_sizes() {
+    fn view_settings_round_trip_custom_sizes() {
         let config: Config = toml::from_str("[window]\nwidth = 320.0").unwrap();
         assert_eq!(config.views.calendar_width(config.window.width), 320.0);
         assert_eq!(config.views.time_block_width(), 400.0);
@@ -1125,16 +1047,14 @@ mod tests {
     fn the_dock_edge_and_borders_round_trip() {
         let views = ViewSettings::default();
         assert_eq!(views.dock_side, DockSide::Left);
-        assert_eq!(views.dock_margin(), 0.0);
         assert_eq!(views.dock_border_outer_width(), 1.0);
         assert_eq!(views.dock_border_inner_width(), 1.0);
 
         let views: ViewSettings = toml::from_str(
-            "dock_side = \"bottom\"\ndock_margin = 18.0\ndock_border_outer_width = 2.0\ndock_border_outer_color = \"#FFFFFF\"\ndock_border_inner_width = 4.0\ndock_border_inner_color = \"#000000\"",
+            "dock_side = \"bottom\"\ndock_left_margin = 18.0\ndock_right_margin = 18.0\ndock_border_outer_width = 2.0\ndock_border_outer_color = \"#FFFFFF\"\ndock_border_inner_width = 4.0\ndock_border_inner_color = \"#000000\"",
         )
         .unwrap();
         assert_eq!(views.dock_side, DockSide::Bottom);
-        assert_eq!(views.dock_margin(), 18.0);
         assert_eq!(views.dock_border_outer_width(), 2.0);
         assert_eq!(views.dock_border_inner_width(), 4.0);
         assert_eq!(views.dock_border_outer_color.to_string(), "#FFFFFF");
@@ -1332,8 +1252,9 @@ mod tests {
     }
 
     #[test]
-    fn dock_margins_inherit_legacy_values_and_can_be_saved_independently() {
-        let mut views: ViewSettings = toml::from_str("dock_margin = 18.0").unwrap();
+    fn dock_margins_can_be_saved_independently() {
+        let mut views: ViewSettings =
+            toml::from_str("dock_left_margin = 18.0\ndock_right_margin = 18.0").unwrap();
         assert_eq!(
             (views.dock_left_margin(), views.dock_right_margin()),
             (18.0, 18.0)

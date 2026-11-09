@@ -1,9 +1,7 @@
 //! Gmail links.
 //!
-//! Gmail's address bar does not show the ID the API wants. Recent links end in
-//! a token such as `FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW`; older ones carry the hex
-//! ID directly, or `permthid=thread-f:<decimal>` in the query. This module
-//! turns each into the hex ID, then asks the Gmail API for the subject.
+//! Gmail's address bar uses conversation tokens rather than API IDs. This module
+//! decodes the token, then asks the Gmail API for the subject.
 //!
 //! The token is the decimal ID, written as `f:<decimal>` (`thread-f:` or
 //! `msg-f:` in some places), base64-encoded, and then respelled with a
@@ -128,16 +126,6 @@ struct Id {
 
 fn reference(url: &str) -> Option<Id> {
     let parts = Parts::of(url);
-    for (key, value) in query_pairs(parts.query) {
-        let found = match key.as_str() {
-            // A thread opened from "print", or the old basic view.
-            "th" | "permthid" | "permmsgid" => from_text(&value),
-            _ => None,
-        };
-        if found.is_some() {
-            return found;
-        }
-    }
     // `#inbox/<thread>`, `#label/Work/<thread>`, `#search/text/<thread>`: the
     // conversation is the last segment that reads as an ID.
     let fragment = parts.fragment.split('?').next().unwrap_or_default();
@@ -156,19 +144,13 @@ impl Id {
     }
 }
 
-/// An ID as it appears in a URL: hex, `thread-f:<decimal>`, or a token.
+/// A conversation token as it appears in a Gmail URL.
 fn from_text(text: &str) -> Option<Id> {
     let text = text.trim();
-    if (15..=16).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Some(Id {
-            message: false,
-            hex: text.to_ascii_lowercase(),
-        });
-    }
     if text.len() >= MIN_TOKEN && text.chars().all(|c| TOKEN_ALPHABET.contains(c)) {
         return from_decoded(&decode_token(text)?);
     }
-    from_decoded(text)
+    None
 }
 
 /// `f:<decimal>`, optionally prefixed with `thread-` or `msg-`.
@@ -274,7 +256,6 @@ fn describe_error(status: u16, detail: &str) -> Failure {
 struct Parts<'a> {
     host: &'a str,
     path: &'a str,
-    query: &'a str,
     fragment: &'a str,
 }
 
@@ -282,7 +263,7 @@ impl<'a> Parts<'a> {
     fn of(url: &'a str) -> Self {
         let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
         let (rest, fragment) = rest.split_once('#').unwrap_or((rest, ""));
-        let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let (rest, _) = rest.split_once('?').unwrap_or((rest, ""));
         let (host, path) = match rest.find('/') {
             Some(at) => rest.split_at(at),
             None => (rest, ""),
@@ -290,20 +271,9 @@ impl<'a> Parts<'a> {
         Self {
             host: host.rsplit('@').next().unwrap_or(host),
             path,
-            query,
             fragment,
         }
     }
-}
-
-fn query_pairs(query: &str) -> impl Iterator<Item = (String, String)> + '_ {
-    query.split('&').filter_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        Some((
-            urlencoding::decode(key).ok()?.into_owned(),
-            urlencoding::decode(value).ok()?.into_owned(),
-        ))
-    })
 }
 
 #[cfg(test)]
@@ -347,28 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn older_link_styles_still_resolve() {
-        assert_eq!(
-            id("https://mail.google.com/mail/u/0/#inbox/18c3a1b2c3d4e5f6"),
-            Some((false, "18c3a1b2c3d4e5f6".to_owned()))
-        );
-        assert_eq!(
-            id("https://mail.google.com/mail/?th=18C3A1B2C3D4E5F6&view=pt"),
-            Some((false, "18c3a1b2c3d4e5f6".to_owned()))
-        );
-        assert_eq!(
-            id(
-                "https://mail.google.com/mail/u/0/?view=pt&search=all&permthid=thread-f%3A1864099454408550099"
-            ),
-            Some((false, "19de9c93ce0566d3".to_owned()))
-        );
-        assert_eq!(
-            id("https://mail.google.com/mail/u/0/?view=pt&permmsgid=msg-f%3A1864099454408550099"),
-            Some((true, "19de9c93ce0566d3".to_owned()))
-        );
-    }
-
-    #[test]
     fn links_without_a_conversation_have_no_id() {
         for url in [
             "https://mail.google.com/mail/u/0/#inbox",
@@ -402,7 +350,7 @@ mod tests {
             ]}},
             {"payload": {"headers": [{"name": "Subject", "value": "Re: Quarterly report"}]}}
         ]});
-        let reference = from_text("19de9c93ce0566d3").unwrap();
+        let reference = from_text("FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW").unwrap();
         assert_eq!(
             subject(&thread, &reference).as_deref(),
             Some("Quarterly report due")
@@ -411,7 +359,10 @@ mod tests {
         let reference = from_decoded("msg-f:1864099454408550099").unwrap();
         assert_eq!(subject(&message, &reference).as_deref(), Some("Hello"));
         assert_eq!(
-            subject(&json!({}), &from_text("19de9c93ce0566d3").unwrap()),
+            subject(
+                &json!({}),
+                &from_text("FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW").unwrap()
+            ),
             None
         );
     }
@@ -419,7 +370,7 @@ mod tests {
     #[test]
     fn api_requests_target_the_right_resource() {
         assert_eq!(
-            from_text("19de9c93ce0566d3").unwrap().url(),
+            from_text("FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW").unwrap().url(),
             "https://gmail.googleapis.com/gmail/v1/users/me/threads/19de9c93ce0566d3?format=metadata&metadataHeaders=Subject"
         );
         assert!(

@@ -302,7 +302,7 @@ pub fn create_time_block(new: &NewEvent, settings: &CalendarSettings) -> Result<
     calendar::create_time_block(
         settings.app_calendar.as_deref(),
         new.title.trim(),
-        &calendar::event_description(&new.description, "Time Block", &[]),
+        &calendar::event_description(&new.description),
         None,
         start,
         end,
@@ -1461,7 +1461,7 @@ pub fn save_event(
     }
     let labelled_block = tb::is_block(original, settings);
     let description = if labelled_block {
-        calendar::event_description(&draft.description, "Time Block", &[])
+        calendar::event_description(&draft.description)
     } else {
         draft.description.clone()
     };
@@ -1586,7 +1586,6 @@ mod tests {
                 location: None,
                 ..Metadata::default()
             },
-            legacy_key: None,
         });
         event
     }
@@ -1894,7 +1893,6 @@ mod tests {
             pending: false,
             block: None,
             order: 0,
-            color_id: None,
         });
         let snapshot = Snapshot {
             calendars: vec![
@@ -2201,7 +2199,7 @@ mod tests {
     }
 
     #[test]
-    fn the_source_label_names_the_kind_or_the_calendar() {
+    fn the_source_label_names_the_kind() {
         let context = EditContext {
             settings: settings(),
             projects: ProjectsSettings::default(),
@@ -2223,7 +2221,7 @@ mod tests {
         assert_eq!(
             source_label(&meeting, &context),
             Source {
-                name: "Work".into(),
+                name: "Event".into(),
                 color: meeting.display_color(&context.settings)
             }
         );

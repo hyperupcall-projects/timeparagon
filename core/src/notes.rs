@@ -4,8 +4,7 @@
 //! A note's file name is its title. Its color and connections, when it has
 //! any, are kept in front matter at the top of the file (see [`files`]), so
 //! the directory reads well in any other Markdown editor. Nothing about notes
-//! is kept in the database; [`migrate_database`] moves notes an older build
-//! kept there into the directory.
+//! is kept in the database.
 
 #[cfg(target_os = "android")]
 pub mod android;
@@ -394,53 +393,6 @@ pub fn fingerprint(directory: &Path) -> u64 {
     files::fingerprint(directory)
 }
 
-/// Moves the notes an older build kept in the database into `directory`, then
-/// removes every trace of them from the database: the document, its sync
-/// history (which the sync worker then also deletes from the server), and the
-/// freed pages. Safe to run again, including after an interrupted run: a note
-/// already written to the directory is not written twice. Returns how many
-/// notes were moved.
-pub fn migrate_database(database: &Path, directory: &Path) -> std::io::Result<usize> {
-    if !database.exists() {
-        return Ok(0);
-    }
-    let library: Option<Library> =
-        crate::task_db::read_document(database, crate::task_db::keys::NOTES)?;
-    let moved = match library {
-        Some(mut library) if !library.notes.is_empty() => {
-            library.notes.retain(|note| !note.is_blank());
-            #[cfg(target_os = "android")]
-            let tree = android::is_tree(directory);
-            #[cfg(not(target_os = "android"))]
-            let tree = false;
-            #[cfg(target_os = "android")]
-            if tree {
-                android::claim_identical(&mut library, directory)?;
-            }
-            if !tree {
-                files::claim_identical(&mut library, directory)?;
-            }
-            let saved = library.save(directory)?;
-            // The files keep the notes' own times, so they sort as before.
-            for (id, file) in &saved.files {
-                if !tree && let Some(note) = library.note(id) {
-                    files::set_modified(&directory.join(file), note.modified_ms);
-                }
-            }
-            library.notes.len()
-        }
-        _ => 0,
-    };
-    crate::database_sync::retire_document(database, crate::task_db::keys::NOTES)?;
-    if moved > 0 {
-        log::info!(
-            "moved {moved} notes from the database to {}",
-            directory.display()
-        );
-    }
-    Ok(moved)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,55 +570,5 @@ mod tests {
         read.adopt_identities(&library);
         assert_eq!(read, library);
         assert_ne!(fingerprint(directory.path()), 0);
-    }
-
-    #[test]
-    fn migration_moves_the_notes_out_of_the_database_and_its_history() {
-        let directory = tempfile::tempdir().unwrap();
-        let database = directory.path().join("timeslay.sqlite3");
-        let notes = directory.path().join("notes");
-        crate::task_db::Database::open(&database).unwrap();
-        crate::database_sync::enroll(&database).unwrap();
-        crate::task_db::write_document_json(&database, crate::task_db::keys::NOTES,
-            r#"{"notes":[{"id":"local-1","drive_id":"imported-1","title":"A","body":"keep","color":"sky","links":[{"kind":"habit","id":"h1","title":"Read"}],"modified_ms":1700000000000},{"id":"local-2","title":"","body":""}]}"#).unwrap();
-        crate::task_db::write_document_json(&database, crate::task_db::keys::HABITS, "{}").unwrap();
-        assert!(!crate::database_sync::history(&database).unwrap().is_empty());
-
-        assert_eq!(migrate_database(&database, &notes).unwrap(), 1);
-        assert_eq!(names(&notes), ["A.md"]);
-        let library = Library::load(&notes);
-        assert_eq!(library.notes[0].body, "keep");
-        assert_eq!(library.notes[0].color, Pastel::Sky);
-        assert_eq!(library.notes[0].links, vec![habit()]);
-        assert_eq!(library.notes[0].modified_ms, 1_700_000_000_000);
-
-        let read: Option<Library> =
-            crate::task_db::read_document(&database, crate::task_db::keys::NOTES).unwrap();
-        assert!(read.is_none());
-        let history = crate::database_sync::history(&database).unwrap();
-        assert!(history.iter().all(|edit| edit.document != "notes"));
-        assert!(history.iter().any(|edit| edit.document == "habits"));
-        let raw = std::fs::read(&database).unwrap();
-        assert!(!raw.windows(4).any(|window| window == b"keep"));
-
-        // Running it again changes nothing.
-        assert_eq!(migrate_database(&database, &notes).unwrap(), 0);
-        assert_eq!(names(&notes), ["A.md"]);
-    }
-
-    #[test]
-    fn an_interrupted_migration_does_not_write_a_note_twice() {
-        let directory = tempfile::tempdir().unwrap();
-        let database = directory.path().join("timeslay.sqlite3");
-        let notes = directory.path().join("notes");
-        crate::task_db::write_document_json(&database, crate::task_db::keys::NOTES,
-            r#"{"notes":[{"id":"1","title":"A","body":"one"},{"id":"2","title":"A","body":"two"}]}"#).unwrap();
-        let library: Library =
-            crate::task_db::read_document(&database, crate::task_db::keys::NOTES)
-                .unwrap()
-                .unwrap();
-        library.save(&notes).unwrap();
-        assert_eq!(migrate_database(&database, &notes).unwrap(), 2);
-        assert_eq!(names(&notes), ["A 2.md", "A.md"]);
     }
 }

@@ -351,7 +351,6 @@ mod tests {
                 order,
                 ..Metadata::default()
             },
-            legacy_key: None,
         });
         task
     }
@@ -406,7 +405,6 @@ mod tests {
             pending: false,
             block: None,
             order: 0,
-            color_id: None,
         });
 
         let day = build(vec![
@@ -420,7 +418,7 @@ mod tests {
 
         let titles: Vec<_> = day.items.iter().map(|item| item.title.as_str()).collect();
         assert_eq!(titles, ["Standup", "Study"]);
-        assert_eq!(day.items[1].time, "6.15p – 7.30p");
+        assert_eq!(day.items[1].time, "6:15 – 7:30p");
         // The todos that were removed do not leave gaps beside what remains.
         assert_eq!(day.items[0].columns, 1);
 
@@ -533,7 +531,6 @@ mod tests {
             pending: false,
             block: None,
             order: 0,
-            color_id: None,
         });
         let day = build_with_travel(vec![scheduled], &campus_trip());
         assert!(day.items.is_empty());

@@ -732,14 +732,9 @@ impl CalendarSettings {
     /// Created on first use; not customizable from Settings.
     pub const APP_CALENDAR_NAME: &str = "TimeSlay";
 
-    /// Names the app calendar has had before. They are still recognized so a
-    /// half-renamed calendar is reused rather than duplicated.
-    pub const APP_CALENDAR_ALIASES: [&str; 2] = ["TimeSlayer", "TimeSlay"];
-
-    /// Whether `name` is the app calendar or one of its former names.
+    /// Whether `name` is the app calendar.
     pub fn is_app_calendar_name(name: &str) -> bool {
-        let name = name.trim();
-        name == Self::APP_CALENDAR_NAME || Self::APP_CALENDAR_ALIASES.contains(&name)
+        name.trim() == Self::APP_CALENDAR_NAME
     }
 
     pub const MIN_SYNC_MINUTES: u32 = 1;
@@ -1247,7 +1242,6 @@ impl Config {
     /// Reads the config, with the scratch data from the database, falling back
     /// to defaults for anything unreadable.
     pub fn load() -> Self {
-        // First, so data an older build left in the file has moved before it is read.
         let database = crate::task_db::path();
         let Some(path) = config_path() else {
             log::warn!("no config directory available; using defaults");

@@ -10,7 +10,7 @@
 //! ```
 //!
 //! This module is the one place that splits notes into lines. The deadline,
-//! metadata, and legacy-id readers all use it, so they agree on where a
+//! metadata readers all use it, so they agree on where a
 //! reserved line may appear.
 
 /// A task's notes, kept in the order they were written.

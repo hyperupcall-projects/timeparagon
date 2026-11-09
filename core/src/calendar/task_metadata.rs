@@ -2,7 +2,7 @@
 //! Values are JSON, one namespaced key per line, after a terminal `---`.
 use crate::calendar::ids;
 use crate::task_db::TaskData;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, json};
 
 const MARKER: &str = "tt-version: ";
 
@@ -50,7 +50,6 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
         super::deadline::parse_input(value.as_str().ok_or("Invalid metadata deadline")?)?;
     }
     let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
-    let legacy_key = fields.remove("legacy_key").unwrap_or(Value::Null);
     let allowed = [
         "repeat_source",
         "inherited",
@@ -61,7 +60,6 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
         "ignored",
         "schedule",
         "projects",
-        "project",
         "labels",
         "priority",
         "location",
@@ -70,9 +68,8 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
     if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("Unknown TimeSlay metadata field; update the app before editing".into());
     }
-    let data: TaskData =
-        serde_json::from_value(json!({"id":id,"legacy_key":legacy_key,"metadata":fields}))
-            .map_err(|e| format!("Invalid TimeSlay metadata: {e}"))?;
+    let data: TaskData = serde_json::from_value(json!({"id":id,"metadata":fields}))
+        .map_err(|e| format!("Invalid TimeSlay metadata: {e}"))?;
     if data.id < 100 {
         return Err("Invalid TimeSlay task ID".into());
     }
@@ -91,11 +88,7 @@ pub fn write(notes: &str, data: &TaskData) -> Result<String, String> {
         format!("{prose}\n")
     };
     result.push_str("---\ntt-version: 1\n");
-    result.push_str(&format!(
-        "tt-id: {}\ntt-legacy_key: {}",
-        data.id,
-        json!(data.legacy_key)
-    ));
+    result.push_str(&format!("tt-id: {}", data.id));
     result.push_str(&format!(
         "\ntt-deadline: {}",
         json!(deadline.map(|d| d.value()))
@@ -110,8 +103,8 @@ pub fn write(notes: &str, data: &TaskData) -> Result<String, String> {
     Ok(result)
 }
 
-/// Resolve a fetched task, migrating legacy sources exactly once. The callback
-/// is the remote write boundary so a failed export leaves legacy data retryable.
+/// Resolve a fetched task, allocating metadata for newly encountered tasks.
+/// The callback publishes metadata before it is treated as remotely saved.
 pub fn load(
     database: &mut crate::task_db::Database,
     event: &super::Event,
@@ -137,8 +130,7 @@ pub fn load(
         database.cache_remote(event, &data)?;
         return Ok(data);
     }
-    // LEGACY_METADATA_COMPAT: SQLite and inline tt-timeblocking/ttid values
-    // are fallback sources only. Never consult them when a footer exists.
+    // New Google Tasks receive their first TimeSlay metadata on encounter.
     let data = database.import(event)?;
     publish(&data)?;
     Ok(data)
@@ -179,44 +171,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_sqlite_is_exported_retryably_then_remote_wins_and_rebuilds_a_fresh_cache() {
-        let mut event = event();
-        event.details.description = "Human notes\ntt-timeblocking: {\"minutes\":30}\nttid: 12345678-1234-4234-8234-123456789abc".into();
-        let mut db = crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
-        let mut local = db.import(&event).unwrap();
-        local.metadata.minutes = 75;
-        db.save(&event, &local).unwrap();
-        assert!(load(&mut db, &event, |_| Err("offline".into())).is_err());
-        assert_eq!(db.lookup(&event).unwrap(), Some(local.clone()));
-        let mut exported = String::new();
-        let data = load(&mut db, &event, |data| {
-            exported = write(&event.details.description, data)?;
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(data, local);
-        assert!(!exported.contains("tt-timeblocking:"));
-        assert!(!exported.contains("ttid:"));
-        assert_eq!(prose(&exported), "Human notes");
-        // An edit on another device is authoritative over the old cache.
-        local.metadata.minutes = 90;
-        event.details.description = write(&exported, &local).unwrap();
-        let loaded = load(&mut db, &event, |_| panic!("already migrated")).unwrap();
-        assert_eq!(loaded, local);
-        assert_eq!(db.lookup(&event).unwrap(), Some(local.clone()));
-        let mut fresh = crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
-        assert_eq!(
-            load(&mut fresh, &event, |_| panic!("no export needed")).unwrap(),
-            local
-        );
-        assert_eq!(fresh.import(&event).unwrap(), local);
-    }
-
-    #[test]
     fn deadlines_migrate_to_footer_and_remain_editable_without_metadata_loss() {
         let data = TaskData {
             id: 100,
-            legacy_key: None,
             metadata: Default::default(),
         };
         let notes = "Human notes\nDEADLINE: 2026-10-30 17:05\nMore notes";
@@ -242,7 +199,6 @@ mod tests {
         let mut event = event();
         let mut data = TaskData {
             id: 100,
-            legacy_key: None,
             metadata: Default::default(),
         };
         data.metadata.schedule =
@@ -267,7 +223,6 @@ mod tests {
     fn all_metadata_round_trips_and_prose_rules_are_preserved() {
         let data = TaskData {
             id: 123,
-            legacy_key: Some("old-history-key".into()),
             metadata: crate::timeblocking::Metadata {
                 created_at: Some(
                     chrono::DateTime::parse_from_rfc3339("2026-10-29T19:30:12.123Z")
@@ -295,7 +250,6 @@ mod tests {
     fn malformed_future_and_oversize_notes_are_never_replaced() {
         let data = TaskData {
             id: 100,
-            legacy_key: None,
             metadata: Default::default(),
         };
         for notes in [

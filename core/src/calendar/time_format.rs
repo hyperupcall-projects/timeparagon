@@ -1,8 +1,8 @@
 //! Display formatting only. Stored values and editor messages remain HH:MM.
 use chrono::Timelike;
 
-/// Clock display preference. Legacy boolean settings remain readable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// Clock display preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimeFormat {
     TwelveHour,
@@ -40,31 +40,6 @@ impl std::fmt::Display for TimeFormat {
             Self::Compact => "9:30p",
             Self::Compact2 => "930p",
         })
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for TimeFormat {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Stored {
-            Legacy(bool),
-            Name(String),
-        }
-        match Stored::deserialize(deserializer)? {
-            Stored::Legacy(true) => Ok(Self::TwentyFourHour),
-            Stored::Legacy(false) => Ok(Self::TwelveHour),
-            Stored::Name(name) => match name.as_str() {
-                "twelve_hour" => Ok(Self::TwelveHour),
-                "twenty_four_hour" => Ok(Self::TwentyFourHour),
-                "compact" => Ok(Self::Compact),
-                "compact_2" => Ok(Self::Compact2),
-                _ => Err(serde::de::Error::unknown_variant(
-                    &name,
-                    &["twelve_hour", "twenty_four_hour", "compact", "compact_2"],
-                )),
-            },
-        }
     }
 }
 

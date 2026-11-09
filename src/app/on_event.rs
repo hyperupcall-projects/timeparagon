@@ -507,7 +507,6 @@ mod tests {
         child.calendar_id = "tasks:list".into();
         child.details.task_data = Some(crate::task_db::TaskData {
             id: 100,
-            legacy_key: None,
             metadata: crate::timeblocking::Metadata {
                 block: Some(key),
                 ..Default::default()

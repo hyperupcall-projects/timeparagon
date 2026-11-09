@@ -1,4 +1,4 @@
-//! Shared dialogs belong to the floating editor, with a main-window fallback.
+//! Shared dialogs use the floating editor; task creation stays in the sidebar.
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
 use timeslay::{
@@ -81,6 +81,7 @@ fn shared_popups_render_in_exactly_one_window() {
                 Size::new(480.0, 900.0),
                 app::view(&state, window),
             );
+            let expected = if kind == "task" { !expected } else { expected };
             assert_eq!(ui.find(label).is_ok(), expected, "{kind}: {window:?}");
         }
         state.editor_window = None;

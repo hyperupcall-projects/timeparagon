@@ -21,7 +21,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Library, Link, Note, Pastel, Saved, UNTITLED};
 
@@ -396,44 +396,4 @@ pub(super) fn write(library: &Library, directory: &Path) -> io::Result<Saved> {
         saved.files.push((note.id.clone(), name));
     }
     Ok(saved)
-}
-
-/// Gives each note not yet in the directory the file already there with
-/// exactly its contents, so an interrupted migration does not write it twice.
-pub(super) fn claim_identical(library: &mut Library, directory: &Path) -> io::Result<()> {
-    let mut claimed = HashSet::new();
-    for note in library.notes.iter_mut().filter(|note| note.file.is_none()) {
-        let stem = file_stem(&note.title);
-        let contents = render(note);
-        for n in 1.. {
-            let name = numbered(&stem, n);
-            let path = directory.join(&name);
-            if !path.exists() {
-                break;
-            }
-            if !claimed.contains(&name) && fs::read(&path)? == contents.as_bytes() {
-                claimed.insert(name.clone());
-                note.file = Some(name);
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Sets a file's modification time. A failure only costs the sort order.
-pub(super) fn set_modified(path: &Path, modified_ms: i64) {
-    let Ok(ms) = u64::try_from(modified_ms) else {
-        return;
-    };
-    if ms == 0 {
-        return;
-    }
-    let result = fs::File::options()
-        .write(true)
-        .open(path)
-        .and_then(|file| file.set_modified(UNIX_EPOCH + Duration::from_millis(ms)));
-    if let Err(error) = result {
-        log::warn!("could not set the time of {}: {error}", path.display());
-    }
 }

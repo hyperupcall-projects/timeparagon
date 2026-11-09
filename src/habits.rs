@@ -461,13 +461,6 @@ impl Store {
         series
             .habit_id
             .as_deref()
-            .or_else(|| {
-                self.library
-                    .adopted
-                    .get(&series.id)
-                    .map(String::as_str)
-                    .filter(|id| !id.is_empty())
-            })
             .filter(|id| self.library.habit(id).is_some())
     }
 
@@ -487,13 +480,6 @@ impl Store {
             .details
             .habit_id
             .as_deref()
-            .or_else(|| {
-                self.library
-                    .adopted
-                    .get(series_id)
-                    .map(String::as_str)
-                    .filter(|id| !id.is_empty())
-            })
             .filter(|id| self.library.habit(id).is_some())
     }
 
@@ -526,44 +512,17 @@ impl Store {
         event.details.habit && self.habit_of(event) == Some(id)
     }
 
-    /// Gives each event the habit it belongs to. An event already pointing at
-    /// a habit this machine has never seen brings that habit back under the
-    /// same id, while a new event gets one by name, plus its past completions.
-    /// Returns whether anything changed.
-    fn adopt(&mut self, listing: &HabitListing) -> bool {
+    /// Restore a habit explicitly linked by a calendar series on another device.
+    fn adopt(&mut self, _listing: &HabitListing) -> bool {
         let mut changed = false;
         for series in &self.series {
-            if let Some(id) = &series.habit_id {
-                if self.library.habit(id).is_none() {
-                    let mut habit = Habit::new(id.clone(), series.title.trim().to_owned());
-                    habit.frequency = series.frequency();
-                    self.library.habits.push(habit);
-                    changed = true;
-                }
-                continue;
+            let Some(id) = &series.habit_id else { continue };
+            if self.library.habit(id).is_none() {
+                let mut habit = Habit::new(id.clone(), series.title.trim().to_owned());
+                habit.frequency = series.frequency();
+                self.library.habits.push(habit);
+                changed = true;
             }
-            if self.library.adopted.contains_key(&series.id) {
-                continue;
-            }
-            let id = match self.library.named(&series.title) {
-                Some(habit) => habit.id.clone(),
-                None => {
-                    let id = new_id();
-                    let mut habit = Habit::new(id.clone(), series.title.trim().to_owned());
-                    habit.frequency = series.frequency();
-                    self.library.habits.push(habit);
-                    id
-                }
-            };
-            if let Some(habit) = self.library.habit_mut(&id) {
-                for completion in &listing.completions {
-                    if completion.series_id == series.id {
-                        habit.add_rep(completion.day);
-                    }
-                }
-            }
-            self.library.adopted.insert(series.id.clone(), id);
-            changed = true;
         }
         changed
     }
@@ -976,13 +935,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 .map(|series| series.id.clone())
                 .collect();
             let sync = !events.is_empty();
-            for series_id in events {
-                state
-                    .habits
-                    .library
-                    .adopted
-                    .insert(series_id, String::new());
-            }
             for series in &mut state.habits.series {
                 if series.habit_id.as_deref() == Some(id.as_str()) {
                     series.habit_id = None;
@@ -1044,13 +996,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             {
                 series.habit_id = habit_id.clone();
             }
-            // Remembered as well, so an event let go of is not claimed again.
-            state
-                .habits
-                .library
-                .adopted
-                .insert(series_id, habit_id.unwrap_or_default());
-            Task::batch([persist(state), refresh_after_event_change()])
+            refresh_after_event_change()
         }
         Action::EventHabitChosen(habit_id) => event_habit_chosen(state, habit_id),
         Action::ShowOnCalendar(id) => {

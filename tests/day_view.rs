@@ -73,6 +73,9 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
             .earliest()
             .unwrap();
         task.end = task.start + Duration::days(1);
+        if id.starts_with("overdue-") {
+            task.details.description = format!("DUE: {day}");
+        }
         state.calendar.events.push(task);
     }
     let mut day = Simulator::with_size(

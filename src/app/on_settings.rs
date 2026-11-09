@@ -347,7 +347,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
         }
         SettingsMessage::ThemeSelected(name) => {
             state.config.appearance.theme = name;
-            state.config.appearance.follow_system = false;
             queue_save(state)
         }
         SettingsMessage::DistanceUnitSelected(unit) => {

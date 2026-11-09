@@ -1108,7 +1108,6 @@ mod tests {
             .to_utc();
         state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
             id: 100,
-            legacy_key: None,
             metadata: tb::Metadata {
                 created_at: Some(timestamp),
                 ..Default::default()
@@ -1140,9 +1139,10 @@ mod tests {
             state.screen = crate::app::Screen::Overdue;
             state.calendar.events[0].start =
                 calendar::at_clock(crate::clock::now().date_naive().pred_opt().unwrap(), 0, 0);
+            state.calendar.events[0].details.description =
+                format!("DUE: {}", state.calendar.events[0].start.date_naive());
             state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
                 id: 100,
-                legacy_key: None,
                 metadata: tb::Metadata {
                     minutes: 90,
                     ..Default::default()

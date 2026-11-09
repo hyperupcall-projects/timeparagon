@@ -28,9 +28,6 @@ them):
 | `timeslay --dock` | The dock: a very thin strip of today along a screen edge |
 | `timeslay --daemon` | The background process that owns the global shortcuts |
 
-The installer removes the separate `timeslay-panel` and `timeslay-dock`
-binaries and the `timeslay-panel.service` that earlier versions installed.
-
 Nothing needs root; everything lives under your home directory.
 
 ## Usage
@@ -189,9 +186,7 @@ systemctl --user restart timeslay-shortcuts.service
 journalctl --user -u timeslay-shortcuts.service -f
 ```
 
-Its settings live in the `[panel]` table of `~/.config/timeslay/config.toml`
-(an older standalone `panel.toml` is still read until `config.toml` has a
-`[panel]` table, and the next save carries its values over):
+Its settings live in the `[panel]` table of `~/.config/timeslay/config.toml`:
 
 ```toml
 [panel]
@@ -203,8 +198,7 @@ width = 200
 
 # Global shortcuts, as Modifier+Key. Any number per action. These are only the
 # defaults: once registered they also appear in System Settings -> Shortcuts,
-# where they can be rebound. The old single `shortcut = "Meta+U"` key is still
-# read as toggle_visibility.
+# where they can be rebound.
 toggle_visibility = ["Meta+U"]
 toggle_shape = ["Meta+Shift+U"]
 ```

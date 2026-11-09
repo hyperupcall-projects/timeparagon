@@ -332,7 +332,6 @@ pub struct DayEntry {
 /// One logged occurrence: when it happened and, on a habit that records a
 /// number, how much (such as how many minutes it went on for), with a comment.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "StoredLogEntry")]
 pub struct LogEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<NaiveTime>,
@@ -368,41 +367,13 @@ impl LogEntry {
     }
 }
 
-/// The first logs kept only a time for each entry.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum StoredLogEntry {
-    Time(NaiveTime),
-    Entry {
-        #[serde(default)]
-        at: Option<NaiveTime>,
-        #[serde(default)]
-        amount: Option<i64>,
-        #[serde(default)]
-        note: String,
-    },
-}
-
-impl From<StoredLogEntry> for LogEntry {
-    fn from(stored: StoredLogEntry) -> Self {
-        match stored {
-            StoredLogEntry::Time(at) => Self {
-                at: Some(at),
-                amount: None,
-                note: String::new(),
-            },
-            StoredLogEntry::Entry { at, amount, note } => Self { at, amount, note },
-        }
-    }
-}
-
 /// A day's log: each time it happened (done, or slipped on a "No" habit) and
 /// each time it was resisted. The counts in `marks` and `resisted` stay the
 /// record; the log says when and how much. Counts from before entries were
 /// logged have fewer entries than the count.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DayLog {
-    #[serde(default, alias = "slipped", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub happened: Vec<LogEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resisted: Vec<LogEntry>,
@@ -495,7 +466,6 @@ pub fn log_time(time: NaiveTime) -> NaiveTime {
 
 /// One habit: its goal, its settings and everything recorded for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(from = "StoredHabit")]
 pub struct Habit {
     pub id: String,
     pub name: String,
@@ -543,155 +513,6 @@ pub struct Habit {
     /// The life area it belongs to, by id. Unset means the Personal area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area: Option<u64>,
-}
-
-/// A habit as any version has saved it.
-#[derive(Deserialize)]
-struct StoredHabit {
-    id: String,
-    name: String,
-    #[serde(default)]
-    kind: StoredKind,
-    #[serde(default)]
-    created: Option<NaiveDate>,
-    #[serde(default)]
-    unit: String,
-    #[serde(default)]
-    target: f64,
-    #[serde(default)]
-    target_type: StoredTargetType,
-    #[serde(default)]
-    question: String,
-    #[serde(default)]
-    notes: String,
-    #[serde(default = "default_color")]
-    color: u8,
-    #[serde(default)]
-    frequency: Frequency,
-    #[serde(default)]
-    archived: bool,
-    #[serde(default)]
-    skip_days: bool,
-    #[serde(default)]
-    question_marks: bool,
-    #[serde(default)]
-    icons: Icons,
-    #[serde(default)]
-    marks: BTreeMap<NaiveDate, StoredMark>,
-    #[serde(default)]
-    resisted: BTreeMap<NaiveDate, u32>,
-    #[serde(default)]
-    log: BTreeMap<NaiveDate, DayLog>,
-    #[serde(default)]
-    section: Option<String>,
-    #[serde(default)]
-    measure: Option<Measure>,
-    #[serde(default)]
-    values: BTreeMap<NaiveDate, i64>,
-    #[serde(default)]
-    area: Option<u64>,
-}
-
-#[derive(Deserialize, Default, PartialEq, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-enum StoredKind {
-    #[default]
-    Yes,
-    No,
-    Measurable,
-}
-
-#[derive(Deserialize, Default, PartialEq, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-enum StoredTargetType {
-    #[default]
-    AtLeast,
-    AtMost,
-}
-
-#[derive(Deserialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-enum StoredMark {
-    Yes,
-    Reps(u32),
-    No,
-    Skip,
-    Amount(i64),
-}
-
-impl From<StoredHabit> for Habit {
-    /// Measurable used to be a third kind of habit, where an amount decided the
-    /// day. It becomes whichever kind has the same goal, with its amounts kept as
-    /// values, and each day judged against the target as it was recorded.
-    fn from(stored: StoredHabit) -> Self {
-        let measurable = stored.kind == StoredKind::Measurable;
-        let at_most = measurable && stored.target_type == StoredTargetType::AtMost;
-        let days = match stored.frequency.fraction().1 {
-            0 | 1 => 1,
-            2..=7 => 7,
-            _ => 30,
-        };
-        let mut marks = BTreeMap::new();
-        let mut values = stored.values;
-        for (day, mark) in stored.marks {
-            let mark = match mark {
-                StoredMark::Yes => Some(Mark::Yes),
-                StoredMark::Reps(times) => Some(Mark::Reps(times)),
-                StoredMark::No => Some(Mark::No),
-                StoredMark::Skip => Some(Mark::Skip),
-                StoredMark::Amount(amount) => {
-                    values.insert(day, amount);
-                    let value = amount as f64 / 1000.0;
-                    if at_most {
-                        (value > stored.target / f64::from(days)).then_some(Mark::Reps(1))
-                    } else {
-                        // A longer period's target can be met over several days.
-                        (value > 0.0 && (days != 1 || value >= stored.target)).then_some(Mark::Yes)
-                    }
-                }
-            };
-            if let Some(mark) = mark {
-                marks.insert(day, mark);
-            }
-        }
-        Self {
-            id: stored.id,
-            name: stored.name,
-            kind: if at_most || stored.kind == StoredKind::No {
-                Kind::No
-            } else {
-                Kind::Yes
-            },
-            created: stored.created,
-            question: stored.question,
-            notes: stored.notes,
-            color: stored.color,
-            frequency: if at_most {
-                Frequency::DAILY
-            } else {
-                stored.frequency
-            },
-            archived: stored.archived,
-            skip_days: stored.skip_days,
-            question_marks: stored.question_marks,
-            icons: stored.icons,
-            marks,
-            resisted: stored.resisted,
-            log: stored.log,
-            section: stored.section,
-            measure: if measurable {
-                Some(Measure {
-                    unit: stored.unit,
-                    target: (stored.target > 0.0).then_some(stored.target),
-                    days,
-                })
-            } else {
-                stored.measure
-            },
-            values,
-            area: stored.area,
-        }
-    }
 }
 
 impl Habit {
@@ -1488,10 +1309,6 @@ pub struct Library {
     pub hide_completed: bool,
     pub score_bucket: Bucket,
     pub history_bucket: Bucket,
-    /// Habit events that predate habits, by series id, and the habit each was
-    /// given. An empty value means the event has been let go of, and it must
-    /// not be claimed again.
-    pub adopted: BTreeMap<String, String>,
 }
 
 impl Default for Library {
@@ -1505,7 +1322,6 @@ impl Default for Library {
             hide_completed: false,
             score_bucket: Bucket::Week,
             history_bucket: Bucket::Month,
-            adopted: BTreeMap::new(),
         }
     }
 }
@@ -2694,68 +2510,6 @@ mod tests {
         assert_eq!(habit.compute(today()).first_day(), ago(5));
     }
 
-    fn old_habit(rest: &str) -> Habit {
-        serde_json::from_str(&format!(r#"{{"id":"a","name":"Run",{rest}}}"#)).unwrap()
-    }
-
-    #[test]
-    fn an_old_at_least_measurable_habit_becomes_did_it() {
-        let habit = old_habit(
-            r#"
-            "kind":"measurable","unit":"miles","target":2.0,"target_type":"at_least",
-            "frequency":{"interval":{"times":1,"days":1}},
-            "marks":{
-                "2015-01-20":{"amount":2500},
-                "2015-01-21":{"amount":1000},
-                "2015-01-22":{"amount":0},
-                "2015-01-23":"skip"
-            }"#,
-        );
-        assert_eq!(habit.kind, Kind::Yes);
-        let measure = habit.measure.clone().unwrap();
-        assert_eq!(
-            (measure.unit.as_str(), measure.target, measure.days),
-            ("miles", Some(2.0), 1)
-        );
-        let day = |n| NaiveDate::from_ymd_opt(2015, 1, n).unwrap();
-        assert_eq!(habit.value_on(day(20)), Some(2.5), "every amount is kept");
-        assert_eq!(habit.value_on(day(21)), Some(1.0));
-        assert_eq!(habit.value_on(day(22)), Some(0.0));
-        assert_eq!(habit.marks.get(&day(20)), Some(&Mark::Yes), "met");
-        assert_eq!(habit.marks.get(&day(21)), None, "short of the target");
-        assert_eq!(habit.marks.get(&day(22)), None);
-        assert_eq!(habit.marks.get(&day(23)), Some(&Mark::Skip));
-    }
-
-    #[test]
-    fn an_old_at_most_measurable_habit_becomes_avoided_it() {
-        let habit = old_habit(
-            r#"
-            "kind":"measurable","unit":"cigarettes","target":7.0,"target_type":"at_most",
-            "frequency":{"interval":{"times":1,"days":7}},
-            "marks":{"2015-01-20":{"amount":1000},"2015-01-21":{"amount":3000}}"#,
-        );
-        assert_eq!(habit.kind, Kind::No);
-        assert_eq!(habit.frequency, Frequency::DAILY);
-        assert_eq!(habit.measure.as_ref().unwrap().days, 7);
-        let day = |n| NaiveDate::from_ymd_opt(2015, 1, n).unwrap();
-        assert_eq!(habit.marks.get(&day(20)), None, "within a day's share");
-        assert_eq!(habit.marks.get(&day(21)), Some(&Mark::Reps(1)));
-        assert_eq!(habit.value_on(day(21)), Some(3.0));
-    }
-
-    #[test]
-    fn a_week_long_target_counts_any_amount_as_doing_it() {
-        let habit = old_habit(
-            r#"
-            "kind":"measurable","target":20.0,
-            "frequency":{"interval":{"times":1,"days":7}},
-            "marks":{"2015-01-20":{"amount":1000}}"#,
-        );
-        let day = NaiveDate::from_ymd_opt(2015, 1, 20).unwrap();
-        assert_eq!(habit.marks.get(&day), Some(&Mark::Yes));
-    }
-
     #[test]
     fn a_saved_habit_with_a_measure_reads_back_the_same() {
         let mut habit = Habit::new("h", "Run");
@@ -2849,11 +2603,11 @@ mod tests {
     }
 
     #[test]
-    fn a_log_keeps_its_entries_and_reads_the_first_format() {
+    fn a_log_keeps_its_entries() {
         let day = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
         let mut habit: Habit = serde_json::from_str(
             r#"{"id":"h","name":"Smoke","kind":"no","marks":{"2026-11-05":{"reps":2}},
-                "log":{"2026-11-05":{"slipped":["20:05:00"]}}}"#,
+                "log":{"2026-11-05":{"happened":[{"at":"20:05:00"}]}}}"#,
         )
         .unwrap();
         let at = NaiveTime::from_hms_opt(20, 5, 0);

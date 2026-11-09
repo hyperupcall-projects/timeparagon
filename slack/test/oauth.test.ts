@@ -113,7 +113,7 @@ test("owner guard blocks commands, shortcuts, forms, and events before any liste
   type Args = { body: unknown; context: { ownerUserId?: string }; next: () => Promise<void>; ack: () => Promise<void>; respond: () => Promise<void> };
   let guard!: (args: Args) => Promise<void>;
   const app = { use(fn: typeof guard) { guard = fn; } } as unknown as App;
-  installOwnerGuard(app, true);
+  installOwnerGuard(app);
   for (const body of [{ user_id: "other" }, { user: { id: "other" }, message: { user: "U1" } }, { type: "view_submission", user: { id: "other" } }, { event: { user: "other" } }, {}]) {
     let called = false, acknowledged = false;
     await guard({ body, context: { ownerUserId: "U1" }, next: async () => { called = true; }, ack: async () => { acknowledged = true; }, respond: async () => {} });
@@ -128,13 +128,11 @@ test("owner guard blocks commands, shortcuts, forms, and events before any liste
   }
 });
 
-test("configuration preserves legacy mode and validates OAuth setup", () => {
-  const legacy = loadConfig({ SLACK_APP_TOKEN: "xapp-local", SLACK_BOT_TOKEN: "bot-local" });
-  assert.equal(legacy.botToken, "bot-local");
-  assert.equal(legacy.oauth, undefined);
-  const env = { SLACK_APP_TOKEN: "xapp-local", SLACK_REDIRECT_URI: config.redirectUri, SLACK_CLIENT_ID: "client", SLACK_CLIENT_SECRET: "secret" };
-  assert.equal(loadConfig(env).oauth?.port, 3000);
-  assert.equal(loadConfig(env).botToken, "");
+test("configuration requires OAuth and rotating app tokens", () => {
+  assert.throws(() => loadConfig({ SLACK_APP_TOKEN: "xapp-local", SLACK_BOT_TOKEN: "bot-local" }));
+  const env = { SLACK_APP_TOKEN: "xoxe.xapp-example", SLACK_APP_REFRESH_TOKEN: "refresh", SLACK_REDIRECT_URI: config.redirectUri, SLACK_CLIENT_ID: "client", SLACK_CLIENT_SECRET: "secret" };
+  assert.equal(loadConfig(env).oauth.port, 3000);
+  assert.throws(() => loadConfig({ ...env, SLACK_REDIRECT_URI: "" }));
   assert.throws(() => loadConfig({ ...env, SLACK_REDIRECT_URI: "http://example.org/slack/oauth/callback" }));
   assert.throws(() => loadConfig({ ...env, SLACK_OAUTH_PORT: "0" }));
   assert.throws(() => loadConfig({ ...env, SLACK_CLIENT_SECRET: "" }));

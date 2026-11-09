@@ -26,63 +26,6 @@ pub fn agent() -> &'static ureq::Agent {
     })
 }
 
-/// LEGACY_METADATA_COMPAT: move the old Calendar description footer into
-/// private extended properties on encounter. Unknown footer lines are retained.
-fn calendar_metadata_body(description: &str) -> Option<serde_json::Value> {
-    let footer = super::metadata_block(description)?;
-    let mut lines = footer.lines();
-    let kind = match lines.next()? {
-        "Type: Habit" => "habit",
-        "Type: Task" => "task",
-        "Type: Time Block" => "time_block",
-        _ => return None,
-    };
-    let mut body = serde_json::json!({
-        "description": super::description_notes(description),
-        "extendedProperties": { "private": { "ttKind": kind } }
-    });
-    let mut other = Vec::new();
-    for line in lines {
-        if let Some(link) = line.strip_prefix("Google Task: ") {
-            body["extendedProperties"]["private"]["ttTaskLink"] = link.into();
-        } else {
-            other.push(line);
-        }
-    }
-    if !other.is_empty() {
-        body["extendedProperties"]["private"]["ttLegacyFooter"] = other.join("\n").into();
-    }
-    Some(body)
-}
-
-fn migrate_calendar_metadata(
-    token: &str,
-    calendar_id: &str,
-    entry: &mut EventEntry,
-) -> Result<(), String> {
-    if entry.status.as_deref() == Some("cancelled") {
-        return Ok(());
-    }
-    let Some(mut body) = calendar_metadata_body(&entry.description) else {
-        return Ok(());
-    };
-    // Existing native properties are authoritative and unrelated keys survive.
-    if let Some(existing) = entry.extended_properties["private"].as_object() {
-        for (key, value) in existing {
-            body["extendedProperties"]["private"][key] = value.clone();
-        }
-    }
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(&entry.id)
-    );
-    super::scheduled::request("PATCH", &url, token, Some(&body)).map_err(|e| e.message)?;
-    entry.description = body["description"].as_str().unwrap().to_owned();
-    entry.extended_properties = body["extendedProperties"].clone();
-    Ok(())
-}
-
 fn append_notice(notice: &mut Option<String>, message: &str) {
     match notice {
         Some(existing) => {
@@ -244,12 +187,6 @@ pub fn fetch_range(
     // Every event TimeSlay writes lives on one calendar. Find it by name, or
     // create it the first time it is missing.
     let app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
-    let color_notice = app_calendar.as_deref().and_then(|id| {
-        let calendar = calendars.iter().find(|calendar| calendar.id == id)?;
-        reset_app_calendar_colors(access_token, id, calendar.color)
-            .err()
-            .map(|error| format!("Could not reset TimeSlay event colors: {error}"))
-    });
     // Task refresh and independent calendar requests overlap. Bound concurrency
     // so an account with many calendars does not open an unbounded worker pool.
     let _ = disabled;
@@ -276,9 +213,6 @@ pub fn fetch_range(
         Ok(tasks) => tasks,
         Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
     };
-    if let Some(message) = color_notice {
-        append_notice(&mut notice, &message);
-    }
     // Fetch app-owned task blocks independently of the day. This makes a task
     // scheduled on another day/device stay scheduled in Backlog and block views.
     let mut linked_calendars: std::collections::HashSet<String> = task_events
@@ -419,88 +353,6 @@ fn resolve_app_calendar(
     }
 }
 
-/// Clear redundant habit colors once per session, including series masters
-/// and exceptions outside the visible day. Failed repairs retry on the next sync.
-fn reset_app_calendar_colors(
-    access_token: &str,
-    calendar_id: &str,
-    calendar_color: Color,
-) -> Result<(), String> {
-    static RESET: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
-        std::sync::Mutex::new(None);
-    let mut guard = RESET
-        .lock()
-        .map_err(|_| "Calendar color cleanup unavailable")?;
-    let calendars = guard.get_or_insert_with(Default::default);
-    if calendars.contains(calendar_id) {
-        return Ok(());
-    }
-    reset_calendar_colors_with(calendar_id, calendar_color, |method, url, body| {
-        super::scheduled::request(method, url, access_token, body).map_err(|error| error.message)
-    })?;
-    calendars.insert(calendar_id.to_owned());
-    Ok(())
-}
-
-fn reset_calendar_colors_with(
-    calendar_id: &str,
-    calendar_color: Color,
-    mut request: impl FnMut(&str, &str, Option<&serde_json::Value>) -> Result<serde_json::Value, String>,
-) -> Result<(), String> {
-    let collection = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
-    let mut page_token: Option<String> = None;
-    let mut entries = Vec::new();
-    loop {
-        // Do not expand recurring series: reset their masters and any explicit
-        // exceptions, without creating an override on every occurrence.
-        let mut url = format!("{collection}?singleEvents=false&maxResults=2500");
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
-        let page = request("GET", &url, None)?;
-        entries.extend(page["items"].as_array().into_iter().flatten().cloned());
-        page_token = page["nextPageToken"].as_str().map(str::to_owned);
-        if page_token.is_none() {
-            break;
-        }
-    }
-    // Collect masters across all pages before examining their exceptions.
-    let is_habit = |entry: &serde_json::Value| {
-        entry["extendedProperties"]["private"]["ttKind"].as_str() == Some("habit")
-            || entry["description"]
-                .as_str()
-                .and_then(calendar_metadata_body)
-                .is_some_and(|body| body["extendedProperties"]["private"]["ttKind"] == "habit")
-    };
-    let habits: std::collections::HashSet<&str> = entries
-        .iter()
-        .filter(|entry| is_habit(entry))
-        .filter_map(|entry| entry["id"].as_str())
-        .collect();
-    // Only redundant habit overrides are removed. Distinct event colors and
-    // all other event kinds remain under the user's control in Google.
-    for entry in &entries {
-        let habit = is_habit(entry)
-            || entry["recurringEventId"]
-                .as_str()
-                .is_some_and(|id| habits.contains(id));
-        let color = entry["colorId"].as_str().and_then(colors::event);
-        if habit
-            && entry["status"].as_str() != Some("cancelled")
-            && color == Some(calendar_color)
-            && let Some(id) = entry["id"].as_str()
-        {
-            request(
-                "PATCH",
-                &format!("{collection}/{}", urlencoding::encode(id)),
-                Some(&serde_json::json!({"colorId": null})),
-            )?;
-        }
-    }
-    Ok(())
-}
-
 fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
     let mut list: CalendarList = get(CALENDAR_LIST, access_token)?;
     while let Some(token) = list.next_page_token.take() {
@@ -574,7 +426,7 @@ fn fetch_events(
 
         for mut entry in list.items {
             entry.options.default_reminders = list.default_reminders.clone();
-            migrate_calendar_metadata(access_token, &calendar.id, &mut entry)?;
+
             if entry.status.as_deref() == Some("cancelled") {
                 continue;
             }
@@ -697,7 +549,7 @@ fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec
         let page: EventList = get(&url, access_token)?;
         for mut entry in page.items {
             entry.options.default_reminders = page.default_reminders.clone();
-            migrate_calendar_metadata(access_token, &calendar.id, &mut entry)?;
+
             if entry.status.as_deref() != Some("cancelled")
                 && let Some(event) = parse_event(entry, calendar, crate::clock::now().date_naive())
             {
@@ -777,7 +629,7 @@ pub fn fetch_habit_listing(
         let page: EventList = get(&url, access_token)?;
         for mut entry in page.items {
             entry.options.default_reminders = page.default_reminders.clone();
-            migrate_calendar_metadata(access_token, &calendar_id, &mut entry)?;
+
             if entry.status.as_deref() == Some("cancelled") {
                 continue;
             }
@@ -928,7 +780,7 @@ pub fn habit_body(
     };
     let mut body = serde_json::json!({
         "summary": title,
-        "description": super::event_description(notes, "Habit", &[]),
+        "description": super::event_description(notes),
         "start": time(start),
         "end": time(end),
         "extendedProperties": { "private": { "ttKind": "habit" } },
@@ -950,7 +802,7 @@ fn parse_habit(entry: EventEntry, calendar_id: &str) -> Option<HabitEvent> {
     let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
     let end = parse_date_time(entry.end.as_ref()?.date_time.as_deref()?)?;
     let notes = plain_text(&entry.description);
-    let notes = super::description_notes(&notes);
+    let notes = notes.as_str();
     Some(HabitEvent {
         id: entry.id,
         calendar_id: calendar_id.to_owned(),
@@ -1582,7 +1434,7 @@ fn notifies_guests(
         || draft.title != original.title
         || draft.start != original.start
         || draft.end != original.end
-        || description != super::description_notes(&original.details.description);
+        || description != original.details.description.as_str();
     // A guest who may only invite others still has to reach those they invite.
     draft.meeting.notify
         && (draft.meeting.can_manage || written.guests_changed)
@@ -2891,60 +2743,6 @@ mod tests {
     }
 
     #[test]
-    fn color_cleanup_covers_all_pages_masters_and_exceptions_only_on_app_calendar() {
-        let mut calls = Vec::new();
-        super::reset_calendar_colors_with("app@example.com", super::colors::event("4").unwrap(), |method, url, body| {
-            assert!(url.starts_with(&format!("{}/app%40example.com/events", super::EVENTS)));
-            calls.push((method.to_owned(), url.to_owned()));
-            if method == "GET" {
-                assert!(body.is_none());
-                assert!(url.contains("singleEvents=false"));
-                assert!(!url.contains("timeMin"));
-                if url.contains("pageToken=") {
-                    assert!(url.contains("pageToken=next%2Fpage"));
-                    return Ok(serde_json::json!({"items": [
-                        {"id": "exception", "recurringEventId": "master", "colorId": "4"},
-                        {"id": "deleted", "status": "cancelled", "colorId": "4", "extendedProperties": {"private": {"ttKind": "habit"}}}
-                    ]}));
-                }
-                return Ok(serde_json::json!({"nextPageToken": "next/page", "items": [
-                    {"id": "master", "recurrence": ["RRULE:FREQ=DAILY"], "colorId": "4", "extendedProperties": {"private": {"ttKind": "habit"}}},
-                    {"id": "plain", "colorId": "4"},
-                    {"id": "distinct-habit", "colorId": "9", "extendedProperties": {"private": {"ttKind": "habit"}}},
-                    {"id": "default"}
-                ]}));
-            }
-            assert_eq!(body, Some(&serde_json::json!({"colorId": null})));
-            Ok(serde_json::json!({}))
-        })
-        .unwrap();
-        assert_eq!(
-            calls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(),
-            ["GET", "GET", "PATCH", "PATCH"]
-        );
-        assert!(calls[2].1.ends_with("/master"));
-        assert!(calls[3].1.ends_with("/exception"));
-    }
-
-    #[test]
-    fn color_cleanup_reports_write_failures_for_retry() {
-        let result = super::reset_calendar_colors_with(
-            "app",
-            super::colors::event("4").unwrap(),
-            |method, _, _| {
-                if method == "GET" {
-                    Ok(
-                        serde_json::json!({"items": [{"id": "event", "colorId": "4", "extendedProperties": {"private": {"ttKind": "habit"}}}]}),
-                    )
-                } else {
-                    Err("write failed".to_owned())
-                }
-            },
-        );
-        assert_eq!(result, Err("write failed".to_owned()));
-    }
-
-    #[test]
     fn queued_event_edits_neither_export_defaults_nor_clear_google_colors() {
         let event = super::super::sample_snapshot().events.remove(0);
         for color in [None, Some("5")] {
@@ -3018,19 +2816,6 @@ mod tests {
     }
 
     use super::*;
-
-    #[test]
-    fn legacy_calendar_footers_move_to_native_properties_without_touching_prose() {
-        let notes = "Human notes\n---\nordinary prose\n---\nType: Task\nGoogle Task: https://tasks.google.com/task/one\nOther: keep me";
-        let body = calendar_metadata_body(notes).unwrap();
-        assert_eq!(body["description"], "Human notes\n---\nordinary prose");
-        let p = &body["extendedProperties"]["private"];
-        assert_eq!(p["ttKind"], "task");
-        assert_eq!(p["ttTaskLink"], "https://tasks.google.com/task/one");
-        assert_eq!(p["ttLegacyFooter"], "Other: keep me");
-        assert!(calendar_metadata_body(body["description"].as_str().unwrap()).is_none());
-        assert!(calendar_metadata_body("Human notes\n---\nordinary prose").is_none());
-    }
 
     #[test]
     fn descriptions_keep_html_link_targets_and_line_breaks() {

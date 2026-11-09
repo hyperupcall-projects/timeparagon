@@ -4,31 +4,20 @@
 //! Tasks and cached calendar months have tables of their own. The rest are JSON
 //! documents, one per kind of data, named in [`keys`].
 //!
-//! LEGACY_METADATA_COMPAT: unexported SQLite rows are migration sources only.
-//! This marker covers the old inline JSON, `ttid:` ids and SQLite-only metadata.
-//! It can all go once every device has synced a build that writes metadata to
-//! Google, and no task notes in the user's account start with `ttid:`.
 use crate::calendar::ids;
-use crate::{
-    calendar::Event,
-    timeblocking::{Metadata, legacy_id, legacy_metadata},
-};
+use crate::{calendar::Event, timeblocking::Metadata};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::Once,
     time::Duration,
 };
-
-mod legacy_files;
 
 /// The names of the documents in the database.
 pub mod keys {
     pub const HABITS: &str = "habits";
     pub const ALARMS: &str = "alarms";
-    pub const NOTES: &str = "notes";
     pub const CONTACTS: &str = "contacts";
     pub const ROUTES: &str = "routes";
     pub const SYNC_STATE: &str = "calendar_sync_state";
@@ -40,38 +29,16 @@ pub mod keys {
 pub struct TaskData {
     pub id: i64,
     pub metadata: Metadata,
-    // Preserve keys already used by work sessions, including in remote metadata.
-    pub legacy_key: Option<String>,
 }
 
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
-/// Version 1 is everything before versioning, which older builds still create
-/// with `IF NOT EXISTS`. A change to the schema bumps this and adds an
-/// idempotent step to [`Database::set_up`]; steps must stay additive, because
-/// an older build can still be running against the same file.
-pub const SCHEMA_VERSION: i64 = 2;
+/// Schema changes are applied transactionally by [`Database::set_up`].
+pub const SCHEMA_VERSION: i64 = 3;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
     db.query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| e.to_string())
-}
-
-/// `ALTER TABLE … ADD COLUMN`, skipped when the column is already there.
-fn add_column(db: &Connection, table: &str, column: &str, definition: &str) -> Result<(), String> {
-    let exists = db
-        .prepare(&format!(
-            "SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1"
-        ))
-        .and_then(|mut q| q.exists([column]))
-        .map_err(|e| e.to_string())?;
-    if !exists {
-        db.execute_batch(&format!(
-            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
-        ))
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 pub struct Database(Connection);
@@ -96,7 +63,24 @@ impl Database {
         // Setting up the schema is most of the cost of opening, and the apps
         // open the database many times a minute. Once a file has been brought
         // to the current version it is not set up again.
-        if memory || schema_version(&db)? < SCHEMA_VERSION {
+        let version = schema_version(&db)?;
+        if version != 0 && version != SCHEMA_VERSION {
+            return Err(format!(
+                "Unsupported database schema {version}; expected {SCHEMA_VERSION}"
+            ));
+        }
+        if version == 0
+            && db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='tasks') AND (SELECT count(*) FROM pragma_table_info('tasks')) != 2",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+        {
+            return Err("Unversioned task databases are no longer supported".into());
+        }
+        if memory || version == 0 {
             Self::set_up(&db, path, memory)?;
         }
         Ok(Self(db))
@@ -112,44 +96,22 @@ impl Database {
         tx.execute_batch("
             CREATE TABLE IF NOT EXISTS counter (singleton INTEGER PRIMARY KEY CHECK(singleton=1), next_id INTEGER NOT NULL CHECK(next_id >= 100));
             INSERT OR IGNORE INTO counter VALUES (1,100);
-            CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL, legacy_key TEXT UNIQUE);
+            CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_records (id TEXT PRIMARY KEY, event TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
             CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT);
+            CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT);
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
-        // Version 2: queued edits carry a payload version and can fail for
-        // good; observed Google snapshots can be pruned; change counters.
-        add_column(
-            &tx,
-            "google_operations",
-            "version",
-            "INTEGER NOT NULL DEFAULT 1",
-        )?;
-        add_column(&tx, "google_operations", "dead_at", "TEXT")?;
-        add_column(&tx, "google_entities", "observed_at", "TEXT")?;
         crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
 
         if !memory {
-            let enrolled = db
-                .query_row(
-                    "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_alarms_v1'",
-                    [],
-                    |_| Ok(()),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .is_some();
-            // Its own connection and transaction, so it runs after ours ends.
-            if !enrolled {
-                crate::database_sync::enroll(path).map_err(|e| e.to_string())?;
-            }
+            crate::database_sync::enroll(path).map_err(|e| e.to_string())?;
             crate::database_sync::install_snapshots(db).map_err(|e| e.to_string())?;
             // Readers no longer wait on a writer, so a poll on the UI thread
             // cannot stall behind the sync worker's transaction. The mode is
@@ -235,7 +197,6 @@ impl Database {
             self.cache_remote(event, &data)?;
             return Ok(data);
         }
-        // LEGACY_METADATA_COMPAT: consult SQLite/inline notes only without a remote footer.
         self.import_inner(event).map_err(|e| e.to_string())
     }
     fn import_inner(&mut self, event: &Event) -> rusqlite::Result<TaskData> {
@@ -243,19 +204,8 @@ impl Database {
             .0
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let source = crate::timeblocking::block_key(event);
-        let legacy = legacy_id(&event.details.description);
-        let existing = tx.query_row("SELECT t.id,t.metadata,t.legacy_key FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
+        let existing = tx.query_row("SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
             [&source], read_data).optional()?;
-        let existing = match (existing, legacy.as_ref()) {
-            (None, Some(key)) => tx
-                .query_row(
-                    "SELECT id,metadata,legacy_key FROM tasks WHERE legacy_key=?1",
-                    [key],
-                    read_data,
-                )
-                .optional()?,
-            (value, _) => value,
-        };
         let data = if let Some(data) = existing {
             data
         } else {
@@ -290,18 +240,14 @@ impl Database {
             };
             // Refuse overflow rather than wrapping or switching to random IDs.
             let next = id.checked_add(1).ok_or(rusqlite::Error::InvalidQuery)?;
-            let metadata = legacy_metadata(&event.details.description);
+            let metadata = Metadata::default();
             let json = serde_json::to_string(&metadata).expect("metadata serializes");
             tx.execute(
-                "INSERT INTO tasks VALUES (?1,?2,?3)",
-                params![id, json, legacy],
+                "INSERT INTO tasks(id,metadata) VALUES (?1,?2)",
+                params![id, json],
             )?;
             tx.execute("UPDATE counter SET next_id=?1 WHERE singleton=1", [next])?;
-            TaskData {
-                id,
-                metadata,
-                legacy_key: legacy,
-            }
+            TaskData { id, metadata }
         };
         tx.execute(
             "INSERT INTO task_aliases VALUES (?1,?2) ON CONFLICT(source) DO NOTHING",
@@ -312,7 +258,7 @@ impl Database {
     }
 
     pub fn lookup(&self, event: &Event) -> Result<Option<TaskData>, String> {
-        self.0.query_row("SELECT t.id,t.metadata,t.legacy_key FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
+        self.0.query_row("SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
             [crate::timeblocking::block_key(event)], read_data).optional().map_err(|e| e.to_string())
     }
 
@@ -337,7 +283,7 @@ impl Database {
         (|| -> rusqlite::Result<()> {
             let tx = self.0.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let json = serde_json::to_string(&data.metadata).expect("metadata serializes");
-            tx.execute("INSERT INTO tasks (id,metadata,legacy_key) VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata,legacy_key=excluded.legacy_key", params![data.id,json,data.legacy_key])?;
+            tx.execute("INSERT INTO tasks (id,metadata) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata", params![data.id,json])?;
             let next = data.id.checked_add(1).ok_or(rusqlite::Error::InvalidQuery)?;
             tx.execute("UPDATE counter SET next_id=max(next_id,?1) WHERE singleton=1", [next])?;
             tx.execute("INSERT INTO task_aliases VALUES (?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id", params![crate::timeblocking::block_key(event),data.id])?;
@@ -353,65 +299,16 @@ fn read_data(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskData> {
     Ok(TaskData {
         id: row.get(0)?,
         metadata,
-        legacy_key: row.get(2)?,
     })
 }
 
-/// The database on this device, with whatever older builds left in files
-/// already moved into it.
+/// The database on this device.
 pub fn path() -> Option<PathBuf> {
-    static IMPORT: Once = Once::new();
-    let directories = crate::config::project_dirs()?;
-    let path = directories.data_local_dir().join("timeslay.sqlite3");
-    IMPORT.call_once(|| {
-        if let Err(error) = rename_from_tasks(&path) {
-            log::warn!("could not rename tasks.sqlite3: {error}");
-        }
-        let legacy = legacy_files::Directories {
-            config: directories.config_dir().to_owned(),
-            data: directories.data_dir().to_owned(),
-            state: directories.state_dir().map(Path::to_owned),
-            cache: directories.cache_dir().to_owned(),
-        };
-        if let Err(error) = legacy_files::import(&path, &legacy) {
-            log::warn!("could not import older local files: {error}");
-        }
-        let config = directories.config_dir().join("config.toml");
-        if let Err(error) = crate::shared_data::adopt(&config, &path) {
-            log::warn!("could not move shared data out of config.toml: {error}");
-        }
-    });
-    Some(path)
-}
-
-/// Older builds called the database `tasks.sqlite3`. It is renamed, and on
-/// Unix the old name is left as a link to the new one, so an older build still
-/// running opens the same database rather than starting an empty one. SQLite
-/// names a database's journal after the file a link points to, so the two
-/// builds also agree on where the journal is.
-fn rename_from_tasks(path: &Path) -> io::Result<()> {
-    let old = path.with_file_name("tasks.sqlite3");
-    let is_file = std::fs::symlink_metadata(&old).is_ok_and(|metadata| metadata.is_file());
-    if !is_file || std::fs::symlink_metadata(path).is_ok() {
-        return Ok(());
-    }
-    // A journal left by a crash must follow its database, or the
-    // transaction it would roll back is lost.
-    let journal = old.with_file_name("tasks.sqlite3-journal");
-    if journal.exists() {
-        std::fs::rename(&journal, path.with_file_name("timeslay.sqlite3-journal"))?;
-    }
-    match std::fs::rename(&old, path) {
-        // Another process just did it.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        result => result?,
-    }
-    #[cfg(unix)]
-    match std::os::unix::fs::symlink("timeslay.sqlite3", &old) {
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        result => result?,
-    }
-    Ok(())
+    Some(
+        crate::config::project_dirs()?
+            .data_local_dir()
+            .join("timeslay.sqlite3"),
+    )
 }
 
 pub fn open() -> Result<Database, String> {
@@ -499,50 +396,6 @@ mod tests {
         event
     }
     #[test]
-    fn persistent_ids_and_migration_preserve_metadata_and_history() {
-        let path = path("migration");
-        let mut db = Database::open(&path).unwrap();
-        let mut original = event("old");
-        original.details.description = "Human notes\ntt-timeblocking: {\"minutes\":45,\"block\":\"work/block\",\"order\":9}\nttid: 12345678-1234-4234-8234-123456789abc".into();
-        let mut data = db.import(&original).unwrap();
-        assert!(data.id >= 100);
-        let original_id = data.id;
-        assert_eq!(data.metadata.minutes, 45);
-        assert_eq!(
-            data.legacy_key.as_deref(),
-            Some("12345678-1234-4234-8234-123456789abc")
-        );
-        assert_eq!(db.import(&original).unwrap(), data);
-        let mut moved = event("new");
-        moved.calendar_id = "tasks:destination".into();
-        data.metadata.minutes = 90;
-        db.save(&moved, &data).unwrap();
-        drop(db);
-        let mut db = Database::open(&path).unwrap();
-        assert_eq!(db.import(&moved).unwrap(), data);
-        assert_eq!(db.import(&original).unwrap(), data); // stale notes cannot overwrite local edits
-        let another_id = db.import(&event("another")).unwrap().id;
-        assert_ne!(another_id, original_id);
-        // A rolled-back transaction must not publish a task.
-        {
-            let tx =
-                db.0.transaction_with_behavior(TransactionBehavior::Immediate)
-                    .unwrap();
-            tx.execute("INSERT INTO tasks VALUES(5000,'{}',NULL)", [])
-                .unwrap();
-        }
-        assert_eq!(
-            db.0.query_row("SELECT count(*) FROM tasks WHERE id=5000", [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-        let after_rollback = db.import(&event("after-rollback")).unwrap().id;
-        assert_ne!(after_rollback, original_id);
-        assert_ne!(after_rollback, another_id);
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-    #[test]
     fn documents_round_trip_and_bad_contents_are_an_error() {
         let path = path("documents");
         assert_eq!(read_document::<String>(&path, "a").unwrap(), None);
@@ -573,35 +426,6 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-    #[test]
-    fn the_old_name_is_renamed_and_still_leads_to_the_database() {
-        let directory = tempfile::tempdir().unwrap();
-        let old = directory.path().join("tasks.sqlite3");
-        let path = directory.path().join("timeslay.sqlite3");
-        let mut db = Database::open(&old).unwrap();
-        let data = db.import(&event("kept")).unwrap();
-        drop(db);
-
-        rename_from_tasks(&path).unwrap();
-        rename_from_tasks(&path).unwrap();
-
-        assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
-        assert_eq!(
-            Database::open(&path)
-                .unwrap()
-                .lookup(&event("kept"))
-                .unwrap(),
-            Some(data.clone())
-        );
-        // An older build opening the old name reaches the same rows.
-        assert_eq!(
-            Database::open(&old)
-                .unwrap()
-                .lookup(&event("kept"))
-                .unwrap(),
-            Some(data)
-        );
     }
     #[test]
     fn allocator_process() {

@@ -43,10 +43,10 @@ export TIMESLAY_BIN="$PWD/target/release/timeslay"
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From a
    manifest**.
 2. Pick your workspace and paste `manifest.yaml` from this directory.
-3. **Install App** → install to the workspace. Copy the **Bot User OAuth
-   Token** (`xoxb-…`).
+3. Configure the OAuth installation endpoint described below. Each workspace
+   connects through OAuth and stores its own bot token.
 4. **Basic Information** → **App-Level Tokens** → generate a token with the
-   `connections:write` scope. For a rotating token, copy **both** the access
+   `connections:write` scope. Copy **both** the rotating access
    token (`xoxe.xapp-…`) and refresh token when shown; Slack shows them only once.
 5. **Basic Information** → **App Credentials** → copy the client ID and client
    secret. These are required to refresh the app-level token.
@@ -63,9 +63,8 @@ npm start
 `npm start` runs `src/app.ts` with `node --experimental-strip-types`. There is
 no compile step: `.ts` files run as-is.
 
-Leave it running while you use Slack. Socket Mode needs no public URL or
-tunnel for normal operation. Connecting multiple workspaces uses an HTTPS
-installation endpoint, described below.
+Leave it running while you use Slack. Socket Mode receives events over its own connection. Connecting workspaces
+uses the HTTPS installation endpoint described below.
 
 For automatic startup, run `packaging/install.sh` from the repository root.
 It installs and enables the **`timeslay-slack.service`** systemd user service,
@@ -79,7 +78,7 @@ logs, and uninstall behavior.
 ### App-level token rotation
 
 Set `SLACK_APP_TOKEN`, `SLACK_APP_REFRESH_TOKEN`, `SLACK_CLIENT_ID`, and
-`SLACK_CLIENT_SECRET` in `.env` alongside `SLACK_BOT_TOKEN`. The app calls
+`SLACK_CLIENT_SECRET` in `.env`. The app calls
 `oauth.v2.access` with `grant_type=refresh_token` on its first startup and
 then refreshes five minutes before expiration, using Slack's `expires_in`.
 It reconnects Socket Mode with each replacement access token.
@@ -126,8 +125,7 @@ use the same connection link once per workspace.
    # SLACK_OAUTH_PORT=3000
    ```
 
-   Keep `SLACK_APP_TOKEN` and any app-level refresh settings. `SLACK_BOT_TOKEN`
-   is ignored in this mode. Restart `npm start` or the installed
+   Keep `SLACK_APP_TOKEN` and its app-level refresh settings. Restart `npm start` or the installed
    `timeslay-slack.service` after upgrading it with `packaging/install.sh`.
 5. Open the **private connection link** printed at startup. For the service:
 
@@ -160,10 +158,6 @@ an existing workspace's owner. To disconnect a workspace, stop the bridge,
 uninstall the app from that workspace in Slack, remove its entry from the
 installation file, then restart. Enterprise organization-wide installation and
 rotating **bot** tokens are not supported by this personal bridge.
-
-Without `SLACK_REDIRECT_URI`, the original single-workspace configuration
-continues to work. Set `SLACK_ALLOWED_USER_ID` to your Slack member ID to restrict
-that mode to your account too (Slack profile → **⋯ → Copy member ID**).
 
 See [Slack's distribution guide](https://docs.slack.dev/app-management/distribution/)
 and [OAuth guide](https://docs.slack.dev/authentication/installing-with-oauth/).

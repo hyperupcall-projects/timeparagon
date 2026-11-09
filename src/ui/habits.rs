@@ -2982,31 +2982,6 @@ mod tests {
     }
 
     #[test]
-    fn an_old_habit_event_becomes_a_habit_with_its_history_once() {
-        let mut state = state();
-        let day = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap();
-        let listing = vec![
-            series("one", "Stretch", "RRULE:FREQ=WEEKLY;BYDAY=MO", None),
-            series("two", " stretch ", "RRULE:FREQ=DAILY", None),
-        ];
-        load(&mut state, listing.clone(), vec![("one", day)]);
-        let library = &state.habits.library;
-        assert_eq!(library.habits.len(), 1, "same name, same habit");
-        let habit = &library.habits[0];
-        assert_eq!(habit.name, "Stretch");
-        assert_eq!(habit.frequency.label(), "Every Monday");
-        assert_eq!(habit.marks[&day], Mark::Reps(1));
-        let id = habit.id.clone();
-        assert_eq!(state.habits.events_of(&id).len(), 2);
-
-        // Deleting the habit keeps its events unclaimed on the next load.
-        act(&mut state, Action::Deleted(id, Ok(())));
-        load(&mut state, listing, vec![("one", day)]);
-        assert!(state.habits.library.habits.is_empty());
-        assert_eq!(state.habits.unlinked_events().len(), 2);
-    }
-
-    #[test]
     fn one_habit_holds_any_number_of_events_and_an_unknown_link_restores_it() {
         let mut state = state();
         add(&mut state, "h", "Run");

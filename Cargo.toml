@@ -83,7 +83,7 @@ debug = "line-tables-only"
 
 # Third-party crates are the bulk of the graph and of its DWARF, and we almost
 # never step through them. The `"*"` wildcard does not cover workspace members,
-# so `timeslay`, `timeslay-core`, `dioxus` and `migrate` keep their debug info.
+# so `timeslay`, `timeslay-core`, and `dioxus` keep their debug info.
 [profile.dev.package."*"]
 debug = false
 
@@ -144,7 +144,7 @@ iced_test = "0.14"
 # separate crate beside it rather than a replacement, so the two can be built
 # and run independently.
 [workspace]
-members = ["core", "dioxus", "migrate"]
+members = ["core", "dioxus"]
 default-members = [".", "core"]
 # The vendored iced_winit is patched in as a dependency, not built as a
 # workspace member of its own.

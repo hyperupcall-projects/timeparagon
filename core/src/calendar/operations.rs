@@ -66,7 +66,6 @@ pub enum Job {
         end: DateTime<Local>,
         recurrence: Vec<String>,
         projects: Vec<u64>,
-        #[serde(default)]
         all_day: bool,
         options: Option<event_options::EventOptions>,
         meeting: Option<meeting::Form>,
@@ -346,8 +345,8 @@ fn enqueue_tx(
             }
             if let Some(data) = &event.details.task_data {
                 tx.execute(
-                    "INSERT INTO tasks(id,metadata,legacy_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
-                    params![data.id, serde_json::to_string(&data.metadata).unwrap(), data.legacy_key],
+                    "INSERT INTO tasks(id,metadata) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
+                    params![data.id, serde_json::to_string(&data.metadata).unwrap()],
                 )?;
                 tx.execute(
                     "INSERT INTO task_aliases(source,task_id) VALUES(?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id",
@@ -1809,7 +1808,7 @@ mod tests {
         assert_eq!(entities(&path), 0);
     }
     #[test]
-    fn queued_creation_keeps_all_day_and_loads_older_timed_jobs() {
+    fn queued_creation_requires_an_explicit_all_day_flag() {
         let event = super::super::sample_snapshot().events.remove(0);
         let job = Job::Create {
             id: event.id,
@@ -1830,8 +1829,7 @@ mod tests {
         assert!(matches!(restored, Job::Create { all_day: true, .. }));
 
         value["Create"].as_object_mut().unwrap().remove("all_day");
-        let legacy: Job = serde_json::from_value(value).unwrap();
-        assert!(matches!(legacy, Job::Create { all_day: false, .. }));
+        assert!(serde_json::from_value::<Job>(value).is_err());
     }
     #[test]
     fn restart_and_stale_google_data_preserve_the_latest_local_edit() {

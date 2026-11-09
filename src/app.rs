@@ -1331,9 +1331,7 @@ fn boot_state() -> State {
     state.calendar.apply_task_colors(&state.config.calendar);
     let database = crate::task_db::path();
     state.calendar.cache_days_in(database.clone());
-    state
-        .notes
-        .go_live(timeslay_core::notes::directory(), database.as_deref());
+    state.notes.go_live(timeslay_core::notes::directory());
     state.people.go_live(database.clone());
     state.travel.cache_in(database.clone());
 
@@ -2431,16 +2429,7 @@ fn remember_app_calendar(state: &mut State, snapshot: &calendar::Snapshot) -> bo
         !calendar.is_task_list()
             && calendar.name == crate::config::CalendarSettings::APP_CALENDAR_NAME
     };
-    let legacy = |calendar: &&calendar::Calendar| {
-        !calendar.is_task_list()
-            && crate::config::CalendarSettings::is_app_calendar_name(&calendar.name)
-    };
-    // The canonical name wins; a former name is used until it is migrated.
-    let found = snapshot
-        .calendars
-        .iter()
-        .find(app)
-        .or_else(|| snapshot.calendars.iter().find(legacy));
+    let found = snapshot.calendars.iter().find(app);
     match found {
         Some(app) if state.config.calendar.app_calendar.as_deref() != Some(app.id.as_str()) => {
             state.config.calendar.app_calendar = Some(app.id.clone());

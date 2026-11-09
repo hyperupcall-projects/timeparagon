@@ -97,11 +97,6 @@ fn stage(directory: &Path) -> io::Result<(tempfile::TempDir, BTreeMap<String, St
     Ok((scratch, before))
 }
 
-pub(super) fn claim_identical(library: &mut Library, directory: &Path) -> io::Result<()> {
-    let (scratch, _) = stage(directory)?;
-    files::claim_identical(library, scratch.path())
-}
-
 pub(super) fn save(library: &Library, directory: &Path) -> io::Result<Saved> {
     let (scratch, before) = stage(directory)?;
     let saved = files::write(library, scratch.path())?;

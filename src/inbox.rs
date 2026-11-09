@@ -493,7 +493,6 @@ fn blank_event() -> Event {
             task_data: Some(task_db::TaskData {
                 id: 0,
                 metadata: tb::Metadata::default(),
-                legacy_key: None,
             }),
             ..Default::default()
         },
@@ -1309,7 +1308,6 @@ mod tests {
         for (event, created_at, updated_at) in [(&mut a, early, late), (&mut b, late, early)] {
             event.details.task_data = Some(task_db::TaskData {
                 id: 100,
-                legacy_key: None,
                 metadata: tb::Metadata {
                     created_at: Some(created_at),
                     ..Default::default()
@@ -1355,7 +1353,6 @@ mod tests {
         let mut blocked = task("blocked", "projects", today);
         blocked.details.task_data = Some(task_db::TaskData {
             id: 101,
-            legacy_key: None,
             metadata: tb::Metadata {
                 block: Some("block".into()),
                 ..Default::default()
@@ -1365,7 +1362,6 @@ mod tests {
         let link = calendar::scheduled::Link::new("calendar".into(), &scheduled).unwrap();
         scheduled.details.task_data = Some(task_db::TaskData {
             id: 102,
-            legacy_key: None,
             metadata: tb::Metadata {
                 schedule: Some(link),
                 ..Default::default()
@@ -1374,7 +1370,6 @@ mod tests {
         let mut ignored = task("ignored", "inbox", today);
         ignored.details.task_data = Some(task_db::TaskData {
             id: 103,
-            legacy_key: None,
             metadata: tb::Metadata {
                 ignored: true,
                 ..Default::default()
@@ -1414,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn overdue_includes_past_dates_and_times_across_lists_but_only_active_tasks() {
+    fn overdue_requires_an_explicit_deadline_across_lists() {
         let mut state = state();
         let today = day("2026-10-30");
         let now = calendar::at_clock(today, 12, 0);
@@ -1437,7 +1432,6 @@ mod tests {
         let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());
         ignored.details.task_data = Some(task_db::TaskData {
             id: 101,
-            legacy_key: None,
             metadata: tb::Metadata {
                 ignored: true,
                 ..Default::default()
@@ -1465,11 +1459,11 @@ mod tests {
                 .iter()
                 .map(|t| t.title.as_str())
                 .collect::<Vec<_>>(),
-            ["deadline", "timed", "yesterday"]
+            ["deadline"]
         );
-        // Crossing midnight includes yesterday's date-only task.
+        // A planning date never becomes a deadline at midnight.
         assert!(
-            overdue_tasks_at(&state, calendar::at_clock(today.succ_opt().unwrap(), 0, 0))
+            !overdue_tasks_at(&state, calendar::at_clock(today.succ_opt().unwrap(), 0, 0))
                 .iter()
                 .any(|task| task.title == "today")
         );
@@ -1497,7 +1491,6 @@ mod tests {
         let mut data = crate::task_db::TaskData {
             id: 100,
             metadata: Default::default(),
-            legacy_key: None,
         };
         data.metadata.block = Some("work/block".into());
         blocked.details.task_data = Some(data);

@@ -129,9 +129,6 @@ if [ -x "$sync_built" ]; then
     sync_installed=1
 fi
 
-# Earlier versions installed separate panel and dock binaries. They are now
-# modes of the one binary (--sidebar, --dock, --daemon).
-rm -f "$bin_dir/timeslay-panel" "$bin_dir/timeslay-dock"
 
 # Retire the browser helpers that earlier versions installed.
 rm -f "$bin_dir/keep-bridge" "$bin_dir/tasks-bridge"
@@ -216,12 +213,6 @@ if [ ! -f "$slack_env" ]; then
     say "Slack setup: copy $slack_config/.env.example to $slack_env and fill in the credentials."
     say "Then run: systemctl --user start timeslay-slack.service"
 fi
-
-# The shortcut daemon used to be the separate timeslay-panel.service.
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user disable --now timeslay-panel.service >/dev/null 2>&1 || true
-fi
-rm -f "$unit_dir/timeslay-panel.service"
 
 # --- Pin the panel with a KWin window rule --------------------------------
 # A Wayland client cannot position or raise its own window, so the panel is

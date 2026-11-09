@@ -1,6 +1,6 @@
 //! Verified, non-destructive database snapshots used before sync enrollment.
 //! Opens the source read-only: calling the app's normal database opener here
-//! would run legacy migrations before we have a backup.
+//! would initialize or change storage before we have a backup.
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

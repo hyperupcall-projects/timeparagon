@@ -713,7 +713,6 @@ pub fn schedule_with(
     // this reservation even if a later API call fails.
     link.calendar_id = destination_calendar;
     // Google uses the calendar default; task colors belong to the local UI.
-    link.color_id = None;
     link.pending = true;
     link.block = data.metadata.block.clone();
     link.order = data.metadata.order;
