@@ -1,9 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 export type Config = {
-  botToken: string;
-  allowedUserId?: string;
-  oauth?: {
+  oauth: {
     clientId: string;
     clientSecret: string;
     redirectUri: string;
@@ -11,7 +9,7 @@ export type Config = {
     installationsFile: string;
   };
   appToken: string;
-  appRotation?: {
+  appRotation: {
     refreshToken: string;
     clientId: string;
     clientSecret: string;
@@ -45,13 +43,13 @@ function timeout(env: NodeJS.ProcessEnv): number {
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const appToken = required(env, "SLACK_APP_TOKEN");
-  const refreshToken = env.SLACK_APP_REFRESH_TOKEN?.trim();
-  if (appToken.startsWith("xoxe.") && !refreshToken) {
-    throw new Error("Rotating app tokens require SLACK_APP_REFRESH_TOKEN.");
-  }
-  const redirectUri = env.SLACK_REDIRECT_URI?.trim();
+  const refreshToken = required(env, "SLACK_APP_REFRESH_TOKEN");
+  if (!appToken.startsWith("xoxe.")) throw new Error("SLACK_APP_TOKEN must be a rotating app token.");
+  const clientId = required(env, "SLACK_CLIENT_ID");
+  const clientSecret = required(env, "SLACK_CLIENT_SECRET");
+  const redirectUri = required(env, "SLACK_REDIRECT_URI");
   let oauth: Config["oauth"];
-  if (redirectUri) {
+  {
     const url = new URL(redirectUri);
     if (url.protocol !== "https:" || url.pathname !== "/slack/oauth/callback" ||
         url.search || url.hash || url.username || url.password) {
@@ -62,27 +60,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error("SLACK_OAUTH_PORT must be between 1 and 65535.");
     }
     oauth = {
-      clientId: required(env, "SLACK_CLIENT_ID"),
-      clientSecret: required(env, "SLACK_CLIENT_SECRET"),
+      clientId: clientId,
+      clientSecret: clientSecret,
       redirectUri, port,
       installationsFile: env.SLACK_INSTALLATIONS_FILE?.trim() ||
         fileURLToPath(new URL("../.slack-installations.json", import.meta.url)),
     };
   }
   return {
-    botToken: oauth ? "" : required(env, "SLACK_BOT_TOKEN"),
-    allowedUserId: env.SLACK_ALLOWED_USER_ID?.trim() || undefined,
     oauth,
     appToken,
-    ...(refreshToken ? {
-      appRotation: {
+    appRotation: {
         refreshToken,
-        clientId: required(env, "SLACK_CLIENT_ID"),
-        clientSecret: required(env, "SLACK_CLIENT_SECRET"),
+        clientId: clientId,
+        clientSecret: clientSecret,
         tokenFile: env.SLACK_APP_TOKEN_FILE?.trim() ||
           fileURLToPath(new URL("../.slack-app-tokens.json", import.meta.url)),
-      },
-    } : {}),
+    },
     timeslayBin: env.TIMESLAY_BIN?.trim() || "timeslay",
     timeslayTimeoutMs: timeout(env),
   };

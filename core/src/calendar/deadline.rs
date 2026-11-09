@@ -104,7 +104,7 @@ pub fn parse_input(input: &str) -> Result<Deadline, String> {
 /// The deadline in the notes. `DEADLINE:` takes precedence over `DUE:`, and
 /// every reserved line is checked so a typo is reported wherever it appears.
 pub fn read_deadline(notes: &str) -> Result<Option<Deadline>, String> {
-    // Versioned remote footer; legacy DUE/DEADLINE lines remain readable below.
+    // Google notes use a versioned footer; local editors use reserved lines.
     if super::task_metadata::prose(notes) != notes
         && let Some(value) = Notes::new(notes).value("tt-deadline:")
     {
@@ -112,7 +112,7 @@ pub fn read_deadline(notes: &str) -> Result<Option<Deadline>, String> {
             serde_json::from_str(value).map_err(|e| format!("Invalid metadata deadline: {e}"))?;
         return value.map(|value| parse_input(&value)).transpose();
     }
-    // LEGACY_METADATA_COMPAT: deadlines embedded among human notes.
+    // Reserved lines are the current editable representation of a deadline.
     let mut timed = None;
     let mut dated = None;
     for line in Notes::new(notes).lines() {

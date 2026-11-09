@@ -2274,7 +2274,6 @@ mod tests {
                 priority: Some(tb::Priority::P2),
                 ..Metadata::default()
             },
-            legacy_key: None,
         });
         task
     }
@@ -2384,7 +2383,7 @@ mod tests {
             &html,
             &[
                 "kind-chip",
-                ">Work<",
+                ">Event<",
                 "Standup",
                 "Projects",
                 "Start Time",

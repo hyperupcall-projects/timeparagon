@@ -268,7 +268,7 @@ fn the_compact_theme_picker_cycles_on_press() -> Result<(), Error> {
 
         // Tall enough that the theme row is on screen without scrolling; the
         // breakpoint only depends on the width.
-        let mut ui = render(&state, Size::new(200.0, 700.0));
+        let mut ui = render(&state, Size::new(200.0, 1000.0));
         let _ = ui.click(shown)?;
         let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -1081,7 +1081,7 @@ fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Erro
     state.screen = Screen::Settings;
     state.calendar.connection = timeslay::calendar::Connection::SignedIn;
 
-    let mut ui = render(&state, Size::new(420.0, 2700.0));
+    let mut ui = render(&state, Size::new(420.0, 3200.0));
 
     let _ = ui.click("Resync calendar and tasks data")?;
 
@@ -1659,7 +1659,6 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
         .unwrap_or(timeslay::task_db::TaskData {
             id: 100,
             metadata: Default::default(),
-            legacy_key: None,
         });
     data.metadata.projects = vec![2];
     data.metadata.priority = Some(Priority::P2);
@@ -2805,11 +2804,7 @@ fn set_task_metadata(
         other => panic!("Unknown fixture task: {other}"),
     };
     event.details.description = prose.into();
-    event.details.task_data = Some(timeslay::task_db::TaskData {
-        id,
-        metadata,
-        legacy_key: None,
-    });
+    event.details.task_data = Some(timeslay::task_db::TaskData { id, metadata });
 }
 
 #[test]

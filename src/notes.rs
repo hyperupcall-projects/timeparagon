@@ -139,18 +139,11 @@ impl Store {
         }
     }
 
-    /// Loads the notes from `directory` and enables saving there. Notes an
-    /// older build kept in the database at `database` are moved there first.
-    pub fn go_live(&mut self, directory: Option<PathBuf>, database: Option<&Path>) {
+    /// Loads the notes from `directory` and enables saving there.
+    pub fn go_live(&mut self, directory: Option<PathBuf>) {
         self.live = true;
         match &directory {
             Some(directory) => {
-                if let Some(database) = database
-                    && let Err(error) = notes::migrate_database(database, directory)
-                {
-                    log::warn!("could not move the notes out of the database: {error}");
-                    self.error = Some(format!("Could not move the old notes: {error}"));
-                }
                 self.library = Library::load(directory);
             }
             None => self.error = Some(NO_DIRECTORY.into()),
@@ -170,13 +163,6 @@ impl Store {
         }
         if self.saving {
             return Err("Notes are still saving; try again in a moment".into());
-        }
-        if self.live
-            && self.directory.is_none()
-            && let Some(path) = &directory
-            && let Some(database) = timeslay_core::task_db::path()
-        {
-            notes::migrate_database(&database, path).map_err(|e| e.to_string())?;
         }
         let mut next = match &directory {
             Some(path) => Library::read(path).map_err(|e| e.to_string())?,
@@ -864,7 +850,7 @@ mod tests {
         let old = tempfile::tempdir().unwrap();
         let new = tempfile::tempdir().unwrap();
         let mut store = Store::default();
-        store.go_live(Some(old.path().into()), None);
+        store.go_live(Some(old.path().into()));
         let id = store.library.create("Old", Vec::new());
         store
             .library
@@ -891,7 +877,7 @@ mod tests {
         std::fs::write(path.join("A.md"), "old").unwrap();
         let mut state = state();
         state.screen = Screen::Notes;
-        state.notes.go_live(Some(path.clone()), None);
+        state.notes.go_live(Some(path.clone()));
         let id = state.notes.library.notes[0].id.clone();
         act(&mut state, Action::Open(id.clone()));
 
@@ -911,7 +897,7 @@ mod tests {
         let path = directory.path().to_owned();
         let mut state = state();
         state.screen = Screen::Notes;
-        state.notes.go_live(Some(path.clone()), None);
+        state.notes.go_live(Some(path.clone()));
         act(&mut state, Action::New);
         act(&mut state, Action::TitleChanged("Plans".into()));
         act(

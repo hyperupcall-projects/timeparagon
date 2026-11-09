@@ -109,12 +109,12 @@ test("bot tokens are not accepted as an app-level rotation response", async (t) 
   await assert.rejects(tokens.getToken(), /valid app-level token pair/);
 });
 
-test("rotating app tokens require refresh and client credentials; legacy tokens still work", () => {
-  const env = { SLACK_BOT_TOKEN: "bot", SLACK_APP_TOKEN: "xoxe.xapp-example" };
+test("rotating app tokens require refresh and client credentials", () => {
+  const env = { SLACK_REDIRECT_URI: "https://example.org/slack/oauth/callback", SLACK_APP_TOKEN: "xoxe.xapp-example" };
   assert.throws(() => loadConfig(env), /SLACK_APP_REFRESH_TOKEN/);
   assert.throws(() => loadConfig({ ...env, SLACK_APP_REFRESH_TOKEN: "refresh" }), /SLACK_CLIENT_ID/);
   assert.throws(() => loadConfig({ ...env, SLACK_APP_REFRESH_TOKEN: "refresh", SLACK_CLIENT_ID: "id" }), /SLACK_CLIENT_SECRET/);
   const configured = loadConfig({ ...env, SLACK_APP_REFRESH_TOKEN: "refresh", SLACK_CLIENT_ID: "id", SLACK_CLIENT_SECRET: "secret" });
   assert.equal(configured.appRotation?.refreshToken, "refresh");
-  assert.equal(loadConfig({ ...env, SLACK_APP_TOKEN: "xapp-legacy" }).appRotation, undefined);
+  assert.throws(() => loadConfig({ ...env, SLACK_APP_TOKEN: "xapp-legacy", SLACK_APP_REFRESH_TOKEN: "refresh" }));
 });

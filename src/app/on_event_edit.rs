@@ -237,7 +237,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
                 .event(&draft.id)
                 .is_some_and(|event| crate::timeblocking::is_block(event, &state.config.calendar));
             let description = if is_block {
-                calendar::event_description(&draft.description, "Time Block", &[])
+                calendar::event_description(&draft.description)
             } else {
                 draft.description.clone()
             };

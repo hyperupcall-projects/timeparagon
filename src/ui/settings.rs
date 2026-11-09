@@ -1630,14 +1630,6 @@ mod tests {
 
         let old: Config = toml::from_str("[appearance]\ntheme = 'Sakura'\n").unwrap();
         assert_eq!(old.appearance.time_format, TimeFormat::TwentyFourHour);
-        for (legacy, expected) in [
-            (false, TimeFormat::TwelveHour),
-            (true, TimeFormat::TwentyFourHour),
-        ] {
-            let migrated: Config =
-                toml::from_str(&format!("[appearance]\nuse_24_hour = {legacy}\n")).unwrap();
-            assert_eq!(migrated.appearance.time_format, expected);
-        }
         let mut state = State::new(old, Catalog::built_in());
         for expected in TimeFormat::ALL {
             let _ = app::update(

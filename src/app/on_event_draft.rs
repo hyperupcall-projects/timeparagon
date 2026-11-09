@@ -281,7 +281,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 state.calendar.calendar_color(&draft.calendar_id)
             };
             let description = if is_block {
-                calendar::event_description(&draft.description, "Time Block", &[])
+                calendar::event_description(&draft.description)
             } else {
                 draft.description.clone()
             };

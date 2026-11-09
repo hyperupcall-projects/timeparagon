@@ -2,16 +2,13 @@
 //! user writes, kept in the local database and shared between devices through
 //! Turso by [`crate::database_sync`].
 //!
-//! Older builds kept these as tables in `config.toml`. The configs still carry
-//! them in memory, so the apps use them as before. Loading puts them into the
-//! config's table before it is parsed, and saving takes them out again
-//! before the rest is written to the file.
+//! Loading overlays these documents into the in-memory configuration. Saving
+//! stores them separately from device settings.
 //!
 //! Each section is one document. A section with nothing in it is not stored at
 //! all, so a fresh device holds nothing that could replace another device's
 //! data when the two are synced.
 
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -204,91 +201,6 @@ pub fn save_section(database: &Path, section: &str, value: &impl Serialize) -> i
     store(database, &mut table, &[section])
 }
 
-/// Moves sections that `config.toml` still holds into the database: those an
-/// older build wrote. Where both have
-/// a section and they differ, the newer wins: the file's
-/// modification time against when the shared data last changed. A section with
-/// nothing in it never replaces one with something. The file keeps its
-/// modification time so the migration does not look like a settings edit.
-pub(crate) fn adopt(config: &Path, database: &Path) -> io::Result<()> {
-    let holds_sections = |text: &str| {
-        toml::from_str::<toml::Table>(text).is_ok_and(|mut table| {
-            SECTIONS
-                .iter()
-                .any(|section| take(&mut table, section).is_some())
-        })
-    };
-    match fs::read_to_string(config) {
-        Ok(text) if holds_sections(&text) => {}
-        Ok(_) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    }
-
-    crate::fsutil::locked(config, || {
-        let text = fs::read_to_string(config)?;
-        let Ok(mut table) = toml::from_str::<toml::Table>(&text) else {
-            return Ok(());
-        };
-        let modified = fs::metadata(config)?.modified()?;
-        let modified_ms = chrono::DateTime::<chrono::Utc>::from(modified).timestamp_millis();
-        let found: Vec<(&str, Value)> = SECTIONS
-            .iter()
-            .filter_map(|section| Some((*section, take(&mut table, section)?)))
-            .collect();
-
-        let mut handle = Database::open(database).map_err(other)?;
-        let tx = handle
-            .connection()
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(other)?;
-        let recorded: Option<i64> = document(&tx, MODIFIED)
-            .map_err(other)?
-            .and_then(|text| text.parse().ok());
-        let file_is_newer = recorded.is_none_or(|recorded| modified_ms > recorded);
-        let mut imported = false;
-        for (section, value) in found {
-            if blank(&value) {
-                continue;
-            }
-            let text = value.to_string();
-            match document(&tx, &key(section)).map_err(other)? {
-                Some(existing) if existing == text => continue,
-                Some(_) if !file_is_newer => {
-                    log::warn!(
-                        "config.toml has an older [{section}] than the database; keeping the database's"
-                    );
-                    continue;
-                }
-                _ => {}
-            }
-            tx.execute(
-                "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                params![key(section), text],
-            )
-            .map_err(other)?;
-            imported = true;
-        }
-        if imported && file_is_newer {
-            // As old as the file, so a newer copy elsewhere still wins the sync.
-            tx.execute(
-                "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                params![MODIFIED, modified_ms.to_string()],
-            )
-            .map_err(other)?;
-        }
-        tx.commit().map_err(other)?;
-
-        let stripped = toml::to_string_pretty(&table).map_err(other)?;
-        crate::fsutil::write_atomic_with(
-            config,
-            stripped.as_bytes(),
-            crate::fsutil::Kind::Private,
-            |file| file.set_modified(modified),
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,87 +277,6 @@ mod tests {
             snapshot(&path).unwrap().1,
             1,
             "saving the same data is not a change"
-        );
-    }
-
-    #[test]
-    fn an_old_config_moves_into_the_database_and_keeps_its_time() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join("config.toml");
-        let path = directory.path().join("test.sqlite3");
-        fs::write(
-            &config,
-            "[calendar]\nsync_minutes = 5\n\n[notepad]\ntext = \"milk\"\nfont_size = 90\n\n[[projects.items]]\nid = 1\nname = \"Work\"\n",
-        )
-        .unwrap();
-        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
-        fs::File::options()
-            .write(true)
-            .open(&config)
-            .unwrap()
-            .set_modified(stamp)
-            .unwrap();
-
-        adopt(&config, &path).unwrap();
-
-        let left = table(&fs::read_to_string(&config).unwrap());
-        assert_eq!(
-            left,
-            table("[calendar]\nsync_minutes = 5\n\n[notepad]\nfont_size = 90\n")
-        );
-        assert_eq!(fs::metadata(&config).unwrap().modified().unwrap(), stamp);
-        let (text, modified) = snapshot(&path).unwrap();
-        assert_eq!(
-            text,
-            r#"{"notepad":{"text":"milk"},"projects":{"items":[{"id":1,"name":"Work"}]}}"#
-        );
-        assert_eq!(modified, 1_700_000_000_000);
-    }
-
-    #[test]
-    fn the_newer_of_an_old_config_and_the_database_wins() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join("config.toml");
-        let path = directory.path().join("test.sqlite3");
-        let stamp = |seconds| {
-            fs::File::options()
-                .write(true)
-                .open(&config)
-                .unwrap()
-                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
-                .unwrap();
-        };
-        save_section(&path, "notepad", &toml::toml! { text = "database" }).unwrap();
-        let mut db = Database::open(&path).unwrap();
-        db.connection()
-            .execute(
-                "UPDATE documents SET value='2000000000000' WHERE key=?1",
-                [MODIFIED],
-            )
-            .unwrap();
-
-        fs::write(&config, "[notepad]\ntext = \"older\"\n").unwrap();
-        stamp(1_000_000_000);
-        adopt(&config, &path).unwrap();
-        assert_eq!(
-            snapshot(&path).unwrap().0,
-            r#"{"notepad":{"text":"database"}}"#
-        );
-        assert!(!fs::read_to_string(&config).unwrap().contains("older"));
-
-        fs::write(
-            &config,
-            "[notepad]\ntext = \"newer\"\n[projects]\nitems = []\n",
-        )
-        .unwrap();
-        stamp(3_000_000_000);
-        adopt(&config, &path).unwrap();
-        assert_eq!(
-            snapshot(&path).unwrap(),
-            (
-                r#"{"notepad":{"text":"newer"}}"#.to_owned(),
-                3_000_000_000_000
-            )
         );
     }
 }

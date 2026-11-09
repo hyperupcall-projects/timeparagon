@@ -41,10 +41,6 @@ const SHARED_KEYS: [&str; 7] = [
     "shared.projects",
     "shared.task_work",
 ];
-/// Documents that used to be shared and no longer exist. Their edits, here or
-/// arriving from devices on older builds, are deleted locally and on the
-/// server. Notes are Markdown files now: see [`crate::notes`].
-const RETIRED_KEYS: [&str; 1] = ["notes"];
 /// Edits per document left unfolded, for recovery and so a fresh save always
 /// has recent history to merge against.
 const KEEP: usize = 20;
@@ -224,8 +220,7 @@ pub(crate) fn install_snapshots(db: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-/// Called only after legacy file and credential handling has finished. Adding
-/// the journal, triggers and initial records is one atomic transaction.
+/// Adds the journal, triggers and initial records in one atomic transaction.
 pub fn enroll(path: &Path) -> io::Result<()> {
     let mut db = open(path)?;
     let tx = db
@@ -234,41 +229,6 @@ pub fn enroll(path: &Path) -> io::Result<()> {
     tx.execute_batch("CREATE TABLE IF NOT EXISTS timeslay_sync_control(singleton INTEGER PRIMARY KEY CHECK(singleton=1), projecting INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS timeslay_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);").map_err(other)?;
     install_snapshots(&tx).map_err(other)?;
-    // Previously local alarms used small sequential IDs on every device.
-    // Give each pre-sync alarm its own identity before recording its first edit.
-    let alarm_history = tx
-        .query_row(
-            "SELECT 1 FROM timeslay_sync_edits WHERE document='alarms' LIMIT 1",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(other)?
-        .is_some();
-    if !alarm_history {
-        let text: Option<String> = tx
-            .query_row("SELECT value FROM documents WHERE key='alarms'", [], |r| {
-                r.get(0)
-            })
-            .optional()
-            .map_err(other)?;
-        if let Some(text) = text
-            && let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text)
-        {
-            if let Some(items) = value.get_mut("alarms").and_then(|v| v.as_array_mut()) {
-                for item in items {
-                    if let Some(fields) = item.as_object_mut() {
-                        fields.insert("id".into(), crate::alarms::new_id().into());
-                    }
-                }
-            }
-            tx.execute(
-                "UPDATE documents SET value=?1 WHERE key='alarms'",
-                [value.to_string()],
-            )
-            .map_err(other)?;
-        }
-    }
     let shared = shared_sql();
     let enrolled = tx
         .query_row(
@@ -283,24 +243,6 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         tx.execute("INSERT INTO timeslay_sync_control VALUES(1,0,0)", [])
             .map_err(other)?;
         tx.execute_batch(&format!("INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,1,0 FROM documents WHERE key IN ({shared});")).map_err(other)?;
-    }
-    // Upgrade an already enrolled database: seed its existing local alarms once,
-    // and replace the old allowlist triggers in this same transaction.
-    let alarms_enrolled = tx
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_alarms_v1'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(other)?
-        .is_some();
-    if !alarms_enrolled {
-        tx.execute_batch("INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,(SELECT coalesce(max(clock),0)+1 FROM timeslay_sync_edits),0 FROM documents WHERE key='alarms' AND NOT EXISTS(SELECT 1 FROM timeslay_sync_edits WHERE document='alarms');
-            DROP TRIGGER IF EXISTS timeslay_sync_insert;
-            DROP TRIGGER IF EXISTS timeslay_sync_update;
-            DROP TRIGGER IF EXISTS timeslay_sync_delete;
-            CREATE TABLE timeslay_sync_alarms_v1(singleton INTEGER PRIMARY KEY);").map_err(other)?;
     }
     for (name, kind, condition, key, before, after) in [
         ("insert", "INSERT", "1", "NEW.key", "NULL", "NEW.value"),
@@ -408,80 +350,6 @@ fn shared(key: &str) -> bool {
     SHARED_KEYS.contains(&key)
 }
 
-/// Removes a document that is no longer kept in the database, with all of its
-/// history: its row, and every journaled edit and snapshot of it. Those are
-/// remembered as deleted but still on the server, so the next sync cycle
-/// deletes them there too. The database is then vacuumed so no copy of the
-/// contents is left in free pages. Does nothing when there is nothing left.
-pub fn retire_document(path: &Path, key: &str) -> io::Result<()> {
-    let mut db = open(path)?;
-    let tx = db
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(other)?;
-    let has_table = |name: &str| -> io::Result<bool> {
-        tx.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
-            [name],
-            |_| Ok(()),
-        )
-        .optional()
-        .map(|found| found.is_some())
-        .map_err(other)
-    };
-    let journaled = has_table("timeslay_sync_control")?;
-    let mut ids = Vec::new();
-    if journaled {
-        install_snapshots(&tx).map_err(other)?;
-        for table in ["timeslay_sync_edits", "timeslay_sync_snapshots"] {
-            let mut q = tx
-                .prepare(&format!("SELECT id FROM {table} WHERE document=?1"))
-                .map_err(other)?;
-            for id in q
-                .query_map([key], |r| r.get::<_, String>(0))
-                .map_err(other)?
-            {
-                ids.push(id.map_err(other)?);
-            }
-        }
-    }
-    let has_document = has_table("documents")?
-        && tx
-            .query_row("SELECT 1 FROM documents WHERE key=?1", [key], |_| Ok(()))
-            .optional()
-            .map_err(other)?
-            .is_some();
-    if ids.is_empty() && !has_document {
-        return Ok(());
-    }
-    if has_document {
-        // Not journaled: the removal is not an edit to share, it is the end of
-        // the document.
-        if journaled {
-            tx.execute(
-                "UPDATE timeslay_sync_control SET projecting=1 WHERE singleton=1",
-                [],
-            )
-            .map_err(other)?;
-        }
-        tx.execute("DELETE FROM documents WHERE key=?1", [key])
-            .map_err(other)?;
-        if journaled {
-            tx.execute(
-                "UPDATE timeslay_sync_control SET projecting=0 WHERE singleton=1",
-                [],
-            )
-            .map_err(other)?;
-        }
-    }
-    let at = now();
-    for id in &ids {
-        delete_row(&tx, id, false, at)?;
-    }
-    tx.commit().map_err(other)?;
-    db.execute_batch("VACUUM").map_err(other)?;
-    Ok(())
-}
-
 /// Every ID this device knows: journaled, snapshotted or deleted.
 fn known_ids(db: &Connection) -> io::Result<HashSet<String>> {
     let mut known = HashSet::new();
@@ -551,14 +419,6 @@ fn apply(
             .map_err(other)?
     };
     for edit in incoming {
-        if RETIRED_KEYS.contains(&edit.document.as_str()) {
-            // Sent by a device on an older build: deleted on the server by
-            // this cycle, and never applied here.
-            if !tombstones.contains(&edit.id) {
-                delete_row(&tx, &edit.id, false, at)?;
-            }
-            continue;
-        }
         if !shared(&edit.document) || edit.clock < 1 {
             return Err(other("unsupported replicated record"));
         }
@@ -1148,27 +1008,6 @@ mod tests {
             assert_eq!(result.alarms[0].id, b.id);
             assert_eq!(result.alarms[0].label, "Edited on phone");
         }
-    }
-
-    #[test]
-    fn upgrade_enrolls_existing_local_alarms_once_and_replaces_old_triggers() {
-        let (_d, path) = db();
-        let connection = open(&path).unwrap();
-        connection.execute_batch("DROP TABLE timeslay_sync_alarms_v1;
-            DROP TRIGGER timeslay_sync_insert;
-            CREATE TRIGGER timeslay_sync_insert AFTER INSERT ON documents WHEN NEW.key='habits' BEGIN SELECT 1; END;
-            INSERT INTO documents VALUES('alarms','{\"alarms\":[{\"id\":1,\"label\":\"Existing\"}]}');").unwrap();
-        assert!(history(&path).unwrap().is_empty());
-        enroll(&path).unwrap();
-        enroll(&path).unwrap();
-        assert_eq!(history(&path).unwrap().len(), 1);
-        let migrated: serde_json::Value = crate::task_db::read_document(&path, "alarms")
-            .unwrap()
-            .unwrap();
-        assert_ne!(migrated["alarms"][0]["id"], 1);
-        assert_eq!(migrated["alarms"][0]["label"], "Existing");
-        crate::task_db::write_document_json(&path, "alarms", r#"{"alarms":[{"id":4}]}"#).unwrap();
-        assert_eq!(history(&path).unwrap().len(), 2);
     }
 
     #[test]

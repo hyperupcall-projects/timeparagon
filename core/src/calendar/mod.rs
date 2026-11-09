@@ -345,38 +345,9 @@ pub mod ids {
     }
 }
 
-/// The delimiter between a person's prose and the app's metadata in the
-/// description of an event the app writes. The metadata is everything after the
-/// last one, so prose may itself contain a `---`.
-pub const METADATA_DELIMITER: &str = "---";
-
-/// Calendar descriptions contain human notes only. Type and link metadata
-/// belong to `extendedProperties.private` at the API boundary.
-pub fn event_description(notes: &str, _kind: &str, _extra: &[String]) -> String {
-    description_notes(notes).trim_end().to_owned()
-}
-
-// LEGACY_METADATA_COMPAT: recognize old Calendar Type footers for migration.
-/// The app metadata written below the last [`METADATA_DELIMITER`] of an event
-/// description, or `None` when there is no footer.
-pub fn metadata_block(description: &str) -> Option<&str> {
-    description
-        .rsplit_once(METADATA_DELIMITER)
-        .map(|(_, after)| after.trim_start_matches(['\r', '\n']))
-}
-
-/// The human prose of an event description, without the app's metadata footer.
-/// Only a footer that starts with a `Type:` line is stripped, so prose that
-/// happens to contain `---` is left alone.
-pub fn description_notes(description: &str) -> &str {
-    if metadata_block(description).is_some_and(|block| block.starts_with("Type: ")) {
-        description
-            .rsplit_once(METADATA_DELIMITER)
-            .map(|(before, _)| before.trim_end())
-            .unwrap_or(description)
-    } else {
-        description
-    }
+/// Normalize the human notes written to a Calendar event.
+pub fn event_description(notes: &str) -> String {
+    notes.trim_end().to_owned()
 }
 
 /// A time change that has been applied to the view but not yet confirmed by
@@ -632,7 +603,7 @@ impl EditDraft {
             all_day: event.all_day,
             id: event.id.clone(),
             title: event.title.clone(),
-            description: description_notes(&event.details.description).to_owned(),
+            description: event.details.description.clone(),
             calendar_id: event.calendar_id.clone(),
             calendar_dropdown_open: false,
             start: event.start,
@@ -968,7 +939,6 @@ fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
         return true;
     }
     if event.all_day {
-        // Older cached all-day entries can have a zero-length end.
         return event.start.date_naive() == day
             || (event.start.date_naive() < day && event.end.date_naive() > day);
     }
@@ -3669,7 +3639,6 @@ mod tests {
                     pending: false,
                     block: None,
                     order: 0,
-                    color_id: None,
                 }),
                 ..Details::default()
             },
@@ -3914,7 +3883,6 @@ mod tests {
                 schedule: Some(link.clone()),
                 ..Default::default()
             },
-            legacy_key: None,
         });
         assigned.details.scheduled = Some(link);
         snapshot.events.push(assigned);
@@ -3939,7 +3907,6 @@ mod tests {
                 schedule: Some(alone_link.clone()),
                 ..Default::default()
             },
-            legacy_key: None,
         });
         alone.details.scheduled = Some(alone_link);
         snapshot.events.push(alone);
@@ -4624,21 +4591,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_calendar_type_footers_are_readable_but_new_descriptions_are_prose() {
-        let description = "Notes\n---\nprose after a delimiter\n---\nType: Time Block\nGoogle Task: https://example.test/task";
-        assert_eq!(event_description("Notes", "Time Block", &[]), "Notes");
-        assert_eq!(
-            description_notes(description),
-            "Notes\n---\nprose after a delimiter"
-        );
-        assert!(
-            metadata_block(description)
-                .unwrap()
-                .starts_with("Type: Time Block")
-        );
-    }
-
-    #[test]
     fn a_drag_on_an_unknown_event_is_refused() {
         let (mut store, start, end) = standup_and_later();
         assert!(!store.begin_time_change("nobody", start, end));
@@ -4710,9 +4662,8 @@ mod tests {
     /// what the next run paints first.
     #[test]
     fn a_location_reaches_every_copy_of_an_event() {
-        let directory =
-            std::env::temp_dir().join(format!("tt-set-location-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("timeslay.sqlite3");
         let snapshot = sample_snapshot();
         let day = snapshot.day;
         let other = day.succ_opt().unwrap();

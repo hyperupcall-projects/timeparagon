@@ -45,9 +45,6 @@ pub enum TravelMode {
     #[default]
     Walk,
     Bike,
-    /// Configs written when public transport was offered read as `Car`:
-    /// Mapbox has no transit routing.
-    #[serde(alias = "multimodal")]
     Car,
 }
 

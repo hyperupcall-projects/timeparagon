@@ -619,15 +619,14 @@ fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
     task.calendar_id = "tasks:list".into();
     task.title = "Assigned task".into();
     task.all_day = true;
-    task.details.description = format!(
-        "tt-timeblocking: {}",
-        serde_json::to_string(&Metadata {
+    task.details.task_data = Some(crate::task_db::TaskData {
+        id: 100,
+        metadata: Metadata {
             block: Some(tb::block_key(&block)),
             minutes: 30,
             ..Metadata::default()
-        })
-        .unwrap()
-    );
+        },
+    });
     let mut standalone = task.clone();
     standalone.id = "task:standalone".into();
     standalone.all_day = false;
@@ -2616,7 +2615,6 @@ fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
     blocked.id = "task:blocked".into();
     blocked.details.task_data = Some(crate::task_db::TaskData {
         id: 101,
-        legacy_key: None,
         metadata: crate::timeblocking::Metadata {
             block: Some("missing-block".into()),
             ..Default::default()

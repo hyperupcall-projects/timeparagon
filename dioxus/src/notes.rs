@@ -44,15 +44,7 @@ impl NotesStore {
         let directory = notes::directory();
         let mut error = None;
         let library = match &directory {
-            Some(directory) => {
-                if let Some(database) = timeslay_core::task_db::path()
-                    && let Err(problem) = notes::migrate_database(&database, directory)
-                {
-                    eprintln!("Could not move the notes out of the database: {problem}");
-                    error = Some(format!("Could not move the old notes: {problem}"));
-                }
-                Library::load(directory)
-            }
+            Some(directory) => Library::load(directory),
             None => {
                 error = Some(NO_DIRECTORY.to_owned());
                 Library::default()
@@ -120,12 +112,6 @@ impl NotesStore {
         let path = settings.path();
         if path == *self.directory.peek() {
             return Ok(());
-        }
-        if self.directory.peek().is_none()
-            && let Some(path) = &path
-            && let Some(database) = timeslay_core::task_db::path()
-        {
-            notes::migrate_database(&database, path).map_err(|e| e.to_string())?;
         }
         let mut next = match &path {
             Some(path) => Library::read(path).map_err(|e| e.to_string())?,

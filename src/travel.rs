@@ -1159,7 +1159,6 @@ mod tests {
                 location: Some(gym),
                 ..Default::default()
             },
-            legacy_key: None,
         });
         assert_eq!(place_of(&travel, &task), Some(gym));
 
@@ -1364,21 +1363,11 @@ mod tests {
     }
 
     #[test]
-    fn home_migrates_legacy_endpoints_and_saves_only_home() {
-        for (input, expected) in [
-            ("start = 1\nend = 2", Some(1)),
-            ("end = 2", Some(2)),
-            ("home = 3\nstart = 1\nend = 2", Some(3)),
-            ("", None),
-        ] {
-            let read: TravelSettings = toml::from_str(input).unwrap();
-            assert_eq!(read.home, expected);
-            let saved = toml::to_string(&read).unwrap();
-            assert!(!saved.contains("start ="));
-            assert!(!saved.contains("end ="));
-            let again: TravelSettings = toml::from_str(&saved).unwrap();
-            assert_eq!(again, read);
-        }
+    fn home_round_trips() {
+        let read: TravelSettings = toml::from_str("home = 3").unwrap();
+        assert_eq!(read.home, Some(3));
+        let saved = toml::to_string(&read).unwrap();
+        assert_eq!(toml::from_str::<TravelSettings>(&saved).unwrap(), read);
     }
 
     #[test]
@@ -1401,13 +1390,6 @@ mod tests {
         ] {
             assert!(!search_url("key", "coffee", proximity).contains("proximity="));
         }
-    }
-
-    #[test]
-    fn a_config_from_before_mapbox_still_reads() {
-        // Public transport used to be a method; it is a drive now.
-        let read: TravelSettings = toml::from_str("default_mode = \"multimodal\"").unwrap();
-        assert_eq!(read.default_mode, TravelMode::Car);
     }
 
     #[test]

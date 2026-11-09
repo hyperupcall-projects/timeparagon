@@ -1,4 +1,4 @@
-//! Persistent work sessions keyed by local task IDs, with aliases for migrated UUIDs.
+//! Persistent work sessions keyed by local task IDs.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

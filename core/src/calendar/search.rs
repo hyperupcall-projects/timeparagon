@@ -321,7 +321,6 @@ mod tests {
                 block: block.map(str::to_owned),
                 ..Default::default()
             },
-            legacy_key: None,
         });
         task
     }

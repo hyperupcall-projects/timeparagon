@@ -19,10 +19,6 @@ pub struct Link {
     pub block: Option<String>,
     #[serde(default)]
     pub order: i64,
-    /// Legacy event color, retained for reading older task metadata.
-    /// Local settings colors are never written to Google Calendar.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color_id: Option<String>,
 }
 
 impl Link {
@@ -41,7 +37,6 @@ impl Link {
             pending: true,
             block: None,
             order: 0,
-            color_id: None,
         })
     }
 
@@ -82,10 +77,6 @@ impl Link {
                 .as_str()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_default(),
-            color_id: p["ttColor"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
         })
     }
 }
@@ -107,7 +98,6 @@ pub fn content(task: &Event, link: &Link) -> Value {
             "ttKind": "task", "ttTaskList": link.list_id, "ttTask": link.task_id,
             "ttBlock": link.block.as_deref().unwrap_or(""), "ttOrder": link.order.to_string(),
             "ttCompleted": task.completed.to_string(),
-            "ttColor": "",
             "ttTaskLink": task.details.link,
             "ttDeadline": super::deadline::read_deadline(&task.details.description).ok().flatten().map(|d| d.value()).unwrap_or_default(),
         }},
@@ -672,16 +662,19 @@ mod tests {
     use crate::timeblocking::{Metadata, task_key};
 
     #[test]
-    fn legacy_task_colors_are_cleared_in_every_calendar_write() {
+    fn task_calendar_writes_use_local_display_colors() {
         let task = make_task("one", false);
-        let mut link = Link::new("app-calendar".into(), &task).unwrap();
-        link.color_id = Some("9".into());
+        let link = Link::new("app-calendar".into(), &task).unwrap();
         for body in [
             content(&task, &link),
             event_body(&task, &link, task.start, task.end),
         ] {
             assert_eq!(body.get("colorId"), Some(&Value::Null));
-            assert_eq!(body["extendedProperties"]["private"]["ttColor"], "");
+            assert!(
+                body["extendedProperties"]["private"]
+                    .get("ttColor")
+                    .is_none()
+            );
         }
     }
 
@@ -697,7 +690,6 @@ mod tests {
         task.details.task_data = Some(crate::task_db::TaskData {
             id: if id == "one" { 100 } else { 101 },
             metadata: Metadata::default(),
-            legacy_key: None,
         });
         task
     }

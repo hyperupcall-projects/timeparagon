@@ -108,23 +108,12 @@ pub fn record_completion(event: &Event) {
     if saved.error.is_some() {
         return;
     }
-    let series = event
-        .details
-        .recurring_event_id
-        .as_deref()
-        .unwrap_or(&event.id);
     let library = &saved.library;
-    let Some(id) = event
-        .details
-        .habit_id
-        .clone()
-        .or_else(|| library.adopted.get(series).cloned())
-        .filter(|id| {
-            library
-                .habit(id)
-                .is_some_and(|habit| habit.kind == Kind::Yes)
-        })
-    else {
+    let Some(id) = event.details.habit_id.clone().filter(|id| {
+        library
+            .habit(id)
+            .is_some_and(|habit| habit.kind == Kind::Yes)
+    }) else {
         return;
     };
     let day = event.start.date_naive();
@@ -200,13 +189,6 @@ fn habit_of_series<'a>(library: &'a Library, series: &'a Series) -> Option<&'a s
     series
         .habit_id
         .as_deref()
-        .or_else(|| {
-            library
-                .adopted
-                .get(&series.id)
-                .map(String::as_str)
-                .filter(|id| !id.is_empty())
-        })
         .filter(|id| library.habit(id).is_some())
 }
 
@@ -226,13 +208,6 @@ fn habit_of<'a>(library: &'a Library, series: &'a [Series], event: &'a Event) ->
         .details
         .habit_id
         .as_deref()
-        .or_else(|| {
-            library
-                .adopted
-                .get(series_id)
-                .map(String::as_str)
-                .filter(|id| !id.is_empty())
-        })
         .filter(|id| library.habit(id).is_some())
 }
 
@@ -1315,12 +1290,6 @@ fn link(ctx: Ctx, settings: CalendarSettings, series: Series, habit_id: Option<S
         ui.write().busy = false;
         match result {
             Ok(()) => {
-                // Remembered as well, so an event let go of is not claimed again.
-                commit(ctx.saved, |library| {
-                    library
-                        .adopted
-                        .insert(series.id.clone(), habit_id.unwrap_or_default());
-                });
                 let mut reload = ctx.reload_series;
                 reload += 1;
             }
@@ -2154,9 +2123,6 @@ fn delete_confirmation(ctx: Ctx, library: &Library, settings: CalendarSettings) 
                 return;
             }
             commit(ctx.saved, |library| {
-                for series in &events {
-                    library.adopted.insert(series.id.clone(), String::new());
-                }
                 library.habits.retain(|habit| habit.id != id);
             });
             {
@@ -2242,11 +2208,10 @@ mod tests {
     }
 
     #[test]
-    fn an_event_counts_towards_its_series_habit_then_its_own_then_the_adopted_one() {
+    fn an_event_counts_towards_its_series_habit_then_its_own() {
         let mut library = Library::default();
         library.habits.push(Habit::new("a", "Run"));
         library.habits.push(Habit::new("b", "Read"));
-        library.adopted.insert("old".to_owned(), "b".to_owned());
         let start = calendar::at_clock(NaiveDate::from_ymd_opt(2026, 11, 7).unwrap(), 9, 0);
         let mut event = Event {
             id: "old_1".to_owned(),
@@ -2263,7 +2228,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        assert_eq!(habit_of(&library, &[], &event), Some("b"));
+        assert_eq!(habit_of(&library, &[], &event), None);
         event.details.habit_id = Some("a".to_owned());
         assert_eq!(habit_of(&library, &[], &event), Some("a"));
         event.details.habit_id = Some("gone".to_owned());

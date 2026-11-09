@@ -8,8 +8,6 @@ use crate::calendar::{self, Event};
 use crate::config::CalendarSettings;
 
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-const META: &str = "tt-timeblocking: ";
-const LEGACY_ID: &str = "ttid:";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
@@ -32,15 +30,7 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<calendar::scheduled::Link>,
     /// The projects this task is filed under, by `config::Project::id`.
-    ///
-    /// LEGACY_METADATA_COMPAT: older task databases stored a single `project` value, so that shape is
-    /// still accepted when reading.
-    #[serde(
-        default,
-        alias = "project",
-        deserialize_with = "deserialize_ids",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<u64>,
     /// Free-form labels, such as "urgent" or "deep work".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -156,25 +146,6 @@ impl BacklogSection {
     }
 }
 
-/// Reads either a single id (the old `project` field) or a list of ids.
-fn deserialize_ids<'de, D>(deserializer: D) -> Result<Vec<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(u64),
-        Many(Vec<u64>),
-    }
-
-    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
-        Some(OneOrMany::One(id)) => vec![id],
-        Some(OneOrMany::Many(ids)) => ids,
-        None => Vec::new(),
-    })
-}
-
 /// How urgent a task is. P1 is the most urgent; a task with neither has no
 /// priority at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,15 +188,6 @@ pub fn apply_status(task: &mut Event, status: TaskStatus) {
     let ignored = status == TaskStatus::Ignored;
     if let Some(data) = &mut task.details.task_data {
         data.metadata.ignored = ignored;
-    } else {
-        let mut meta = metadata(task);
-        meta.ignored = ignored;
-        // LEGACY_METADATA_COMPAT: tasks edited before their first database import.
-        task.details.description = format!(
-            "{}\n{META}{}",
-            description(&task.details.description),
-            serde_json::to_string(&meta).expect("metadata serializes")
-        );
     }
 }
 
@@ -235,11 +197,6 @@ pub fn task_label(task: &Event) -> String {
         TaskStatus::Completed => format!("{} · Completed ✓", task.title),
         TaskStatus::Ignored => format!("{} · Ignored", task.title),
     }
-}
-
-/// Whether a line carries app metadata rather than something a person wrote.
-fn is_internal(line: &str) -> bool {
-    line.starts_with(META) || line.trim_start().starts_with(LEGACY_ID)
 }
 
 pub fn description(notes: &str) -> String {
@@ -254,10 +211,7 @@ pub fn description(notes: &str) -> String {
     } else {
         Notes::new(notes)
     };
-    if !notes.lines().any(is_internal) {
-        return notes.text().to_owned();
-    }
-    notes.without_where(is_internal).trim_end().to_owned()
+    notes.text().to_owned()
 }
 
 pub fn metadata(event: &Event) -> Metadata {
@@ -272,49 +226,16 @@ pub fn metadata(event: &Event) -> Metadata {
                 .flatten()
                 .map(|data| data.metadata)
         })
-        .unwrap_or_else(|| legacy_metadata(&event.details.description))
-}
-
-/// LEGACY_METADATA_COMPAT: remove with the old inline JSON/ttid migration.
-pub fn legacy_metadata(notes: &str) -> Metadata {
-    Notes::new(notes)
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix(META)
-                .and_then(|s| serde_json::from_str(s).ok())
-        })
         .unwrap_or_default()
 }
 
-/// LEGACY_METADATA_COMPAT: preserves existing work-history keys during migration.
-pub fn legacy_id(notes: &str) -> Option<String> {
-    Notes::new(notes)
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix(LEGACY_ID))
-        .map(str::trim)
-        .find(|id| {
-            (id.len() == 36
-                && id.bytes().enumerate().all(|(i, c)| {
-                    if [8, 13, 18, 23].contains(&i) {
-                        c == b'-'
-                    } else {
-                        c.is_ascii_hexdigit()
-                    }
-                }))
-                || (id.bytes().all(|c| c.is_ascii_digit())
-                    && id.parse::<i64>().is_ok_and(|n| n >= 100))
-        })
-        .map(str::to_owned)
-}
-
 pub fn task_key(event: &Event) -> String {
-    if let Some(data) = &event.details.task_data {
-        return data
-            .legacy_key
-            .clone()
-            .unwrap_or_else(|| data.id.to_string());
-    }
-    legacy_id(&event.details.description).unwrap_or_else(|| block_key(event))
+    event
+        .details
+        .task_data
+        .as_ref()
+        .map(|data| data.id.to_string())
+        .unwrap_or_else(|| block_key(event))
 }
 
 pub fn block_key(event: &Event) -> String {
@@ -441,7 +362,6 @@ mod tests {
         child.completed = true;
         let mut data = crate::task_db::TaskData {
             id: 123,
-            legacy_key: Some("history".into()),
             metadata: Metadata {
                 block: Some(block_key(&parent)),
                 minutes: 25,
@@ -463,7 +383,7 @@ mod tests {
         assert_eq!(data.id, 123);
         assert_eq!(data.metadata.minutes, 25);
         assert_eq!(data.metadata.order, 99);
-        assert_eq!(data.legacy_key.as_deref(), Some("history"));
+
         assert_eq!(data.metadata.projects, [7]);
         assert_eq!(data.metadata.labels, ["work"]);
         assert_eq!(data.metadata.priority, Some(Priority::P1));
@@ -512,7 +432,6 @@ mod tests {
         for section in BacklogSection::ALL {
             let data = crate::task_db::TaskData {
                 id: 123,
-                legacy_key: None,
                 metadata: Metadata {
                     backlog_section: section,
                     ..Default::default()
@@ -523,23 +442,6 @@ mod tests {
             assert_eq!(read, data);
             assert_eq!(calendar::task_metadata::prose(&notes), "Keep these notes");
         }
-    }
-
-    #[test]
-    fn a_legacy_single_project_still_loads_and_is_saved_as_a_list() {
-        let old: Metadata =
-            serde_json::from_str(r#"{"minutes":30,"project":7}"#).expect("legacy metadata");
-        assert_eq!(old.projects, vec![7]);
-        assert!(old.labels.is_empty());
-
-        let mut metadata = old;
-        metadata.projects = vec![3, 7];
-        metadata.labels = vec!["deep work".into()];
-        let json = serde_json::to_string(&metadata).unwrap();
-        let read: Metadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(read.projects, vec![3, 7]);
-        assert_eq!(read.labels, ["deep work"]);
-        assert!(!json.contains("\"project\":"));
     }
 
     #[test]

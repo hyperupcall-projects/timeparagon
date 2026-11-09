@@ -2758,7 +2758,6 @@ mod tests {
                 minutes: 35,
                 ..Default::default()
             },
-            legacy_key: None,
         });
         state.timeblocking.focus = Some("standup".into());
         state
@@ -2983,17 +2982,6 @@ mod tests {
         assert_eq!(
             metadata(state.calendar.event("task:deep").unwrap()).minutes,
             60
-        );
-    }
-
-    #[test]
-    fn legacy_markers_are_importable_and_removed_from_prose() {
-        let old = "human notes\nttid: 12345678-1234-4234-8234-123456789abc\nmore notes\ntt-timeblocking: {\"minutes\":60,\"block\":null,\"order\":1}";
-        assert_eq!(description(old), "human notes\nmore notes");
-        assert_eq!(legacy_metadata(old).minutes, 60);
-        assert_eq!(
-            legacy_id(old).as_deref(),
-            Some("12345678-1234-4234-8234-123456789abc")
         );
     }
 

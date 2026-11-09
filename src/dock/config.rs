@@ -252,7 +252,8 @@ mod tests {
     fn the_strip_size_margin_and_border_come_from_the_view_settings() {
         let views = ViewSettings {
             dock_width: 14.0,
-            dock_margin: 12.0,
+            dock_left_margin: Some(12.0),
+            dock_right_margin: Some(12.0),
             margin: 20.0,
             dock_side: DockSide::Top,
             panel_border_outer_width: 2.0,

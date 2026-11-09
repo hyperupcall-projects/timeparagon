@@ -395,9 +395,15 @@ mod tests {
             let mut task = event(id, "tasks:list", at(day, 0, 0), 0);
             task.id = crate::calendar::ids::event_id(id);
             task.all_day = true;
-            task.details.description = format!(
-                "tt-timeblocking: {{\"block\":\"{block}\",\"minutes\":30,\"order\":{order}}}"
-            );
+            task.details.task_data = Some(crate::task_db::TaskData {
+                id: 100,
+                metadata: crate::timeblocking::Metadata {
+                    block: Some(block.to_owned()),
+                    minutes: 30,
+                    order,
+                    ..Default::default()
+                },
+            });
             task
         };
         let store = store(

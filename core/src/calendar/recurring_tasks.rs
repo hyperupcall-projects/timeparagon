@@ -16,12 +16,7 @@ fn source(task: &Event) -> Option<i64> {
 fn series(task: &Event) -> Option<String> {
     let meta = tb::metadata(task);
     let inherited = meta.inherited?;
-    inherited.series.clone().or_else(|| {
-        // Compatibility with metadata saved before recurring tasks were materialized.
-        (!inherited.recurrence.is_empty())
-            .then_some(meta.block)
-            .flatten()
-    })
+    inherited.series.clone()
 }
 
 /// Pure planning keeps refreshes idempotent, including completed occurrences.
@@ -231,7 +226,6 @@ mod tests {
         child.completed = true;
         let mut data = crate::task_db::TaskData {
             id: 100,
-            legacy_key: None,
             metadata: tb::Metadata {
                 block: Some(tb::block_key(&parent)),
                 minutes: 25,
@@ -342,18 +336,8 @@ mod tests {
     }
 
     #[test]
-    fn recurrence_requires_enabled_propagation_and_supports_old_metadata() {
+    fn recurrence_requires_enabled_propagation() {
         let mut events = fixture();
-        events[2]
-            .details
-            .task_data
-            .as_mut()
-            .unwrap()
-            .metadata
-            .inherited
-            .as_mut()
-            .unwrap()
-            .series = None;
         assert_eq!(missing(&events).len(), 2);
         for block in &mut events[..2] {
             block.details.options.child_metadata.force = false;

@@ -1244,12 +1244,6 @@ fn calendar_sync_refreshes_habit_links_for_a_new_series_without_opening_habits()
         let mut habit = Habit::new("breakfast", "Breakfast");
         habit.marks.insert(yesterday, Mark::Yes);
         state.habits.library.habits.push(habit);
-        state
-            .habits
-            .library
-            .adopted
-            .insert("old-breakfast-series".into(), "breakfast".into());
-
         let mut event = snapshot.events[0].clone();
         event.id = "new-breakfast-series_today".into();
         event.title = "Breakfast".into();
@@ -1292,7 +1286,7 @@ fn calendar_sync_refreshes_habit_links_for_a_new_series_without_opening_habits()
                     end: event.end,
                     recurrence: vec!["RRULE:FREQ=DAILY".into()],
                     color_id: None,
-                    habit_id: None,
+                    habit_id: Some("breakfast".into()),
                 }],
                 completions: vec![],
             }))),

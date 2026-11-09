@@ -199,22 +199,6 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
                 .into_iter()
                 .map(Event::from)
                 .filter(|event| !canonical_tasks || !event.is_task())
-                .map(|mut event| {
-                    // LEGACY_METADATA_COMPAT: only old snapshots missing task
-                    // metadata need the task tables.
-                    if event.is_task() && event.details.task_data.is_none() {
-                        match database.lookup(&event) {
-                            Ok(Some(data)) => {
-                                event.details.task_data = Some(data);
-                                event.details.description =
-                                    crate::timeblocking::description(&event.details.description);
-                            }
-                            Err(error) => log::warn!("Cannot load local task data: {error}"),
-                            _ => {}
-                        }
-                    }
-                    event
-                })
                 .filter(|event| super::event_on_day(event, day, day_end_hour))
                 .collect();
             if let Ok(mut statement) = database
@@ -494,7 +478,6 @@ mod tests {
         event.details.task_updated_at = Some(timestamp);
         event.details.task_data = Some(crate::task_db::TaskData {
             id: 100,
-            legacy_key: None,
             metadata: crate::timeblocking::Metadata {
                 created_at: Some(timestamp),
                 ..Default::default()

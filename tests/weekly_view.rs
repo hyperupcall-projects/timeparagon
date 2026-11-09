@@ -428,7 +428,6 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
             block: Some("work/standup".into()),
             ..Default::default()
         },
-        legacy_key: None,
     });
     let _ = app::update(
         &mut state,
@@ -898,7 +897,6 @@ fn task_list_mixes_tasks_and_events_in_start_order_and_keeps_each_day_separate()
     early.details.task_data = Some(timeslay::task_db::TaskData {
         id: 999,
         metadata: data,
-        legacy_key: None,
     });
     early.details.scheduled = Some(calendar::scheduled::Link::new("work".into(), &early).unwrap());
     state.calendar.replace_cached_task("task:early", &early);
@@ -965,11 +963,7 @@ fn weekly_task_view_omits_all_day_tasks_without_hiding_scheduled_cards() -> Resu
         if id == "linked" {
             let mut metadata = timeslay::timeblocking::metadata(&task);
             metadata.block = Some("work/standup".into());
-            task.details.task_data = Some(timeslay::task_db::TaskData {
-                id: 999,
-                metadata,
-                legacy_key: None,
-            });
+            task.details.task_data = Some(timeslay::task_db::TaskData { id: 999, metadata });
         }
         let task_id = task.id.clone();
         state.calendar.replace_cached_task(&task_id, &task);
@@ -1259,7 +1253,6 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
                 projects: vec![project],
                 ..Default::default()
             },
-            legacy_key: None,
         });
         events.push(task);
     }

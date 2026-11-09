@@ -85,32 +85,10 @@ pub struct PanelConfig {
     pub width: u32,
     /// Global shortcuts for [`Action::ToggleVisibility`], each in
     /// `Modifier+Key` form, e.g. `"Meta+U"`. Any of them triggers the action.
-    /// The old single `shortcut = "Meta+U"` key is still read.
-    #[serde(alias = "shortcut", deserialize_with = "string_or_list")]
     pub toggle_visibility: Vec<String>,
     /// Global shortcuts for [`Action::ToggleShape`].
-    #[serde(deserialize_with = "string_or_list")]
     pub toggle_shape: Vec<String>,
-    #[serde(deserialize_with = "string_or_list")]
     pub toggle_reservation: Vec<String>,
-}
-
-/// Accepts `"Meta+U"` as well as `["Meta+U", "Meta+J"]`.
-fn string_or_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
-    }
-
-    Ok(match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::One(one) => vec![one],
-        OneOrMany::Many(many) => many,
-    })
 }
 
 impl Default for PanelConfig {
@@ -183,14 +161,6 @@ mod tests {
 
         let restored: PanelConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored, config);
-    }
-
-    #[test]
-    fn the_old_single_shortcut_key_still_loads() {
-        let config: PanelConfig = toml::from_str("shortcut = \"Meta+K\"").unwrap();
-
-        assert_eq!(config.toggle_visibility, ["Meta+K"]);
-        assert_eq!(config.toggle_shape, ["Meta+Shift+U"]);
     }
 
     #[test]

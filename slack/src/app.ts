@@ -434,10 +434,10 @@ export function actorId(body: unknown): string | undefined {
     value.user_id ?? value.event?.user;
 }
 
-export function installOwnerGuard(app: App, distributed: boolean, legacyOwner?: string): void {
+export function installOwnerGuard(app: App): void {
   app.use(async (args) => {
-    const owner = distributed ? args.context.ownerUserId : legacyOwner;
-    if ((!distributed && !owner) || (typeof owner === "string" && actorId(args.body) === owner)) {
+    const owner = args.context.ownerUserId;
+    if (typeof owner === "string" && actorId(args.body) === owner) {
       await args.next();
       return;
     }
@@ -449,16 +449,13 @@ export function installOwnerGuard(app: App, distributed: boolean, legacyOwner?: 
 }
 
 /** Builds the Bolt app and attaches every listener. */
-export function createApp(config: Config, installations?: Installations): App {
-  if (config.oauth && !installations) throw new Error("OAuth mode requires an installation store.");
+export function createApp(config: Config, installations: Installations): App {
   const app = new App({
-    ...(config.oauth && installations ? {
-      authorize: authorizeInstallation(installations),
-    } : { token: config.botToken }),
+    authorize: authorizeInstallation(installations),
     appToken: config.appToken,
     socketMode: true,
   });
-  installOwnerGuard(app, !!config.oauth, config.allowedUserId);
+  installOwnerGuard(app);
   register(app, config);
   app.error(async (error) => {
     console.error("Unhandled Slack app error:", error);
@@ -472,8 +469,8 @@ const invokedDirectly =
 
 if (invokedDirectly) {
   const config = loadConfig();
-  const tokens = config.appRotation ? new AppTokens(config.appRotation) : undefined;
-  while (tokens) {
+  const tokens = new AppTokens(config.appRotation);
+  while (true) {
     try {
       config.appToken = await tokens.getToken();
       break;
@@ -482,13 +479,13 @@ if (invokedDirectly) {
       await delay(30_000);
     }
   }
-  const installations = config.oauth ? new Installations(config.oauth.installationsFile, config.oauth.clientId) : undefined;
-  if (config.oauth && installations) await startOAuth(config.oauth, installations);
+  const installations = new Installations(config.oauth.installationsFile, config.oauth.clientId);
+  await startOAuth(config.oauth, installations);
   let app = createApp(config, installations);
   await app.start();
   console.log("TimeSlay Slack app is running (socket mode).");
   let retrying = false;
-  while (tokens) {
+  while (true) {
     if (!retrying) await delay(Math.max(1_000, tokens.refreshAt - Date.now()));
     try {
       // Save the replacement pair before reconnecting Socket Mode. The new

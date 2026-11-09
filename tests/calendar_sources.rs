@@ -546,8 +546,8 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
         .unwrap()
         .name = "Legacy tasks calendar".into();
     state.config.calendar.app_calendar = Some("app".into());
-    // Exclude by remembered ID even if renamed, and recognize legacy names.
-    for (id, name) in [("app", "Renamed app calendar"), ("old", "TimeSlayer")] {
+    // Exclude by remembered ID even if renamed, and by the canonical name.
+    for (id, name) in [("app", "Renamed app calendar"), ("duplicate", "TimeSlay")] {
         state.calendar.calendars.push(Calendar {
             id: id.into(),
             name: name.into(),
@@ -595,7 +595,6 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
             ui.simulate(iced_test::simulator::click());
         }
         assert!(ui.find("Renamed app calendar").is_err());
-        assert!(ui.find("TimeSlayer").is_err());
         assert!(ui.find("Events").is_err());
         let messages: Vec<_> = ui.into_messages().collect();
         for source in calendar::sources::TimeSlaySource::ALL {
