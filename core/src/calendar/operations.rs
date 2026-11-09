@@ -978,6 +978,7 @@ pub fn edit_task(
         .map(Ok)
         .unwrap_or_else(|| db.import(&task))?;
     use task_edit::Change;
+    task_edit::reset_repeat_source(&mut data.metadata, &change);
     match &change {
         Change::ReleaseInheritance => data.metadata.inherited = None,
         Change::Inherit(inherited) => {

@@ -121,6 +121,25 @@ pub enum Change {
     Reflow(DateTime<Local>, DateTime<Local>),
 }
 
+/// A recurring copy's source belongs to its current block's series only.
+pub(crate) fn reset_repeat_source(metadata: &mut crate::timeblocking::Metadata, change: &Change) {
+    let moved = match change {
+        Change::Block(key, _, _) => metadata.block.as_ref() != Some(key),
+        Change::Reorder(block, _, _) => block != &metadata.block,
+        Change::Unassign
+        | Change::Day(_)
+        | Change::ClearSchedule
+        | Change::Backlog(_)
+        | Change::Inbox
+        | Change::Triaged
+        | Change::Time(_, _) => true,
+        _ => false,
+    };
+    if moved {
+        metadata.repeat_source = None;
+    }
+}
+
 pub fn validate_child_edit(task: &Event, change: &Change) -> Result<(), String> {
     if metadata(task)
         .inherited
@@ -267,6 +286,7 @@ pub fn save(
     }
     let mut database = crate::task_db::open()?;
     let mut data = database.import(&task)?;
+    reset_repeat_source(&mut data.metadata, &change);
     // A previous attempt may have moved the task before Calendar failed. The
     // durable link retains its new identity so retrying the old chip is safe.
     if let Some(link) = &data.metadata.schedule {
@@ -808,6 +828,29 @@ pub fn create_inbox_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recurring_source_is_cleared_on_detach_or_another_block_but_not_reordering() {
+        let mut meta = crate::timeblocking::Metadata {
+            repeat_source: Some(123),
+            block: Some("app/block".into()),
+            ..Default::default()
+        };
+        reset_repeat_source(
+            &mut meta,
+            &Change::Reorder(Some("app/block".into()), 10, UNDATED),
+        );
+        assert_eq!(meta.repeat_source, Some(123));
+        for change in [
+            Change::Unassign,
+            Change::Backlog(None),
+            Change::Reorder(Some("app/other".into()), 10, UNDATED),
+        ] {
+            meta.repeat_source = Some(123);
+            reset_repeat_source(&mut meta, &change);
+            assert_eq!(meta.repeat_source, None);
+        }
+    }
 
     #[test]
     fn a_schedule_range_reads_its_fields_and_can_run_past_midnight() {

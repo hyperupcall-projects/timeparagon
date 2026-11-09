@@ -14,6 +14,8 @@ const LEGACY_ID: &str = "ttid:";
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_source: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited: Option<Box<InheritedMetadata>>,
     /// Creation instant recorded by TimeSlay; absent for tasks created elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +66,8 @@ pub struct ChildMetadata {
 /// The complete inherited snapshot also records repeat rules and event settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InheritedMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
     pub fields: ChildMetadata,
     pub projects: Vec<u64>,
     pub labels: Vec<String>,
@@ -75,6 +79,21 @@ pub fn inherited_metadata(block: &Event) -> InheritedMetadata {
     let mut options = block.details.options.clone();
     options.child_metadata = ChildMetadata::default();
     InheritedMetadata {
+        series: if !block.details.recurrence.is_empty()
+            || block.details.recurring_event_id.is_some()
+        {
+            Some(format!(
+                "{}/{}",
+                block.calendar_id,
+                block
+                    .details
+                    .recurring_event_id
+                    .as_deref()
+                    .unwrap_or(&block.id)
+            ))
+        } else {
+            None
+        },
         fields: block.details.options.child_metadata.clone(),
         projects: block.details.projects.clone(),
         labels: block.details.labels.clone(),
