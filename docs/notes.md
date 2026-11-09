@@ -8,7 +8,9 @@ They replace the old Google Keep integration, which has been removed.
 
 Each note is a Markdown file, `<title>.md`. Choose its folder under
 **Settings → Notes** on desktop and mobile. On Android, **Choose folder**
-opens the system folder picker and keeps access across restarts. The folder
+opens the system folder picker and keeps access across restarts. Android
+requires this picker to grant access; typing a filesystem path does not grant
+storage permissions. The folder
 is a device-local setting; choose the corresponding synced folder on each
 device to see the same notes. Switching folders saves pending edits in the
 previous folder first. Notes drafted before setup are saved in the chosen folder.

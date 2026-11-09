@@ -17,7 +17,7 @@ object NotesStorage {
         val result = JSONObject()
         when (request.getString("op")) {
             "pick" -> {
-                prefs.edit().remove("selection").apply()
+                prefs.edit().remove("selection").remove("error").apply()
                 context.startActivity(Intent(context, NotesFolderActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             "selection" -> {
@@ -89,8 +89,10 @@ class NotesFolderActivity : Activity() {
             val prefs = getSharedPreferences("notes-picker", MODE_PRIVATE)
             try {
                 val uri = data.data!!
-                contentResolver.takePersistableUriPermission(uri, data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
-                prefs.edit().putString("selection", uri.toString()).apply()
+                val access = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                require(data.flags and access == access) { "Choose a folder that allows reading and writing notes" }
+                contentResolver.takePersistableUriPermission(uri, access)
+                prefs.edit().remove("error").putString("selection", uri.toString()).apply()
             } catch (error: Exception) { prefs.edit().putString("error", error.message).apply() }
         }
         finish()
