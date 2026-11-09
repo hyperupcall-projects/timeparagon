@@ -7,7 +7,7 @@ own screen and the rest of the app in sheets over it:
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   `[notes] directory` set in `config.toml`.
 - Search and filters for the day.
-- **Do**, **Plan** (Day, Week, 2 Weeks or Month), **Tasks**
+- **Do**, **Plan** (Day, Multi-day or Month), **Tasks**
   with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
   **More** and **Settings**.
 - Joining meetings and answering invitations.
@@ -181,9 +181,11 @@ scopes does not revoke existing tokens.
 **Do** shows the day's calendar,
 with the day picker, **View** (the Calendars and Filter tabs) and **Actions**
 (Sync now) at the left; the picker's ● goes back to today. **Plan** plans the
-period named on it, and its ▾ chooses Day, Week, 2 Weeks or Month. Planning
-shows the selected period: the day calendar or a list of days for a week,
-two weeks or a month. **Tasks** shows the Overdue, Inbox, Today and Backlog
+period named on it, and its ▾ chooses Day, Multi-day or Month. Planning
+shows a day schedule, two or three schedules side by side, or the full month.
+The compact date strip expands from one week to the whole month. Selecting a
+date changes the schedules below it. In Month, tapping a date opens its day;
+the Month button above the schedule returns to the full month. **Tasks** shows the Overdue, Inbox, Today and Backlog
 lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside

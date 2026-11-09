@@ -1,5 +1,4 @@
-//! Week, two-week and month views, as a list: the grids the desktop draws need
-//! more width than a phone has.
+//! Compact agenda lists for one, two or three days, or a month.
 
 use chrono::{Duration, Months, NaiveDate};
 use dioxus::prelude::*;
@@ -13,29 +12,16 @@ use crate::editor::worker;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Range {
-    Week,
-    TwoWeeks,
+    Days(u8),
     Month,
 }
 
 /// The days of the range holding `anchor`, in order.
-pub fn dates(range: Range, anchor: NaiveDate, settings: &CalendarSettings) -> Vec<NaiveDate> {
-    let first_of_week = |day: NaiveDate| {
-        let back = calendar::month_grid(calendar::first_of_month(day), settings.first_day_of_week)
-            .into_iter()
-            .position(|cell| cell == calendar::first_of_month(day))
-            .unwrap_or(0) as i64;
-        let from_first = (day - calendar::first_of_month(day)).num_days();
-        day - Duration::days((from_first + back) % 7)
-    };
+pub fn dates(range: Range, anchor: NaiveDate, _settings: &CalendarSettings) -> Vec<NaiveDate> {
     match range {
-        Range::Week | Range::TwoWeeks => {
-            let count = if range == Range::Week { 7 } else { 14 };
-            let start = first_of_week(anchor);
-            (0..count)
-                .map(|offset| start + Duration::days(offset))
-                .collect()
-        }
+        Range::Days(count) => (0..count)
+            .map(|offset| anchor + Duration::days(i64::from(offset)))
+            .collect(),
         Range::Month => {
             let first = calendar::first_of_month(anchor);
             let next = first.checked_add_months(Months::new(1)).unwrap_or(first);
@@ -44,27 +30,11 @@ pub fn dates(range: Range, anchor: NaiveDate, settings: &CalendarSettings) -> Ve
     }
 }
 
-/// The range's name on its picker, as the desktop's narrow header gives it:
-/// "11/2 – 11/8" for a week or two, and the month's name for a month.
-pub fn label(range: Range, anchor: NaiveDate, settings: &CalendarSettings) -> String {
-    if range == Range::Month {
-        return calendar::month_heading(calendar::first_of_month(anchor));
-    }
-    let days = dates(range, anchor, settings);
-    match (days.first(), days.last()) {
-        (Some(first), Some(last)) => {
-            format!("{} – {}", first.format("%-m/%-d"), last.format("%-m/%-d"))
-        }
-        _ => String::new(),
-    }
-}
-
 /// The anchor of the next or previous range.
 pub fn step(range: Range, anchor: NaiveDate, forward: bool) -> NaiveDate {
     let days = |count: i64| anchor + Duration::days(if forward { count } else { -count });
     match range {
-        Range::Week => days(7),
-        Range::TwoWeeks => days(14),
+        Range::Days(count) => days(i64::from(count)),
         Range::Month => {
             let months = Months::new(1);
             let moved = if forward {
@@ -171,7 +141,7 @@ pub fn AgendaSheet(
     let starting = if filter.is_some() {
         Range::Month
     } else {
-        Range::Week
+        Range::Days(1)
     };
     let mut range = use_signal(move || starting);
     let mut anchor = use_signal(move || day);
@@ -203,8 +173,9 @@ pub fn AgendaSheet(
                     }
                 }
                 div { class: "sheet-tabs",
-                    {tab("Week", Range::Week)}
-                    {tab("2 weeks", Range::TwoWeeks)}
+                    {tab("Day", Range::Days(1))}
+                    {tab("2 days", Range::Days(2))}
+                    {tab("3 days", Range::Days(3))}
                     {tab("Month", Range::Month)}
                     div { class: "spacer" }
                     button {
@@ -252,28 +223,22 @@ fn shows(filter: &crate::habits::CalendarFilter, event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Datelike;
-    use timeslay_core::calendar::first_day::FirstDayOfWeek;
 
     fn on(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
     }
 
     #[test]
-    fn a_week_starts_on_the_configured_day_whichever_day_it_holds() {
-        for first_day in FirstDayOfWeek::ALL {
-            let settings = CalendarSettings {
-                first_day_of_week: first_day,
-                ..CalendarSettings::default()
-            };
-            let wanted = calendar::month_grid(on(2026, 11, 1), first_day)[0].weekday();
-            for offset in 0..40 {
-                let anchor = on(2026, 10, 20) + Duration::days(offset);
-                let week = dates(Range::Week, anchor, &settings);
-                assert_eq!(week.len(), 7);
-                assert_eq!(week[0].weekday(), wanted, "{first_day} {anchor}");
-                assert!(week.contains(&anchor), "{first_day} {anchor}");
-            }
+    fn days_start_at_selection_and_cross_year_boundaries() {
+        let settings = CalendarSettings::default();
+        for count in 1..=3 {
+            let days = dates(Range::Days(count), on(2026, 12, 31), &settings);
+            assert_eq!(days.len(), count as usize);
+            assert_eq!(days[0], on(2026, 12, 31));
+            assert_eq!(
+                *days.last().unwrap(),
+                on(2026, 12, 31) + Duration::days(i64::from(count - 1))
+            );
         }
     }
 
@@ -283,8 +248,11 @@ mod tests {
         let february = dates(Range::Month, on(2026, 2, 14), &settings);
         assert_eq!(february.len(), 28);
         assert_eq!(february[0], on(2026, 2, 1));
-        assert_eq!(dates(Range::TwoWeeks, on(2026, 2, 14), &settings).len(), 14);
-        assert_eq!(step(Range::Week, on(2026, 2, 14), false), on(2026, 2, 7));
+        assert_eq!(dates(Range::Days(3), on(2026, 2, 14), &settings).len(), 3);
+        assert_eq!(
+            step(Range::Days(1), on(2026, 2, 14), false),
+            on(2026, 2, 13)
+        );
         assert_eq!(step(Range::Month, on(2026, 1, 31), true), on(2026, 2, 28));
     }
 }

@@ -11,7 +11,6 @@ use timeslay_core::config::{CalendarSettings, Config};
 use timeslay_core::task_edit::Change;
 use timeslay_core::timeblocking as tb;
 
-use crate::agenda::Range;
 use crate::css_color;
 use crate::day::{self, EditContext};
 use crate::editor::worker;
@@ -20,20 +19,18 @@ use crate::editor::worker;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlanView {
     Day,
-    Week,
-    TwoWeeks,
+    MultiDay,
     Month,
 }
 
 impl PlanView {
-    pub const ALL: [Self; 4] = [Self::Day, Self::Week, Self::TwoWeeks, Self::Month];
+    pub const ALL: [Self; 3] = [Self::Day, Self::MultiDay, Self::Month];
 
     /// The Plan button's label.
     pub fn label(self) -> &'static str {
         match self {
             Self::Day => "Plan Day",
-            Self::Week => "Plan Week",
-            Self::TwoWeeks => "Plan 2 Weeks",
+            Self::MultiDay => "Plan Multi-day",
             Self::Month => "Plan Month",
         }
     }
@@ -42,19 +39,8 @@ impl PlanView {
     pub fn menu_label(self) -> &'static str {
         match self {
             Self::Day => "Day",
-            Self::Week => "Week",
-            Self::TwoWeeks => "2 Weeks",
+            Self::MultiDay => "Multi-day",
             Self::Month => "Month",
-        }
-    }
-
-    /// The range drawn by Plan; a day uses the day calendar.
-    pub fn range(self) -> Option<Range> {
-        match self {
-            Self::Day => None,
-            Self::Week => Some(Range::Week),
-            Self::TwoWeeks => Some(Range::TwoWeeks),
-            Self::Month => Some(Range::Month),
         }
     }
 }
@@ -905,8 +891,10 @@ mod tests {
     #[test]
     fn the_plan_button_names_its_period() {
         assert_eq!(PlanView::Day.label(), "Plan Day");
-        assert_eq!(PlanView::TwoWeeks.label(), "Plan 2 Weeks");
-        assert_eq!(PlanView::Day.range(), None);
-        assert_eq!(PlanView::Month.range(), Some(Range::Month));
+        assert_eq!(PlanView::MultiDay.label(), "Plan Multi-day");
+        assert_eq!(
+            PlanView::ALL.map(PlanView::menu_label),
+            ["Day", "Multi-day", "Month"]
+        );
     }
 }
