@@ -8342,7 +8342,7 @@ dependencies = [
 
 [[package]]
 name = "timeslay"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8383,7 +8383,7 @@ dependencies = [
 
 [[package]]
 name = "timeslay-core"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -8412,7 +8412,7 @@ dependencies = [
 
 [[package]]
 name = "timeslay-dioxus"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "chrono",
  "dioxus",
@@ -8427,7 +8427,7 @@ dependencies = [
 
 [[package]]
 name = "timeslay-migrate"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "chrono",
  "serde_json",
