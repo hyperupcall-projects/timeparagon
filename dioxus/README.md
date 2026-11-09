@@ -16,6 +16,12 @@ own screen and the rest of the app in sheets over it:
   and filters (hold a row to drag it in manual order), each habit's page with its
   charts, notes and calendar events, the add and edit form, the day dialog with
   its logs, archiving, deleting and CSV export (to the Download folder).
+- Alarms (**More → Alarms**): add, edit and delete dated alarms with a label and
+  sound. They sync through Turso and appear on the desktop calendar. Android
+  delivers them as notifications, including while the app is closed; notification
+  permission is required. Built-in sounds work on both devices; desktop audio
+  files use Android’s default sound on the phone. Flash, volume, repeat and
+  window-raising settings apply on desktop.
 - Reminders for events, tasks, time blocks, habits, sleep and travel, with a
   sound per kind (see [docs/reminders.md](../docs/reminders.md)).
 - People (**More → People**): search the contacts of the Google account the
@@ -25,7 +31,7 @@ own screen and the rest of the app in sheets over it:
   Google accounts stay on the desktop, as the phone has no secure store for
   their tokens yet.
 
-Habits, todos, the notepad, brain dumps, projects and work sessions sync
+Alarms, habits, todos, the notepad, brain dumps, projects and work sessions sync
 through the Turso server configured in **Settings → Database sync** on each
 device. The URL is stored in `[database_sync].url` in `config.toml`; a blank URL
 disables sync. Each device needs network access to that server. Changes save locally
@@ -45,12 +51,12 @@ cargo run -p timeslay-core --example database_history -- /path/to/timeslay.sqlit
 
 Only one process per device opens the Turso replica. The desktop dock, panel
 and Android widget service continue using SQLite; journal triggers capture
-changes from every process. Alarms, credentials, theme, calendar/contacts/route
+changes from every process. Credentials, theme, calendar/contacts/route
 caches and fetch timestamps stay local. Google Calendar and Tasks remain their
 own sources of truth. Settings in `config.toml` stay local to each device.
 
-These stay on the desktop: the dock and panel, global shortcuts, alarms and the
-Pomodoro timer (neither runs in the background here yet), voice input, the
+These stay on the desktop: the dock and panel, global shortcuts, the
+Pomodoro timer, voice input, the
 extra Google accounts, and the Slack and browser integrations, which reach the phone as
 ordinary tasks.
 
@@ -195,7 +201,7 @@ the Month button above the schedule returns to the full month. **Tasks** shows t
 lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside
-its list. **Note** opens the notepad, and **More** holds Habits, Notes, Brain
+its list. **Note** opens the notepad, and **More** holds Alarms, Habits, Notes, Brain
 dump, Todos and projects, and Operations. Life stays on the desktop.
 
 ## What the day view shows

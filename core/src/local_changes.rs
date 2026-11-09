@@ -30,6 +30,7 @@ const QUEUE: &str = "google.queue";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Counters {
     pub habits: i64,
+    pub alarms: i64,
     pub overlay: i64,
     pub queue: i64,
 }
@@ -95,6 +96,7 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
             .unwrap_or(0))
     };
     Ok(Counters {
+        alarms: value(&document(crate::task_db::keys::ALARMS))?,
         habits: value(&document(crate::task_db::keys::HABITS))?,
         overlay: value(OVERLAY)?,
         queue: value(QUEUE)?,

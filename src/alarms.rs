@@ -9,6 +9,7 @@
 //! updates that change them. Drawing lives in `ui::calendar` and
 //! `ui::alarms`.
 
+#[cfg(test)]
 use crate::calendar::time_format::TimeFormat;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -32,41 +33,7 @@ const MISSED_GRACE_MINUTES: i64 = 5;
 /// otherwise, so it never announces itself as a finished timer.
 const DEFAULT_SUMMARY: &str = "Alarm";
 
-/// One alarm.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Alarm {
-    pub id: u64,
-    pub at: DateTime<Local>,
-    /// What the alarm is for. Empty for an unnamed alarm.
-    #[serde(default)]
-    pub label: String,
-    /// What happens when it goes off.
-    #[serde(default)]
-    pub profile: AlarmProfile,
-}
-
-impl Alarm {
-    /// The notification and sound to run when this alarm goes off.
-    ///
-    /// A label becomes the notification's headline, and the body always says
-    /// what time was asked for, so the notification never falls back to the
-    /// timer wording.
-    pub fn firing_profile(&self, time_format: TimeFormat) -> AlarmProfile {
-        let mut profile = self.profile.clone();
-
-        if !self.label.trim().is_empty() {
-            profile.notification.summary = self.label.trim().to_owned();
-        }
-        if profile.notification.body.trim().is_empty() {
-            profile.notification.body = format!(
-                "Alarm for {}",
-                crate::calendar::time_format::clock(self.at, time_format)
-            );
-        }
-
-        profile
-    }
-}
+pub use timeslay_core::alarms::Alarm;
 
 /// The popup that edits one alarm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +59,7 @@ pub struct Alarms {
     path: Option<PathBuf>,
     /// Set while an edit has not been written yet.
     dirty: bool,
+    saving: usize,
 }
 
 impl Alarms {
@@ -107,6 +75,22 @@ impl Alarms {
             let now = crate::clock::now();
             alarms.retain(|alarm| minutes_between(now, alarm.at) > -MISSED_GRACE_MINUTES);
             self.items = alarms;
+        }
+    }
+
+    pub fn accepts_shared(&self) -> bool {
+        !self.dirty && self.saving == 0
+    }
+
+    pub fn adopt_shared(&mut self, mut items: Vec<Alarm>) {
+        items.sort_by_key(|alarm| alarm.at);
+        self.items = items;
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|e| self.get(e.id).is_none())
+        {
+            self.editor = None;
         }
     }
 
@@ -128,12 +112,7 @@ impl Alarms {
 
     /// Adds an alarm and returns its id.
     pub fn add(&mut self, at: DateTime<Local>, profile: AlarmProfile) -> u64 {
-        let id = self
-            .items
-            .iter()
-            .map(|alarm| alarm.id)
-            .max()
-            .map_or(1, |max| max + 1);
+        let id = timeslay_core::alarms::new_id();
 
         self.items.push(Alarm {
             id,
@@ -413,11 +392,18 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
 
         Action::Saved(result) => {
+            state.alarms.saving = state.alarms.saving.saturating_sub(1);
             if let Err(error) = result {
+                state.alarms.dirty = true;
                 log::warn!("could not save the alarms: {error}");
+                return Task::none();
             }
 
-            Task::none()
+            if state.alarms.dirty {
+                save(state)
+            } else {
+                Task::none()
+            }
         }
     }
 }
@@ -546,6 +532,9 @@ fn ring_due(state: &mut State) -> Task<Message> {
             state.alarms.editor = None;
         }
 
+        if minutes_between(crate::clock::now(), alarm.at) <= -MISSED_GRACE_MINUTES {
+            continue;
+        }
         tasks.push(app::fire(
             state,
             &alarm.firing_profile(state.config.appearance.time_format),
@@ -559,12 +548,17 @@ fn ring_due(state: &mut State) -> Task<Message> {
 
 /// Writes the alarms on a worker thread, the way the config is saved.
 fn save(state: &mut State) -> Task<Message> {
+    if state.alarms.saving > 0 {
+        state.alarms.dirty = true;
+        return Task::none();
+    }
     state.alarms.dirty = false;
 
     let Some((path, alarms)) = state.alarms.snapshot() else {
         return Task::none();
     };
 
+    state.alarms.saving += 1;
     blocking::run(move || write(&path, alarms).map_err(|error| error.to_string()))
         .map(|result| Message::Alarms(Action::Saved(result)))
 }

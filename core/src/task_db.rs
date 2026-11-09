@@ -139,7 +139,7 @@ impl Database {
         if !memory {
             let enrolled = db
                 .query_row(
-                    "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_control'",
+                    "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_alarms_v1'",
                     [],
                     |_| Ok(()),
                 )

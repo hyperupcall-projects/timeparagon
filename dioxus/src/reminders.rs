@@ -29,7 +29,7 @@ struct Plan {
 
 #[derive(Debug, Serialize)]
 struct CategoryPlan {
-    id: &'static str,
+    id: String,
     label: &'static str,
     enabled: bool,
     color: String,
@@ -51,7 +51,7 @@ struct SoundPlan {
 #[derive(Debug, Serialize)]
 struct Item {
     key: String,
-    category: &'static str,
+    category: String,
     title: String,
     body: String,
     /// Milliseconds since the epoch.
@@ -87,13 +87,13 @@ fn hex(color: timeslay_core::Color) -> String {
 fn plan(config: &Config, due: Vec<timeslay_core::reminders::Due>) -> Plan {
     let settings = &config.reminders;
     Plan {
-        enabled: settings.enabled,
+        enabled: true,
         categories: Category::ALL
             .into_iter()
             .map(|category| CategoryPlan {
-                id: category.id(),
+                id: category.id().into(),
                 label: category.label(),
-                enabled: settings.get(category).enabled,
+                enabled: settings.enabled && settings.get(category).enabled,
                 color: hex(category.color(&config.calendar)),
                 sound: sound_plan(&settings.get(category).sound),
             })
@@ -102,12 +102,50 @@ fn plan(config: &Config, due: Vec<timeslay_core::reminders::Due>) -> Plan {
             .into_iter()
             .map(|due| Item {
                 key: due.key,
-                category: due.category.id(),
+                category: due.category.id().into(),
                 title: due.title,
                 body: due.body,
                 at: due.at.timestamp_millis(),
             })
             .collect(),
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn append_alarms(
+    plan: &mut Plan,
+    library: timeslay_core::alarms::Library,
+    now: DateTime<Local>,
+    format: timeslay_core::calendar::time_format::TimeFormat,
+) {
+    for alarm in library.alarms {
+        if alarm.at < now - chrono::Duration::minutes(5) {
+            continue;
+        }
+        let profile = alarm.firing_profile(format);
+        let category = format!("alarm-{}", alarm.id);
+        let sound = if !profile.sound.enabled {
+            Sound::Silent
+        } else {
+            match profile.sound.choice {
+                timeslay_core::alarms::SoundChoice::Builtin(tone) => Sound::Tone { tone },
+                timeslay_core::alarms::SoundChoice::Custom { .. } => Sound::Default,
+            }
+        };
+        plan.categories.push(CategoryPlan {
+            id: category.clone(),
+            label: "Alarm",
+            enabled: profile.notification.enabled || profile.sound.enabled,
+            color: "#A855F7".into(),
+            sound: sound_plan(&sound),
+        });
+        plan.reminders.push(Item {
+            key: format!("alarm:{}:{}", alarm.id, alarm.at.timestamp_millis()),
+            category,
+            title: profile.notification.summary,
+            body: profile.notification.body,
+            at: alarm.at.timestamp_millis(),
+        });
     }
 }
 
@@ -148,11 +186,27 @@ pub fn publish(config: &Config) {
     // The first publish in a process always re-arms, in case the alarms were
     // lost (an update, a force stop) while the plan on disk stayed the same.
     static ARMED: AtomicBool = AtomicBool::new(false);
+    // Settings changes and database sync can publish concurrently. Read and
+    // publish in order so an older plan cannot replace a newer alarm edit.
+    static PUBLISH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _publishing = PUBLISH.lock().unwrap_or_else(|error| error.into_inner());
 
     let Some(path) = files_dir().map(|dir| dir.join("reminders.json")) else {
         return;
     };
-    let plan = plan(config, due(config, timeslay_core::clock::now()));
+    let mut plan = plan(config, due(config, timeslay_core::clock::now()));
+    let Some(database) = timeslay_core::task_db::path() else {
+        return;
+    };
+    let Ok(library) = timeslay_core::alarms::read(&database) else {
+        return;
+    };
+    append_alarms(
+        &mut plan,
+        library,
+        timeslay_core::clock::now(),
+        config.appearance.time_format,
+    );
     let Ok(json) = serde_json::to_vec(&plan) else {
         return;
     };
@@ -279,7 +333,7 @@ fn request_device_info() {
 }
 
 /// Shows Android's "allow notifications" prompt where the system has one.
-fn request_permission() {
+pub fn request_permission() {
     #[cfg(target_os = "android")]
     send(None, None, Some(PERMISSION_ACTIVITY));
 }
@@ -537,6 +591,54 @@ mod tests {
     use super::*;
     use timeslay_core::reminders::Due;
     use timeslay_core::sounds::Tone;
+
+    #[test]
+    fn alarms_are_planned_independently_of_reminders_and_keep_their_sound() {
+        use timeslay_core::alarms::{Alarm, AlarmProfile, Library, SoundChoice};
+        let config = Config::default();
+        let now = timeslay_core::clock::now();
+        let mut profile = AlarmProfile::default();
+        profile.sound.choice = SoundChoice::Builtin(Tone::Bell);
+        let alarm = Alarm {
+            id: 42,
+            at: now + chrono::Duration::days(3),
+            label: "Tea".into(),
+            profile,
+        };
+        let mut plan = plan(&config, vec![]);
+        append_alarms(
+            &mut plan,
+            Library {
+                alarms: vec![alarm.clone()],
+            },
+            now,
+            config.appearance.time_format,
+        );
+        assert!(plan.enabled);
+        assert!(
+            plan.categories
+                .iter()
+                .filter(|c| c.id != "alarm-42")
+                .all(|c| !c.enabled)
+        );
+        let category = plan.categories.last().unwrap();
+        assert!(category.enabled);
+        assert_eq!(category.sound.resource, "timeslay_tone_bell");
+        assert_eq!(plan.reminders[0].title, "Tea");
+        assert_eq!(plan.reminders[0].at, alarm.at.timestamp_millis());
+        let mut expired = alarm;
+        expired.at = now - chrono::Duration::minutes(6);
+        let count = plan.reminders.len();
+        append_alarms(
+            &mut plan,
+            Library {
+                alarms: vec![expired],
+            },
+            now,
+            config.appearance.time_format,
+        );
+        assert_eq!(plan.reminders.len(), count);
+    }
 
     #[test]
     fn the_plan_carries_every_category_and_each_reminder() {
