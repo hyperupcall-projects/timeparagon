@@ -271,7 +271,7 @@ fn parse_front_matter(front: &str, note: &mut Note) {
     }
 }
 
-fn parse(name: &str, text: &str, modified_ms: i64) -> Note {
+pub(super) fn parse(name: &str, text: &str, modified_ms: i64) -> Note {
     let (front, body) = split_front_matter(text);
     let mut note = Note {
         id: format!("file:{name}"),

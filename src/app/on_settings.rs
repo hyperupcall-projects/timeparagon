@@ -4,6 +4,39 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Message> {
     match message {
+        SettingsMessage::NotesDirectoryChanged(value) => {
+            state.notes.directory_input = value;
+            Task::none()
+        }
+        SettingsMessage::NotesDirectoryBrowse => blocking::run(|| {
+            rfd::FileDialog::new()
+                .set_title("Choose notes folder")
+                .pick_folder()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .map(|path| Message::Settings(SettingsMessage::NotesDirectoryPicked(path))),
+        SettingsMessage::NotesDirectoryPicked(path) => {
+            if let Some(path) = path {
+                state.notes.directory_input = path;
+                return update(state, SettingsMessage::NotesDirectoryApply);
+            }
+            Task::none()
+        }
+        SettingsMessage::NotesDirectoryApply => {
+            let settings = timeslay_core::config::NotesSettings {
+                directory: state.notes.directory_input.trim().to_owned(),
+            };
+            match state.notes.configure(settings.path()) {
+                Ok(()) => {
+                    state.config.notes = settings;
+                    queue_save(state)
+                }
+                Err(error) => {
+                    state.notes.error = Some(format!("Could not change notes folder: {error}"));
+                    Task::none()
+                }
+            }
+        }
         SettingsMessage::DatabaseSyncUrlChanged(url) => {
             state.config.database_sync.url = url;
             queue_save(state)

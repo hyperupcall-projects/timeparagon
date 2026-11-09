@@ -7,6 +7,8 @@
 //! is kept in the database; [`migrate_database`] moves notes an older build
 //! kept there into the directory.
 
+#[cfg(target_os = "android")]
+pub mod android;
 mod files;
 pub mod markdown;
 
@@ -188,6 +190,32 @@ pub fn directory() -> Option<PathBuf> {
     crate::config::NotesSettings::load().path()
 }
 
+/// Opens the saved Markdown file using the device's associated app.
+pub fn open_file(directory: &Path, file: &str) -> std::io::Result<()> {
+    if Path::new(file).file_name().and_then(|name| name.to_str()) != Some(file) {
+        return Err(std::io::Error::other("Invalid note filename"));
+    }
+    #[cfg(target_os = "android")]
+    return android::open(directory, file);
+    #[cfg(not(target_os = "android"))]
+    {
+        let path = directory.join(file).canonicalize()?;
+        #[cfg(target_os = "macos")]
+        let mut command = std::process::Command::new("open");
+        #[cfg(target_os = "windows")]
+        let mut command = std::process::Command::new("explorer");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let mut command = std::process::Command::new("xdg-open");
+        if command.arg(path).status()?.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(
+                "Could not open the note in its default app",
+            ))
+        }
+    }
+}
+
 /// What a save did, for [`Library::saved`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Saved {
@@ -222,6 +250,10 @@ impl Library {
 
     /// [`Self::load`], with the error.
     pub fn read(directory: &Path) -> std::io::Result<Self> {
+        #[cfg(target_os = "android")]
+        if android::is_tree(directory) {
+            return android::read(directory);
+        }
         files::read(directory)
     }
 
@@ -229,6 +261,10 @@ impl Library {
     /// removing those of deleted ones. Files this library does not know about,
     /// such as ones made in another editor since it was read, are left alone.
     pub fn save(&self, directory: &Path) -> std::io::Result<Saved> {
+        #[cfg(target_os = "android")]
+        if android::is_tree(directory) {
+            return android::save(self, directory);
+        }
         files::write(self, directory)
     }
 
@@ -351,6 +387,10 @@ impl Library {
 /// A cheap summary of the directory's Markdown files (their names, sizes and
 /// modification times), so a poll only rereads the notes when it changes.
 pub fn fingerprint(directory: &Path) -> u64 {
+    #[cfg(target_os = "android")]
+    if android::is_tree(directory) {
+        return android::fingerprint(directory);
+    }
     files::fingerprint(directory)
 }
 
@@ -369,11 +409,21 @@ pub fn migrate_database(database: &Path, directory: &Path) -> std::io::Result<us
     let moved = match library {
         Some(mut library) if !library.notes.is_empty() => {
             library.notes.retain(|note| !note.is_blank());
-            files::claim_identical(&mut library, directory)?;
+            #[cfg(target_os = "android")]
+            let tree = android::is_tree(directory);
+            #[cfg(not(target_os = "android"))]
+            let tree = false;
+            #[cfg(target_os = "android")]
+            if tree {
+                android::claim_identical(&mut library, directory)?;
+            }
+            if !tree {
+                files::claim_identical(&mut library, directory)?;
+            }
             let saved = library.save(directory)?;
             // The files keep the notes' own times, so they sort as before.
             for (id, file) in &saved.files {
-                if let Some(note) = library.note(id) {
+                if !tree && let Some(note) = library.note(id) {
                     files::set_modified(&directory.join(file), note.modified_ms);
                 }
             }
@@ -417,6 +467,12 @@ mod tests {
     fn save(library: &mut Library, directory: &Path) {
         let saved = library.save(directory).unwrap();
         library.saved(&saved);
+    }
+
+    #[test]
+    fn opening_rejects_paths_outside_the_notes_folder() {
+        assert!(open_file(Path::new("/tmp"), "../private.md").is_err());
+        assert!(open_file(Path::new("/tmp"), "/private.md").is_err());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::blocking;
 use crate::calendar::Event;
 
 /// Shown while notes have nowhere to go.
-const NO_DIRECTORY: &str = "Notes are not saved: set a directory under [notes] in config.toml";
+const NO_DIRECTORY: &str = "Notes are not saved: choose a notes folder in Settings";
 
 /// How far either side of the day in view to look for things to connect.
 const SEARCH_DAYS: i64 = 30;
@@ -37,6 +37,7 @@ pub struct Store {
     live: bool,
     /// The notes directory, when one is set.
     directory: Option<PathBuf>,
+    pub directory_input: String,
     /// Bumped by every save, so a reload read before it can tell it is out
     /// of date.
     revision: u64,
@@ -56,6 +57,7 @@ pub struct Store {
     /// Where the back button goes when a note was opened from elsewhere.
     return_to: Option<Screen>,
     saving: bool,
+    open_external_pending: bool,
     /// The cached copy on disk is behind.
     cache_stale: bool,
     pub error: Option<String>,
@@ -67,6 +69,7 @@ impl Default for Store {
             library: Library::default(),
             live: false,
             directory: None,
+            directory_input: String::new(),
             open: None,
             tab: Tab::default(),
             editor: text_editor::Content::new(),
@@ -76,6 +79,7 @@ impl Default for Store {
             confirm_delete: false,
             return_to: None,
             saving: false,
+            open_external_pending: false,
             revision: 0,
             cache_stale: false,
             error: None,
@@ -151,7 +155,54 @@ impl Store {
             }
             None => self.error = Some(NO_DIRECTORY.into()),
         }
+        self.directory_input = directory
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         self.directory = directory;
+    }
+
+    /// Flush the old folder before switching, so pending edits cannot leak into
+    /// another library. Unsaved notes created before setup are retained.
+    pub fn configure(&mut self, directory: Option<PathBuf>) -> Result<(), String> {
+        if self.directory == directory {
+            return Ok(());
+        }
+        if self.saving {
+            return Err("Notes are still saving; try again in a moment".into());
+        }
+        if self.live
+            && self.directory.is_none()
+            && let Some(path) = &directory
+            && let Some(database) = timeslay_core::task_db::path()
+        {
+            notes::migrate_database(&database, path).map_err(|e| e.to_string())?;
+        }
+        let mut next = match &directory {
+            Some(path) => Library::read(path).map_err(|e| e.to_string())?,
+            None => Library::default(),
+        };
+        if self.cache_stale
+            && let Some(old) = &self.directory
+        {
+            let saved = self.library.save(old).map_err(|e| e.to_string())?;
+            self.library.saved(&saved);
+        }
+        let drafts = self.directory.is_none() && !self.library.notes.is_empty();
+        if drafts {
+            next.notes.extend(self.library.notes.clone());
+        }
+        if drafts && let Some(path) = &directory {
+            let saved = next.save(path).map_err(|e| e.to_string())?;
+            next.saved(&saved);
+        }
+        self.open = None;
+        self.library = next;
+        self.directory = directory;
+        self.cache_stale = false;
+        self.revision += 1;
+        self.error = self.directory.is_none().then(|| NO_DIRECTORY.into());
+        Ok(())
     }
 
     pub fn saving(&self) -> bool {
@@ -196,6 +247,8 @@ impl Store {
 pub enum Action {
     /// Reload the local database copy.
     Refresh,
+    OpenExternal,
+    ExternalOpened(Result<(), String>),
     Saved(Result<Saved, String>),
     /// The timer for saving local edits.
     Tick,
@@ -302,16 +355,57 @@ pub fn title_input_id() -> iced::widget::Id {
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
     match action {
         Action::Refresh => refresh(state),
+        Action::OpenExternal => {
+            if state.notes.saving {
+                state.notes.open_external_pending = true;
+                return Task::none();
+            }
+            let result = (|| -> Result<_, String> {
+                let directory = state.notes.directory.clone().ok_or(NO_DIRECTORY)?;
+                let saved = state
+                    .notes
+                    .library
+                    .save(&directory)
+                    .map_err(|e| e.to_string())?;
+                state.notes.library.saved(&saved);
+                state.notes.cache_stale = false;
+                let file = state
+                    .notes
+                    .open_note()
+                    .and_then(|n| n.file.clone())
+                    .ok_or("No note selected")?;
+                Ok((directory, file))
+            })();
+            match result {
+                Ok((directory, file)) => blocking::run(move || {
+                    notes::open_file(&directory, &file).map_err(|e| e.to_string())
+                })
+                .map(|result| Message::Notes(Action::ExternalOpened(result))),
+                Err(error) => {
+                    state.notes.error = Some(error);
+                    Task::none()
+                }
+            }
+        }
+        Action::ExternalOpened(result) => {
+            state.notes.error = result.err();
+            Task::none()
+        }
         Action::Saved(result) => {
             state.notes.saving = false;
             match result {
                 Ok(saved) => {
                     state.notes.library.saved(&saved);
                     state.notes.error = None;
-                    save_cache(&mut state.notes)
+                    if std::mem::take(&mut state.notes.open_external_pending) {
+                        Task::done(Message::Notes(Action::OpenExternal))
+                    } else {
+                        save_cache(&mut state.notes)
+                    }
                 }
                 Err(error) => {
                     state.notes.cache_stale = true;
+                    state.notes.open_external_pending = false;
                     state.notes.error = Some(format!("Could not save notes: {error}"));
                     Task::none()
                 }
@@ -747,6 +841,47 @@ mod tests {
         act(&mut state, Action::DeleteConfirmed);
         assert!(state.notes.library.notes.is_empty());
         assert!(state.notes.open.is_none());
+    }
+
+    #[test]
+    fn choosing_a_folder_keeps_drafts_and_loads_existing_notes() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("Existing.md"), "from mobile").unwrap();
+        let mut store = Store::default();
+        let id = store.library.create("Draft", Vec::new());
+        store.library.edit(&id, |note| note.body = "pending".into());
+        store.configure(Some(folder.path().into())).unwrap();
+        assert_eq!(store.library.notes.len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("Draft.md")).unwrap(),
+            "pending"
+        );
+        assert!(store.error.is_none());
+    }
+
+    #[test]
+    fn changing_folders_flushes_old_edits_and_does_not_copy_them() {
+        let old = tempfile::tempdir().unwrap();
+        let new = tempfile::tempdir().unwrap();
+        let mut store = Store::default();
+        store.go_live(Some(old.path().into()), None);
+        let id = store.library.create("Old", Vec::new());
+        store
+            .library
+            .edit(&id, |note| note.body = "last edit".into());
+        store.touched();
+        std::fs::write(new.path().join("New.md"), "shared").unwrap();
+        store.configure(Some(new.path().into())).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(old.path().join("Old.md")).unwrap(),
+            "last edit"
+        );
+        assert_eq!(store.library.notes.len(), 1);
+        assert_eq!(store.library.notes[0].title, "New");
+        assert!(!new.path().join("Old.md").exists());
+        store.saving = true;
+        assert!(store.configure(Some(old.path().into())).is_err());
+        assert_eq!(store.directory(), Some(new.path()));
     }
 
     #[test]

@@ -516,6 +516,10 @@ pub enum NotepadMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum SettingsMessage {
+    NotesDirectoryChanged(String),
+    NotesDirectoryApply,
+    NotesDirectoryBrowse,
+    NotesDirectoryPicked(Option<String>),
     DatabaseSyncUrlChanged(String),
     ThemeSelected(String),
     TimeFormatSelected(TimeFormat),
