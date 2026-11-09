@@ -32,8 +32,9 @@ use std::{
 
 const TABLE: &str = "timeslay_revisions_v1";
 /// The documents shared between devices. Everything else stays local.
-const SHARED_KEYS: [&str; 6] = [
+const SHARED_KEYS: [&str; 7] = [
     "habits",
+    "alarms",
     "shared.todos",
     "shared.notepad",
     "shared.brain_dump",
@@ -134,6 +135,7 @@ fn describe_edits(edits: &[&Edit]) -> String {
     for edit in edits {
         let kind = match edit.document.as_str() {
             "habits" => "habit",
+            "alarms" => "alarm",
             "shared.todos" => "todo",
             "shared.notepad" => "notepad",
             "shared.brain_dump" => "brain dump",
@@ -232,6 +234,41 @@ pub fn enroll(path: &Path) -> io::Result<()> {
     tx.execute_batch("CREATE TABLE IF NOT EXISTS timeslay_sync_control(singleton INTEGER PRIMARY KEY CHECK(singleton=1), projecting INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS timeslay_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);").map_err(other)?;
     install_snapshots(&tx).map_err(other)?;
+    // Previously local alarms used small sequential IDs on every device.
+    // Give each pre-sync alarm its own identity before recording its first edit.
+    let alarm_history = tx
+        .query_row(
+            "SELECT 1 FROM timeslay_sync_edits WHERE document='alarms' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(other)?
+        .is_some();
+    if !alarm_history {
+        let text: Option<String> = tx
+            .query_row("SELECT value FROM documents WHERE key='alarms'", [], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(other)?;
+        if let Some(text) = text
+            && let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text)
+        {
+            if let Some(items) = value.get_mut("alarms").and_then(|v| v.as_array_mut()) {
+                for item in items {
+                    if let Some(fields) = item.as_object_mut() {
+                        fields.insert("id".into(), crate::alarms::new_id().into());
+                    }
+                }
+            }
+            tx.execute(
+                "UPDATE documents SET value=?1 WHERE key='alarms'",
+                [value.to_string()],
+            )
+            .map_err(other)?;
+        }
+    }
     let shared = shared_sql();
     let enrolled = tx
         .query_row(
@@ -246,6 +283,24 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         tx.execute("INSERT INTO timeslay_sync_control VALUES(1,0,0)", [])
             .map_err(other)?;
         tx.execute_batch(&format!("INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,1,0 FROM documents WHERE key IN ({shared});")).map_err(other)?;
+    }
+    // Upgrade an already enrolled database: seed its existing local alarms once,
+    // and replace the old allowlist triggers in this same transaction.
+    let alarms_enrolled = tx
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_alarms_v1'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(other)?
+        .is_some();
+    if !alarms_enrolled {
+        tx.execute_batch("INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,(SELECT coalesce(max(clock),0)+1 FROM timeslay_sync_edits),0 FROM documents WHERE key='alarms' AND NOT EXISTS(SELECT 1 FROM timeslay_sync_edits WHERE document='alarms');
+            DROP TRIGGER IF EXISTS timeslay_sync_insert;
+            DROP TRIGGER IF EXISTS timeslay_sync_update;
+            DROP TRIGGER IF EXISTS timeslay_sync_delete;
+            CREATE TABLE timeslay_sync_alarms_v1(singleton INTEGER PRIMARY KEY);").map_err(other)?;
     }
     for (name, kind, condition, key, before, after) in [
         ("insert", "INSERT", "1", "NEW.key", "NULL", "NEW.value"),
@@ -1036,6 +1091,86 @@ mod tests {
         let doc = serde_json::json!({"habits":[{"id":"a","marks":marks}]});
         crate::task_db::write_document(path, "habits", &doc).unwrap();
     }
+    #[test]
+    fn alarms_merge_offline_additions_edits_and_deletions_between_devices() {
+        use crate::alarms::{self, Alarm, AlarmProfile, Library};
+        let (_a, first) = db();
+        let (_b, second) = db();
+        let at = crate::clock::now() + chrono::Duration::hours(1);
+        let make = |label: &str| Alarm {
+            id: alarms::new_id(),
+            at,
+            label: label.into(),
+            profile: AlarmProfile::default(),
+        };
+        let a = make("Desktop");
+        let b = make("Phone");
+        assert_ne!(a.id, b.id);
+        alarms::write(
+            &first,
+            &Library {
+                alarms: vec![a.clone()],
+            },
+        )
+        .unwrap();
+        alarms::write(
+            &second,
+            &Library {
+                alarms: vec![b.clone()],
+            },
+        )
+        .unwrap();
+        let mut server = HashMap::new();
+        send(&first, &mut server);
+        send(&second, &mut server);
+        let remote = server.values().cloned().collect::<Vec<_>>();
+        apply(&first, &remote, None, now()).unwrap();
+        apply(&second, &remote, None, now()).unwrap();
+        assert_eq!(alarms::read(&first).unwrap().alarms.len(), 2);
+        let mut desktop = alarms::read(&first).unwrap();
+        desktop.alarms.retain(|item| item.id != a.id);
+        let mut phone = alarms::read(&second).unwrap();
+        phone
+            .alarms
+            .iter_mut()
+            .find(|item| item.id == b.id)
+            .unwrap()
+            .label = "Edited on phone".into();
+        alarms::write(&first, &desktop).unwrap();
+        alarms::write(&second, &phone).unwrap();
+        send(&first, &mut server);
+        send(&second, &mut server);
+        let remote = server.values().cloned().collect::<Vec<_>>();
+        for path in [&first, &second] {
+            apply(path, &remote, None, now()).unwrap();
+            let result = alarms::read(path).unwrap();
+            assert_eq!(result.alarms.len(), 1);
+            assert_eq!(result.alarms[0].id, b.id);
+            assert_eq!(result.alarms[0].label, "Edited on phone");
+        }
+    }
+
+    #[test]
+    fn upgrade_enrolls_existing_local_alarms_once_and_replaces_old_triggers() {
+        let (_d, path) = db();
+        let connection = open(&path).unwrap();
+        connection.execute_batch("DROP TABLE timeslay_sync_alarms_v1;
+            DROP TRIGGER timeslay_sync_insert;
+            CREATE TRIGGER timeslay_sync_insert AFTER INSERT ON documents WHEN NEW.key='habits' BEGIN SELECT 1; END;
+            INSERT INTO documents VALUES('alarms','{\"alarms\":[{\"id\":1,\"label\":\"Existing\"}]}');").unwrap();
+        assert!(history(&path).unwrap().is_empty());
+        enroll(&path).unwrap();
+        enroll(&path).unwrap();
+        assert_eq!(history(&path).unwrap().len(), 1);
+        let migrated: serde_json::Value = crate::task_db::read_document(&path, "alarms")
+            .unwrap()
+            .unwrap();
+        assert_ne!(migrated["alarms"][0]["id"], 1);
+        assert_eq!(migrated["alarms"][0]["label"], "Existing");
+        crate::task_db::write_document_json(&path, "alarms", r#"{"alarms":[{"id":4}]}"#).unwrap();
+        assert_eq!(history(&path).unwrap().len(), 2);
+    }
+
     #[test]
     fn enrollment_and_projection_are_retryable_and_do_not_rejournal_remote_writes() {
         let (_d, path) = db();

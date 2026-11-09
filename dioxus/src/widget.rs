@@ -235,6 +235,8 @@ pub fn notify() {
 #[cfg(target_os = "android")]
 fn refresh() -> bool {
     let config = day::load_config();
+    // Standalone alarms do not depend on Google sign-in or calendar reminders.
+    crate::reminders::publish(&config);
     if !day::signed_in() {
         // Nothing to sync with until the user signs in, so retrying cannot help.
         return true;

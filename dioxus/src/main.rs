@@ -7,6 +7,7 @@
 //! block first lists its assigned tasks.
 
 mod agenda;
+mod alarms;
 mod create;
 mod day;
 mod editor;
@@ -229,6 +230,7 @@ fn App() -> Element {
     let mut show_people = use_signal(|| false);
     // Kept while the app runs, so the sheet reopens on what it showed.
     let people_store = use_signal(people::Store::live);
+    let mut show_alarms = use_signal(|| false);
     let mut show_operations = use_signal(|| false);
     let mut google_operations = use_signal(Vec::<calendar::operations::Operation>::new);
     calendar::operations::start();
@@ -373,6 +375,9 @@ fn App() -> Element {
                 && let Ok(rows) = calendar::operations::list()
             {
                 google_operations.set(rows);
+            }
+            if moved(|c| c.alarms) {
+                reminders::republish(&config.peek());
             }
             notes_store.reload_shared();
             changes = counters;
@@ -1064,6 +1069,7 @@ fn App() -> Element {
                             },
                             "Todos and projects"
                         }
+                        button { class: "btn", onclick: move |_| { show_more.set(false); show_alarms.set(true); }, "Alarms" }
                         button { class: "btn", onclick: move |_| {show_more.set(false);show_operations.set(true);}, "Operations" }
                         p { class: "hint", "{database_sync_status}" }
                     }
@@ -1489,6 +1495,7 @@ fn App() -> Element {
             {create_sheet}
             {scratch_sheet}
             {more_sheet}
+            if show_alarms() { alarms::AlarmsSheet { config, day: selected_day, on_close: move |_| show_alarms.set(false) } }
             {people_sheet}
             if show_operations() {
                 div { class: "modal-backdrop", onclick: move |_| show_operations.set(false),

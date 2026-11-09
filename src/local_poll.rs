@@ -32,6 +32,7 @@ pub struct Poll {
     overlay: Option<i64>,
     queue: Option<i64>,
     habits: Option<i64>,
+    alarms: Option<i64>,
     /// The notes directory's [`timeslay_core::notes::fingerprint`].
     notes: Option<u64>,
     /// Read the queued edits again even though their counter has not moved,
@@ -43,6 +44,8 @@ pub struct Poll {
 #[derive(Debug, Clone)]
 pub struct Polled {
     counters: Counters,
+    alarms: Option<Result<timeslay_core::alarms::Snapshot, String>>,
+    alarms_before: Vec<crate::alarms::Alarm>,
     overlay: Option<Result<Overlay, String>>,
     operations: Option<Result<Vec<Operation>, String>>,
     habits: Option<Result<Option<timeslay_core::habits::Library>, String>>,
@@ -76,6 +79,8 @@ pub fn start(state: &mut State) -> Task<Message> {
         state.poll.habits,
         state.poll.notes,
     );
+    let previous_alarms = state.poll.alarms;
+    let alarms_before = state.alarms.items().to_vec();
     let force_overlay = std::mem::take(&mut state.poll.force_overlay);
     let habits_revision = state.habits.revision();
     let notes_revision = state.notes.revision();
@@ -96,6 +101,9 @@ pub fn start(state: &mut State) -> Task<Message> {
             .map_or(0, timeslay_core::notes::fingerprint);
         Some(Polled {
             counters,
+            alarms: moved(previous_alarms, counters.alarms)
+                .then(|| timeslay_core::alarms::poll(&database).map_err(|e| e.to_string())),
+            alarms_before,
             overlay: overlay_path
                 .filter(|_| force_overlay || moved(overlay, counters.overlay))
                 .map(|path| operations::load_overlay(&path)),
@@ -131,6 +139,8 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
     };
     let Polled {
         counters,
+        alarms,
+        alarms_before,
         overlay,
         operations,
         habits,
@@ -163,6 +173,20 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
                 .record(format!("Cannot read the Google queue: {error}"), true),
         }
         state.operations = operations;
+    }
+
+    if state.alarms.accepts_shared() && state.alarms.items() == alarms_before {
+        match alarms {
+            Some(Ok(snapshot)) => {
+                if let Some(path) = timeslay_core::task_db::path() {
+                    snapshot.observe(&path);
+                }
+                state.alarms.adopt_shared(snapshot.library.alarms);
+                state.poll.alarms = Some(counters.alarms);
+            }
+            Some(Err(error)) => log::warn!("could not reload alarms: {error}"),
+            None => {}
+        }
     }
 
     match habits {
@@ -212,6 +236,8 @@ mod tests {
                 habits: 7,
                 ..Default::default()
             },
+            alarms: None,
+            alarms_before: state.alarms.items().to_vec(),
             overlay: None,
             operations: None,
             habits: Some(Ok(Some(habits))),
