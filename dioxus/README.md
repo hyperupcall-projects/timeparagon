@@ -7,7 +7,7 @@ own screen and the rest of the app in sheets over it:
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   `[notes] directory` set in `config.toml`.
 - Search and filters for the day.
-- **Do**, **Plan** (Day, Multi-day or Month), **Tasks**
+- **Do**, **Plan** (Day, Multi-day, Month or Schedule), **Tasks**
   with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
   **More** and **Settings**.
 - Joining meetings and answering invitations.

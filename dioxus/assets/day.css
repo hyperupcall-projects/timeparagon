@@ -3006,3 +3006,28 @@ textarea {
     .planner-date { min-height: 28px; }
     .planner-number { width: 25px; height: 25px; }
 }
+
+/* Schedule: date gutter, calendar color, time and title. */
+.schedule-list { overflow-y: auto; min-height: 0; flex: 1; }
+.schedule-day { display: grid; grid-template-columns: 150px minmax(0, 1fr); border-bottom: 1px solid var(--edge); padding: 14px 8px; }
+.schedule-date { align-self: start; display: flex; align-items: center; gap: 12px; border: 0; background: none; color: inherit; padding: 6px; text-transform: uppercase; font-size: 12px; cursor: pointer; }
+.schedule-day-number { font-size: 24px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; }
+.schedule-date.today { color: var(--accent); }
+.schedule-date.today .schedule-day-number { background: var(--accent); color: var(--on-accent, white); }
+.schedule-rows { min-width: 0; }
+.schedule-row { display: grid; grid-template-columns: 12px 180px minmax(0, 1fr); align-items: center; gap: 20px; width: 100%; padding: 10px 12px; min-height: 40px; background: none; color: inherit; border: 0; border-radius: 20px; text-align: left; cursor: pointer; font: inherit; }
+.schedule-row:hover, .schedule-row:focus-visible { background: var(--hover); }
+.schedule-dot { width: 12px; height: 12px; border-radius: 50%; }
+.schedule-title { overflow-wrap: anywhere; }
+.schedule-row.past { opacity: .4; }
+.schedule-now { position: relative; height: 1px; background: #e53935; margin: 2px 0; }
+.schedule-now::before { content: ''; position: absolute; top: -5px; left: -5px; width: 11px; height: 11px; border-radius: 50%; background: #e53935; }
+.schedule-empty { padding: 10px 12px; }
+@media (max-width: 600px) {
+  .schedule-day { grid-template-columns: 64px minmax(0,1fr); padding: 12px 4px; }
+  .schedule-date { flex-direction: column; gap: 2px; font-size: 10px; padding: 4px 0; }
+  .schedule-row { grid-template-columns: 10px minmax(0,1fr); gap: 4px 12px; padding: 9px 10px; border-radius: 12px; }
+  .schedule-dot { grid-row: 1 / 3; width: 10px; height: 10px; }
+  .schedule-time { grid-column: 2; font-size: 12px; }
+  .schedule-title { grid-column: 2; font-size: 14px; }
+}

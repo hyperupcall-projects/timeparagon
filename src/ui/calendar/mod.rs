@@ -12,6 +12,7 @@ mod menu;
 mod month;
 mod pointer;
 mod preview;
+mod schedule;
 mod search;
 #[cfg(test)]
 mod sleep_tests;
@@ -33,6 +34,7 @@ use menu::*;
 pub use month::*;
 pub use pointer::*;
 pub use preview::preview_view;
+pub use schedule::*;
 pub(crate) use search::*;
 pub use two_week::*;
 pub use week::*;

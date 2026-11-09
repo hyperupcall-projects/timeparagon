@@ -1,4 +1,4 @@
-//! Phone calendar: an expandable date strip above a shared one-to-three-day grid.
+//! Phone calendar: a date picker above day grids, a month, or a schedule list.
 use chrono::{Datelike, Duration, Months, NaiveDate};
 use dioxus::prelude::*;
 use timeslay_core::calendar::first_day::FirstDayOfWeek;
@@ -17,6 +17,7 @@ fn schedule_dates(
 ) -> Vec<NaiveDate> {
     match view {
         PlanView::Month => calendar::month_grid(anchor, first),
+        PlanView::Schedule => calendar::schedule::dates(anchor),
         _ => (0..if view == PlanView::Day { 1 } else { count })
             .map(|offset| anchor + Duration::days(i64::from(offset)))
             .collect(),
@@ -48,12 +49,20 @@ pub fn Planner(
     on_open: EventHandler<Event>,
     on_block: EventHandler<Event>,
 ) -> Element {
+    let mut clock = use_signal(chrono::Local::now);
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            clock.set(chrono::Local::now());
+        }
+    });
     let mut count = use_signal(|| 3u8);
     let mut expanded = use_signal(|| false);
     let selected = anchor();
     let period = view();
     let days_count = count();
     let full_month = period == PlanView::Month;
+    let agenda_mode = period == PlanView::Schedule;
     let dates = schedule_dates(period, selected, days_count, settings.first_day_of_week);
     let load_settings = settings.clone();
     let wanted = dates.clone();
@@ -74,7 +83,7 @@ pub fn Planner(
     let mut scrolled_for = use_signal(|| None::<(NaiveDate, PlanView, u8)>);
     use_effect(move || {
         let key = (anchor(), view(), count());
-        if key.1 == PlanView::Month || scrolled_for() == Some(key) {
+        if matches!(key.1, PlanView::Month | PlanView::Schedule) || scrolled_for() == Some(key) {
             return;
         }
         let ready = loaded.read().as_ref().is_some_and(|result| {
@@ -95,7 +104,7 @@ pub fn Planner(
     });
     let strip = strip_dates(
         selected,
-        expanded() || full_month,
+        expanded() || full_month || agenda_mode,
         settings.first_day_of_week,
     );
     let heading = calendar::month_heading(calendar::first_of_month(selected));
@@ -126,9 +135,9 @@ pub fn Planner(
             div { class: "planner-toolbar",
                 button {
                     class: "planner-heading",
-                    aria_label: "Show full month",
-                    onclick: move |_| view.set(PlanView::Month),
-                    "{heading}"
+                    aria_label: if agenda_mode { "Jump to date" } else { "Show full month" },
+                    onclick: move |_| { if agenda_mode { expanded.set(!expanded()); } else { view.set(PlanView::Month); } },
+                    "{heading} ▾"
                 }
                 div { class: "spacer" }
                 button { class: "btn icon", aria_label: "Previous month", title: "Previous month",
@@ -139,7 +148,7 @@ pub fn Planner(
                     onclick: move |_| { if let Some(date) = anchor().checked_add_months(Months::new(1)) { anchor.set(date); } }, "›"
                 }
             }
-            if !full_month {
+            if !full_month && !agenda_mode {
                 div { class: "planner-options",
                     if period == PlanView::MultiDay {
                         div { class: "planner-count", role: "group", aria_label: "Days to show",
@@ -154,6 +163,7 @@ pub fn Planner(
                     button { class: "btn small", onclick: move |_| view.set(PlanView::Month), "Month" }
                 }
             }
+            if !agenda_mode || expanded() {
             div { class: "planner-weekdays",
                 for weekday in settings.first_day_of_week.short_labels() {
                     span { key: "{weekday}", "{weekday}" }
@@ -165,7 +175,7 @@ pub fn Planner(
                         let mut class = String::from("planner-date");
                         if date.month() != selected.month() { class.push_str(" outside"); }
                         if date == today { class.push_str(" today"); }
-                        let in_range = !full_month && dates.contains(&date);
+                        let in_range = !full_month && !agenda_mode && dates.contains(&date);
                         if date == selected { class.push_str(" selected"); }
                         else if in_range { class.push_str(" in-range"); }
                         let rows = month_rows.iter().find(|(day, _)| *day == date).map(|(_, rows)| rows.as_slice()).unwrap_or(&[]);
@@ -177,6 +187,7 @@ pub fn Planner(
                                 aria_current: if date == today { "date" } else { "false" },
                                 onclick: move |_| {
                                     anchor.set(date);
+                                    if agenda_mode { expanded.set(false); }
                                     if full_month { view.set(PlanView::Day); }
                                 },
                                 span { class: "planner-number", "{date.day()}" }
@@ -191,7 +202,8 @@ pub fn Planner(
                     }
                 }
             }
-            if !full_month {
+            }
+            if !full_month && !agenda_mode {
                 button { class: "planner-expand", aria_expanded: expanded().to_string(),
                     aria_label: if expanded() { "Collapse to week" } else { "Expand to month" },
                     onclick: move |_| expanded.set(!expanded()),
@@ -207,7 +219,12 @@ pub fn Planner(
             } else if snapshot.is_none() {
                 p { class: "planner-message hint", role: "status", "Loading calendar…" }
             }
-            if !full_month {
+            if agenda_mode {
+                if let Some(snapshot) = &snapshot {
+                    {schedule_list(snapshot, &dates, &settings, time_format, &search, clock(), on_open, anchor)}
+                }
+            }
+            if !full_month && !agenda_mode {
                 if let Some(snapshot) = snapshot {
                     {schedule_grid(&snapshot, &dates, &settings, time_format, shown_count, on_open, on_block, (!search.is_active()).then(|| config.read().clone()).as_ref())}
                 }
@@ -483,6 +500,65 @@ mod tests {
     }
 
     #[test]
+    fn schedule_list_renders_all_day_first_with_overnight_rows_and_current_time() {
+        fn app() -> Element {
+            use chrono::{Local, TimeZone};
+            let first = date(2026, 11, 8);
+            let second = date(2026, 11, 9);
+            let at = |day: NaiveDate, hour| {
+                Local
+                    .from_local_datetime(&day.and_hms_opt(hour, 0, 0).unwrap())
+                    .single()
+                    .unwrap()
+            };
+            let event = |title: &str, start, end, all_day| Event {
+                id: title.into(),
+                calendar_id: "work".into(),
+                title: title.into(),
+                start,
+                end,
+                all_day,
+                color: calendar::colors::DEFAULT_EVENT,
+                completed: false,
+                details: calendar::Details::default(),
+            };
+            let snapshot = Snapshot {
+                calendars: vec![],
+                events: vec![
+                    event("Evening work", at(first, 18), at(first, 19), false),
+                    event("All-day work", at(first, 0), at(second, 0), true),
+                    event("Morning work", at(first, 9), at(first, 10), false),
+                    event("Sleep", at(first, 22), at(second, 6), false),
+                ],
+                day: first,
+                fetched_at: at(first, 12),
+                notice: None,
+            };
+            let anchor = use_signal(move || first);
+            schedule_list(
+                &snapshot,
+                &[first, second],
+                &CalendarSettings::default(),
+                TimeFormat::TwentyFourHour,
+                &Search::default(),
+                at(first, 12),
+                EventHandler::new(|_| {}),
+                anchor,
+            )
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.find("All-day work").unwrap() < html.find("Morning work").unwrap());
+        assert!(html.find("Morning work").unwrap() < html.find("Current time").unwrap());
+        assert!(html.find("Current time").unwrap() < html.find("Evening work").unwrap());
+        assert!(html.contains("Sleep (Day 1/2)"));
+        assert!(html.contains("Sleep (Day 2/2)"));
+        assert!(html.contains("schedule-row past"));
+        assert!(html.contains("22:00 – 06:00"));
+    }
+
+    #[test]
     fn strip_keeps_selection_for_every_week_start() {
         for first in FirstDayOfWeek::ALL {
             for offset in 0..40 {
@@ -518,5 +594,68 @@ mod tests {
         let month = schedule_dates(PlanView::Month, anchor, 3, first);
         assert!(month.contains(&date(2026, 12, 1)));
         assert!(month.contains(&date(2026, 12, 31)));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_list(
+    snapshot: &Snapshot,
+    dates: &[NaiveDate],
+    settings: &CalendarSettings,
+    format: TimeFormat,
+    search: &Search,
+    now: chrono::DateTime<chrono::Local>,
+    on_open: EventHandler<Event>,
+    mut anchor: Signal<NaiveDate>,
+) -> Element {
+    let days = day::schedule_agenda(snapshot, dates, settings);
+    rsx! {
+        div { key: "{dates.first():?}", class: "schedule-list", aria_label: "Schedule",
+            for (date, rows) in days {
+                {
+                    let today = date == now.date_naive();
+                    let needle = if today {
+                        Some(rows.iter().position(|row| !row.event.all_day && row.event.start > now).unwrap_or(rows.len()))
+                    } else { None };
+                    rsx! {
+                        section { key: "{date}", class: "schedule-day",
+                            button {
+                                class: if today { "schedule-date today" } else { "schedule-date" },
+                                aria_label: date.format("%A, %B %-d, %Y").to_string(),
+                                onclick: move |_| anchor.set(date),
+                                span { class: "schedule-day-number", {date.format("%-d").to_string()} }
+                                span { {date.format("%b, %a").to_string()} }
+                            }
+                            div { class: "schedule-rows",
+                                if rows.is_empty() { p { class: "schedule-empty hint", "No events" } }
+                                for (index, row) in rows.iter().enumerate() {
+                                    {
+                                        let event = row.event.clone();
+                                        let hidden = search.hides_details(&event);
+                                        let title = if hidden { timeslay_core::calendar::search::PRIVATE_TITLE.into() } else { calendar::schedule::title(&event, date) };
+                                        let dot = crate::css_color(if hidden { timeslay_core::calendar::search::PRIVATE_COLOR } else { row.color });
+                                        let past = !event.all_day && event.end <= now;
+                                        let time = calendar::schedule::time_label(&event, format);
+                                        rsx! {
+                                            div { key: "{event.id}", class: "schedule-entry",
+                                            if needle == Some(index) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
+                                            button {
+                                                class: if past { "schedule-row past" } else { "schedule-row" },
+                                                onclick: move |_| on_open.call(event.clone()),
+                                                span { class: "schedule-dot", style: "background:{dot}" }
+                                                span { class: "schedule-time", "{time}" }
+                                                span { class: "schedule-title", "{title}" }
+                                            }
+                                            }
+                                        }
+                                    }
+                                }
+                                if needle == Some(rows.len()) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

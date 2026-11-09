@@ -265,10 +265,12 @@ pub(super) fn grid_scrolled(viewport: scrollable::Viewport) -> Message {
 }
 
 pub fn scroll_week_to_start() -> iced::Task<Message> {
-    iced::widget::operation::scroll_to(
-        iced::widget::Id::new(WEEK_SCROLL),
-        iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
-    )
+    iced::Task::batch([WEEK_SCROLL, RANGE_SCROLL].map(|id| {
+        iced::widget::operation::scroll_to(
+            iced::widget::Id::new(id),
+            iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+        )
+    }))
 }
 
 /// Scrolls the day grid so the needle sits a little below the top, the way
@@ -305,7 +307,7 @@ pub fn scroll_by(view: crate::app::CalendarView, delta: f32) -> iced::Task<Messa
     let id = match view {
         CalendarView::Day => DAY_SCROLL,
         CalendarView::Week => WEEK_DAY_SCROLL,
-        CalendarView::TwoWeek | CalendarView::Month => RANGE_SCROLL,
+        CalendarView::TwoWeek | CalendarView::Month | CalendarView::Schedule => RANGE_SCROLL,
     };
     iced::widget::operation::scroll_by(
         iced::widget::Id::new(id),
