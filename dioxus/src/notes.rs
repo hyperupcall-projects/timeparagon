@@ -106,6 +106,10 @@ impl NotesStore {
     }
 
     pub fn configure(mut self, value: &str) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        if !value.trim().is_empty() && !value.trim().starts_with("content://") {
+            return Err("Use Choose folder to grant access to your notes folder".into());
+        }
         let settings = timeslay_core::config::NotesSettings {
             directory: value.trim().into(),
         };
