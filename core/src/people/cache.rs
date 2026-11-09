@@ -14,8 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Book, Contact, Group, parse_all};
-use crate::integrations::accounts::Login;
+use super::{Book, Contact, Group, Login, parse_all};
 
 /// Hands out each snapshot's place in line. Snapshots are written on scratch
 /// threads that may finish in any order, and the newest one has to win.
@@ -41,12 +40,12 @@ struct Account {
 }
 
 /// The books as they stood when this was made, waiting to be written.
-pub(super) struct Snapshot {
+pub struct Snapshot {
     order: u64,
     json: String,
 }
 
-pub(super) fn snapshot(books: &[Book]) -> Result<Snapshot, serde_json::Error> {
+pub fn snapshot(books: &[Book]) -> Result<Snapshot, serde_json::Error> {
     let people = |contacts: &[Contact]| contacts.iter().map(|c| c.person.clone()).collect();
     let file = File {
         accounts: books
@@ -68,7 +67,7 @@ pub(super) fn snapshot(books: &[Book]) -> Result<Snapshot, serde_json::Error> {
 
 impl Snapshot {
     /// Writes the document, unless a newer snapshot has already been written to it.
-    pub(super) fn write(self, path: &Path) -> io::Result<()> {
+    pub fn write(self, path: &Path) -> io::Result<()> {
         let mut written = WRITTEN.lock().unwrap_or_else(|p| p.into_inner());
         let written = written.get_or_insert_with(HashMap::new);
         if written.get(path).is_some_and(|newest| *newest > self.order) {
@@ -82,7 +81,7 @@ impl Snapshot {
 
 /// The books from the last run. Nothing saved, or something unreadable, means
 /// starting empty: everything in it can be fetched again.
-pub(super) fn load(path: &Path) -> Vec<Book> {
+pub fn load(path: &Path) -> Vec<Book> {
     match crate::task_db::read_document::<File>(path, crate::task_db::keys::CONTACTS) {
         Ok(file) => file
             .map(|file| file.accounts.into_iter().map(book_from).collect())

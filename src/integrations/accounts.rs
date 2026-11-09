@@ -23,14 +23,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::{Message, State};
 use crate::blocking;
-use crate::calendar::api;
 use crate::calendar::oauth::{self, Tokens};
 use crate::config::CalendarSettings;
-
-const PROFILE: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
-
-/// What the account is called when the calendar's own sign-in is used.
-const PRIMARY_LABEL: &str = "Google Calendar account";
+use timeslay_core::people::api::profile_email;
 
 /// Serializes reads and rewrites of the token file. Two lookups may refresh
 /// different accounts at once; without this one would overwrite the other.
@@ -49,65 +44,17 @@ struct File {
     accounts: Vec<Account>,
 }
 
-/// An account a link can be tried against. Holds no credentials, only which
-/// account to find them for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Login {
-    /// What to call it in a message: an address, or the calendar account.
-    pub label: String,
-    which: Which,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-enum Which {
-    /// The account the calendar is signed in with.
-    Primary,
-    /// A connected Gmail account, by address.
-    Extra(String),
-}
-
-impl Login {
-    /// Whether this is the calendar's sign-in, which is renewed from a
-    /// different place than a connected account.
-    pub fn is_primary(&self) -> bool {
-        self.which == Which::Primary
-    }
-
-    /// The calendar's sign-in, when its address could not be looked up.
-    pub fn is_unidentified(&self) -> bool {
-        self.is_primary() && self.label == PRIMARY_LABEL
-    }
-
-    #[cfg(test)]
-    pub fn primary(label: &str) -> Self {
-        Self {
-            label: label.to_owned(),
-            which: Which::Primary,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn extra(email: &str) -> Self {
-        Self {
-            label: email.to_owned(),
-            which: Which::Extra(email.to_owned()),
-        }
-    }
-}
+/// An account a link can be tried against. Shared with the Dioxus app, whose
+/// People sheet keeps the same cache.
+pub use timeslay_core::people::Login;
 
 /// Every account a Gmail link may belong to, in the order they are tried: the
 /// calendar's account first, if it is signed in, then the connected ones.
 pub fn logins() -> Vec<Login> {
-    let primary = oauth::load_tokens().map(|_| Login {
-        label: PRIMARY_LABEL.to_owned(),
-        which: Which::Primary,
-    });
+    let primary = oauth::load_tokens().map(|_| Login::unidentified());
     primary
         .into_iter()
-        .chain(emails().into_iter().map(|email| Login {
-            label: email.clone(),
-            which: Which::Extra(email),
-        }))
+        .chain(emails().iter().map(|email| Login::extra(email)))
         .collect()
 }
 
@@ -137,9 +84,8 @@ pub fn identified(settings: &CalendarSettings) -> Vec<Login> {
 /// A fresh access token for `login`, refreshed if the stored one has expired.
 /// Blocking.
 pub fn token(settings: &CalendarSettings, login: &Login) -> Result<String, String> {
-    let email = match &login.which {
-        Which::Primary => return Ok(crate::timeblocking::access(settings)?),
-        Which::Extra(email) => email,
+    let Some(email) = login.extra_email() else {
+        return Ok(crate::timeblocking::access(settings)?);
     };
     let stored = read()
         .map_err(|error| error.to_string())?
@@ -240,32 +186,6 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
     STORE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// The address a token belongs to, from Gmail's own profile call: every account
-/// here has been granted read-only Gmail.
-fn profile_email(access_token: &str) -> Result<String, String> {
-    let result = api::agent()
-        .get(PROFILE)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Accept", "application/json")
-        .call();
-    match result {
-        Ok(response) => {
-            let body: serde_json::Value = response
-                .into_json()
-                .map_err(|error| format!("Gmail response: {error}"))?;
-            body["emailAddress"]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| "Gmail did not say which account this is".to_owned())
-        }
-        Err(ureq::Error::Status(403, _)) => {
-            Err("Turn on the Gmail API for your Google Cloud project, then try again".to_owned())
-        }
-        Err(ureq::Error::Status(status, _)) => Err(format!("Gmail: HTTP {status}")),
-        Err(error) => Err(format!("Gmail: {error}")),
-    }
 }
 
 #[cfg(not(target_os = "android"))]
