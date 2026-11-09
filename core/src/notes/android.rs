@@ -44,8 +44,26 @@ pub fn request(request: Value) -> io::Result<Value> {
             .l()?;
         Ok(env.get_string(&JString::from(output))?.into())
     });
-    if result.is_err() {
+    if let Err(error) = result {
+        // JNI's generic JavaException hides useful errors (including a missing
+        // bridge class). Clear the pending exception before calling toString.
+        let exception = env.exception_occurred().ok();
         let _ = env.exception_clear();
+        let detail = exception.filter(|e| !e.is_null()).and_then(|exception| {
+            let message = env
+                .call_method(exception, "toString", "()Ljava/lang/String;", &[])
+                .ok()?
+                .l()
+                .ok()?;
+            env.get_string(&JString::from(message))
+                .ok()
+                .map(String::from)
+        });
+        let _ = env.exception_clear();
+        return Err(io::Error::other(format!(
+            "Android notes storage: {}",
+            detail.unwrap_or_else(|| error.to_string())
+        )));
     }
     let value: Value =
         serde_json::from_str(&result.map_err(io::Error::other)?).map_err(io::Error::other)?;
@@ -84,7 +102,12 @@ pub(super) fn fingerprint(directory: &Path) -> u64 {
     hash.finish()
 }
 fn stage(directory: &Path) -> io::Result<(tempfile::TempDir, BTreeMap<String, String>)> {
-    let scratch = tempfile::tempdir()?;
+    // Android's default temporary directory is not writable by an app. Use
+    // the private cache configured at startup instead.
+    let dirs = crate::config::project_dirs()
+        .ok_or_else(|| io::Error::other("No app cache directory for notes"))?;
+    std::fs::create_dir_all(dirs.cache_dir())?;
+    let scratch = tempfile::tempdir_in(dirs.cache_dir())?;
     let mut before = BTreeMap::new();
     for doc in documents(directory)? {
         // Providers are untrusted: never use a display name as a relative path.
