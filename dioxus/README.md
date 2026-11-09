@@ -178,7 +178,7 @@ the same relative layout as it does on desktop.
 
 ### Settings and data sync
 
-Turso is required for shared data sync, including habits, todos and
+Turso is required for shared data sync, including habits and
 projects. Notes are files and are not synced through Turso. `config.toml` stays local to each device. Both apps watch it and
 reload local edits; they do not upload or download settings through Google
 Drive, and Google sign-in does not request Drive access.

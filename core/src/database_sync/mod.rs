@@ -32,10 +32,9 @@ use std::{
 
 const TABLE: &str = "timeslay_revisions_v1";
 /// The documents shared between devices. Everything else stays local.
-const SHARED_KEYS: [&str; 7] = [
+const SHARED_KEYS: [&str; 6] = [
     "habits",
     "alarms",
-    "shared.todos",
     "shared.notepad",
     "shared.brain_dump",
     "shared.projects",
@@ -106,7 +105,7 @@ pub fn unsent_edits() -> usize {
         })
         .and_then(|db| {
             db.query_row(
-                "SELECT COUNT(*) FROM timeslay_sync_edits WHERE uploaded=0",
+                &format!("SELECT COUNT(*) FROM timeslay_sync_edits WHERE uploaded=0 AND document IN ({})", shared_sql()),
                 [],
                 |r| r.get::<_, i64>(0),
             )
@@ -132,7 +131,6 @@ fn describe_edits(edits: &[&Edit]) -> String {
         let kind = match edit.document.as_str() {
             "habits" => "habit",
             "alarms" => "alarm",
-            "shared.todos" => "todo",
             "shared.notepad" => "notepad",
             "shared.brain_dump" => "brain dump",
             "shared.projects" => "project",
@@ -256,6 +254,21 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         ),
         ("delete", "DELETE", "1", "OLD.key", "OLD.value", "NULL"),
     ] {
+        // Older installations journaled the retired scratchpad. Replace their
+        // triggers so it stays local even when an older process writes it.
+        let trigger = format!("timeslay_sync_{name}");
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1",
+                [&trigger],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(other)?;
+        if existing.is_some_and(|sql| sql.contains("'shared.todos'")) {
+            tx.execute_batch(&format!("DROP TRIGGER {trigger};"))
+                .map_err(other)?;
+        }
         // The clock also counts snapshots, so a save after a fold still sorts
         // after everything this device has seen.
         tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS timeslay_sync_{name} AFTER {kind} ON documents
@@ -282,7 +295,12 @@ fn edits(db: &Connection, pending: bool) -> io::Result<Vec<Edit>> {
 }
 
 fn rows(db: &Connection, pending: bool) -> io::Result<Vec<(Edit, Local)>> {
-    let filter = if pending { "WHERE uploaded=0" } else { "" };
+    // Keep retired history on disk, but never replay or upload it.
+    let filter = format!(
+        "WHERE document IN ({}){}",
+        shared_sql(),
+        if pending { " AND uploaded=0" } else { "" }
+    );
     let mut out: Vec<(Edit, Local)> = db
         .prepare(&format!(
             "SELECT id,document,before_json,after_json,clock,uploaded FROM timeslay_sync_edits {filter} ORDER BY clock,id"
@@ -419,6 +437,11 @@ fn apply(
             .map_err(other)?
     };
     for edit in incoming {
+        // Old devices and servers can still hold scratchpad records. They
+        // must not prevent the remaining documents from syncing.
+        if edit.document == "shared.todos" {
+            continue;
+        }
         if !shared(&edit.document) || edit.clock < 1 {
             return Err(other("unsupported replicated record"));
         }
@@ -950,6 +973,66 @@ mod tests {
             (0..n).map(|i| (format!("d{i}"), i.into())).collect();
         let doc = serde_json::json!({"habits":[{"id":"a","marks":marks}]});
         crate::task_db::write_document(path, "habits", &doc).unwrap();
+    }
+    #[test]
+    fn retired_scratchpad_history_and_old_clients_do_not_affect_sync() {
+        let (_directory, path) = db();
+        let db = open(&path).unwrap();
+        // Simulate an existing database with the old trigger and unsent data.
+        let sql: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='timeslay_sync_insert'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        db.execute_batch("DROP TRIGGER timeslay_sync_insert;")
+            .unwrap();
+        db.execute_batch(&sql.replace("'habits'", "'shared.todos','habits'"))
+            .unwrap();
+        db.execute(
+            "INSERT INTO documents VALUES('shared.todos',?1)",
+            ["{\"items\":[{\"text\":\"old\",\"indent\":0}],\"current\":0}"],
+        )
+        .unwrap();
+        enroll(&path).unwrap();
+        assert!(edits(&db, true).unwrap().is_empty());
+        db.execute("DELETE FROM documents WHERE key='shared.todos'", [])
+            .unwrap();
+        db.execute("INSERT INTO documents VALUES('shared.todos','{}')", [])
+            .unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM timeslay_sync_edits WHERE document='shared.todos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "retired documents no longer create journal entries"
+        );
+
+        let legacy = Edit {
+            id: "old-device".into(),
+            document: "shared.todos".into(),
+            after: Some("unreadable retired data".into()),
+            clock: 1,
+            ..Default::default()
+        };
+        let active = Edit {
+            id: "active".into(),
+            document: "shared.notepad".into(),
+            after: Some(r#"{"text":"still syncing"}"#.into()),
+            clock: 1,
+            ..Default::default()
+        };
+        apply(&path, &[legacy, active.clone()], None, now()).unwrap();
+        assert_eq!(history(&path).unwrap(), vec![active]);
+        let text: serde_json::Value = crate::task_db::read_document(&path, "shared.notepad")
+            .unwrap()
+            .unwrap();
+        assert_eq!(text["text"], "still syncing");
     }
     #[test]
     fn alarms_merge_offline_additions_edits_and_deletions_between_devices() {
