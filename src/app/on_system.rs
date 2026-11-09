@@ -100,6 +100,12 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
                 return Task::none();
             }
             let previous = std::mem::replace(&mut state.config, config);
+            if previous.notes != state.config.notes {
+                if let Err(error) = state.notes.configure(state.config.notes.path()) {
+                    state.notes.error = Some(error);
+                }
+                state.notes.directory_input = state.config.notes.directory.clone();
+            }
             if previous.views != state.config.views {
                 state.view_layout_input = None;
                 state.panel_border_input = None;

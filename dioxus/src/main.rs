@@ -379,6 +379,12 @@ fn App() -> Element {
             if generation != seen {
                 seen = generation;
                 let reloaded = day::load_config();
+                if reloaded.notes != config.peek().notes
+                    && let Err(error) = notes_store.configure(&reloaded.notes.directory)
+                {
+                    let mut message = notes_store.error;
+                    message.set(Some(error));
+                }
                 if reloaded != *config.peek() {
                     config.set(reloaded);
                 }
@@ -1205,6 +1211,7 @@ fn App() -> Element {
                             }
                         }
                         p { class: "hint", "{database_sync_status}" }
+                        notes::NotesSettings { config }
                         reminders::ReminderSection { config }
                         h3 { class: "settings-heading", "Google" }
                         form {
@@ -2355,6 +2362,7 @@ mod sheet_tests {
             &[
                 ">Edit<",
                 ">View<",
+                "Open in default app",
                 "Trip plan",
                 "Butter",
                 "Mint",

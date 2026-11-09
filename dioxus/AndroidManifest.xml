@@ -38,6 +38,10 @@
             </intent-filter>
         </activity>
 
+        <activity android:name="dev.timeslay.day.notes.NotesFolderActivity"
+            android:exported="false" android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- The day view widget. Its sources are in android/; scripts/build-android.sh
              adds them to the project `dx` generates. -->
         <receiver android:name="dev.timeslay.day.widget.DayWidgetProvider"

@@ -6,8 +6,14 @@ They replace the old Google Keep integration, which has been removed.
 
 ## Storage
 
-Each note is a Markdown file, `<title>.md`, in the directory set in
-`config.toml`:
+Each note is a Markdown file, `<title>.md`. Choose its folder under
+**Settings → Notes** on desktop and mobile. On Android, **Choose folder**
+opens the system folder picker and keeps access across restarts. The folder
+is a device-local setting; choose the corresponding synced folder on each
+device to see the same notes. Switching folders saves pending edits in the
+previous folder first. Notes drafted before setup are saved in the chosen folder.
+
+The setting can also be set in `config.toml`:
 
 ```toml
 [notes]
@@ -73,8 +79,12 @@ a note is always dark, on every theme.
 - Deleting a note asks for confirmation, then deletes its file.
 - An edit made in the app while the file was changed elsewhere overwrites that
   change.
-- Notes are available in both the desktop and Android apps, each reading the
-  directory in its own `config.toml`. Saving does not depend on Google sign-in.
+- Notes are available in both the desktop and Android apps. Saving does not
+  depend on Google sign-in.
+- **Open in default app** saves the latest edits and opens the actual Markdown
+  file with the system's associated application. On Android, the app receives
+  access to that document. Changes made there appear after returning to TimeSlay.
+  An installed app that handles Markdown or plain text is needed.
 
 ## Upgrading from Google Keep
 

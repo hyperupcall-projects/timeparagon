@@ -100,6 +100,19 @@ impl NotesSettings {
     }
 }
 
+/// Changes only this device's notes folder, preserving other settings.
+pub fn save_notes_directory(directory: &str) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_notes_directory_at(&path, directory)
+}
+
+fn save_notes_directory_at(path: &Path, directory: &str) -> io::Result<()> {
+    edit_table(path, "notes", |table| {
+        table.insert("directory".into(), directory.trim().into());
+        Ok(())
+    })
+}
+
 pub fn save_database_sync_url(url: &str) -> io::Result<()> {
     let path = config_path().ok_or_else(no_config_directory)?;
     save_database_sync_url_at(&path, url)
@@ -1285,6 +1298,27 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_folder_setting_preserves_desktop_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[window]\nwidth = 321\n[notes]\nfuture_option = true\n",
+        )
+        .unwrap();
+        save_notes_directory_at(&path, "  ~/Documents/Shared Notes  ").unwrap();
+        assert_eq!(
+            Config::load_from(&path, None).notes.directory,
+            "~/Documents/Shared Notes"
+        );
+        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(table["window"]["width"].as_integer(), Some(321));
+        assert_eq!(table["notes"]["future_option"].as_bool(), Some(true));
+        save_notes_directory_at(&path, " ").unwrap();
+        assert!(Config::load_from(&path, None).notes.path().is_none());
+    }
 
     #[test]
     fn sync_url_defaults_to_disabled_and_preserves_other_settings() {

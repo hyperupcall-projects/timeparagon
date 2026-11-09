@@ -274,6 +274,8 @@ fn editor_page<'a>(state: &'a State, note: &'a Note, metrics: &Metrics) -> Eleme
     };
 
     let mut footer = column![
+        crate::ui::controls::quiet_button(text("Open in default app").size(size))
+            .on_press(msg(Action::OpenExternal)),
         swatches(&note.id, note.color),
         connections(state, note, metrics),
     ]

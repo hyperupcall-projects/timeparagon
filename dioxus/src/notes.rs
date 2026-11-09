@@ -19,7 +19,7 @@ use timeslay_core::timeblocking as tb;
 const SAVE_AFTER: Duration = Duration::from_millis(400);
 const MAX_CANDIDATES: usize = 8;
 /// Shown while notes have nowhere to go.
-const NO_DIRECTORY: &str = "Notes are not saved: set a directory under [notes] in config.toml";
+const NO_DIRECTORY: &str = "Notes are not saved: choose a notes folder in Settings";
 
 /// The note an editor asked to open, shared through context.
 #[derive(Clone, Copy)]
@@ -92,9 +92,10 @@ impl NotesStore {
         }
     }
 
-    fn save_local(mut self) {
+    fn save_local(mut self) -> bool {
         let Some(directory) = self.directory.peek().clone() else {
-            return;
+            self.error.set(Some(NO_DIRECTORY.into()));
+            return false;
         };
         let result = self.library.peek().save(&directory);
         match result {
@@ -102,11 +103,75 @@ impl NotesStore {
                 self.library.write().saved(&saved);
                 self.error.set(None);
                 self.saved_edits.set(*self.edits.peek());
+                true
             }
             Err(error) => {
                 let mut message = self.error;
                 message.set(Some(format!("Could not save notes: {error}")));
+                false
             }
+        }
+    }
+
+    pub fn configure(mut self, value: &str) -> Result<(), String> {
+        let settings = timeslay_core::config::NotesSettings {
+            directory: value.trim().into(),
+        };
+        let path = settings.path();
+        if path == *self.directory.peek() {
+            return Ok(());
+        }
+        if self.directory.peek().is_none()
+            && let Some(path) = &path
+            && let Some(database) = timeslay_core::task_db::path()
+        {
+            notes::migrate_database(&database, path).map_err(|e| e.to_string())?;
+        }
+        let mut next = match &path {
+            Some(path) => Library::read(path).map_err(|e| e.to_string())?,
+            None => Library::default(),
+        };
+        let configured = self.directory.peek().is_some();
+        let pending = *self.edits.peek() != *self.saved_edits.peek();
+        if configured && pending && !self.save_local() {
+            return Err("Could not save pending notes in the previous folder".into());
+        }
+        if self.directory.peek().is_none() {
+            next.notes.extend(self.library.peek().notes.clone());
+            if !next.notes.is_empty()
+                && let Some(path) = &path
+            {
+                let saved = next.save(path).map_err(|e| e.to_string())?;
+                next.saved(&saved);
+            }
+        }
+        timeslay_core::config::save_notes_directory(&settings.directory)
+            .map_err(|e| e.to_string())?;
+        self.library.set(next);
+        self.directory.set(path.clone());
+        self.fingerprint.set(None);
+        self.saved_edits.set(*self.edits.peek());
+        self.error.set(path.is_none().then(|| NO_DIRECTORY.into()));
+        Ok(())
+    }
+
+    fn open_external(mut self, id: &str) {
+        if !self.save_local() {
+            return;
+        }
+        let directory = self.directory.peek().clone();
+        let file = self.library.peek().note(id).and_then(|n| n.file.clone());
+        if let (Some(directory), Some(file)) = (directory, file) {
+            spawn_forever(async move {
+                let result =
+                    tokio::task::spawn_blocking(move || notes::open_file(&directory, &file)).await;
+                let error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                };
+                self.error.set(error);
+            });
         }
     }
 
@@ -142,6 +207,62 @@ impl NotesStore {
             self.library.write().delete(id);
         }
         self.save_local();
+    }
+}
+
+/// Folder setup is device-local; sync the chosen folders to share Markdown.
+#[component]
+pub fn NotesSettings(config: Signal<timeslay_core::config::Config>) -> Element {
+    let store = use_context::<NotesStore>();
+    let mut input = use_signal(|| timeslay_core::config::NotesSettings::load().directory);
+    let mut problem = use_signal(|| None::<String>);
+    #[cfg(target_os = "android")]
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            match notes::android::request(serde_json::json!({"op":"selection"})) {
+                Ok(result) => {
+                    if let Some(value) = result["directory"].as_str() {
+                        input.set(value.to_owned());
+                        match store.configure(value) {
+                            Ok(()) => {
+                                config.set(crate::day::load_config());
+                                problem.set(None);
+                            }
+                            Err(error) => problem.set(Some(error)),
+                        }
+                    }
+                }
+                Err(error) => problem.set(Some(error.to_string())),
+            }
+        }
+    });
+    #[cfg(target_os = "android")]
+    let picker = rsx! {
+            button { class: "btn", onclick: move |_| {
+                if let Err(error) = notes::android::request(serde_json::json!({"op":"pick"})) { problem.set(Some(error.to_string())); }
+            }, "Choose folder" }
+    };
+    #[cfg(not(target_os = "android"))]
+    let picker: Element = rsx! {};
+    rsx! {
+        h3 { class: "settings-heading", "Notes" }
+        label { r#for: "settings-notes-folder", "Notes folder" }
+        input {
+            id: "settings-notes-folder", class: "client-input", value: "{input}",
+            placeholder: "Notes folder", oninput: move |event| input.set(event.value()),
+        }
+        div { class: "sheet-row",
+            {picker}
+            button { class: "btn", onclick: move |_| {
+                match store.configure(&input()) {
+                    Ok(()) => { config.set(crate::day::load_config()); problem.set(None); }
+                    Err(error) => problem.set(Some(error)),
+                }
+            }, "Apply" }
+        }
+        p { class: "hint", "Sync this folder with your desktop notes folder to see the same Markdown notes on both devices. Notes do not use database sync." }
+        if let Some(error) = problem() { p { class: "error-text", role: "alert", "{error}" } }
     }
 }
 
@@ -401,6 +522,7 @@ fn NoteEditor(
     let title_id = id.clone();
     let body_id = id.clone();
     let delete_id = id.clone();
+    let external_id = id.clone();
 
     rsx! {
         div { class: "modal-backdrop editor-backdrop",
@@ -456,6 +578,7 @@ fn NoteEditor(
                             }
                         }
                     }
+                    button { class: "btn", onclick: move |_| store.open_external(&external_id), "Open in default app" }
                     div { class: "note-swatches", {swatches} }
                     h3 { class: "settings-heading", "Connected to" }
                     {connections}
