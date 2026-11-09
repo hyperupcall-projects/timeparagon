@@ -130,50 +130,6 @@ fn main() {
                 directory,
                 theme,
                 Size::new(width, 720.0),
-                "calendar-todos",
-                |state| {
-                    state.screen = Screen::Calendar;
-                    state.calendar = timeslay::calendar::Store::with_snapshot(
-                        timeslay::calendar::sample_snapshot(),
-                    );
-                    state.config.todos.add("Draft the report");
-                    state.config.todos.add("Collect the numbers");
-                    state.config.todos.indent(1, 1);
-                    state.config.todos.add("Send it round");
-                    state.config.todos.set_current(1);
-                },
-            );
-
-            count += shoot(
-                directory,
-                theme,
-                Size::new(width, 720.0),
-                "todos",
-                |state| {
-                    state.screen = Screen::Backlog;
-
-                    // The sample events are in the past, so a couple are moved to
-                    // later today to give the "Coming up" list something to show.
-                    let mut snapshot = timeslay::calendar::sample_snapshot();
-                    let soon = chrono::Local::now() + chrono::Duration::minutes(20);
-                    snapshot.events[1].start = soon;
-                    snapshot.events[1].end = soon + chrono::Duration::minutes(30);
-                    snapshot.events[3].start = soon + chrono::Duration::minutes(45);
-                    snapshot.events[3].end = soon + chrono::Duration::minutes(105);
-                    state.calendar = timeslay::calendar::Store::with_snapshot(snapshot);
-
-                    state.config.todos.add("Draft the report");
-                    state.config.todos.add("Collect the numbers");
-                    state.config.todos.indent(1, 1);
-                    state.config.todos.add("Send it round");
-                    state.config.todos.set_current(1);
-                },
-            );
-
-            count += shoot(
-                directory,
-                theme,
-                Size::new(width, 720.0),
                 "notepad",
                 |state| {
                     state.screen = Screen::Notepad;

@@ -30,7 +30,6 @@ pub struct Config {
     pub travel: crate::places::PlaceSettings,
     pub appearance: AppearanceSettings,
     pub notepad: NotepadText,
-    pub todos: crate::todos::TodoList,
     pub brain_dump: crate::brain_dump::Dumps,
     pub reminders: crate::reminders::ReminderSettings,
 }
@@ -527,7 +526,6 @@ pub struct CalendarSettings {
     /// app from the calendar list; not exposed as a user setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_calendar: Option<String>,
-    pub time_block_list: Option<String>,
     /// Google Tasks list for tasks moved to the backlog. None uses Backlog.
     pub backlog_list: Option<String>,
     /// Google Tasks list that collects triaged tasks until they are scheduled.
@@ -617,7 +615,6 @@ impl Default for CalendarSettings {
             show_tasks: true,
             hide_overdue_tasks: false,
             app_calendar: None,
-            time_block_list: None,
             backlog_list: None,
             triaged_list: None,
             inbox_list: None,
@@ -715,10 +712,6 @@ impl CalendarSettings {
 
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
-
-    /// The Google Tasks list time-blocked and scheduled tasks are kept on,
-    /// unless another is chosen in Settings.
-    pub const DEFAULT_TIME_BLOCK_LIST: &str = "Time Blocked";
 
     /// The Google Tasks list tasks are moved to for the backlog, unless
     /// another is chosen in Settings.
@@ -1177,11 +1170,6 @@ pub fn save_notepad_text(text: &str) -> io::Result<()> {
 }
 
 /// Replaces the temporary todo list.
-pub fn save_todos(todos: &crate::todos::TodoList) -> io::Result<()> {
-    crate::shared_data::save_section(&database()?, "todos", todos)
-}
-
-/// Replaces the brain dump pages.
 pub fn save_brain_dump(dumps: &crate::brain_dump::Dumps) -> io::Result<()> {
     crate::shared_data::save_section(&database()?, "brain_dump", dumps)
 }
@@ -1367,9 +1355,6 @@ mod tests {
         let original = "[pomodoro]\nwork_minutes = 25\n[notepad]\nfont_size = 120\n";
         std::fs::write(&path, original).unwrap();
 
-        let mut todos = crate::todos::TodoList::default();
-        todos.add("write it");
-        crate::shared_data::save_section(&database, "todos", &todos).unwrap();
         let mut dumps = crate::brain_dump::Dumps::default();
         dumps.set(
             chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
@@ -1380,7 +1365,6 @@ mod tests {
         crate::shared_data::save_section(&database, "notepad", &notepad).unwrap();
 
         let read = Config::load_from(&path, Some(&database));
-        assert_eq!(read.todos, todos);
         assert_eq!(read.brain_dump, dumps);
         assert_eq!(read.notepad.text, "new");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);

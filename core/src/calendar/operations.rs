@@ -88,6 +88,9 @@ pub enum Job {
         color: Option<String>,
         habit: String,
     },
+    CreateCalendarTask {
+        task: Box<Event>,
+    },
     CreateTask {
         task: Box<Event>,
         notes: String,
@@ -256,10 +259,8 @@ fn enqueue_in(
                 .as_mut()
                 .ok_or("Assigned task has no metadata")?;
             data.metadata.block = None;
-            data.metadata.schedule = None;
             data.metadata.inherited = None;
             data.metadata.repeat_source = None;
-            released.details.scheduled = None;
             released.all_day = true;
             released.start = at_clock(original.start.date_naive(), 0, 0);
             released.end = released.start + chrono::Duration::days(1);
@@ -295,7 +296,7 @@ fn enqueue_tx(
         Job::TaskEdit { .. } => "Edit task",
         Job::Delete { .. } | Job::DeleteTask { .. } => "Delete",
         Job::Create { .. } => "Create event",
-        Job::CreateTask { .. } => "Create task",
+        Job::CreateTask { .. } | Job::CreateCalendarTask { .. } => "Create task",
         Job::Sleep { .. } => "Save sleep",
         Job::HabitCompleted { .. } => "Habit completion",
         Job::Reply { .. } => "Reply to invitation",
@@ -870,7 +871,7 @@ fn remap(v: &mut serde_json::Value, a: &[(String, String, String)]) {
                         local != remote && (id == *local || id == ids::event_id(local))
                     })
                 {
-                    let full = id.starts_with(ids::TASK);
+                    let full = calendar.starts_with(ids::TASK_LIST);
                     obj.insert(
                         id_key.into(),
                         if full {
@@ -977,7 +978,7 @@ fn execute(
         Job::DeleteTask { mut task, calendar } => {
             let mut db = task_db::open()?;
             let data = db.import(&task)?;
-            task.details.scheduled = data.metadata.schedule;
+            task.details.task_data = Some(data);
             send::delete_task(client, &task, calendar.as_deref())?
         }
         Job::Create {
@@ -1034,6 +1035,12 @@ fn execute(
             email,
             response,
         } => send::reply(client, &event.calendar_id, &event.id, &email, response)?,
+        Job::CreateCalendarTask { mut task } => {
+            let old = task.id.clone();
+            let token = client.access_token()?;
+            super::calendar_tasks::persist(&token, &task.clone(), &mut task, s)?;
+            return Ok(Some((old, task.id, task.calendar_id)));
+        }
         Job::CreateTask {
             task,
             notes,
@@ -1082,103 +1089,12 @@ pub fn edit_task(
     order: i64,
 ) -> Result<Event, String> {
     task_edit::validate_child_edit(&task, &change)?;
-    let original = task.clone();
     let mut db = task_db::open()?;
-    let mut data = task
-        .details
-        .task_data
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(|| db.import(&task))?;
-    use task_edit::Change;
-    task_edit::reset_repeat_source(&mut data.metadata, &change);
-    match &change {
-        Change::ReleaseInheritance => data.metadata.inherited = None,
-        Change::Inherit(inherited) => {
-            crate::timeblocking::apply_inherited(&mut task, &mut data, inherited.clone())
-        }
-        Change::Title(v) => task.title = v.clone(),
-        Change::Description(v) => {
-            let deadline = deadline::read_deadline(&task.details.description)?;
-            task.details.description = deadline::write(v, deadline);
-        }
-        Change::Estimate(v) => {
-            data.metadata.minutes = *v;
-            if !task.all_day && *v > 0 {
-                task.end = task.start + chrono::Duration::minutes(i64::from(*v));
-            }
-        }
-        Change::Projects(v) => data.metadata.projects = v.clone(),
-        Change::Labels(v) => data.metadata.labels = v.clone(),
-        Change::Priority(v) => data.metadata.priority = *v,
-        Change::Location(v) => data.metadata.location = *v,
-        Change::BacklogSection(v) => data.metadata.backlog_section = *v,
-        Change::Deadline(v) => {
-            task.details.description = deadline::write(&task.details.description, *v)
-        }
-        Change::Time(start, end) | Change::Block(_, start, end) | Change::Reflow(start, end) => {
-            task.start = *start;
-            task.end = *end;
-            task.all_day = false;
-            if let Some(list) = settings.time_block_list.as_deref() {
-                task.calendar_id = ids::calendar_id(list);
-            }
-            if let Change::Block(key, _, _) = &change {
-                data.metadata.block = Some(key.clone());
-                data.metadata.order = order;
-                task.end = task.start
-                    + chrono::Duration::minutes(i64::from(if data.metadata.minutes == 0 {
-                        30
-                    } else {
-                        data.metadata.minutes
-                    }));
-            } else if matches!(change, Change::Time(_, _)) {
-                data.metadata.block = None;
-                let moved = !original.all_day && *end - *start == original.end - original.start;
-                if moved && data.metadata.minutes > 0 {
-                    task.end = *start + chrono::Duration::minutes(i64::from(data.metadata.minutes));
-                } else {
-                    data.metadata.minutes = (*end - *start).num_minutes().clamp(0, 10080) as u32;
-                }
-            }
-        }
-        Change::Reorder(block, order, _) => {
-            data.metadata.block = block.clone();
-            data.metadata.order = *order;
-        }
-        Change::Day(_)
-        | Change::ClearSchedule
-        | Change::Unassign
-        | Change::Inbox
-        | Change::Triaged
-        | Change::Backlog(_) => {
-            let day = match &change {
-                Change::Day(day) => *day,
-                Change::Unassign => task.start.date_naive(),
-                _ => crate::timeblocking::UNDATED,
-            };
-            task.start = at_clock(day, 0, 0);
-            task.end = task.start + chrono::Duration::days(1);
-            task.all_day = true;
-            data.metadata.schedule = None;
-            data.metadata.block = None;
-            data.metadata.inherited = None;
-            task.details.scheduled = None;
-            let list = match &change {
-                Change::Inbox => settings.inbox_list.as_deref(),
-                Change::Triaged => settings.triaged_list.as_deref(),
-                Change::Backlog(_) => settings.backlog_list.as_deref(),
-                _ => None,
-            };
-            if let Some(list) = list {
-                task.calendar_id = ids::calendar_id(list);
-            }
-            if let Change::Backlog(Some(section)) = change {
-                data.metadata.backlog_section = section;
-            }
-        }
+    if task.details.task_data.is_none() {
+        task.details.task_data = Some(db.import(&task)?);
     }
-    task.details.task_data = Some(data);
+    let original = task.clone();
+    task = super::calendar_tasks::apply(task, settings, &change, order)?;
     enqueue(
         Job::TaskEdit {
             task: original.clone(),
@@ -1225,6 +1141,18 @@ pub fn create_task(
     }
     data.metadata.created_at = Some(crate::clock::utc_now());
     task.details.task_data = Some(data);
+    if let Some(day) = due {
+        task = super::calendar_tasks::apply(task, settings, &task_edit::Change::Day(day), 0)?;
+        enqueue(
+            Job::CreateCalendarTask {
+                task: Box::new(task.clone()),
+            },
+            Some(&task),
+            &task.calendar_id,
+            &task.id,
+        )?;
+        return Ok(task);
+    }
     enqueue(
         Job::CreateTask {
             task: Box::new(task.clone()),
@@ -2122,121 +2050,5 @@ mod tests {
         let latest = edit(&path, "immediate edit");
         store.apply_local_operations().unwrap();
         assert_eq!(store.event(&latest.id).unwrap().title, "immediate edit");
-    }
-    #[test]
-    fn retries_keep_reserved_schedule_ids_without_overwriting_local_metadata() {
-        let (_dir, path) = db();
-        let mut db = task_db::Database::open(&path).unwrap();
-        let mut task = super::super::sample_snapshot().events.remove(0);
-        task.id = "task:local".into();
-        task.calendar_id = "tasks:inbox".into();
-        let data = db.import(&task).unwrap();
-        task.details.task_data = Some(data.clone());
-        enqueue_in(
-            &path,
-            Job::TaskEdit {
-                task: task.clone(),
-                change: task_edit::Change::Title("new title".into()),
-                order: 0,
-            },
-            Some(&task),
-            &task.calendar_id,
-            &task.id,
-        )
-        .unwrap();
-        let mut reserved = None;
-        drain_in(&path, |_| {
-            let mut db = task_db::Database::open(&path)?;
-            let mut progress = db.import(&task)?;
-            let mut moved = task.clone();
-            moved.id = "task:moved".into();
-            moved.calendar_id = "tasks:destination".into();
-            let link = scheduled::Link::new("calendar".into(), &moved)?;
-            reserved = Some(link.event_id.clone());
-            progress.metadata.schedule = Some(link);
-            db.save(&moved, &progress)?;
-            Err("Calendar timed out after Tasks moved".into())
-        })
-        .unwrap();
-        assert!(
-            db.lookup(&task)
-                .unwrap()
-                .unwrap()
-                .metadata
-                .schedule
-                .is_none()
-        );
-        db.connection()
-            .execute("UPDATE google_operations SET lease_until=0", [])
-            .unwrap();
-        drain_in(&path, |job| {
-            let Job::TaskEdit { task, .. } = job else {
-                panic!("expected task edit")
-            };
-            assert_eq!(task.id, "task:moved");
-            assert_eq!(task.calendar_id, "tasks:destination");
-            let mut db = task_db::Database::open(&path)?;
-            assert_eq!(
-                db.import(&task)?.metadata.schedule.unwrap().event_id,
-                reserved.unwrap()
-            );
-            Ok(None)
-        })
-        .unwrap();
-        let left: i64 = db
-            .connection()
-            .query_row("SELECT count(*) FROM google_operation_progress", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(left, 0);
-    }
-    #[test]
-    fn later_queued_edits_inherit_backend_links_without_losing_their_newer_fields() {
-        let (_dir, path) = db();
-        let mut db = task_db::Database::open(&path).unwrap();
-        let mut task = super::super::sample_snapshot().events.remove(0);
-        task.id = "task:local".into();
-        task.calendar_id = "tasks:inbox".into();
-        task.details.task_data = Some(db.import(&task).unwrap());
-        let job = Job::TaskEdit {
-            task: task.clone(),
-            change: task_edit::Change::Title("first".into()),
-            order: 0,
-        };
-        enqueue_in(&path, job, Some(&task), &task.calendar_id, &task.id).unwrap();
-        let mut newer = task.clone();
-        newer.details.task_data.as_mut().unwrap().metadata.minutes = 90;
-        enqueue_in(
-            &path,
-            Job::TaskEdit {
-                task: newer.clone(),
-                change: task_edit::Change::Title("second".into()),
-                order: 0,
-            },
-            Some(&newer),
-            &task.calendar_id,
-            &task.id,
-        )
-        .unwrap();
-        drain_in(&path, |_| {
-            let mut db = task_db::Database::open(&path)?;
-            let mut data = db.import(&task)?;
-            data.metadata.schedule = Some(scheduled::Link::new("calendar".into(), &task)?);
-            db.save(&task, &data)?;
-            Err("Earlier request failed after reserving its calendar ID".into())
-        })
-        .unwrap();
-        drain_in(&path, |job| {
-            let Job::TaskEdit { task, .. } = job else {
-                panic!("expected task edit")
-            };
-            let mut db = task_db::Database::open(&path)?;
-            let data = db.import(&task)?;
-            assert!(data.metadata.schedule.is_some());
-            assert_eq!(data.metadata.minutes, 90);
-            Ok(None)
-        })
-        .unwrap();
     }
 }

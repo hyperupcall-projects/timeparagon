@@ -624,7 +624,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 
     let mut events = snapshot.events.clone();
     for event in &mut events {
-        if event.calendar_id.starts_with(ids::TASK_LIST) && event.details.scheduled.is_none() {
+        if event.calendar_id.starts_with(ids::TASK_LIST) && !event.is_calendar_task() {
             event.color = settings
                 .task_color(&event.calendar_id)
                 .unwrap_or(calendar::colors::TASK);
@@ -750,7 +750,7 @@ fn is_time_block(
 ) -> bool {
     !event.is_task()
         && !event.all_day
-        && event.details.scheduled.is_none()
+        && !event.is_calendar_task()
         && event.details.sleep.is_none()
         && (settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
             || assigned_keys.contains(&tb::block_key(event)))
@@ -762,11 +762,8 @@ fn managed_copy(event: &Event, settings: &CalendarSettings, block_keys: &HashSet
     let Some(managed) = settings.app_calendar.as_deref() else {
         return false;
     };
-    event
-        .details
-        .scheduled
-        .as_ref()
-        .is_some_and(|link| link.calendar_id == managed)
+    event.is_calendar_task()
+        && event.calendar_id == managed
         && tb::metadata(event)
             .block
             .as_ref()
@@ -1361,10 +1358,7 @@ pub(crate) fn untriaged_in(
                     .eq_ignore_ascii_case(calendar::scheduled::DEFAULT_LIST)
         }),
     };
-    inbox
-        && task.start.date_naive() == tb::UNDATED
-        && tb::in_backlog(task)
-        && tb::metadata(task).schedule.is_none()
+    inbox && task.start.date_naive() == tb::UNDATED && tb::in_backlog(task)
 }
 
 /// Open tasks of the day that a block could take on.
@@ -1579,7 +1573,6 @@ mod tests {
                 minutes,
                 order,
                 ignored: false,
-                schedule: None,
                 projects: Vec::new(),
                 labels: Vec::new(),
                 priority: None,
@@ -1880,40 +1873,6 @@ mod tests {
         // Tasks remain because the Google Tasks source itself is still on.
         assert_eq!(model.task_groups[0].tasks.len(), 1);
         assert!(model.task_groups[0].tasks[0].block.is_none());
-    }
-
-    #[test]
-    fn every_task_survives_a_hidden_schedule_calendar() {
-        let mut assigned = task("a", "Write", None, 1, 45, false);
-        assigned.details.scheduled = Some(calendar::scheduled::Link {
-            calendar_id: "scheduled".into(),
-            event_id: "event".into(),
-            list_id: "work".into(),
-            task_id: "a".into(),
-            pending: false,
-            block: None,
-            order: 0,
-        });
-        let snapshot = Snapshot {
-            calendars: vec![
-                calendar("scheduled", "Tasks"),
-                calendar("tasks:work", "Work"),
-            ],
-            events: vec![assigned],
-            day: day(),
-            fetched_at: at(10, 0),
-            notice: None,
-        };
-        let settings = CalendarSettings {
-            app_calendar: Some("scheduled".into()),
-            disabled: vec!["scheduled".into()],
-            ..CalendarSettings::default()
-        };
-        let model = build_model(&snapshot, &settings);
-
-        assert_eq!(model.task_groups.len(), 1);
-        assert_eq!(model.task_groups[0].tasks.len(), 1);
-        assert!(model.timed.is_empty());
     }
 
     #[test]

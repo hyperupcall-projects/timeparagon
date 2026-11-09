@@ -72,15 +72,10 @@ impl TimeSlaySource {
             return Some(Self::Sleep);
         }
         let on_calendar = event.calendar_id == app_calendar;
-        let scheduled_on_calendar = event
-            .details
-            .scheduled
-            .as_ref()
-            .is_some_and(|link| link.calendar_id == app_calendar);
-        if !on_calendar && !scheduled_on_calendar {
+        if !on_calendar {
             return None;
         }
-        Some(if event.is_task() || event.details.scheduled.is_some() {
+        Some(if event.is_task() {
             Self::Tasks
         } else if event.details.habit {
             Self::Habits

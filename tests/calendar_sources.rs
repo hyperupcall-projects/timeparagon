@@ -364,11 +364,9 @@ fn managed_lists_are_omitted_by_name_and_configured_id() {
     for (id, name) in [
         ("inbox", " Inbox "),
         ("triaged", "triaged"),
-        ("blocked", "Time Blocked"),
         ("backlog", "Backlog"),
         ("custom-inbox", "Capture"),
         ("custom-triaged", "Reviewed"),
-        ("custom-blocked", "Planned"),
         ("custom-backlog", "Later"),
     ] {
         state.calendar.calendars.push(Calendar {
@@ -381,7 +379,6 @@ fn managed_lists_are_omitted_by_name_and_configured_id() {
     }
     state.config.calendar.inbox_list = Some("custom-inbox".into());
     state.config.calendar.triaged_list = Some("tasks:custom-triaged".into());
-    state.config.calendar.time_block_list = Some("custom-blocked".into());
     state.config.calendar.backlog_list = Some("tasks:custom-backlog".into());
     let sources = state.calendar.display_sources(&state.config.calendar);
     let lists: Vec<_> = sources
@@ -397,14 +394,7 @@ fn managed_lists_are_omitted_by_name_and_configured_id() {
         app::view(&state, window::Id::unique()),
     );
     for name in [
-        "Inbox",
-        "triaged",
-        "Time Blocked",
-        "Backlog",
-        "Capture",
-        "Reviewed",
-        "Planned",
-        "Later",
+        "Inbox", "triaged", "Backlog", "Capture", "Reviewed", "Later",
     ] {
         assert!(
             ui.find(name).is_err(),
@@ -631,10 +621,12 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
                 event.details.sleep = Some(calendar::sleep::Record::planned(state.calendar.day));
             }
             TimeSlaySource::Tasks => {
-                event.id = "task:scheduled".into();
-                event.calendar_id = "tasks:one".into();
-                event.details.scheduled =
-                    Some(calendar::scheduled::Link::new("app".into(), &event).unwrap());
+                event.id = "scheduled-task".into();
+                event.calendar_id = "app".into();
+                event.details.task_data = Some(timeslay::task_db::TaskData {
+                    id: 999,
+                    metadata: Default::default(),
+                });
             }
             _ => {}
         }
@@ -729,10 +721,12 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
                 event.details.sleep = Some(calendar::sleep::Record::planned(state.calendar.day));
             }
             TimeSlaySource::Tasks => {
-                event.id = "task:scheduled".into();
-                event.calendar_id = "tasks:one".into();
-                event.details.scheduled =
-                    Some(calendar::scheduled::Link::new("app".into(), &event).unwrap());
+                event.id = "scheduled-task".into();
+                event.calendar_id = "app".into();
+                event.details.task_data = Some(timeslay::task_db::TaskData {
+                    id: 999,
+                    metadata: Default::default(),
+                });
             }
             _ => {}
         }

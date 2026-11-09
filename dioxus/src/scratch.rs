@@ -1,5 +1,4 @@
-//! Todos, the notepad, brain dumps and projects: the things the desktop keeps
-//! in `config.toml`, which reach the phone through the config sync.
+//! The notepad, brain dumps and projects, shared through database sync.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +21,6 @@ fn written(result: std::io::Result<()>, what: &str) -> Result<Config, String> {
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum Page {
     #[default]
-    Todos,
     Notepad,
     BrainDump,
     Projects,
@@ -59,96 +57,18 @@ pub fn ScratchSheet(
                     }
                 }
                 div { class: "sheet-tabs",
-                    {tab("Todos", Page::Todos)}
                     {tab("Notepad", Page::Notepad)}
                     {tab("Brain dump", Page::BrainDump)}
                     {tab("Projects", Page::Projects)}
                 }
                 div { class: "modal-body editor-body",
                     match page() {
-                        Page::Todos => rsx! { Todos { config } },
                         Page::Notepad => rsx! { Notepad { config } },
                         Page::BrainDump => rsx! { BrainDump { key: "{day}", config, day } },
                         Page::Projects => rsx! { Projects { config } },
                     }
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn Todos(config: Signal<Config>) -> Element {
-    let mut typed = use_signal(String::new);
-    let mut error = use_signal(|| None::<String>);
-    let mut change = move |edit: &dyn Fn(&mut timeslay_core::todos::TodoList)| {
-        let mut todos = config.peek().todos.clone();
-        edit(&mut todos);
-        match written(config::save_todos(&todos), "todos") {
-            Ok(saved) => {
-                config.set(saved);
-                error.set(None);
-            }
-            Err(message) => error.set(Some(message)),
-        }
-    };
-    let todos = config.read().todos.clone();
-    let current = todos.current_index();
-    let count = todos.len();
-    rsx! {
-        if let Some(message) = error() {
-            p { class: "editor-error", role: "alert", "{message}" }
-        }
-        p { class: "hint", "A scratchpad for breaking work into steps. It never touches Google Tasks." }
-        form {
-            class: "sheet-row",
-            onsubmit: move |event| {
-                event.prevent_default();
-                let text = typed().trim().to_owned();
-                if !text.is_empty() {
-                    change(&|todos| { todos.add(text.clone()); });
-                    typed.set(String::new());
-                }
-            },
-            input {
-                class: "client-input",
-                r#type: "text",
-                placeholder: "Add a step",
-                aria_label: "Add a step",
-                value: "{typed}",
-                oninput: move |event| typed.set(event.value()),
-            }
-            button { class: "btn primary", r#type: "submit", "Add" }
-        }
-        if todos.is_empty() {
-            p { class: "empty-note", "Nothing here." }
-        }
-        for (index, todo) in todos.items().iter().enumerate() {
-            div {
-                key: "{index}-{todo.text}",
-                class: "todo-row",
-                style: "margin-left: {u32::from(todo.indent) * 16}px;",
-                button {
-                    class: if current == Some(index) { "todo-text current" } else { "todo-text" },
-                    aria_pressed: (current == Some(index)).to_string(),
-                    onclick: move |_| change(&|todos| todos.set_current(index)),
-                    "{todo.text}"
-                }
-                button { class: "btn icon", title: "Move up", aria_label: "Move up", disabled: index == 0,
-                    onclick: move |_| change(&|todos| todos.move_item(index, -1)), "↑" }
-                button { class: "btn icon", title: "Move down", aria_label: "Move down", disabled: index + 1 == count,
-                    onclick: move |_| change(&|todos| todos.move_item(index, 1)), "↓" }
-                button { class: "btn icon", title: "Indent", aria_label: "Indent",
-                    disabled: todo.indent >= timeslay_core::todos::MAX_INDENT,
-                    onclick: move |_| change(&|todos| todos.indent(index, 1)), "→" }
-                button { class: "btn icon", title: "Outdent", aria_label: "Outdent", disabled: todo.indent == 0,
-                    onclick: move |_| change(&|todos| todos.indent(index, -1)), "←" }
-                button { class: "btn icon", title: "Remove", aria_label: "Remove",
-                    onclick: move |_| change(&|todos| todos.remove(index)), "×" }
-            }
-        }
-        if !todos.is_empty() {
-            button { class: "btn", onclick: move |_| change(&|todos| todos.clear()), "Clear all" }
         }
     }
 }

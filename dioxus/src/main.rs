@@ -1065,9 +1065,9 @@ fn App() -> Element {
                             class: "btn",
                             onclick: move |_| {
                                 show_more.set(false);
-                                show_scratch.set(Some(scratch::Page::Todos));
+                                show_scratch.set(Some(scratch::Page::Projects));
                             },
-                            "Todos and projects"
+                            "Projects"
                         }
                         button { class: "btn", onclick: move |_| { show_more.set(false); show_alarms.set(true); }, "Alarms" }
                         button { class: "btn", onclick: move |_| {show_more.set(false);show_operations.set(true);}, "Operations" }
@@ -2470,27 +2470,12 @@ mod sheet_tests {
     }
 
     #[test]
-    fn the_lists_open_on_todos_and_offer_the_other_pages() {
+    fn the_lists_open_on_the_notepad_and_offer_the_other_pages() {
         fn app() -> Element {
-            let config = use_signal(|| {
-                let mut config = Config::default();
-                config.todos.add("Write the report");
-                config.todos.add("Send it");
-                config
-            });
+            let config = use_signal(Config::default);
             rsx! { scratch::ScratchSheet { config, day: today(), on_close: |_| {} } }
         }
-        assert_offers(
-            &render(app),
-            &[
-                ">Todos<",
-                ">Notepad<",
-                ">Brain dump<",
-                ">Projects<",
-                "Write the report",
-                "Add a step",
-            ],
-        );
+        assert_offers(&render(app), &[">Notepad<", ">Brain dump<", ">Projects<"]);
     }
 
     fn render_list(app: fn() -> Element) -> String {

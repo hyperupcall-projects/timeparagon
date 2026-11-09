@@ -10,6 +10,7 @@ use crate::config::CalendarSettings;
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat_source: Option<i64>,
@@ -27,8 +28,6 @@ pub struct Metadata {
     pub order: i64,
     #[serde(default)]
     pub ignored: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schedule: Option<calendar::scheduled::Link>,
     /// The projects this task is filed under, by `config::Project::id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<u64>,
@@ -234,7 +233,13 @@ pub fn task_key(event: &Event) -> String {
         .details
         .task_data
         .as_ref()
-        .map(|data| data.id.to_string())
+        .map(|data| {
+            if event.is_calendar_task() && event.details.recurring_event_id.is_some() {
+                format!("{}/{}", data.id, event.id)
+            } else {
+                data.id.to_string()
+            }
+        })
         .unwrap_or_else(|| block_key(event))
 }
 
@@ -246,7 +251,7 @@ pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
     !event.is_task()
         && !event.details.habit
         && event.details.sleep.is_none()
-        && event.details.scheduled.is_none()
+        && !event.is_calendar_task()
         && !event.all_day
         && settings.app_calendar.as_deref() == Some(&event.calendar_id)
 }
@@ -254,10 +259,7 @@ pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
 /// A task that still needs a time: unscheduled, or waiting on a schedule write.
 pub fn in_backlog(event: &Event) -> bool {
     let meta = metadata(event);
-    let pending = meta.schedule.as_ref().is_some_and(|link| link.pending);
-    event.is_task()
-        && !event.completed
-        && (pending || (meta.schedule.is_none() && meta.block.is_none()))
+    event.is_task() && !event.completed && event.task_ref().is_some() && meta.block.is_none()
 }
 
 /// A task whose date is the current day. An undated task is not.
@@ -295,7 +297,6 @@ pub fn unslotted_on(
         && event.all_day
         && event.start.date_naive() == day
         && meta.block.is_none()
-        && meta.schedule.is_none()
         && !past_due(event, now)
 }
 

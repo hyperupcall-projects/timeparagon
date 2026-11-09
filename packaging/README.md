@@ -158,7 +158,7 @@ details pane sits to the right of it. `detail_width` is the pane's default width
 `timeslay --sidebar` opens **TimeSlay itself** as a slim panel — 200px
 wide by default — down the **left** edge of the screen. It is a separate
 instance of the real application, not a second, cut-down view: the same clock,
-calendar, todos and settings, just in a narrow window.
+calendar and settings, just in a narrow window.
 
 ### Shortcuts
 

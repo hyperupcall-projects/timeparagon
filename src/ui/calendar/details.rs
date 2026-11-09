@@ -25,7 +25,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         return sleep_editor(state, event, metrics);
     }
     let mut body = column![].spacing(metrics.spacing).width(Fill);
-    if is_task(event) {
+    if event.task_ref().is_some() {
         body = body.push(super::super::timeblocking::fields(state, event, metrics));
     } else {
         // An event is edited right here. There is no separate Edit button and
@@ -35,7 +35,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 
     let details = &event.details;
     let new_habit = event.id == crate::habits::NEW_HABIT_ID;
-    if !is_task(event) && !new_habit {
+    if event.task_ref().is_none() && !new_habit {
         // A calendar event gets a place to search for and choose, the same as
         // a task does. Where Google holds a location no saved place matches,
         // that text stays above the button.
@@ -57,7 +57,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             metrics,
         ));
     }
-    if !is_task(event)
+    if event.task_ref().is_none()
         && !new_habit
         && !event.details.habit
         && !crate::timeblocking::is_block(event, &state.config.calendar)
@@ -75,7 +75,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             |v0| Message::EventEdit(EventEditMessage::EventEditMeeting(v0)),
         ));
     }
-    if !is_task(event)
+    if event.task_ref().is_none()
         && !event.details.habit
         && let Some(draft) = &state.calendar.edit_draft
     {
@@ -88,7 +88,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             |v0| Message::EventEdit(EventEditMessage::EventEditRecurrence(v0)),
         ));
     }
-    if !is_task(event)
+    if event.task_ref().is_none()
         && let Some(draft) = &state.calendar.edit_draft
     {
         body = body.push(event_options(&draft.options, metrics, |v0| {
@@ -146,14 +146,14 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             .into(),
         );
     }
-    if !is_task(event) {
+    if event.task_ref().is_none() {
         buttons.push(event_save_control(state, event, metrics));
         if !new_habit {
             buttons.push(event_scope_control(state, event, metrics, true));
         }
     }
     // Tasks are managed here now; only events get a link back to Google.
-    if !is_task(event) && !details.link.is_empty() {
+    if event.task_ref().is_none() && !details.link.is_empty() {
         let link = details.link.clone();
         buttons.push(
             button(
@@ -224,7 +224,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
         return iced::widget::Space::new().width(0.0).height(0.0).into();
     };
 
-    let is_task = event.is_task();
+    let is_task = event.task_ref().is_some();
 
     // Clicking outside the card puts the prompt away without deleting.
     let dismiss = mouse_area(

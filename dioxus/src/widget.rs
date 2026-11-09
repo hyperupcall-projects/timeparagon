@@ -75,7 +75,7 @@ fn hex(color: Color) -> String {
 
 /// Tasks stay in the app. A scheduled task's calendar copy is one too.
 fn is_todo(event: &Event) -> bool {
-    event.is_task() || event.details.scheduled.is_some()
+    event.is_task() || event.is_calendar_task()
 }
 
 fn widget_day(
@@ -391,44 +391,6 @@ mod tests {
     }
 
     #[test]
-    fn todos_are_left_out_but_blocks_stay() {
-        let mut timed_task = task("Timed", None, 6, false);
-        timed_task.all_day = false;
-        timed_task.start = at(14, 0);
-        timed_task.end = at(15, 0);
-        let mut scheduled = event("Scheduled", "work", at(14, 0), at(15, 0));
-        scheduled.details.scheduled = Some(calendar::scheduled::Link {
-            calendar_id: "work".into(),
-            event_id: "Scheduled".into(),
-            list_id: "list".into(),
-            task_id: "task".into(),
-            pending: false,
-            block: None,
-            order: 0,
-        });
-
-        let day = build(vec![
-            event("Study", "blocks", at(18, 15), at(19, 30)),
-            event("Standup", "work", at(14, 0), at(15, 0)),
-            task("Write", Some("blocks/Study"), 1, false),
-            task("Loose", None, 2, false),
-            timed_task,
-            scheduled,
-        ]);
-
-        let titles: Vec<_> = day.items.iter().map(|item| item.title.as_str()).collect();
-        assert_eq!(titles, ["Standup", "Study"]);
-        assert_eq!(day.items[1].time, "6:15 – 7:30p");
-        // The todos that were removed do not leave gaps beside what remains.
-        assert_eq!(day.items[0].columns, 1);
-
-        let json = serde_json::to_string(&day).unwrap();
-        for todo in ["Write", "Loose", "Timed", "Scheduled"] {
-            assert!(!json.contains(todo), "{todo} reached the widget");
-        }
-    }
-
-    #[test]
     fn short_items_that_would_collide_on_screen_share_columns() {
         // These do not overlap in time, but 15 minutes draws as 30.
         let day = build(vec![
@@ -508,33 +470,6 @@ mod tests {
             &campus_trip(),
         );
         assert!(day.items[0].travel.as_ref().unwrap().half_width);
-    }
-
-    #[test]
-    fn the_widget_has_no_trip_when_travel_is_off_or_leads_to_a_todo() {
-        let off = PlaceSettings {
-            show: false,
-            ..campus_trip()
-        };
-        let day = build_with_travel(
-            vec![at_campus(event("Lecture", "work", at(9, 0), at(10, 0)))],
-            &off,
-        );
-        assert!(day.items[0].travel.is_none());
-
-        let mut scheduled = at_campus(event("Scheduled", "work", at(9, 0), at(10, 0)));
-        scheduled.details.scheduled = Some(calendar::scheduled::Link {
-            calendar_id: "work".into(),
-            event_id: "Scheduled".into(),
-            list_id: "list".into(),
-            task_id: "task".into(),
-            pending: false,
-            block: None,
-            order: 0,
-        });
-        let day = build_with_travel(vec![scheduled], &campus_trip());
-        assert!(day.items.is_empty());
-        assert!(!serde_json::to_string(&day).unwrap().contains("travel"));
     }
 
     #[test]

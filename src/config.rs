@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::audio::Tone;
 use crate::hex::HexColor;
-use crate::todos::TodoList;
 
 pub use timeslay_core::config::{
     CalendarSettings, DatabaseSyncSettings, Goal, LifeArea, Objective, PERSONAL_AREA, Project,
@@ -62,10 +61,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "crate::task_work::WorkLog::is_empty")]
     pub task_work: crate::task_work::WorkLog,
     pub pomodoro: crate::pomodoro::Pomodoro,
-    /// The temporary todo scratchpad. It is left out of the file while it is
-    /// empty, so a config that never used it stays as it was.
-    #[serde(default, skip_serializing_if = "TodoList::is_empty")]
-    pub todos: TodoList,
     /// The notepad's page. It is left out of the file while it is blank, so a
     /// config that never used it stays as it was.
     #[serde(default, skip_serializing_if = "Notepad::is_empty")]
@@ -927,7 +922,6 @@ mod tests {
         let mut config = Config::default();
         config.notepad.text = "milk".into();
         config.notepad.font_size = 120;
-        config.todos.add("write it");
         config.brain_dump.set(
             chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
             "idea".into(),
@@ -935,7 +929,7 @@ mod tests {
         config.save_to(&path, Some(&database)).unwrap();
 
         let file: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        for section in ["todos", "brain_dump", "projects", "task_work"] {
+        for section in ["brain_dump", "projects", "task_work"] {
             assert!(file.get(section).is_none(), "{section} left the file");
         }
         assert_eq!(file["notepad"].as_table().unwrap().len(), 1);
@@ -949,8 +943,10 @@ mod tests {
         assert!(Config::default().save_to(&path, Some(&database)).is_err());
         fs::write(&path, "").unwrap();
         assert_eq!(
-            Config::read_from(&path, Some(&database)).unwrap().todos,
-            config.todos
+            Config::read_from(&path, Some(&database))
+                .unwrap()
+                .brain_dump,
+            config.brain_dump
         );
     }
 
@@ -967,10 +963,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_managed_task_lists_are_inbox_triaged_time_blocked_and_backlog() {
+    fn the_managed_task_lists_are_inbox_triaged_and_backlog() {
         assert_eq!(crate::inbox::DEFAULT_LIST, "Inbox");
         assert_eq!(CalendarSettings::DEFAULT_TRIAGED_LIST, "Triaged");
-        assert_eq!(CalendarSettings::DEFAULT_TIME_BLOCK_LIST, "Time Blocked");
         assert_eq!(CalendarSettings::DEFAULT_BACKLOG_LIST, "Backlog");
         assert_eq!(
             TriageRequirements::default(),
@@ -1125,17 +1120,13 @@ mod tests {
             [alarm.sound]
             volume = 25
             future_sound_setting = "anything"
-            [[todos.items]]
-            text = "keep me"
-            future_item_setting = true
             "#,
             |path| ignored.push(path),
         )
         .unwrap();
         assert_eq!(config.appearance.theme, "Ocean");
         assert_eq!(config.alarm.sound.volume, 25);
-        assert_eq!(config.todos.items()[0].text, "keep me");
-        assert_eq!(ignored.len(), 4, "{ignored:?}");
+        assert_eq!(ignored.len(), 3, "{ignored:?}");
         assert!(ignored.contains(&"future_setting".to_owned()));
         assert!(ignored.contains(&"appearance.future_theme_setting".to_owned()));
         assert!(ignored.contains(&"alarm.sound.future_sound_setting".to_owned()));
@@ -1337,28 +1328,6 @@ mod tests {
     fn an_empty_task_color_map_is_left_out_of_the_config_file() {
         let text = toml::to_string_pretty(&CalendarSettings::default()).unwrap();
         assert!(!text.contains("task_colors"), "got {text:?}");
-    }
-
-    #[test]
-    fn a_todo_scratchpad_survives_a_round_trip() {
-        let mut config = Config::default();
-        config.todos.add("write the report");
-        config.todos.add("send the email");
-        config.todos.set_current(1);
-        config.todos.indent(1, 1);
-
-        let text = toml::to_string_pretty(&config).unwrap();
-        let parsed: Config = toml::from_str(&text).unwrap();
-
-        assert_eq!(parsed.todos, config.todos);
-        assert_eq!(parsed.todos.current().unwrap().text, "send the email");
-        assert_eq!(parsed.todos.items()[1].indent, 1);
-    }
-
-    #[test]
-    fn an_empty_scratchpad_is_left_out_of_the_config_file() {
-        let text = toml::to_string_pretty(&Config::default()).unwrap();
-        assert!(!text.contains("todos"), "got {text:?}");
     }
 
     #[test]

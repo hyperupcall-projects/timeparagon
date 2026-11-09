@@ -11,7 +11,7 @@ own screen and the rest of the app in sheets over it:
   with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
   **More** and **Settings**.
 - Joining meetings and answering invitations.
-- Todos, the notepad, brain dumps and projects, shared through Turso.
+- The notepad, brain dumps and projects, shared through Turso.
 - The habit tracker, with the desktop's features: the list with sections, sorting
   and filters (hold a row to drag it in manual order), each habit's page with its
   charts, notes and calendar events, the add and edit form, the day dialog with
@@ -31,7 +31,7 @@ own screen and the rest of the app in sheets over it:
   Google accounts stay on the desktop, as the phone has no secure store for
   their tokens yet.
 
-Alarms, habits, todos, the notepad, brain dumps, projects and work sessions sync
+Alarms, habits, the notepad, brain dumps, projects and work sessions sync
 through the Turso server configured in **Settings → Database sync** on each
 device. The URL is stored in `[database_sync].url` in `config.toml`; a blank URL
 disables sync. Each device needs network access to that server. Changes save locally
@@ -202,7 +202,7 @@ lists beneath the navigation. The lists take the same tasks as the desktop's and
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside
 its list. **Note** opens the notepad, and **More** holds Alarms, Habits, Notes, Brain
-dump, Todos and projects, and Operations. Life stays on the desktop.
+dump, Projects, and Operations. Life stays on the desktop.
 
 ## What the day view shows
 

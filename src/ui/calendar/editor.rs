@@ -35,7 +35,7 @@ pub fn event_editor<'a>(
     };
 
     if draft.loading {
-        let mut loading = column![text("Loading habit…").size(metrics.label())].spacing(6);
+        let mut loading = column![text("Loading recurrence…").size(metrics.label())].spacing(6);
         if let Some(error) = &state.calendar.error {
             loading = loading.push(text(error).style(text::danger)).push(
                 crate::ui::controls::quiet_button("Retry")
@@ -73,9 +73,8 @@ pub fn event_editor<'a>(
     };
     // Habits and time blocks are always timed, so only a plain event can be
     // switched to whole days.
-    let can_be_all_day = !event.details.habit
-        && event.details.scheduled.is_none()
-        && !crate::timeblocking::is_block(event, &state.config.calendar);
+    let can_be_all_day =
+        !event.details.habit && !crate::timeblocking::is_block(event, &state.config.calendar);
     let mut start = column![label(if event.details.habit {
         "Start day"
     } else if draft.all_day {
@@ -112,7 +111,7 @@ pub fn event_editor<'a>(
         ));
     }
     let targets = state.calendar.move_targets(event, &state.config.calendar);
-    let source: Option<Element<'a, Message>> = if targets.is_empty() {
+    let source: Option<Element<'a, Message>> = if targets.is_empty() || event.is_calendar_task() {
         None
     } else {
         let options: Vec<CalendarChoice> = targets

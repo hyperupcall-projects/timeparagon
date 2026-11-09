@@ -682,3 +682,44 @@ fn saved_habit_edits_refresh_both_the_habits_list_and_calendar() {
     )));
     assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
 }
+
+#[test]
+fn scheduled_tasks_open_the_event_editor_with_repeat_projects_labels_and_notes() {
+    use iced_test::{Simulator, core::Settings};
+    let mut state = state();
+    state.config.calendar.app_calendar = Some("app".into());
+    let parent_key = timeslay::timeblocking::block_key(state.calendar.event("standup").unwrap());
+    let mut event = state.calendar.event("standup").unwrap().clone();
+    event.id = "native-task".into();
+    event.calendar_id = "app".into();
+    event.details = Default::default();
+    event.details.description = "Calendar task notes".into();
+    event.details.labels = vec!["work".into()];
+    event.details.task_data = Some(timeslay::task_db::TaskData {
+        id: 123,
+        metadata: timeslay::timeblocking::Metadata {
+            block: Some(parent_key),
+            labels: vec!["work".into()],
+            ..Default::default()
+        },
+    });
+    state.calendar.events.push(event);
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("native-task".into())),
+    );
+    let draft = state.calendar.edit_draft.as_ref().unwrap();
+    assert_eq!(draft.id, "native-task");
+    assert_eq!(draft.description, "Calendar task notes");
+    assert_eq!(draft.labels, ["work"]);
+    let editor = state.editor_window.unwrap();
+    let mut ui = Simulator::with_size(
+        Settings::default(),
+        Size::new(600.0, 1800.0),
+        app::view(&state, editor),
+    );
+    assert!(ui.find("Labels").is_ok());
+    assert!(ui.find("Does not repeat").is_ok());
+    assert!(ui.find("Save current event").is_ok());
+    assert!(ui.find("Complete task").is_ok());
+}

@@ -58,7 +58,6 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
         "minutes",
         "order",
         "ignored",
-        "schedule",
         "projects",
         "labels",
         "priority",
@@ -115,18 +114,7 @@ pub fn load(
     {
         return Ok(data);
     }
-    if let Some(mut data) = read(&event.details.description)? {
-        // Tasks.move preserves notes but may change the native task ID. Repair
-        // the link from the returned resource after an interrupted move.
-        if let Some(link) = &mut data.metadata.schedule {
-            let list = ids::bare_list(&event.calendar_id);
-            let id = ids::bare_task(&event.id);
-            if link.list_id != list || link.task_id != id {
-                link.list_id = list.to_owned();
-                link.task_id = id.to_owned();
-                publish(&data)?;
-            }
-        }
+    if let Some(data) = read(&event.details.description)? {
         database.cache_remote(event, &data)?;
         return Ok(data);
     }
@@ -138,6 +126,17 @@ pub fn load(
 
 /// Write through to Google before publishing a cache update.
 pub fn save(token: &str, event: &super::Event, data: &TaskData) -> Result<(), String> {
+    if event.is_calendar_task() {
+        let mut event = event.clone();
+        event.details.task_data = Some(data.clone());
+        return super::api::patch(
+            &super::calendar_tasks::event_url(&event),
+            token,
+            &super::calendar_tasks::body(&event)?.to_string(),
+            "Save calendar task",
+        )
+        .map_err(String::from);
+    }
     let list = event
         .calendar_id
         .strip_prefix(ids::TASK_LIST)
@@ -162,14 +161,6 @@ pub fn save(token: &str, event: &super::Event, data: &TaskData) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn event() -> super::super::Event {
-        let mut event = super::super::sample_snapshot().events.remove(0);
-        event.id = "task:one".into();
-        event.calendar_id = "tasks:list".into();
-        event.details = Default::default();
-        event
-    }
-
     #[test]
     fn deadlines_migrate_to_footer_and_remain_editable_without_metadata_loss() {
         let data = TaskData {
@@ -192,31 +183,6 @@ mod tests {
             None
         );
         assert_eq!(read(&remote).unwrap(), Some(data));
-    }
-
-    #[test]
-    fn interrupted_task_move_repairs_the_remote_schedule_identity() {
-        let mut event = event();
-        let mut data = TaskData {
-            id: 100,
-            metadata: Default::default(),
-        };
-        data.metadata.schedule =
-            Some(super::super::scheduled::Link::new("cal".into(), &event).unwrap());
-        event.details.description = write("Notes", &data).unwrap();
-        event.id = "task:moved".into();
-        event.calendar_id = "tasks:destination".into();
-        let mut db = crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
-        let mut published = None;
-        let loaded = load(&mut db, &event, |data| {
-            published = Some(data.clone());
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(published, Some(loaded.clone()));
-        let link = loaded.metadata.schedule.unwrap();
-        assert_eq!(link.task_id, "moved");
-        assert_eq!(link.list_id, "destination");
     }
 
     #[test]

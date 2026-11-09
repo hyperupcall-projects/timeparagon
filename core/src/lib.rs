@@ -34,7 +34,6 @@ pub mod task_edit;
 pub mod task_input;
 pub mod theme;
 pub mod timeblocking;
-pub mod todos;
 
 /// The color type used by calendar events and settings.
 pub use iced_core::Color;
