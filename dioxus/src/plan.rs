@@ -21,10 +21,11 @@ pub enum PlanView {
     Day,
     MultiDay,
     Month,
+    Schedule,
 }
 
 impl PlanView {
-    pub const ALL: [Self; 3] = [Self::Day, Self::MultiDay, Self::Month];
+    pub const ALL: [Self; 4] = [Self::Day, Self::MultiDay, Self::Month, Self::Schedule];
 
     /// The Plan button's label.
     pub fn label(self) -> &'static str {
@@ -32,6 +33,7 @@ impl PlanView {
             Self::Day => "Plan Day",
             Self::MultiDay => "Plan Multi-day",
             Self::Month => "Plan Month",
+            Self::Schedule => "Plan Schedule",
         }
     }
 
@@ -41,6 +43,7 @@ impl PlanView {
             Self::Day => "Day",
             Self::MultiDay => "Multi-day",
             Self::Month => "Month",
+            Self::Schedule => "Schedule",
         }
     }
 }
@@ -894,7 +897,7 @@ mod tests {
         assert_eq!(PlanView::MultiDay.label(), "Plan Multi-day");
         assert_eq!(
             PlanView::ALL.map(PlanView::menu_label),
-            ["Day", "Multi-day", "Month"]
+            ["Day", "Multi-day", "Month", "Schedule"]
         );
     }
 }

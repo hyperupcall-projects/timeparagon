@@ -15,6 +15,7 @@ pub mod notes;
 pub mod oauth;
 pub mod operations;
 pub mod projects;
+pub mod schedule;
 pub mod scheduled;
 pub mod search;
 pub mod sleep;

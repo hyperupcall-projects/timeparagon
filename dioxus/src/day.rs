@@ -340,6 +340,23 @@ pub fn agenda(
     dates: &[NaiveDate],
     settings: &CalendarSettings,
 ) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
+    agenda_rows(snapshot, dates, settings, false)
+}
+
+pub fn schedule_agenda(
+    snapshot: &Snapshot,
+    dates: &[NaiveDate],
+    settings: &CalendarSettings,
+) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
+    agenda_rows(snapshot, dates, settings, true)
+}
+
+fn agenda_rows(
+    snapshot: &Snapshot,
+    dates: &[NaiveDate],
+    settings: &CalendarSettings,
+    schedule: bool,
+) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
     let assigned: HashSet<String> = snapshot
         .events
         .iter()
@@ -368,7 +385,9 @@ pub fn agenda(
                             .is_some_and(|key| blocks.contains(&key)))
                 })
                 .filter(|event| {
-                    if event.all_day {
+                    if schedule {
+                        calendar::schedule::occurs_on(event, date)
+                    } else if event.all_day {
                         // An all-day item's end is the morning after it.
                         event.start.date_naive() <= date && date < event.end.date_naive()
                     } else {

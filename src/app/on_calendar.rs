@@ -72,6 +72,25 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
             let resize = range_view_transition(state, was_wide, Task::none());
             Task::batch([navigation, resize, show_cached_calendar(state)])
         }
+        CalendarMessage::CalendarScheduleViewSelected => {
+            let navigation = planning_sidebar(state);
+            state.view_menu_open = false;
+            state.habits.calendar_habit = None;
+            let was_wide = state.range_view_active();
+            if state.view != CalendarView::Schedule {
+                state.week_anchor = state.calendar.day;
+            }
+            state.view = CalendarView::Schedule;
+            state.plan_view = CalendarView::Schedule;
+            state.week_hover = None;
+            let resize = range_view_transition(state, was_wide, Task::none());
+            Task::batch([
+                navigation,
+                resize,
+                ui::calendar::scroll_week_to_start(),
+                show_cached_calendar(state),
+            ])
+        }
         CalendarMessage::CalendarTwoWeekViewSelected => {
             let navigation = planning_sidebar(state);
             state.view_menu_open = false;

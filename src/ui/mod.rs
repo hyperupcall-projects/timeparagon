@@ -96,7 +96,9 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         }
         if state.range_view_active() {
             let metrics = Metrics::of(size);
-            let (content, name) = if state.monthly() {
+            let (content, name) = if state.view == CalendarView::Schedule {
+                (calendar::schedule_view(state, &metrics), "Schedule")
+            } else if state.monthly() {
                 (calendar::monthly_view(state, &metrics), "Month")
             } else if state.two_weekly() {
                 (calendar::two_week_view(state, &metrics), "2 Weeks")
@@ -592,6 +594,7 @@ pub fn plan_view_label(state: &State) -> &'static str {
         CalendarView::Week => "Plan Week",
         CalendarView::TwoWeek => "Plan 2 Weeks",
         CalendarView::Month => "Plan Month",
+        CalendarView::Schedule => "Plan Schedule",
     }
 }
 
@@ -941,6 +944,7 @@ fn plan_view_message(view: CalendarView) -> Message {
         CalendarView::Week => Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
         CalendarView::TwoWeek => Message::Calendar(CalendarMessage::CalendarTwoWeekViewSelected),
         CalendarView::Month => Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+        CalendarView::Schedule => Message::Calendar(CalendarMessage::CalendarScheduleViewSelected),
     }
 }
 
@@ -955,6 +959,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         ("Week", CalendarView::Week),
         ("2 Weeks", CalendarView::TwoWeek),
         ("Month", CalendarView::Month),
+        ("Schedule", CalendarView::Schedule),
     ] {
         let selected = state.plan_view == view;
         let message = plan_view_message(view);

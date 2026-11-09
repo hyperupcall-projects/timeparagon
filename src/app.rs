@@ -60,6 +60,7 @@ pub enum CalendarView {
     Week,
     TwoWeek,
     Month,
+    Schedule,
 }
 
 /// The sidebar shown beside a planning overview.
@@ -644,6 +645,7 @@ pub enum CalendarMessage {
     CalendarModeSelected(bool),
     CalendarTaskListToggled(bool),
     CalendarMonthViewSelected,
+    CalendarScheduleViewSelected,
     CalendarTwoWeekViewSelected,
     /// Open a day's full list from the two-week view, or close it.
     CalendarTwoWeekMore(Option<chrono::NaiveDate>),
@@ -1119,6 +1121,7 @@ impl State {
 
     pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
         match self.view {
+            CalendarView::Schedule => calendar::schedule::dates(self.week_anchor),
             CalendarView::Month => {
                 calendar::month_grid(self.week_anchor, self.config.calendar.first_day_of_week)
             }
