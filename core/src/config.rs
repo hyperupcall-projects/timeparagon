@@ -1169,7 +1169,7 @@ pub fn save_notepad_text(text: &str) -> io::Result<()> {
     crate::shared_data::save_section(&database()?, "notepad", &notepad)
 }
 
-/// Replaces the temporary todo list.
+/// Replaces the brain dump pages.
 pub fn save_brain_dump(dumps: &crate::brain_dump::Dumps) -> io::Result<()> {
     crate::shared_data::save_section(&database()?, "brain_dump", dumps)
 }

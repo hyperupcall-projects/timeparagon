@@ -2766,36 +2766,6 @@ textarea {
     flex: 1;
 }
 
-.todo-row {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-}
-
-.todo-text {
-    flex: 1;
-    min-width: 0;
-    min-height: 40px;
-    padding: 4px 6px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    text-align: left;
-    overflow-wrap: anywhere;
-}
-
-.todo-text.current {
-    background: var(--hover);
-    font-weight: 600;
-}
-
-.todo-row .btn.icon {
-    flex: none;
-    width: 32px;
-    min-width: 32px;
-    padding: 0;
-}
-
 .scratch-text {
     width: 100%;
     min-height: 40vh;

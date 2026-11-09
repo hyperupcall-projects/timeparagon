@@ -33,8 +33,7 @@ fn other(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-/// Whether a value holds nothing worth keeping. An empty todo list still says
-/// which item is current, so a zero counts as nothing too.
+/// Whether a value holds nothing worth keeping, including default zero values.
 fn blank(value: &Value) -> bool {
     match value {
         Value::Null | Value::Bool(false) => true,
