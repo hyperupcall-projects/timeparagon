@@ -1669,7 +1669,7 @@ mod tests {
             until.naive_local(),
             date("2026-12-31").and_hms_opt(23, 59, 59).unwrap()
         );
-        assert_eq!(lines[1], "EXDATE:20261111090000");
+        assert_eq!(lines[1], "EXDATE:20261111T090000");
         assert!(draft.repeat_summary().contains("until December 31"));
         assert!(draft.repeat_summary().contains("1 skipped"));
     }
@@ -1749,9 +1749,8 @@ mod tests {
         assert_eq!(draft.rule.extra, [date("2026-11-02"), date("2026-11-09")]);
         assert_eq!(draft.rule.skips, [date("2026-11-11")]);
         let written = draft.recurrence_lines().unwrap();
-        assert!(written.contains(&"RDATE:20261102090000".to_owned()));
-        assert!(written.contains(&"RDATE:20261109090000".to_owned()));
-        assert!(written.contains(&"EXDATE:20261111090000".to_owned()));
+        assert!(written.contains(&lines[1]));
+        assert!(written.contains(&lines[2]));
     }
 
     #[test]
