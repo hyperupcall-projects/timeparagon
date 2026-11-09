@@ -456,7 +456,7 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     {
         let meta = tb::metadata(task);
         return column![
-            text("Metadata is inherited from the time block. Edit it in Focus & Plan.")
+            text("Metadata is inherited from the time block. Click the time block to edit its metadata.")
                 .size(metrics.label()),
             text(format!(
                 "Projects: {} · Labels: {} · Priority: {}",
@@ -984,7 +984,6 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .size(metrics.label())
         .style(text::secondary),
         actions,
-        super::calendar::event_editor(state, block, metrics),
         super::controls::section_heading("Planned Tasks", Some(tasks.len()), 16.0),
         planned_slot(state, &block_id, metrics),
     ]

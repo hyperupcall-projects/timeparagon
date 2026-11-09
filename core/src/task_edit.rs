@@ -139,7 +139,10 @@ pub fn validate_child_edit(task: &Event, change: &Change) -> Result<(), String> 
                 | Change::BacklogSection(_)
         )
     {
-        return Err("Metadata is inherited from the time block. Edit it in Focus & Plan.".into());
+        return Err(
+            "Metadata is inherited from the time block. Click the time block to edit its metadata."
+                .into(),
+        );
     }
     Ok(())
 }

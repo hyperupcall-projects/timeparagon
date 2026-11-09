@@ -1603,8 +1603,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                 | Change::BacklogSection(_)
         )
     {
-        state.calendar.error =
-            Some("Metadata is inherited from the time block. Edit it in Focus & Plan.".into());
+        state.calendar.error = Some(
+            "Metadata is inherited from the time block. Click the time block to edit its metadata."
+                .into(),
+        );
         return Task::none();
     }
     if matches!(change, Change::Title(_)) {
