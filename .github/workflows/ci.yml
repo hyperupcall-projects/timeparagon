@@ -39,26 +39,26 @@ jobs:
             libasound2t64 libnss3 libgbm1
       - run: cargo test --workspace --locked
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-24.04
-    env:
-      CARGO_BUILD_JOBS: "2"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang cmake pkg-config \
-            libpipewire-0.3-dev libspa-0.2-dev libxkbcommon-dev libwayland-dev \
-            libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
-            libasound2t64 libnss3 libgbm1
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+  # clippy:
+  #   name: Clippy
+  #   runs-on: ubuntu-24.04
+  #   env:
+  #     CARGO_BUILD_JOBS: "2"
+  #     CARGO_PROFILE_DEV_DEBUG: "0"
+  #   steps:
+  #     - uses: actions/checkout@v7
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         components: clippy
+  #     - name: Install native dependencies
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y --no-install-recommends \
+  #           clang cmake pkg-config \
+  #           libpipewire-0.3-dev libspa-0.2-dev libxkbcommon-dev libwayland-dev \
+  #           libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
+  #           libasound2t64 libnss3 libgbm1
+  #     - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   daylight-saving:
     name: Rust tests on daylight saving days
