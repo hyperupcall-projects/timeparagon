@@ -1,6 +1,6 @@
 //! TimeSlay's Dioxus app.
 //!
-//! Do is the day's calendar, Plan shows a day, week, two weeks or month,
+//! Do is the day's calendar, Plan shows a day, multiple days or month,
 //! Tasks holds the Overdue, Inbox, Today and Backlog lists,
 //! Note opens the notepad, More the other pages, and
 //! Settings the settings. Tapping an item opens a sheet that edits it; a time
@@ -15,6 +15,7 @@ mod habits_charts;
 mod notes;
 mod plan;
 mod reminders;
+mod schedule;
 mod scratch;
 mod search;
 mod style;
@@ -194,11 +195,9 @@ fn App() -> Element {
     let task_tab = use_signal(|| TaskTab::Overdue);
     let mut plan_menu_open = use_signal(|| false);
     // The day the range being planned holds.
-    let mut week_anchor = use_signal(|| *current_day.peek());
+    let plan_anchor = use_signal(|| *current_day.peek());
     let month_open = use_signal(|| false);
     let month_shown = use_signal(|| calendar::first_of_month(*current_day.peek()));
-    let range_month_open = use_signal(|| false);
-    let range_month_shown = use_signal(|| calendar::first_of_month(*current_day.peek()));
     let mut show_actions = use_signal(|| false);
     let mut scrolled = use_signal(|| false);
     let follow_today = use_signal(|| true);
@@ -514,7 +513,7 @@ fn App() -> Element {
         page,
         view: plan_view,
         menu_open: plan_menu_open,
-        week_anchor,
+        plan_anchor,
         current_day,
     };
     let mut open_settings = move || {
@@ -885,54 +884,31 @@ fn App() -> Element {
         }
     };
 
-    // Plan always shows the selected period; task lists live on Tasks.
-    let range_page = plan_view().range().filter(|_| page() == Page::Plan).map(|range| {
-        let anchor = week_anchor();
-        let shown = agenda::dates(range, anchor, &settings);
-        let shows_today = shown.contains(&today);
-        let preview = if range == agenda::Range::Month { Vec::new() } else { shown };
-        rsx! {
-            div { class: "day-header",
-                div { class: "day-controls",
-                    {month_picker(
-                        agenda::label(range, anchor, &settings),
-                        anchor,
-                        preview,
-                        shows_today,
-                        today,
-                        settings.first_day_of_week,
-                        range_month_open,
-                        range_month_shown,
-                        Pick::Anchor(week_anchor),
-                    )}
-                    if range == agenda::Range::Month {
-                        button { class: "btn", onclick: move |_| week_anchor.set(today), "Today" }
-                    }
-                    {header_buttons()}
-                }
-                {status()}
-            }
-            div { class: "plan-page",
-                agenda::AgendaDays {
-                    settings: settings.clone(),
-                    range,
-                    anchor,
-                    today,
-                    revision,
-                    filter: None,
-                    search: search_state.read().clone(),
-                    on_day: move |day| {
-                        page.set(Page::Do);
-                        day_nav.go_to(day, day == day::today(&config.peek().calendar));
-                    },
-                    // Its sheet edits it among the rest of its own day.
-                    on_open: move |event: Event| {
-                        let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
-                        day_nav.go_to(day, day == day::today(&config.peek().calendar));
-                        pending_open.set(Some(event.id));
-                    },
-                }
-            }
+    let range_page = (page() == Page::Plan).then(|| rsx! {
+        div { class: "day-header",
+            div { class: "day-controls", {header_buttons()} }
+            {status()}
+        }
+        schedule::Planner {
+            config,
+            settings: settings.clone(),
+            view: plan_view,
+            anchor: plan_anchor,
+            today,
+            revision,
+            time_format,
+            search: search_state.read().clone(),
+            on_day: move |day| day_nav.go_to(day, day == day::today(&config.peek().calendar)),
+            on_block: move |event: Event| {
+                let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+                day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                selected_block.set(Some(event.id));
+            },
+            on_open: move |event: Event| {
+                let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+                day_nav.go_to(day, day == day::today(&config.peek().calendar));
+                pending_open.set(Some(event.id));
+            },
         }
     });
 
@@ -1603,19 +1579,19 @@ struct PlanNav {
     page: Signal<Page>,
     view: Signal<PlanView>,
     menu_open: Signal<bool>,
-    week_anchor: Signal<NaiveDate>,
+    plan_anchor: Signal<NaiveDate>,
     current_day: Signal<NaiveDate>,
 }
 
 impl PlanNav {
     /// Open the selected period, starting a range from the day in view.
     fn choose(mut self, view: PlanView) {
-        let was_range = *self.page.peek() == Page::Plan && self.view.peek().range().is_some();
+        let was_planning = *self.page.peek() == Page::Plan;
         let changed = *self.view.peek() != view;
         self.menu_open.set(false);
         self.view.set(view);
-        if view.range().is_some() && (changed || !was_range) {
-            self.week_anchor.set(*self.current_day.peek());
+        if changed || !was_planning {
+            self.plan_anchor.set(*self.current_day.peek());
         }
         self.page.set(Page::Plan);
     }
@@ -1656,15 +1632,12 @@ fn task_list(
 enum Pick {
     /// The day in view.
     Day(DayNav),
-    /// The range being planned.
-    Anchor(Signal<NaiveDate>),
 }
 
 impl Pick {
     fn pick(self, day: NaiveDate, today: NaiveDate) {
         match self {
             Self::Day(nav) => nav.go_to(day, day == today),
-            Self::Anchor(mut anchor) => anchor.set(day),
         }
     }
 }
@@ -2034,7 +2007,14 @@ fn timed_event_view(
 
 /// A time block's tasks, listed in the space it leaves beside itself. The
 /// ones that run past the block's end are marked.
-fn block_task_rows(timed: &TimedEvent, editing: Signal<Option<Event>>) -> Vec<Element> {
+fn block_task_rows(timed: &TimedEvent, mut editing: Signal<Option<Event>>) -> Vec<Element> {
+    block_task_buttons(
+        timed,
+        EventHandler::new(move |event| editing.set(Some(event))),
+    )
+}
+
+fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<Element> {
     let top = timed.start_min as f32 * HOUR_HEIGHT / 60.0;
     let duration = (timed.end_min - timed.start_min).max(1) as u32;
     let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
@@ -2045,7 +2025,6 @@ fn block_task_rows(timed: &TimedEvent, editing: Signal<Option<Event>>) -> Vec<El
         .iter()
         .enumerate()
         .map(|(index, task)| {
-            let mut editing = editing;
             elapsed += task.minutes;
             let class = if elapsed > duration {
                 "block-task over"
@@ -2064,7 +2043,7 @@ fn block_task_rows(timed: &TimedEvent, editing: Signal<Option<Event>>) -> Vec<El
                     key: "{task.event.id}",
                     class: "{class}",
                     style: "top:{row_top:.1}px;left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
-                    onclick: move |_| editing.set(Some(opened.clone())),
+                    onclick: move |_| on_open.call(opened.clone()),
                     "{icon} {title} · {minutes}m"
                 }
             }
@@ -2490,14 +2469,14 @@ mod sheet_tests {
             let mut page = use_signal(|| Page::Tasks);
             let view = use_signal(|| PlanView::Day);
             let mut menu_open = use_signal(|| true);
-            let mut week_anchor = use_signal(|| today() - chrono::Duration::days(7));
+            let mut plan_anchor = use_signal(|| today() - chrono::Duration::days(7));
             let current_day = use_signal(today);
             use_hook(move || {
                 let nav = PlanNav {
                     page,
                     view,
                     menu_open,
-                    week_anchor,
+                    plan_anchor,
                     current_day,
                 };
                 for period in PlanView::ALL {
@@ -2507,12 +2486,12 @@ mod sheet_tests {
                     assert_eq!(*page.peek(), Page::Plan);
                     assert_eq!(*view.peek(), period);
                     assert!(!*menu_open.peek());
-                    if period.range().is_some() {
-                        assert_eq!(*week_anchor.peek(), today());
+                    {
+                        assert_eq!(*plan_anchor.peek(), today());
                         let next = today() + chrono::Duration::days(7);
-                        week_anchor.set(next);
+                        plan_anchor.set(next);
                         nav.choose(period);
-                        assert_eq!(*week_anchor.peek(), next);
+                        assert_eq!(*plan_anchor.peek(), next);
                     }
                 }
             });
