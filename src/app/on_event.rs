@@ -173,6 +173,22 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
         EventMessage::EventOpened(id) => {
+            if let Some(task) = state.calendar.event(&id)
+                && task.is_task()
+                && let Some(key) = crate::timeblocking::metadata(task).block
+                && let Some(parent) = state
+                    .calendar
+                    .events
+                    .iter()
+                    .find(|e| !e.is_task() && crate::timeblocking::block_key(e) == key)
+                && state.timeblocking.block.as_deref() != Some(parent.id.as_str())
+                && state.timeblocking.focus.as_deref() != Some(parent.id.as_str())
+            {
+                return crate::timeblocking::update(
+                    state,
+                    crate::timeblocking::Action::Plan(parent.id.clone()),
+                );
+            }
             // The task screens list tasks in full whatever the calendar hides,
             // so this only stops a click on the calendar itself.
             let on_calendar = state.range_view_active() || state.screen == Screen::Calendar;
@@ -204,13 +220,25 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 draft.loading = event.details.habit && event.details.recurring_event_id.is_some();
                 // A block's panel and the event pane are two different
                 // sidebars; opening one closes the other.
-                if state.timeblocking.block.is_some() {
+                if state.timeblocking.block.is_some() && !is_task {
                     close_block = Some(crate::timeblocking::close(state));
                 }
                 if !is_task {
                     // Events are edited in place in the details pane, so the
                     // draft opens with the card rather than behind an Edit
                     // button.
+                    state.timeblocking.child_due = draft
+                        .options
+                        .child_metadata
+                        .due
+                        .map(|d| d.value())
+                        .unwrap_or_default();
+                    state.timeblocking.child_deadline = draft
+                        .options
+                        .child_metadata
+                        .deadline
+                        .map(|d| d.value())
+                        .unwrap_or_default();
                     state.calendar.edit_draft = Some(draft);
                 }
                 if is_task {
@@ -275,7 +303,9 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
         }
         EventMessage::EventClosed => {
             state.calendar.open_event = None;
-            state.calendar.edit_draft = None;
+            if state.timeblocking.block.is_none() && state.timeblocking.focus.is_none() {
+                state.calendar.edit_draft = None;
+            }
             state.calendar.detail_event = None;
             state.inbox.picker = None;
             Task::none()
@@ -459,4 +489,37 @@ fn write_event_time(
     state.calendar.error = None;
     blocking::run(move || calendar::set_event_time(&calendar_id, &request_id, start, end, notify))
         .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assigned_tasks_open_their_block_and_are_edited_from_that_interface() {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let parent = state.calendar.event("standup").unwrap().clone();
+        state.config.calendar.app_calendar = Some(parent.calendar_id.clone());
+        let key = crate::timeblocking::block_key(&parent);
+        let child = state.calendar.event_mut("deep").unwrap();
+        child.id = "task:child".into();
+        child.calendar_id = "tasks:list".into();
+        child.details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            legacy_key: None,
+            metadata: crate::timeblocking::Metadata {
+                block: Some(key),
+                ..Default::default()
+            },
+        });
+        let _ = update(&mut state, EventMessage::EventOpened("task:child".into()));
+        assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
+        assert!(state.calendar.open_event.is_none());
+        let _ = update(&mut state, EventMessage::EventOpened("task:child".into()));
+        assert_eq!(state.calendar.open_event.as_deref(), Some("task:child"));
+        assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
+        let _ = update(&mut state, EventMessage::EventClosed);
+        assert_eq!(state.calendar.edit_draft.as_ref().unwrap().id, "standup");
+    }
 }

@@ -184,6 +184,23 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
             if draft.loading || draft.saving {
                 return Task::none();
             }
+            if state
+                .calendar
+                .event(&draft.id)
+                .is_some_and(|event| crate::timeblocking::is_block(event, &state.config.calendar))
+            {
+                for value in [
+                    &state.timeblocking.child_due,
+                    &state.timeblocking.child_deadline,
+                ] {
+                    if !value.trim().is_empty()
+                        && let Err(error) = calendar::deadline::parse_input(value)
+                    {
+                        state.calendar.error = Some(error);
+                        return Task::none();
+                    }
+                }
+            }
             if draft.title.trim().is_empty() {
                 state.calendar.error = Some("Enter a title".into());
                 return Task::none();

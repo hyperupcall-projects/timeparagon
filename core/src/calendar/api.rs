@@ -1135,11 +1135,14 @@ fn fetch_task_items(
             .and_then(task_due_date)
             .unwrap_or(crate::timeblocking::UNDATED);
         if let Some(mut event) = parse_task(task, calendar_id, color, due) {
-            let data = super::task_metadata::load(&mut database, &event, |data| {
+            let mut data = super::task_metadata::load(&mut database, &event, |data| {
                 super::task_metadata::save(access_token, &event, data)
             })?;
             event.details.description =
                 crate::timeblocking::description(&event.details.description);
+            if let Some(inherited) = data.metadata.inherited.as_deref().cloned() {
+                crate::timeblocking::apply_inherited(&mut event, &mut data, inherited);
+            }
             event.details.task_data = Some(data);
             events.push(event);
         }
@@ -2442,7 +2445,14 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
 
     crate::calendar::Details {
         sleep: super::sleep::Record::from_properties(&entry.extended_properties),
-        options: entry.options.clone(),
+        options: {
+            let mut options = entry.options.clone();
+            options.child_metadata = entry.extended_properties["private"]["ttChildMetadata"]
+                .as_str()
+                .and_then(|v| serde_json::from_str(v).ok())
+                .unwrap_or_default();
+            options
+        },
         task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
         task_data: None,
@@ -3118,13 +3128,19 @@ mod tests {
                 {"method": "popup", "minutes": 10},
                 {"method": "email", "minutes": 1440}
             ]},
-            "transparency": "transparent", "visibility": "private"
+            "transparency": "transparent", "visibility": "private",
+            "extendedProperties": {"private": {"ttChildMetadata": "{\"force\":true,\"priority\":\"P1\"}"}}
         }))
         .unwrap();
         let cached = serde_json::to_string(&details_of(&entry)).unwrap();
         let mut event = super::super::sample_snapshot().events.remove(0);
         event.details = serde_json::from_str(&cached).unwrap();
         let mut draft = super::super::EditDraft::from_event(&event);
+        assert!(draft.options.child_metadata.force);
+        assert_eq!(
+            draft.options.child_metadata.priority,
+            Some(crate::timeblocking::Priority::P1)
+        );
         assert_eq!(draft.options.transparency, Availability::Free);
         assert_eq!(draft.options.visibility, Visibility::Private);
         assert_eq!(draft.options.reminders.overrides.len(), 2);
@@ -3143,6 +3159,13 @@ mod tests {
         .unwrap();
         assert_eq!(body["reminders"]["overrides"][1]["minutes"], 1440);
         assert_eq!(body["reminders"]["overrides"][1]["method"], "email");
+        let policy: crate::timeblocking::ChildMetadata = serde_json::from_str(
+            body["extendedProperties"]["private"]["ttChildMetadata"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(policy.force);
         assert_eq!(body["transparency"], "transparent");
         assert_eq!(body["visibility"], "private");
         draft.options.update(Action::Remove(1));

@@ -449,6 +449,32 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     if !busy {
         estimate = estimate.on_press(msg(Action::EditEstimate(task.id.clone())));
     }
+    if tb::metadata(task)
+        .inherited
+        .as_ref()
+        .is_some_and(|v| v.fields.force)
+    {
+        let meta = tb::metadata(task);
+        return column![
+            text("Metadata is inherited from the time block. Edit it in Focus & Plan.")
+                .size(metrics.label()),
+            text(format!(
+                "Projects: {} · Labels: {} · Priority: {}",
+                meta.projects
+                    .iter()
+                    .filter_map(|id| state.config.projects.get(*id))
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                meta.labels.join(", "),
+                meta.priority.map(|p| p.label()).unwrap_or("None")
+            ))
+            .size(metrics.label()),
+            column![field_label("Estimate", metrics), estimate].spacing(6),
+        ]
+        .spacing(12)
+        .into();
+    }
     column![
         project_field(state, task, metrics),
         column![field_label("Estimate", metrics), estimate].spacing(6),
@@ -958,6 +984,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .size(metrics.label())
         .style(text::secondary),
         actions,
+        super::calendar::event_editor(state, block, metrics),
         super::controls::section_heading("Planned Tasks", Some(tasks.len()), 16.0),
         planned_slot(state, &block_id, metrics),
     ]
@@ -1407,6 +1434,141 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     .center_x(Fill)
     .center_y(Fill);
     stack![backdrop, foreground].into()
+}
+
+pub fn propagation_controls<'a>(
+    state: &'a State,
+    block: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let Some(draft) = state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .filter(|d| d.id == block.id)
+    else {
+        return column![].into();
+    };
+    let policy = &draft.options.child_metadata;
+    let mut body = column![
+        crate::ui::controls::checkbox(policy.force)
+            .label("Force propagate metadata to child tasks")
+            .on_toggle({
+                let id = block.id.clone();
+                move |v| msg(Action::ForcePropagation(id.clone(), v))
+            })
+    ]
+    .spacing(8);
+    for (name, deadline) in [
+        ("Due date (YYYY-MM-DD or YYYY-MM-DD HH:MM)", false),
+        ("Deadline (YYYY-MM-DD or YYYY-MM-DD HH:MM)", true),
+    ] {
+        let value = if deadline {
+            policy.deadline
+        } else {
+            policy.due
+        }
+        .map(|d| d.value())
+        .unwrap_or_default();
+        // Keep free-form input in its own action so partially typed dates remain visible.
+        let input = if deadline {
+            &state.timeblocking.child_deadline
+        } else {
+            &state.timeblocking.child_due
+        };
+        body = body.push(text(name).size(metrics.label())).push(
+            crate::ui::controls::text_input(&value, input)
+                .on_input(move |v| msg(Action::ChildDate(deadline, v)))
+                .on_submit(msg(Action::SaveChildDate(deadline))),
+        );
+    }
+    let mut priorities = row![text("Priority").size(metrics.label())].spacing(6);
+    for priority in [None, Some(tb::Priority::P1), Some(tb::Priority::P2)] {
+        let mut next = policy.clone();
+        next.priority = priority;
+        priorities = priorities.push(
+            button(text(priority.map(|p| p.label()).unwrap_or("None"))).on_press(
+                Message::EventEdit(crate::app::EventEditMessage::EventEditOptions(
+                    crate::calendar::event_options::Action::ChildMetadata(next),
+                )),
+            ),
+        );
+    }
+    body = body.push(priorities).push(
+        text(format!(
+            "Selected priority: {}",
+            policy.priority.map(|p| p.label()).unwrap_or("None")
+        ))
+        .size(metrics.label()),
+    );
+    let mut locations = column![text("Location").size(metrics.label())].spacing(4);
+    for (id, name) in std::iter::once((None, "None")).chain(
+        state
+            .config
+            .travel
+            .places
+            .iter()
+            .map(|p| (Some(p.id), p.name.as_str())),
+    ) {
+        let mut next = policy.clone();
+        next.location = id;
+        locations = locations.push(button(text(name)).on_press(Message::EventEdit(
+            crate::app::EventEditMessage::EventEditOptions(
+                crate::calendar::event_options::Action::ChildMetadata(next),
+            ),
+        )));
+    }
+    body.push(
+        text(format!(
+            "Selected location: {}",
+            policy
+                .location
+                .and_then(|id| state.config.travel.place(id))
+                .map(|place| place.name.as_str())
+                .unwrap_or("None")
+        ))
+        .size(metrics.label()),
+    )
+    .push(locations)
+    .push(
+        button("Save time block metadata").on_press(Message::EventEdit(
+            crate::app::EventEditMessage::EventEditSaveRequested,
+        )),
+    )
+    .into()
+}
+
+pub fn propagation_confirmation<'a>(_state: &'a State, _metrics: &Metrics) -> Element<'a, Message> {
+    use iced::widget::{Space, stack};
+    let body = column![
+        text("Overwrite child task metadata?").size(20),
+        text("Existing metadata on every child task will be rewritten, including projects, due dates, deadlines, labels, priorities, locations, recurring settings and notifications. Future changes to the time block will propagate to its children. Child metadata cannot be edited while this option is enabled."),
+        row![button("Cancel").on_press(msg(Action::CancelPropagation)), button("Overwrite and enable").on_press(msg(Action::ConfirmPropagation))].spacing(8),
+    ].spacing(12);
+    let backdrop =
+        mouse_area(
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|_| container::Style {
+                    background: Some(super::controls::SCRIM.into()),
+                    ..Default::default()
+                }),
+        )
+        .on_press(msg(Action::CancelPropagation));
+    let card = container(
+        mouse_area(
+            container(body)
+                .padding(20)
+                .max_width(500)
+                .style(super::controls::surface),
+        )
+        .on_press(Message::Ignored),
+    )
+    .padding(16)
+    .center_x(Fill)
+    .center_y(Fill);
+    stack![backdrop, card].into()
 }
 
 #[cfg(test)]
