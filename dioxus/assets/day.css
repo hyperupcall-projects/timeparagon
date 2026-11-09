@@ -51,8 +51,7 @@ textarea {
 
 /* ---------------------------------------------------------------- navigation */
 
-/* One card, as on the desktop: Do and Plan, then Note, More and Settings,
- * with Plan's lists on a row of their own beneath. */
+/* Do, Plan and Tasks, then Note, More and Settings. Tasks owns the second row. */
 .nav-card {
     flex: none;
     position: relative;
@@ -74,12 +73,12 @@ textarea {
     min-width: 0;
 }
 
-.plan-tabs {
+.task-tabs {
     overflow-x: auto;
     scrollbar-width: none;
 }
 
-.plan-tabs::-webkit-scrollbar {
+.task-tabs::-webkit-scrollbar {
     display: none;
 }
 
@@ -2885,11 +2884,12 @@ textarea {
 }
 
 /* A phone keeps every tab on one line by shortening Settings and tightening. */
-@media (max-width: 400px) {
+@media (max-width: 480px) {
     .nav-card .nav-tab,
     .plan-main,
     .plan-toggle {
-        padding: 0 7px;
+        padding: 0 5px;
+        font-size: 13px;
     }
 
     .label-long {
@@ -2898,5 +2898,23 @@ textarea {
 
     .label-short {
         display: inline;
+    }
+}
+
+/* Keep the longest planning label and Tasks visible on small phones. */
+@media (max-width: 360px) {
+    .nav-card {
+        padding-inline: 8px;
+    }
+
+    .nav-row {
+        gap: 2px;
+    }
+
+    .nav-card .nav-tab,
+    .plan-main,
+    .plan-toggle {
+        padding: 0 3px;
+        font-size: 12px;
     }
 }

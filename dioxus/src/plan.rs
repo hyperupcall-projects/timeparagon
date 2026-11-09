@@ -1,6 +1,5 @@
-//! Planning, as the desktop's Plan tab does it: the period being planned (a
-//! day, a week, two weeks or a month) and the task lists beneath it, Overdue,
-//! Inbox, Today and Backlog. The lists follow the same rules as the desktop's,
+//! Planning periods and the lists under Tasks: Overdue, Inbox, Today and
+//! Backlog. The lists follow the same rules as the desktop's,
 //! so a task shows in the same list on both.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime};
@@ -49,7 +48,7 @@ impl PlanView {
         }
     }
 
-    /// The range drawn on the Schedule tab; a day plans from its lists alone.
+    /// The range drawn by Plan; a day uses the day calendar.
     pub fn range(self) -> Option<Range> {
         match self {
             Self::Day => None,
@@ -60,29 +59,20 @@ impl PlanView {
     }
 }
 
-/// The lists beneath the Plan button. Schedule, the range itself, is only
-/// there while a range is being planned.
+/// The lists beneath the Tasks button.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PlanTab {
-    Schedule,
+pub enum TaskTab {
     Overdue,
     Inbox,
     Today,
     Backlog,
 }
 
-impl PlanTab {
-    pub const ALL: [Self; 5] = [
-        Self::Schedule,
-        Self::Overdue,
-        Self::Inbox,
-        Self::Today,
-        Self::Backlog,
-    ];
+impl TaskTab {
+    pub const ALL: [Self; 4] = [Self::Overdue, Self::Inbox, Self::Today, Self::Backlog];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Schedule => "Schedule",
             Self::Overdue => "Overdue",
             Self::Inbox => "Inbox",
             Self::Today => "Today",
@@ -286,7 +276,7 @@ fn timestamp(time: Option<DateTime<chrono::Utc>>, format: TimeFormat) -> String 
 /// One of Overdue, Inbox, Today or Backlog.
 #[component]
 pub fn TaskList(
-    tab: PlanTab,
+    tab: TaskTab,
     config: Signal<Config>,
     /// What the lists choose from: every task loaded, with local edits.
     events: Vec<Event>,
@@ -304,22 +294,22 @@ pub fn TaskList(
     let settings = config.read().calendar.clone();
     let now = timeslay_core::clock::now();
     let (heading, subtitle, tasks): (String, &str, Vec<&Event>) = match tab {
-        PlanTab::Overdue => (
+        TaskTab::Overdue => (
             "Overdue".to_owned(),
             "Incomplete tasks with a past scheduled time or deadline. This should be empty! Move tasks that you plan to do in inbox, schedule them for later, or move them to the backlog.",
             overdue_tasks(&events, &settings, now),
         ),
-        PlanTab::Inbox => (
+        TaskTab::Inbox => (
             "Inbox".to_owned(),
             "Tasks waiting to be triaged",
             inbox_tasks(&events, &settings, &calendars),
         ),
-        PlanTab::Today => (
+        TaskTab::Today => (
             "Today".to_owned(),
             "Tasks for today that still need a time slot",
             today_tasks(&events, &settings, now),
         ),
-        PlanTab::Backlog | PlanTab::Schedule => {
+        TaskTab::Backlog => {
             return rsx! {
                 Backlog {
                     config,
@@ -333,20 +323,20 @@ pub fn TaskList(
         }
     };
 
-    let invitations = if tab == PlanTab::Inbox && signed_in {
+    let invitations = if tab == TaskTab::Inbox && signed_in {
         rsx! { Invitations { calendars: calendars.clone(), settings: settings.clone(), revision, editing } }
     } else {
         rsx! {}
     };
     let sort = match tab {
-        PlanTab::Overdue => Some(settings.overdue_sort),
-        PlanTab::Inbox => Some(settings.inbox_sort),
+        TaskTab::Overdue => Some(settings.overdue_sort),
+        TaskTab::Inbox => Some(settings.inbox_sort),
         _ => None,
     };
     let count = tasks.len();
     let empty = match tab {
-        PlanTab::Overdue => "Nothing overdue",
-        PlanTab::Inbox => "Nothing to triage",
+        TaskTab::Overdue => "Nothing overdue",
+        TaskTab::Inbox => "Nothing to triage",
         _ => "No tasks left to slot in today",
     };
     let time_format = config.read().appearance.time_format;
@@ -365,7 +355,7 @@ pub fn TaskList(
                     }
                     p { class: "hint plan-subtitle", "{subtitle}" }
                 }
-                if tab == PlanTab::Inbox {
+                if tab == TaskTab::Inbox {
                     button { class: "btn primary", onclick: move |_| on_new_task.call(()), "New task" }
                 }
             }
@@ -383,7 +373,7 @@ pub fn TaskList(
                             };
                             let (inbox, overdue) = {
                                 let calendar = &config.peek().calendar;
-                                if tab == PlanTab::Overdue {
+                                if tab == TaskTab::Overdue {
                                     (calendar.inbox_sort, picked)
                                 } else {
                                     (picked, calendar.overdue_sort)
@@ -443,7 +433,7 @@ fn missing(value: &'static str, strict: bool) -> Element {
 /// triaged, planned, completed or moved.
 fn task_card(
     task: &Event,
-    tab: PlanTab,
+    tab: TaskTab,
     config: &Config,
     time_format: TimeFormat,
     editing: Signal<Option<Event>>,
@@ -452,7 +442,7 @@ fn task_card(
     let opened = task.clone();
     let m = tb::metadata(task);
     let mut fields: Vec<Element> = Vec::new();
-    if tab == PlanTab::Overdue {
+    if tab == TaskTab::Overdue {
         fields.push(field(
             "Due Date",
             plain(scheduled_label(task, time_format).unwrap_or_else(|| "None".into())),
@@ -469,7 +459,7 @@ fn task_card(
             }),
         ));
     } else {
-        let strict = tab == PlanTab::Inbox;
+        let strict = tab == TaskTab::Inbox;
         fields.push(field(
             "Created",
             rsx! { span { class: "hint", "{timestamp(m.created_at, time_format)}" } },
