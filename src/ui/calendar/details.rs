@@ -318,8 +318,8 @@ fn has_guests_to_tell(event: &Event) -> bool {
     attendance.can_manage() && !attendance.guests.is_empty()
 }
 
-/// Asks whether a dragged meeting's guests should hear about its new time. The
-/// chip has already moved; Cancel, or a click outside the card, puts it back.
+/// Selects recurrence scope, then asks whether to notify a meeting's guests.
+/// Cancel, or a click outside the card, restores the previewed time.
 pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(event) = state
         .calendar
@@ -340,29 +340,60 @@ pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elem
             .width(Fill)
             .on_press(Message::Event(message))
     };
-    let card = container(iced::widget::opaque(
-        container(
-            column![
-                text("Email guests about the new time?").size(metrics.label() + 1.0),
-                text(event.title.clone())
-                    .size(metrics.label())
-                    .style(text::secondary),
-                row![
-                    choice("Cancel", EventMessage::EventMoveCancelled)
-                        .style(crate::ui::controls::secondary),
-                    choice("Don't send", EventMessage::EventMoveConfirmed(false))
-                        .style(crate::ui::controls::secondary),
-                    choice("Send", EventMessage::EventMoveConfirmed(true))
-                        .style(crate::ui::controls::primary),
-                ]
-                .spacing(6)
-                .width(Fill),
+    let scope_needed = state
+        .calendar
+        .pending_move
+        .as_ref()
+        .is_some_and(|p| p.scope.is_none());
+    let mut body = column![
+        text(if scope_needed {
+            "Apply this change to…"
+        } else {
+            "Email guests about the new time?"
+        })
+        .size(metrics.label() + 1.0),
+        text(event.title.clone())
+            .size(metrics.label())
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing);
+    if scope_needed {
+        for (label, scope) in [
+            ("This event", calendar::SaveScope::Current),
+            (
+                "This and following events",
+                calendar::SaveScope::CurrentAndFuture,
+            ),
+            ("All events", calendar::SaveScope::All),
+        ] {
+            body = body.push(
+                choice(label, EventMessage::EventMoveScoped(scope))
+                    .style(crate::ui::controls::secondary),
+            );
+        }
+        body = body.push(
+            choice("Cancel", EventMessage::EventMoveCancelled)
+                .style(crate::ui::controls::secondary),
+        );
+    } else {
+        body = body.push(
+            row![
+                choice("Cancel", EventMessage::EventMoveCancelled)
+                    .style(crate::ui::controls::secondary),
+                choice("Don't send", EventMessage::EventMoveConfirmed(false))
+                    .style(crate::ui::controls::secondary),
+                choice("Send", EventMessage::EventMoveConfirmed(true))
+                    .style(crate::ui::controls::primary),
             ]
-            .spacing(metrics.spacing),
-        )
-        .padding(metrics.padding)
-        .width(Length::Fixed(300.0))
-        .style(crate::ui::controls::surface),
+            .spacing(6)
+            .width(Fill),
+        );
+    }
+    let card = container(iced::widget::opaque(
+        container(body)
+            .padding(metrics.padding)
+            .width(Length::Fixed(300.0))
+            .style(crate::ui::controls::surface),
     ))
     .width(Fill)
     .height(Fill)

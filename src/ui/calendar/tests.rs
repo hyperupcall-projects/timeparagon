@@ -2632,3 +2632,46 @@ fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
     );
     assert!(ui.find("1 overdue.  0 in inbox.  1 not slotted in").is_ok());
 }
+
+#[test]
+fn recurring_time_change_prompt_offers_each_scope_at_narrow_and_wide_widths() {
+    use iced_test::{Simulator, core::Settings};
+    for size in [Size::new(360.0, 640.0), Size::new(1000.0, 700.0)] {
+        for (label, scope) in [
+            ("This event", calendar::SaveScope::Current),
+            (
+                "This and following events",
+                calendar::SaveScope::CurrentAndFuture,
+            ),
+            ("All events", calendar::SaveScope::All),
+        ] {
+            let mut state = State::blank();
+            state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+            let event = state
+                .calendar
+                .events
+                .iter_mut()
+                .find(|e| !e.is_task())
+                .unwrap();
+            event.details.recurring_event_id = Some("series".into());
+            let original = event.clone();
+            state.calendar.pending_move = Some(calendar::PendingMove {
+                id: original.id.clone(),
+                start: original.start,
+                end: original.end,
+                original,
+                scope: None,
+            });
+            let metrics = Metrics::of(size);
+            let mut ui = Simulator::with_size(
+                Settings::default(),
+                size,
+                move_confirmation(&state, &metrics),
+            );
+            ui.click(label).unwrap();
+            assert!(ui.into_messages().any(|m| matches!(m,
+                Message::Event(EventMessage::EventMoveScoped(chosen)) if chosen == scope
+            )));
+        }
+    }
+}

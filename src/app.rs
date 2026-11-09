@@ -759,8 +759,8 @@ pub enum EventMessage {
     FormEdited(FormField, text_editor::Action),
     EventOpened(String),
     EventClosed,
-    /// The user dragged an event's time on the day grid. The new times are
-    /// applied to the view at once and written back to Google.
+    /// The user moved or resized an event on the day grid. Preview the time,
+    /// then ask for recurrence scope and guest notifications before saving.
     EventTimeChanged {
         id: String,
         start: DateTime<Local>,
@@ -774,6 +774,8 @@ pub enum EventMessage {
     EventDeleteNotify(bool),
     /// Write the dragged meeting's new time, emailing the guests or not.
     EventMoveConfirmed(bool),
+    /// Choose which occurrences receive the dragged time change.
+    EventMoveScoped(calendar::SaveScope),
     /// Put the dragged meeting back.
     EventMoveCancelled,
     EventDeleteRequested(String),
@@ -1915,6 +1917,12 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 /// looked at without running anything.
 fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     use keyboard::key::Named;
+    if state.calendar.pending_move.is_some() {
+        return match key.as_ref() {
+            Key::Named(Named::Escape) => Some(Message::Event(EventMessage::EventMoveCancelled)),
+            _ => None,
+        };
+    }
     if state
         .calendar
         .draft
