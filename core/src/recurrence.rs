@@ -174,6 +174,9 @@ pub struct Rule {
     pub interval: String,
     /// Monday first, matching [`WEEKDAYS`].
     pub weekdays: [bool; 7],
+    /// Imported week boundary; absent rules use Monday.
+    #[serde(default)]
+    pub week_start: Option<Weekday>,
     pub monthly: MonthlyMode,
     pub monthly_day: String,
     /// 1–5, or -1 for the last weekday of the month.
@@ -189,6 +192,9 @@ pub struct Rule {
     /// Extra dates kept from an imported `RDATE`; they are written back but
     /// not shown as raw text.
     pub extra: Vec<NaiveDate>,
+    /// Keep imported exception instants and timezone parameters verbatim.
+    #[serde(default)]
+    exception_lines: Vec<String>,
     /// The original lines when [`RepeatMode::Custom`] is selected.
     pub custom: Option<Vec<String>>,
 }
@@ -201,6 +207,7 @@ impl Rule {
             repeat: RepeatMode::Weekly,
             interval: "1".to_owned(),
             weekdays: weekday_flags(&[day.weekday()]),
+            week_start: None,
             monthly: MonthlyMode::Day,
             monthly_day: day.day().to_string(),
             monthly_nth: nth,
@@ -210,6 +217,7 @@ impl Rule {
             count: "10".to_owned(),
             skips: Vec::new(),
             extra: Vec::new(),
+            exception_lines: Vec::new(),
             custom: None,
         }
     }
@@ -288,6 +296,7 @@ impl Rule {
         let mut rule = None;
         let mut skips = Vec::new();
         let mut extra = Vec::new();
+        let mut exception_lines = Vec::new();
         for line in recurrence.lines() {
             if starts_with_kind(line, "RRULE") {
                 if rule.is_some() {
@@ -302,11 +311,13 @@ impl Rule {
                     return false;
                 };
                 skips.append(&mut dates);
+                exception_lines.push(line.clone());
             } else if starts_with_kind(line, "RDATE") {
                 let Some(mut dates) = dates_in(line, "RDATE") else {
                     return false;
                 };
                 extra.append(&mut dates);
+                exception_lines.push(line.clone());
             }
         }
         let Some(rule) = rule else {
@@ -315,6 +326,7 @@ impl Rule {
 
         let mut freq = String::new();
         let mut interval = 1u32;
+        let mut week_start = None;
         let mut byday: Vec<String> = Vec::new();
         let mut bymonthday: Vec<i32> = Vec::new();
         let mut bymonth: Vec<u32> = Vec::new();
@@ -368,9 +380,10 @@ impl Rule {
                     }
                 }
                 "WKST" => {
-                    if parse_weekday(value).is_none() {
+                    let Some(day) = parse_weekday(value) else {
                         return false;
-                    }
+                    };
+                    week_start = Some(day);
                 }
                 "UNTIL" => {
                     let Some(day) = parse_until(value) else {
@@ -486,6 +499,7 @@ impl Rule {
         }
 
         self.interval = interval.to_string();
+        self.week_start = week_start;
         self.ends = ends;
         self.until = until;
         self.count = count;
@@ -495,6 +509,7 @@ impl Rule {
         extra.dedup();
         self.skips = skips;
         self.extra = extra;
+        self.exception_lines = exception_lines;
         true
     }
 
@@ -558,6 +573,9 @@ impl Rule {
                 ),
                 RepeatMode::Never | RepeatMode::Custom => unreachable!(),
             };
+            if let Some(day) = self.week_start {
+                rule.push_str(&format!(";WKST={}", weekday_code(day)));
+            }
             match self.ends {
                 EndKind::Never => {}
                 EndKind::OnDate => {
@@ -580,8 +598,12 @@ impl Rule {
             lines.push(format!("RRULE:{rule}"));
         }
 
+        if !self.exception_lines.is_empty() {
+            lines.extend(self.exception_lines.iter().cloned());
+            return Ok(lines);
+        }
         let date_line = |name: &str, day: &NaiveDate| match start {
-            Some(start) => format!("{name}:{}{}", day.format("%Y%m%d"), start.format("%H%M%S")),
+            Some(start) => format!("{name}:{}T{}", day.format("%Y%m%d"), start.format("%H%M%S")),
             None => format!("{name};VALUE=DATE:{}", day.format("%Y%m%d")),
         };
         for day in &self.extra {
@@ -851,6 +873,80 @@ fn dates_in(line: &str, kind: &str) -> Option<Vec<NaiveDate>> {
         dates.push(NaiveDate::parse_from_str(&date, "%Y%m%d").ok()?);
     }
     if dates.is_empty() { None } else { Some(dates) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anchor() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, 8).unwrap()
+    }
+
+    #[test]
+    fn editing_imported_exceptions_preserves_instants_zones_and_date_values() {
+        let exceptions = [
+            "RDATE:20261109T200000Z,20261109T210000Z",
+            "EXDATE;TZID=Europe/London:20261111T090000",
+            "EXDATE:20261112T080000Z",
+            "RDATE;VALUE=DATE:20261113,20261114",
+        ];
+        let mut input = vec!["RRULE:FREQ=DAILY".to_owned()];
+        input.extend(exceptions.iter().map(|s| s.to_string()));
+        let mut rule = Rule::from_recurrence(anchor(), &Recurrence::from_lines(&input));
+        assert_eq!(rule.repeat, RepeatMode::Daily);
+        rule.apply_action(Action::Interval("2".into()), anchor());
+        // Queued drafts survive serialization before being sent.
+        let rule: Rule = serde_json::from_str(&serde_json::to_string(&rule).unwrap()).unwrap();
+        let output = rule
+            .lines_at(anchor(), NaiveTime::from_hms_opt(9, 0, 0).unwrap())
+            .unwrap();
+        assert_eq!(output[0], "RRULE:FREQ=DAILY;INTERVAL=2");
+        assert_eq!(&output[1..], exceptions);
+    }
+
+    #[test]
+    fn new_timed_exceptions_include_the_datetime_separator() {
+        let mut rule = Rule::weekly(anchor());
+        rule.extra.push(anchor());
+        rule.skips.push(anchor().succ_opt().unwrap());
+        let output = rule
+            .lines_at(anchor(), NaiveTime::from_hms_opt(9, 30, 0).unwrap())
+            .unwrap();
+        assert_eq!(output[1], "RDATE:20261108T093000");
+        assert_eq!(output[2], "EXDATE:20261109T093000");
+        let all_day = rule.all_day_lines_at(anchor()).unwrap();
+        assert_eq!(all_day[1], "RDATE;VALUE=DATE:20261108");
+        assert_eq!(all_day[2], "EXDATE;VALUE=DATE:20261109");
+    }
+
+    #[test]
+    fn changing_a_biweekly_rule_keeps_its_imported_week_boundary() {
+        let recurrence =
+            Recurrence::from_lines(&["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO;WKST=SU".into()]);
+        let mut rule = Rule::from_recurrence(anchor(), &recurrence);
+        rule.apply_action(Action::Ends(EndKind::After), anchor());
+        rule.apply_action(Action::Count("10".into()), anchor());
+        let output = rule
+            .lines_at(anchor(), NaiveTime::from_hms_opt(9, 0, 0).unwrap())
+            .unwrap();
+        assert_eq!(
+            output,
+            ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,SU;WKST=SU;COUNT=10"]
+        );
+        let restored = Rule::from_recurrence(anchor(), &Recurrence::from_lines(&output));
+        assert_eq!(restored.week_start, Some(Weekday::Sun));
+    }
+
+    #[test]
+    fn older_serialized_rules_default_to_monday_and_generated_exceptions() {
+        let mut value = serde_json::to_value(Rule::weekly(anchor())).unwrap();
+        value.as_object_mut().unwrap().remove("week_start");
+        value.as_object_mut().unwrap().remove("exception_lines");
+        let rule: Rule = serde_json::from_value(value).unwrap();
+        assert_eq!(rule.week_start, None);
+        assert!(rule.exception_lines.is_empty());
+    }
 }
 
 fn until_utc(date: NaiveDate) -> String {

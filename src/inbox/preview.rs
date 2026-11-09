@@ -164,7 +164,8 @@ pub(crate) fn repeats_on(rule: &Rule, anchor: NaiveDate, day: NaiveDate) -> bool
     }
     let every = rule.interval.trim().parse::<i64>().unwrap_or(1).max(1);
     let days = (day - anchor).num_days();
-    let weeks = (week_start(day) - week_start(anchor)).num_days() / 7;
+    let first = rule.week_start.unwrap_or(chrono::Weekday::Mon);
+    let weeks = (week_start(day, first) - week_start(anchor, first)).num_days() / 7;
     let months = i64::from(day.year() - anchor.year()) * 12 + i64::from(day.month())
         - i64::from(anchor.month());
     let hit = match rule.repeat {
@@ -184,8 +185,9 @@ pub(crate) fn repeats_on(rule: &Rule, anchor: NaiveDate, day: NaiveDate) -> bool
     hit || (rule.extra.contains(&day))
 }
 
-fn week_start(day: NaiveDate) -> NaiveDate {
-    day - Duration::days(i64::from(day.weekday().num_days_from_monday()))
+fn week_start(day: NaiveDate, first: chrono::Weekday) -> NaiveDate {
+    let offset = (day.weekday().num_days_from_monday() + 7 - first.num_days_from_monday()) % 7;
+    day - Duration::days(i64::from(offset))
 }
 
 /// What the open form would create.
@@ -407,6 +409,23 @@ mod tests {
         rule.interval = "2".into();
         assert!(!repeats_on(&rule, monday, day("2026-11-09")));
         assert!(repeats_on(&rule, monday, day("2026-11-16")));
+    }
+
+    #[test]
+    fn imported_week_start_keeps_biweekly_preview_dates_in_the_same_week() {
+        let anchor = day("2026-11-08");
+        let rule = Rule::from_recurrence(
+            anchor,
+            &crate::recurrence::Recurrence::from_lines(&[
+                "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO;WKST=SU".into(),
+            ]),
+        );
+        for date in ["2026-11-08", "2026-11-09", "2026-11-22", "2026-11-23"] {
+            assert!(repeats_on(&rule, anchor, day(date)), "{date}");
+        }
+        for date in ["2026-11-15", "2026-11-16"] {
+            assert!(!repeats_on(&rule, anchor, day(date)), "{date}");
+        }
     }
 
     #[test]

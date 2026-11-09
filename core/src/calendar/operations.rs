@@ -265,8 +265,8 @@ fn enqueue_in(
         .map_err(|e| e.to_string())?;
     if let Some(existing) = tx
         .query_row(
-            "SELECT id FROM google_entities WHERE json_extract(event,'$.id')=?1 LIMIT 1",
-            [id],
+            "SELECT id FROM google_entities WHERE json_extract(event,'$.id')=?1 AND (id=?2 OR json_extract(event,'$.calendar_id')=?3) LIMIT 1",
+            params![id, entity, calendar],
             |r| r.get::<_, String>(0),
         )
         .optional()
@@ -309,12 +309,13 @@ fn enqueue_in(
 pub struct Overlay {
     /// Remote ID to the local ID it was created under, so an item keeps the
     /// ID the interface already knows it by.
-    aliases: HashMap<String, String>,
+    aliases: HashMap<(String, String), String>,
     entities: Vec<OverlayEntity>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct OverlayEntity {
+    calendar: String,
     id: String,
     /// `None` for an item deleted locally.
     event: Option<Event>,
@@ -328,15 +329,21 @@ pub fn load_overlay(database: &std::path::Path) -> Result<Overlay, String> {
     let mut aliases = HashMap::new();
     {
         let mut q = tx
-            .prepare("SELECT local,remote FROM google_id_map")
+            .prepare("SELECT local,remote,calendar FROM google_id_map")
             .map_err(|e| e.to_string())?;
         for row in q
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
             .map_err(|e| e.to_string())?
         {
-            let (local, remote) = row.map_err(|e| e.to_string())?;
+            let (local, remote, calendar) = row.map_err(|e| e.to_string())?;
             if local != remote {
-                aliases.entry(remote).or_insert(local);
+                aliases.entry((calendar, remote)).or_insert(local);
             }
         }
     }
@@ -356,10 +363,11 @@ pub fn load_overlay(database: &std::path::Path) -> Result<Overlay, String> {
             .map_err(|e| e.to_string())?
         {
             let (key, json, ack) = row.map_err(|e| e.to_string())?;
-            let Some((_, id)) = key.split_once('\n') else {
+            let Some((calendar, id)) = key.split_once('\n') else {
                 continue;
             };
             entities.push(OverlayEntity {
+                calendar: calendar.to_owned(),
                 id: id.to_owned(),
                 event: json
                     .map(|json| serde_json::from_str(&json))
@@ -376,20 +384,28 @@ impl Overlay {
     /// The ID the interface knows `id` by: the local ID it was created under,
     /// following moves that changed it more than once. Task IDs are mapped
     /// without their `task:` prefix.
-    fn local_id(&self, id: &str) -> Option<String> {
-        if let Some(local) = self.follow(id) {
+    fn local_id(&self, calendar: &str, id: &str) -> Option<String> {
+        if let Some(local) = self.follow(calendar, id) {
             return Some(local);
         }
         let bare = id.strip_prefix(ids::TASK)?;
-        self.follow(bare).map(|local| ids::event_id(&local))
+        self.follow(calendar, bare)
+            .map(|local| ids::event_id(&local))
     }
 
-    fn follow(&self, id: &str) -> Option<String> {
-        let mut current = self.aliases.get(id)?;
+    fn follow(&self, calendar: &str, id: &str) -> Option<String> {
+        let mut current = self.aliases.get(&(calendar.to_owned(), id.to_owned()))?;
         // A chain is at most as long as the map; a cycle stops there too.
         for _ in 0..self.aliases.len() {
-            match self.aliases.get(current.as_str()) {
-                Some(next) if next != current => current = next,
+            // Intermediate moves may have used a different calendar. Only
+            // follow an unambiguous predecessor once the first hop is scoped.
+            let mut predecessors = self
+                .aliases
+                .iter()
+                .filter(|((_, remote), _)| remote == current)
+                .map(|(_, local)| local);
+            match (predecessors.next(), predecessors.next()) {
+                (Some(next), None) if next != current => current = next,
                 _ => break,
             }
         }
@@ -402,10 +418,34 @@ impl Overlay {
     /// and an edit Google had confirmed before that is not applied over them:
     /// the fetch already shows it, or something newer.
     pub fn apply(&self, events: &mut Vec<Event>, fetched_at: Option<DateTime<Local>>) {
+        let mut remapped = std::collections::HashSet::new();
         if !self.aliases.is_empty() {
             for event in events.iter_mut() {
-                if let Some(local) = self.local_id(&event.id) {
+                if let Some(local) = self.local_id(&event.calendar_id, &event.id) {
                     event.id = local;
+                    let candidates: Vec<_> = self
+                        .entities
+                        .iter()
+                        .filter(|entity| entity.id == event.id)
+                        .collect();
+                    let origin = candidates
+                        .iter()
+                        .copied()
+                        .find(|entity| {
+                            entity.calendar == event.calendar_id
+                                || entity
+                                    .event
+                                    .as_ref()
+                                    .is_some_and(|saved| saved.calendar_id == event.calendar_id)
+                        })
+                        .or_else(|| (candidates.len() == 1).then(|| candidates[0]));
+                    if let Some(origin) = origin {
+                        remapped.insert((
+                            origin.calendar.clone(),
+                            event.calendar_id.clone(),
+                            event.id.clone(),
+                        ));
+                    }
                 }
             }
         }
@@ -415,7 +455,19 @@ impl Overlay {
             {
                 continue;
             }
-            events.retain(|e| e.id != entity.id);
+            events.retain(|e| {
+                e.id != entity.id
+                    || !(e.calendar_id == entity.calendar
+                        || entity
+                            .event
+                            .as_ref()
+                            .is_some_and(|saved| saved.calendar_id == e.calendar_id)
+                        || remapped.contains(&(
+                            entity.calendar.clone(),
+                            e.calendar_id.clone(),
+                            e.id.clone(),
+                        )))
+            });
             if let Some(event) = &entity.event {
                 events.push(event.clone());
             }
@@ -439,8 +491,8 @@ pub fn cached_event(calendar: &str, id: &str) -> Result<Option<Event>, String> {
     let json: Option<String> = db
         .connection()
         .query_row(
-            "SELECT event FROM google_entities WHERE json_extract(event,'$.id')=?1 AND (acknowledged_at IS NULL OR acknowledged_at > COALESCE((SELECT json_extract(value,'$.fetched_at') FROM documents WHERE key='calendar_sync_state'),''))",
-            [id],
+            "SELECT event FROM google_entities WHERE json_extract(event,'$.id')=?1 AND (id=?2 OR json_extract(event,'$.calendar_id')=?3) AND (acknowledged_at IS NULL OR acknowledged_at > COALESCE((SELECT json_extract(value,'$.fetched_at') FROM documents WHERE key='calendar_sync_state'),''))",
+            params![id, key(calendar, id), calendar],
             |r| r.get(0),
         )
         .optional()
@@ -1173,15 +1225,17 @@ pub(super) fn observe_range(
         if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
             continue;
         }
-        let Some((_, id)) = key.split_once('\n') else {
+        let Some((calendar, id)) = key.split_once('\n') else {
             continue;
         };
-        let current = events.iter().find(|e| e.id == id);
         let old = json
             .as_ref()
             .map(|j| serde_json::from_str::<Event>(j))
             .transpose()
             .map_err(|e| e.to_string())?;
+        let current = events.iter().find(|e| {
+            e.id == id && e.calendar_id == old.as_ref().map_or(calendar, |e| &e.calendar_id)
+        });
         let covered = current.is_some()
             || old.as_ref().is_some_and(|e| {
                 e.is_task() || (e.start.date_naive() <= last && e.end.date_naive() >= first)
@@ -1501,21 +1555,142 @@ mod tests {
         assert!(discard_in(&path, waiting).is_err());
     }
     #[test]
-    fn ids_follow_chains_of_moves_without_scanning_every_alias() {
+    fn ids_follow_chains_of_moves_only_from_the_matching_calendar() {
         let overlay = Overlay {
             aliases: [("b", "a"), ("c", "b"), ("x", "x")]
                 .into_iter()
-                .map(|(remote, local)| (remote.to_owned(), local.to_owned()))
+                .map(|(remote, local)| {
+                    (("calendar".to_owned(), remote.to_owned()), local.to_owned())
+                })
                 .collect(),
             entities: Vec::new(),
         };
-        assert_eq!(overlay.local_id("c").as_deref(), Some("a"));
-        assert_eq!(overlay.local_id("task:c").as_deref(), Some("task:a"));
-        assert_eq!(overlay.local_id("b").as_deref(), Some("a"));
-        assert_eq!(overlay.local_id("unknown"), None);
+        assert_eq!(overlay.local_id("calendar", "c").as_deref(), Some("a"));
+        assert_eq!(
+            overlay.local_id("calendar", "task:c").as_deref(),
+            Some("task:a")
+        );
+        assert_eq!(overlay.local_id("calendar", "b").as_deref(), Some("a"));
+        assert_eq!(overlay.local_id("calendar", "unknown"), None);
+        assert_eq!(overlay.local_id("other", "c"), None);
         // A self-mapping cannot loop.
-        assert_eq!(overlay.local_id("x").as_deref(), Some("x"));
+        assert_eq!(overlay.local_id("calendar", "x").as_deref(), Some("x"));
     }
+    #[test]
+    fn edits_and_deletions_preserve_matching_ids_on_other_calendars() {
+        let (_dir, path) = db();
+        let a = edit(&path, "calendar A edit");
+        let mut b = a.clone();
+        b.calendar_id = "other-calendar".into();
+        b.title = "calendar B edit".into();
+        enqueue_in(
+            &path,
+            Job::Edit {
+                original: Box::new(b.clone()),
+                draft: EditDraft::from_event(&b),
+                scope: SaveScope::Current,
+                description: String::new(),
+                color: None,
+            },
+            Some(&b),
+            &b.calendar_id,
+            &b.id,
+        )
+        .unwrap();
+        let mut events = vec![a.clone(), b.clone()];
+        overlay(&path, &mut events, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.contains(&a));
+        assert!(events.contains(&b));
+        enqueue_in(
+            &path,
+            Job::Delete {
+                calendar: a.calendar_id.clone(),
+                id: a.id.clone(),
+                scope: SaveScope::Current,
+                notify: false,
+            },
+            None,
+            &a.calendar_id,
+            &a.id,
+        )
+        .unwrap();
+        overlay(&path, &mut events, None).unwrap();
+        assert_eq!(events, [b]);
+    }
+
+    #[test]
+    fn moved_ids_on_other_calendars_are_not_remapped_or_removed() {
+        let (_dir, path) = db();
+        let local = edit(&path, "local");
+        drain_in(&path, |_| {
+            Ok(Some((
+                local.id.clone(),
+                "remote".into(),
+                "destination".into(),
+            )))
+        })
+        .unwrap();
+        let mut moved = local.clone();
+        moved.id = "remote".into();
+        moved.calendar_id = "destination".into();
+        let mut other = moved.clone();
+        other.calendar_id = "unrelated".into();
+        let mut events = vec![moved, other.clone()];
+        overlay(&path, &mut events, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.contains(&local));
+        assert!(events.contains(&other));
+    }
+    #[test]
+    fn a_moved_overlay_does_not_consume_another_calendars_local_id() {
+        let (_dir, path) = db();
+        let original = edit(&path, "original");
+        let mut moved = original.clone();
+        moved.calendar_id = "destination".into();
+        enqueue_in(
+            &path,
+            Job::Edit {
+                original: Box::new(original.clone()),
+                draft: EditDraft::from_event(&moved),
+                scope: SaveScope::Current,
+                description: String::new(),
+                color: None,
+            },
+            Some(&moved),
+            &original.calendar_id,
+            &original.id,
+        )
+        .unwrap();
+        let mut other = original.clone();
+        other.calendar_id = "unrelated".into();
+        enqueue_in(
+            &path,
+            Job::Edit {
+                original: Box::new(other.clone()),
+                draft: EditDraft::from_event(&other),
+                scope: SaveScope::Current,
+                description: String::new(),
+                color: None,
+            },
+            Some(&other),
+            &other.calendar_id,
+            &other.id,
+        )
+        .unwrap();
+        task_db::Database::open(&path).unwrap().connection().execute(
+            "INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,'remote','destination')",
+            [&original.id],
+        ).unwrap();
+        let mut remote = moved.clone();
+        remote.id = "remote".into();
+        let mut events = vec![remote, other.clone()];
+        overlay(&path, &mut events, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.contains(&moved));
+        assert!(events.contains(&other));
+    }
+
     #[test]
     fn snapshots_google_has_since_confirmed_are_pruned_after_an_hour() {
         let (_dir, path) = db();
