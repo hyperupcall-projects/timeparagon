@@ -84,13 +84,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             .align_y(iced::Center),
         ]
         .spacing(2);
-        let mut body = column![
-            header,
-            button("Plan time block").on_press(msg(Action::Plan(block.id.clone()))),
-            super::timeblocking::propagation_controls(state, block, metrics),
-            pomodoro(state, narrow)
-        ]
-        .spacing(8);
+        let mut body = column![header, pomodoro(state, narrow)].spacing(8);
         if let Some(error) = &state.calendar.error {
             body = body.push(text(error).size(12).style(text::danger));
         }
