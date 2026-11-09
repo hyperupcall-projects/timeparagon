@@ -86,7 +86,7 @@ pub fn plan(
     let wake = events
         .iter()
         .filter(|e| e.details.sleep.is_none() && !e.all_day)
-        .filter(|e| !e.is_task() || e.details.scheduled.is_some())
+        .filter(|e| !e.is_task() || e.is_calendar_task())
         .map(|e| e.start)
         .filter(|&start| start >= from && start < latest)
         .min()

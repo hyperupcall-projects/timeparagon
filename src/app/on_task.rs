@@ -35,6 +35,14 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
             )
         }
         TaskMessage::TaskDeleteRequested(id) => {
+            if state
+                .calendar
+                .event(&id)
+                .is_some_and(|e| e.is_calendar_task())
+            {
+                return super::on_event::update(state, EventMessage::EventDeleteRequested(id));
+            }
+
             // Only Google Tasks can be deleted this way; calendar events use
             // EventDeleteRequested instead.
             let is_task = state

@@ -174,7 +174,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
         }
         EventMessage::EventOpened(id) => {
             if let Some(task) = state.calendar.event(&id)
-                && task.is_task()
+                && task.task_ref().is_some()
                 && let Some(key) = crate::timeblocking::metadata(task).block
                 && let Some(parent) = state
                     .calendar
@@ -215,9 +215,10 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             state.calendar.actions_open = false;
             let mut close_block = None;
             if let Some(event) = state.calendar.event(&id).cloned() {
-                let is_task = event.is_task();
+                let is_task = event.task_ref().is_some();
                 let mut draft = calendar::EditDraft::from_event(&event);
-                draft.loading = event.details.habit && event.details.recurring_event_id.is_some();
+                draft.loading = (event.details.habit || event.is_calendar_task())
+                    && event.details.recurring_event_id.is_some();
                 // A block's panel and the event pane are two different
                 // sidebars; opening one closes the other.
                 if state.timeblocking.block.is_some() && !is_task {
@@ -280,7 +281,10 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             let habit_load = state
                 .calendar
                 .event(&id)
-                .filter(|event| event.details.habit && event.details.recurring_event_id.is_some())
+                .filter(|event| {
+                    (event.details.habit || event.is_calendar_task())
+                        && event.details.recurring_event_id.is_some()
+                })
                 .cloned()
                 .map(|event| {
                     let settings = state.config.calendar.clone();
@@ -320,7 +324,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             if event.start == start && event.end == end {
                 return Task::none();
             }
-            if event.is_task() {
+            if event.task_ref().is_some() {
                 return crate::timeblocking::update(
                     state,
                     crate::timeblocking::Action::Schedule(id, start, end),
@@ -412,7 +416,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             let is_task = state
                 .calendar
                 .event(&id)
-                .map(|event| event.is_task())
+                .map(|event| event.task_ref().is_some())
                 .unwrap_or(false);
             if is_task {
                 return Task::none();
@@ -435,7 +439,11 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 return Task::none();
             }
             let scope = state.calendar.pending_delete_scope;
-            let Some(event) = state.calendar.event(&id).filter(|event| !event.is_task()) else {
+            let Some(event) = state
+                .calendar
+                .event(&id)
+                .filter(|event| event.task_ref().is_none())
+            else {
                 state.calendar.pending_delete = None;
                 return Task::none();
             };

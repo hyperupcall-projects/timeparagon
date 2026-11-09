@@ -181,7 +181,6 @@ pub fn is_inbox_list(state: &State, calendar_id: &str) -> bool {
 pub fn untriaged(state: &State, event: &Event) -> bool {
     event.start.date_naive() == UNDATED
         && tb::in_backlog(event)
-        && tb::metadata(event).schedule.is_none()
         && is_inbox_list(state, &event.calendar_id)
 }
 
@@ -1359,11 +1358,12 @@ mod tests {
             },
         });
         let mut scheduled = task("scheduled", "inbox", today);
-        let link = calendar::scheduled::Link::new("calendar".into(), &scheduled).unwrap();
+        scheduled.id = "scheduled".into();
+        scheduled.calendar_id = "calendar".into();
+        scheduled.all_day = false;
         scheduled.details.task_data = Some(task_db::TaskData {
             id: 102,
             metadata: tb::Metadata {
-                schedule: Some(link),
                 ..Default::default()
             },
         });

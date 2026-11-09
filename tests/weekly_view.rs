@@ -898,14 +898,15 @@ fn task_list_mixes_tasks_and_events_in_start_order_and_keeps_each_day_separate()
         id: 999,
         metadata: data,
     });
-    early.details.scheduled = Some(calendar::scheduled::Link::new("work".into(), &early).unwrap());
+    early.id = "scheduled-task".into();
+    early.calendar_id = "work".into();
     state.calendar.replace_cached_task("task:early", &early);
     let entries = state
         .calendar
         .task_list_events_on(date(14), &state.config.calendar);
     assert_eq!(
         entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
-        vec!["task:early", "standup"]
+        vec!["scheduled-task", "standup"]
     );
     let entries = state
         .calendar

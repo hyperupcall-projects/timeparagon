@@ -2,6 +2,7 @@
 //! should not have to know about.
 
 pub mod api;
+pub mod calendar_tasks;
 pub mod client;
 pub mod colors;
 pub(crate) mod day_cache;
@@ -82,7 +83,6 @@ impl Calendar {
             && ([
                 scheduled::DEFAULT_LIST,
                 CalendarSettings::DEFAULT_TRIAGED_LIST,
-                CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
                 CalendarSettings::DEFAULT_BACKLOG_LIST,
             ]
             .iter()
@@ -90,7 +90,6 @@ impl Calendar {
                 || [
                     &settings.inbox_list,
                     &settings.triaged_list,
-                    &settings.time_block_list,
                     &settings.backlog_list,
                 ]
                 .into_iter()
@@ -131,14 +130,14 @@ impl Event {
         }
         if self.details.color_id.is_none()
             && !self.is_task()
-            && self.details.scheduled.is_none()
+            && !self.is_calendar_task()
             && !self.all_day
             && settings.app_calendar.as_deref() == Some(self.calendar_id.as_str())
         {
             return settings.time_block_color();
         }
         if !self.is_task()
-            && self.details.scheduled.is_none()
+            && !self.is_calendar_task()
             && !self.details.habit
             && self.details.color_id.is_none()
         {
@@ -164,10 +163,17 @@ impl Event {
         }
     }
 
-    /// Whether this came from Google Tasks rather than Google Calendar. Task
-    /// events carry a `task:` id and a `tasks:` calendar id.
+    /// A task, either undated work in Google Tasks or a dated Calendar event.
     pub fn is_task(&self) -> bool {
-        self.id.starts_with(ids::TASK) || self.calendar_id.starts_with(ids::TASK_LIST)
+        self.details.task_data.is_some()
+            || self.id.starts_with(ids::TASK)
+            || self.calendar_id.starts_with(ids::TASK_LIST)
+    }
+
+    pub fn is_calendar_task(&self) -> bool {
+        self.is_task()
+            && !self.id.starts_with(ids::TASK)
+            && !self.calendar_id.starts_with(ids::TASK_LIST)
     }
 
     /// Whether changing this item needs a recurrence scope.
@@ -183,16 +189,15 @@ impl Event {
     /// What this item is to the app.
     ///
     /// Google stores everything as events or tasks; the app tells its own
-    /// kinds apart by the fields it writes. The order matters: a sleep or habit
-    /// event lives on the app's calendar too, and a scheduled task's block is
-    /// an event that carries a task link. `calendars` lets the app's calendar
+    /// kinds apart by their metadata. Sleep, habits and dated tasks all live
+    /// on the app's calendar. `calendars` lets the app's calendar
     /// be recognized by name before its ID has been recorded in `settings`.
     pub fn kind(&self, settings: &CalendarSettings, calendars: &[Calendar]) -> EventKind {
         if self.details.sleep.is_some() {
             EventKind::Sleep
         } else if self.details.habit {
             EventKind::Habit
-        } else if self.details.scheduled.is_some() {
+        } else if self.is_calendar_task() {
             EventKind::ScheduledTask
         } else if self.is_task() {
             EventKind::Task
@@ -836,11 +841,6 @@ pub fn event_enabled(calendars: &[Calendar], event: &Event, settings: &CalendarS
     });
     let kind = sources::TimeSlaySource::of(event, app_calendar.unwrap_or(""));
     calendar_enabled(event.source_id(), settings)
-        && event
-            .details
-            .scheduled
-            .as_ref()
-            .is_none_or(|link| calendar_enabled(&link.calendar_id, settings))
         && kind.is_none_or(|kind| calendar_enabled(kind.id(), settings))
 }
 
@@ -887,7 +887,6 @@ pub struct Details {
     pub projects: Vec<u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    pub scheduled: Option<scheduled::Link>,
     pub task_data: Option<crate::task_db::TaskData>,
     pub location: String,
     pub description: String,
@@ -992,9 +991,9 @@ fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
 fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
     if event.details.sleep.is_some() {
         event.color = settings.sleep_color();
-    } else if event.calendar_id.starts_with(ids::TASK_LIST) && event.details.scheduled.is_none() {
+    } else if event.calendar_id.starts_with(ids::TASK_LIST) && !event.is_calendar_task() {
         event.color = task_color(settings, &event.calendar_id);
-    } else if event.details.scheduled.is_some() {
+    } else if event.is_calendar_task() {
         // A task's calendar block, on the TimeSlay calendar.
         event.color = settings.task_event_color();
     } else if event.details.habit {
@@ -1837,11 +1836,7 @@ impl Store {
     /// else living on the TimeSlay calendar belong to the app, and the TimeSlay
     /// calendar is never a destination. Also empty with nowhere else to go.
     pub fn move_targets(&self, event: &Event, settings: &CalendarSettings) -> Vec<&Calendar> {
-        if event.is_task()
-            || event.details.habit
-            || event.details.sleep.is_some()
-            || event.details.scheduled.is_some()
-        {
+        if event.is_task() || event.details.habit || event.details.sleep.is_some() {
             return Vec::new();
         }
         let targets: Vec<&Calendar> = self
@@ -1927,17 +1922,8 @@ impl Store {
     /// Drops a deleted task, every cached copy of it, and the calendar blocks
     /// that were standing in for it.
     pub fn forget_task(&mut self, id: &str) {
-        let task_id = ids::bare_task(id).to_owned();
         let drop_copies = |events: &mut Vec<Event>| {
-            events.retain(|event| {
-                event.id != id
-                    && event
-                        .details
-                        .scheduled
-                        .as_ref()
-                        .map(|link| link.task_id.as_str())
-                        != Some(task_id.as_str())
-            });
+            events.retain(|event| event.id != id);
         };
         if let Some(database) = &self.day_cache {
             day_cache::update_events(database, drop_copies);
@@ -2124,11 +2110,8 @@ fn omit_managed_tasks_event(
     let Some(managed) = settings.app_calendar.as_deref() else {
         return false;
     };
-    event
-        .details
-        .scheduled
-        .as_ref()
-        .is_some_and(|link| link.calendar_id == managed)
+    event.is_calendar_task()
+        && event.calendar_id == managed
         && crate::timeblocking::metadata(event)
             .block
             .as_ref()
@@ -2315,7 +2298,7 @@ pub fn sync_habits(
     api::fetch_habits(&token, app_calendar)
 }
 
-/// Load a habit's repeat schedule without losing the selected occurrence.
+/// Load a calendar series repeat schedule without losing the selected occurrence.
 /// The Habits list starts at the first occurrence of its representative series.
 pub fn habit_edit_draft(
     client: &GoogleClient,
@@ -2682,6 +2665,13 @@ pub fn save_event_scope(
     event.details.options = draft.options.clone();
     event.details.projects = draft.projects.ids.clone();
     event.details.labels = draft.labels.clone();
+    if let Some(data) = &mut event.details.task_data {
+        data.metadata.projects = draft.projects.ids.clone();
+        data.metadata.labels = draft.labels.clone();
+        if !draft.all_day {
+            data.metadata.minutes = (draft.end - draft.start).num_minutes().clamp(0, 10080) as u32;
+        }
+    }
     if draft.recurrence_changed {
         event.details.recurrence = draft.recurrence_lines()?;
     }
@@ -2874,11 +2864,6 @@ pub(crate) mod send {
     ) -> Result<Event, GoogleError> {
         let mut previous = task.clone();
         previous.details.task_data = Some(database.import(task)?);
-        previous.details.scheduled = previous
-            .details
-            .task_data
-            .as_ref()
-            .and_then(|d| d.metadata.schedule.clone());
         let mut updated = previous.clone();
         crate::timeblocking::apply_status(&mut updated, status);
         if let Err(error) = write(&updated).and_then(|()| {
@@ -2904,24 +2889,20 @@ pub(crate) mod send {
     }
 
     fn write_task_status(token: &str, task: &Event) -> Result<(), GoogleError> {
-        let list = task
-            .calendar_id
-            .strip_prefix(ids::TASK_LIST)
-            .ok_or("Invalid task list")?;
-        let id = task.id.strip_prefix(ids::TASK).ok_or("Invalid task")?;
+        if task.is_calendar_task() {
+            return api::patch(
+                &calendar_tasks::event_url(task),
+                token,
+                &calendar_tasks::body(task)?.to_string(),
+                "Save task completion",
+            );
+        }
+        let native = task.task_ref().ok_or("Invalid Google Task")?;
         if let Some(data) = &task.details.task_data {
             task_metadata::save(token, task, data)?;
         }
-        api::set_task_completed(token, list, id, task.completed)
+        api::set_task_completed(token, native.list, native.task, task.completed)
             .map_err(describe_task_write_error)?;
-        if let Some(link) = &task.details.scheduled {
-            scheduled::request(
-                "PATCH",
-                &link.event_url(),
-                token,
-                Some(&scheduled::content(task, link)),
-            )?;
-        }
         Ok(())
     }
 
@@ -2935,37 +2916,17 @@ pub(crate) mod send {
         app_calendar: Option<&str>,
     ) -> Result<(), GoogleError> {
         let token = client.access_token()?;
-        let chip_list = task
-            .calendar_id
-            .strip_prefix(ids::TASK_LIST)
-            .unwrap_or(task.calendar_id.as_str());
-        let chip_task = ids::bare_task(&task.id);
-        // The schedule records the list the task was moved to. A cached chip can
-        // still name the list it left.
-        let (list_id, task_id) = match &task.details.scheduled {
-            Some(link) if !link.list_id.is_empty() && !link.task_id.is_empty() => {
-                (link.list_id.as_str(), link.task_id.as_str())
+        if task.is_calendar_task() {
+            calendar_tasks::remove(&token, &calendar_tasks::event_url(task))?;
+        } else {
+            let native = task.task_ref().ok_or("Invalid Google Task")?;
+            match api::delete_task(&token, native.list, native.task) {
+                Ok(()) => {}
+                Err(e) if matches!(e.status, Some(404 | 410)) => {}
+                Err(e) => return Err(e),
             }
-            _ => (chip_list, chip_task),
-        };
-
-        match api::delete_task(&token, list_id, task_id) {
-            Ok(()) => {}
-            // Already gone is what a delete wants.
-            Err(e) if e.status == Some(404) => {}
-            Err(e) => return Err(describe_task_write_error(e)),
         }
-
-        let mut calendars = Vec::new();
-        if let Some(link) = &task.details.scheduled {
-            calendars.push(link.calendar_id.as_str());
-        }
-        if let Some(calendar) = app_calendar.filter(|calendar| !calendars.contains(calendar)) {
-            calendars.push(calendar);
-        }
-        for calendar in calendars {
-            scheduled::remove_task_copies(&token, calendar, task_id)?;
-        }
+        let _ = app_calendar;
         Ok(())
     }
 
@@ -3562,133 +3523,6 @@ mod tests {
     }
 
     #[test]
-    fn task_status_round_trips_and_failed_writes_restore_the_previous_status() {
-        use crate::timeblocking::{self as tb, TaskStatus};
-        let mut database =
-            crate::task_db::Database::open(std::path::Path::new(":memory:")).unwrap();
-        let mut task = sample_snapshot().events.remove(0);
-        task.id = "task:status".into();
-        task.calendar_id = "tasks:list".into();
-        let mut data = database.import(&task).unwrap();
-        let mut link = scheduled::Link::new("calendar".into(), &task).unwrap();
-        link.pending = false;
-        link.block = Some("work/block".into());
-        data.metadata.block = link.block.clone();
-        data.metadata.minutes = 45;
-        data.metadata.schedule = Some(link.clone());
-        database.save(&task, &data).unwrap();
-        task.details.task_data = Some(data);
-        task.details.scheduled = Some(link.clone());
-
-        for status in [
-            TaskStatus::Ignored,
-            TaskStatus::Active,
-            TaskStatus::Completed,
-            TaskStatus::Active,
-            TaskStatus::Ignored,
-            TaskStatus::Completed,
-            TaskStatus::Ignored,
-            TaskStatus::Active,
-        ] {
-            let previous = task.clone();
-            let mut calls = Vec::new();
-            let failed = send::save_task_status(&mut database, &task, status, |updated| {
-                calls.push(tb::task_status(updated));
-                if calls.len() == 1 {
-                    Err("Calendar is offline".into())
-                } else {
-                    Ok(())
-                }
-            });
-            let failed = failed.unwrap_err();
-            assert!(failed.to_string().contains("the task was restored"));
-            // The message is new, but the cause decides whether to retry.
-            assert_eq!(failed.kind, google::Kind::Other);
-            assert_eq!(calls, [status, tb::task_status(&previous)]);
-            assert_eq!(database.lookup(&task).unwrap(), previous.details.task_data);
-
-            task = send::save_task_status(&mut database, &task, status, |updated| {
-                assert_eq!(updated.completed, status != TaskStatus::Active);
-                assert_eq!(tb::task_status(updated), status);
-                Ok(())
-            })
-            .unwrap();
-            let mut reloaded = task.clone();
-            reloaded.details.task_data = database.lookup(&task).unwrap();
-            assert_eq!(tb::task_status(&reloaded), status);
-            assert_eq!(tb::metadata(&reloaded).block, link.block);
-            assert_eq!(tb::metadata(&reloaded).minutes, 45);
-            assert_eq!(reloaded.details.scheduled.as_ref(), Some(&link));
-            assert_eq!((task.start, task.end), (previous.start, previous.end));
-        }
-    }
-
-    #[test]
-    fn forgetting_a_task_drops_the_stale_list_copy_and_its_calendar_block() {
-        let mut store = Store::with_snapshot(sample_snapshot());
-        let day = store.day;
-        let at = store.events[0].start;
-        let mirror = Event {
-            id: "ttblock".into(),
-            calendar_id: "tasks-calendar".into(),
-            title: "Shopping2".into(),
-            start: at,
-            end: at,
-            all_day: false,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details {
-                scheduled: Some(scheduled::Link {
-                    calendar_id: "tasks-calendar".into(),
-                    event_id: "ttblock".into(),
-                    list_id: "time-blocked".into(),
-                    task_id: "abc".into(),
-                    pending: false,
-                    block: None,
-                    order: 0,
-                }),
-                ..Details::default()
-            },
-        };
-        let ghost = Event {
-            id: "task:abc".into(),
-            calendar_id: "tasks:low-priority".into(),
-            title: "Shopping2".into(),
-            start: at,
-            end: at,
-            all_day: true,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details::default(),
-        };
-        let kept = Event {
-            id: "task:other".into(),
-            calendar_id: "tasks:low-priority".into(),
-            title: "Keep".into(),
-            start: at,
-            end: at,
-            all_day: true,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details::default(),
-        };
-        store.events = vec![mirror, ghost.clone(), kept];
-        store.cache.insert(day.pred_opt().unwrap(), vec![ghost]);
-        store.open_event = Some("ttblock".into());
-
-        store.forget_task("task:abc");
-
-        let titles: Vec<_> = store
-            .events
-            .iter()
-            .map(|event| event.title.as_str())
-            .collect();
-        assert_eq!(titles, vec!["Keep"]);
-        assert!(store.cache.values().all(|events| events.is_empty()));
-        assert!(store.open_event.is_none());
-    }
-
-    #[test]
     fn upcoming_keeps_unfinished_things_in_time_order() {
         fn make(
             id: &str,
@@ -3833,122 +3667,6 @@ mod tests {
             .map(|e| e.title.as_str())
             .collect();
         assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn the_timeslayer_calendar_draws_blocks_but_not_task_copies() {
-        let mut snapshot = sample_snapshot();
-        let day = snapshot.day;
-        let at = |hour, minute| {
-            day.and_hms_opt(hour, minute, 0)
-                .unwrap()
-                .and_local_timezone(Local)
-                .unwrap()
-        };
-        snapshot.events.push(Event {
-            id: "focus".into(),
-            calendar_id: "tasks".into(),
-            title: "Focus".into(),
-            start: at(10, 0),
-            end: at(12, 0),
-            all_day: false,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details::default(),
-        });
-        snapshot.events.push(Event {
-            id: "tasks-all-day".into(),
-            calendar_id: "tasks".into(),
-            title: "Managed all day".into(),
-            start: at(0, 0),
-            end: at(0, 0),
-            all_day: true,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details::default(),
-        });
-
-        let mut assigned = Event {
-            id: "task:inside".into(),
-            calendar_id: "tasks:list".into(),
-            title: "Inside the block".into(),
-            start: at(10, 0),
-            end: at(10, 30),
-            all_day: false,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details::default(),
-        };
-        let mut link = scheduled::Link::new("tasks".into(), &assigned).unwrap();
-        link.pending = false;
-        link.block = Some("tasks/focus".into());
-        assigned.details.task_data = Some(crate::task_db::TaskData {
-            id: 100,
-            metadata: crate::timeblocking::Metadata {
-                block: Some("tasks/focus".into()),
-                minutes: 30,
-                schedule: Some(link.clone()),
-                ..Default::default()
-            },
-        });
-        assigned.details.scheduled = Some(link);
-        snapshot.events.push(assigned);
-
-        let mut alone = Event {
-            id: "task:alone".into(),
-            calendar_id: "tasks:list".into(),
-            title: "On my own".into(),
-            start: at(15, 0),
-            end: at(15, 30),
-            all_day: false,
-            color: colors::DEFAULT_EVENT,
-            completed: false,
-            details: Details::default(),
-        };
-        let mut alone_link = scheduled::Link::new("tasks".into(), &alone).unwrap();
-        alone_link.pending = false;
-        alone.details.task_data = Some(crate::task_db::TaskData {
-            id: 101,
-            metadata: crate::timeblocking::Metadata {
-                minutes: 30,
-                schedule: Some(alone_link.clone()),
-                ..Default::default()
-            },
-        });
-        alone.details.scheduled = Some(alone_link);
-        snapshot.events.push(alone);
-
-        let store = Store::with_snapshot(snapshot);
-        let mut settings = CalendarSettings {
-            app_calendar: Some("tasks".into()),
-            ..Default::default()
-        };
-
-        let titles: Vec<_> = store
-            .timed_events(&settings)
-            .map(|event| event.title.as_str())
-            .collect();
-        assert!(titles.contains(&"Standup"));
-        assert!(titles.contains(&"Focus"));
-        assert!(titles.contains(&"On my own"));
-        assert!(titles.contains(&"Write the Cal tab"));
-        assert!(!titles.contains(&"Inside the block"));
-        assert!(
-            store
-                .all_day_events(&settings)
-                .any(|event| event.title == "Managed all day")
-        );
-        assert!(
-            store
-                .all_day_events(&settings)
-                .any(|event| event.title == "Team offsite")
-        );
-
-        settings.default_calendar = Some("tasks".into());
-        assert_eq!(
-            store.default_calendar_id(&settings).as_deref(),
-            Some("personal")
-        );
     }
 
     #[test]
@@ -4392,72 +4110,6 @@ mod tests {
     }
 
     /// Startup and navigation recolor stale disk entries without a network fetch.
-    #[test]
-    fn disk_cached_tasks_use_saved_colors_before_the_first_sync() {
-        let scratch = day_cache::Scratch::new("saved-colors");
-        let mut snapshot = sample_snapshot();
-        let day = snapshot.day;
-        let flamingo = colors::event("4").unwrap();
-        let purple = colors::event("3").unwrap();
-        let task = snapshot.events.iter_mut().find(|e| e.id == "deep").unwrap();
-        task.calendar_id = "tasks:list".into();
-        task.color = flamingo;
-        let mut scheduled = task.clone();
-        scheduled.id = "scheduled-task".into();
-        scheduled.details.scheduled =
-            Some(scheduled::Link::new("app-calendar".into(), task).unwrap());
-        snapshot.events.push(scheduled);
-        let ordinary_color = snapshot
-            .events
-            .iter()
-            .find(|e| e.id == "standup")
-            .unwrap()
-            .color;
-
-        // Sync persists the raw snapshot before applying display preferences.
-        let mut previous = Store::with_snapshot(empty_snapshot(day));
-        previous.cache_days_in(Some(scratch.path().to_path_buf()));
-        previous.apply_snapshot(snapshot);
-
-        let mut settings = CalendarSettings::default();
-        settings.set_task_color("tasks:list", Some(purple));
-        settings.set_task_event_color(Some(purple));
-        let mut store = Store::with_snapshot(empty_snapshot(day));
-        store.apply_task_colors(&settings);
-        store.cache_days_in(Some(scratch.path().to_path_buf()));
-        let check_colors = |store: &Store| {
-            for id in ["deep", "scheduled-task"] {
-                assert_eq!(store.event(id).unwrap().color, purple);
-            }
-            assert_eq!(store.event("standup").unwrap().color, ordinary_color);
-        };
-        check_colors(&store);
-
-        // A later disk read, including a range view, uses current preferences.
-        let tomorrow = day.succ_opt().unwrap();
-        store.set_day(tomorrow, day);
-        store.cache.clear();
-        store.load_cached_days(&[day, tomorrow]);
-        assert_eq!(
-            store
-                .events_on(day)
-                .iter()
-                .find(|e| e.id == "deep")
-                .unwrap()
-                .color,
-            purple
-        );
-        store.set_day(day, day);
-        check_colors(&store);
-
-        // Updating preferences must also affect days that are still on disk.
-        store.set_day(tomorrow, day);
-        store.cache.clear();
-        settings.set_task_color("tasks:list", Some(colors::TASK));
-        store.apply_task_colors(&settings);
-        store.set_day(day, day);
-        assert_eq!(store.event("deep").unwrap().color, colors::TASK);
-    }
 
     /// The months on disk are trimmed by the same rule as the memory cache.
     #[test]

@@ -14,7 +14,7 @@
 
 pub use timeslay_core::{
     calendar, clock, config_watch, database_sync, fsutil, hex, recurrence, secrets, shared_data,
-    task_db, task_input, todos,
+    task_db, task_input,
 };
 
 pub mod activity;

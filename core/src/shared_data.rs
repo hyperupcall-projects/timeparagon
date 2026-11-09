@@ -1,4 +1,4 @@
-//! Todos, the notepad's text, brain dumps, projects and work sessions: data the
+//! The notepad's text, brain dumps, projects and work sessions: data the
 //! user writes, kept in the local database and shared between devices through
 //! Turso by [`crate::database_sync`].
 //!
@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::task_db::Database;
 
 /// The sections, by their names in the config.
-pub const SECTIONS: [&str; 5] = ["todos", "notepad", "brain_dump", "projects", "task_work"];
+pub const SECTIONS: [&str; 4] = ["notepad", "brain_dump", "projects", "task_work"];
 
 /// The time the shared data last changed, as milliseconds since the epoch.
 const MODIFIED: &str = "shared_data_modified_ms";
@@ -238,9 +238,8 @@ mod tests {
     #[test]
     fn sections_leave_the_table_on_save_and_come_back_on_load() {
         let (_directory, path) = database();
-        let mut saved = table(
-            "[notepad]\ntext = \"milk\"\nfont_size = 120\n\n[todos]\ncurrent = 0\n\n[[todos.items]]\ntext = \"a\"\n\n[window]\nwidth = 5\n",
-        );
+        let mut saved =
+            table("[notepad]\ntext = \"milk\"\nfont_size = 120\n\n[window]\nwidth = 5\n");
         store(&path, &mut saved, &SECTIONS).unwrap();
         assert_eq!(
             saved,
@@ -250,21 +249,19 @@ mod tests {
         overlay(&path, &mut saved).unwrap();
         assert_eq!(saved["notepad"]["text"].as_str(), Some("milk"));
         assert_eq!(saved["notepad"]["font_size"].as_integer(), Some(120));
-        assert_eq!(saved["todos"]["items"][0]["text"].as_str(), Some("a"));
         assert!(saved.get("brain_dump").is_none());
     }
 
     #[test]
     fn an_empty_section_is_not_stored_and_only_changes_move_the_clock() {
         let (_directory, path) = database();
-        save_section(&path, "todos", &crate::todos::TodoList::default()).unwrap();
+        save_section(&path, "notepad", &crate::config::NotepadText::default()).unwrap();
         assert_eq!(snapshot(&path).unwrap(), ("{}".to_owned(), 0));
 
-        let mut todos = crate::todos::TodoList::default();
-        todos.add("a");
-        save_section(&path, "todos", &todos).unwrap();
+        let notepad = crate::config::NotepadText { text: "a".into() };
+        save_section(&path, "notepad", &notepad).unwrap();
         let (text, first) = snapshot(&path).unwrap();
-        assert!(text.contains("\"todos\""));
+        assert!(text.contains("\"notepad\""));
         assert!(first > 0);
 
         let mut database = Database::open(&path).unwrap();
@@ -272,7 +269,7 @@ mod tests {
             .connection()
             .execute("UPDATE documents SET value='1' WHERE key=?1", [MODIFIED])
             .unwrap();
-        save_section(&path, "todos", &todos).unwrap();
+        save_section(&path, "notepad", &notepad).unwrap();
         assert_eq!(
             snapshot(&path).unwrap().1,
             1,

@@ -1,8 +1,5 @@
-//! Writing changes to a Google Task, shared by both apps.
-//!
-//! Every function here blocks on the network, so run it on a worker thread. A
-//! task's metadata, its Google Tasks entry and its scheduled calendar copy are
-//! written together, in an order that a failure part way through can recover from.
+//! Task editing shared by both apps. Dated tasks are native Calendar events;
+//! undated tasks live in Google Tasks. All changes use the durable offline queue.
 
 use crate::calendar::google::GoogleError;
 use crate::calendar::ids;
@@ -10,7 +7,7 @@ use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
 use crate::calendar::{self, Event};
 use crate::config::{CalendarSettings, TriageRequirements};
-use crate::timeblocking::{BacklogSection, Priority, UNDATED, block_key, description, metadata};
+use crate::timeblocking::{BacklogSection, Priority, UNDATED, block_key, metadata};
 
 /// The longest name Google Tasks accepts.
 pub const MAX_TITLE_CHARS: usize = 1024;
@@ -272,7 +269,7 @@ pub fn reflow(
 }
 
 pub fn save(
-    mut task: Event,
+    task: Event,
     settings: &CalendarSettings,
     change: Change,
     order: i64,
@@ -285,486 +282,52 @@ pub fn save(
         )?);
     }
     let mut database = crate::task_db::open()?;
-    let mut data = database.import(&task)?;
-    reset_repeat_source(&mut data.metadata, &change);
-    // A previous attempt may have moved the task before Calendar failed. The
-    // durable link retains its new identity so retrying the old chip is safe.
-    if let Some(link) = &data.metadata.schedule {
-        task.id = format!("task:{}", link.task_id);
-        task.calendar_id = format!("tasks:{}", link.list_id);
-        task.details.scheduled = Some(link.clone());
-    }
-    if matches!(
-        change,
-        Change::Unassign
-            | Change::Day(_)
-            | Change::ClearSchedule
-            | Change::Backlog(_)
-            | Change::Inbox
-            | Change::Triaged
-    ) {
-        data.metadata.inherited = None;
-    }
-    task.details.description = description(&task.details.description);
-    match change {
-        Change::ReleaseInheritance => {
-            data.metadata.inherited = None;
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::Inherit(inherited) => {
-            crate::timeblocking::apply_inherited(&mut task, &mut data, inherited);
-            let token = access(settings)?;
-            let due = data
-                .metadata
-                .inherited
-                .as_ref()
-                .and_then(|v| v.fields.due)
-                .map(|d| format!("{}T00:00:00Z", d.date));
-            calendar::api::patch(&task_url(&task)?, &token,
-                &serde_json::json!({"notes": calendar::task_metadata::write(&task.details.description, &data)?, "due": due}).to_string(), "Inherit time block metadata")?;
-            task.details.task_data = Some(data.clone());
-            if let Some(link) = &data.metadata.schedule
-                && !link.pending
-            {
-                calendar::scheduled::request(
-                    "PATCH",
-                    &link.event_url(),
-                    &token,
-                    Some(&calendar::scheduled::content(&task, link)),
-                )
-                .map_err(|e| e.message)?;
-            }
-            database.save(&task, &data)?;
-        }
-        // Tasks own the name. A scheduled block copies that name onto its calendar event.
-        Change::Title(title) => {
-            let token = access(settings)?;
-            calendar::api::patch(
-                &task_url(&task)?,
-                &token,
-                &serde_json::json!({ "title": title }).to_string(),
-                "Rename task",
-            )?;
-            task.title = title;
-            if let Some(link) = &data.metadata.schedule
-                && !link.pending
-            {
-                calendar::scheduled::request(
-                    "PATCH",
-                    &link.event_url(),
-                    &token,
-                    Some(&calendar::scheduled::content(&task, link)),
-                )
-                .map_err(|error| error.message)?;
-            }
-        }
-        Change::Description(value) => {
-            let deadline = calendar::deadline::read_deadline(&task.details.description)?;
-            task.details.description = calendar::deadline::write(&value, deadline);
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::Estimate(minutes) => {
-            data.metadata.minutes = minutes;
-            let token = access(settings)?;
-            // A scheduled task lasts exactly as long as its estimate.
-            if minutes > 0 && data.metadata.schedule.is_some() && !task.all_day {
-                let start = task.start;
-                schedule(
-                    &mut task,
-                    &mut data,
-                    &mut database,
-                    settings,
-                    &token,
-                    start,
-                    start + chrono::Duration::minutes(i64::from(minutes)),
-                )?;
-            } else {
-                calendar::task_metadata::save(&token, &task, &data)?;
-                database.save(&task, &data)?;
-            }
-        }
-        Change::Projects(projects) => {
-            data.metadata.projects = projects;
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::Labels(labels) => {
-            data.metadata.labels = labels;
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::BacklogSection(section) => {
-            data.metadata.backlog_section = section;
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::Priority(priority) => {
-            data.metadata.priority = priority;
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::Location(location) => {
-            data.metadata.location = location;
-            calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-            database.save(&task, &data)?;
-        }
-        Change::Deadline(deadline) => {
-            let token = access(settings)?;
-            let notes = calendar::deadline::write(&task.details.description, deadline);
-            let base = task_url(&task)?;
-            calendar::api::patch(
-                &base,
-                &token,
-                &serde_json::json!({"notes": calendar::task_metadata::write(&notes, &data)?})
-                    .to_string(),
-                "Save task deadline",
-            )?;
-            task.details.description = notes;
-            if let Some(link) = &data.metadata.schedule {
-                calendar::scheduled::request(
-                    "PATCH",
-                    &link.event_url(),
-                    &token,
-                    Some(&calendar::scheduled::content(&task, link)),
-                )
-                .map_err(|e| e.message)?;
-            }
-        }
-        Change::Backlog(_)
-        | Change::Inbox
-        | Change::Triaged
-        | Change::Unassign
-        | Change::Day(_)
-        | Change::ClearSchedule => {
-            let (day, destination) = match change {
-                Change::Day(day) => (Some(day), None),
-                Change::ClearSchedule => (None, None),
-                Change::Unassign => (Some(task.start.date_naive()), None),
-                Change::Inbox => (None, Some(Destination::Inbox)),
-                Change::Triaged => (None, Some(Destination::Triaged)),
-                Change::Backlog(section) => (None, Some(Destination::Backlog(section))),
-                _ => unreachable!(),
-            };
-            let token = access(settings)?;
-            unschedule_with(
-                &mut task,
-                &mut data,
-                &mut database,
-                settings,
-                &calendar::scheduled::Google { token: &token },
-                day,
-                destination,
-            )?;
-        }
-        Change::Block(key, start, _end) => {
-            data.metadata.block = Some(key);
-            data.metadata.order = order;
-            let minutes = if data.metadata.minutes == 0 {
-                30
-            } else {
-                data.metadata.minutes
-            };
-            let token = access(settings)?;
-            schedule(
-                &mut task,
-                &mut data,
-                &mut database,
-                settings,
-                &token,
-                start,
-                start + chrono::Duration::minutes(i64::from(minutes)),
-            )?;
-        }
-        Change::Reflow(start, end) => {
-            let token = access(settings)?;
-            schedule(
-                &mut task,
-                &mut data,
-                &mut database,
-                settings,
-                &token,
-                start,
-                end,
-            )?;
-        }
-        Change::Time(start, end) => {
-            data.metadata.block = None;
-            let token = access(settings)?;
-            // Moving keeps the estimate as the duration; resizing is a new estimate.
-            let moved = !task.all_day && end - start == task.end - task.start;
-            let end = if moved && data.metadata.minutes > 0 {
-                start + chrono::Duration::minutes(i64::from(data.metadata.minutes))
-            } else {
-                let minutes = (end - start).num_minutes().clamp(0, 10080);
-                data.metadata.minutes = minutes as u32;
-                end
-            };
-            schedule(
-                &mut task,
-                &mut data,
-                &mut database,
-                settings,
-                &token,
-                start,
-                end,
-            )?;
-        }
-        Change::Reorder(block, order, day) => {
-            data.metadata.block = block;
-            data.metadata.order = order;
-            if data.metadata.block.is_some() {
-                let token = access(settings)?;
-                let start = if task.all_day {
-                    Local
-                        .from_local_datetime(&day.and_hms_opt(9, 0, 0).unwrap())
-                        .earliest()
-                        .ok_or("Invalid local date")?
-                } else {
-                    task.start
-                };
-                let minutes = if data.metadata.minutes == 0 {
-                    30
-                } else {
-                    data.metadata.minutes
-                };
-                schedule(
-                    &mut task,
-                    &mut data,
-                    &mut database,
-                    settings,
-                    &token,
-                    start,
-                    start + chrono::Duration::minutes(i64::from(minutes)),
-                )?;
-            } else {
-                calendar::task_metadata::save(&access(settings)?, &task, &data)?;
-                database.save(&task, &data)?;
-            }
-        }
-    }
-    task.details.task_data = Some(data);
-    Ok(task)
-}
-
-/// The Google Tasks list a task leaves the schedule for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Destination {
-    Inbox,
-    Backlog(Option<BacklogSection>),
-    Triaged,
-}
-
-/// Remove the schedule, then move tasks to the destination while retaining
-/// their local ID. Day-only rescheduling keeps the current Google Tasks list.
-pub fn unschedule_with(
-    task: &mut Event,
-    data: &mut crate::task_db::TaskData,
-    database: &mut crate::task_db::Database,
-    settings: &CalendarSettings,
-    remote: &impl calendar::scheduled::Remote,
-    day: Option<NaiveDate>,
-    destination: Option<Destination>,
-) -> Result<(), String> {
-    let section = match destination {
-        Some(Destination::Backlog(section)) => section,
-        _ => None,
-    };
-    // Resolve/create the list before changing the task's existing schedule.
-    let destination = match destination {
-        Some(Destination::Backlog(_)) => {
-            Some(remote.backlog_list(settings.backlog_list.as_deref())?)
-        }
-        Some(Destination::Inbox) => Some(remote.inbox_list(settings.inbox_list.as_deref())?),
-        Some(Destination::Triaged) => Some(remote.triaged_list(settings.triaged_list.as_deref())?),
-        None => None,
-    };
-    let mut link = match &data.metadata.schedule {
-        Some(link) => link.clone(),
-        None => calendar::scheduled::Link::new(String::new(), task)?,
-    };
-    if data.metadata.schedule.is_some() {
-        remote.remove_event(&link)?;
-    }
-    remote.set_day(&link, day)?;
-    if let Some(section) = section {
-        data.metadata.backlog_section = section;
-    }
-    data.metadata.block = None;
-    data.metadata.schedule = None;
-    task.details.scheduled = None;
-    task.all_day = true;
-    let day = day.unwrap_or(UNDATED);
-    task.start = Local
-        .from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
-        .earliest()
-        .ok_or("Invalid local date")?;
-    task.end = task.start + chrono::Duration::days(1);
-    // If moving lists fails, sync still sees the successfully cleared schedule.
-    remote.save_metadata(task, data)?;
-    database.save(task, data)?;
-    if let Some(destination) = destination.filter(|destination| *destination != link.list_id) {
-        let response = remote.move_task(&link, &destination)?;
-        link.task_id = response["id"]
-            .as_str()
-            .ok_or("Google did not return the moved task ID")?
-            .to_owned();
-        task.id = format!("task:{}", link.task_id);
-        task.calendar_id = ids::calendar_id(&destination);
-        task.details.link = response["webViewLink"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!(
-                    "https://tasks.google.com/task/{}",
-                    urlencoding::encode(&link.task_id)
-                )
-            });
-        task.color = settings
-            .task_color(&task.calendar_id)
-            .unwrap_or(calendar::colors::TASK);
-        remote.save_metadata(task, data)?;
-        database.save(task, data)?;
-    }
-    Ok(())
+    let data = database.import(&task)?;
+    let mut original = task;
+    original.details.task_data = Some(data);
+    let mut saved = calendar::calendar_tasks::apply(original.clone(), settings, &change, order)?;
+    let token = access(settings)?;
+    calendar::calendar_tasks::persist(&token, &original, &mut saved, settings)?;
+    database.save(
+        &saved,
+        saved
+            .details
+            .task_data
+            .as_ref()
+            .ok_or("Missing task data")?,
+    )?;
+    Ok(saved)
 }
 
 pub fn task_url(task: &Event) -> Result<String, String> {
-    let list = task
-        .calendar_id
-        .strip_prefix(ids::TASK_LIST)
-        .ok_or("Invalid task list")?;
-    let id = task.id.strip_prefix(ids::TASK).ok_or("Invalid task")?;
+    let task = ids::TaskRef::of(task).ok_or("Invalid Google Task")?;
     Ok(format!(
         "{}/{}/tasks/{}",
         calendar::api::TASKS,
-        urlencoding::encode(list),
-        urlencoding::encode(id)
+        urlencoding::encode(task.list),
+        urlencoding::encode(task.task)
     ))
 }
 
 pub fn schedule(
     task: &mut Event,
     data: &mut crate::task_db::TaskData,
-    database: &mut crate::task_db::Database,
+    _database: &mut crate::task_db::Database,
     settings: &CalendarSettings,
-    token: &str,
+    _token: &str,
     start: DateTime<Local>,
     end: DateTime<Local>,
 ) -> Result<(), String> {
-    if !calendar::operations::replaying() {
-        *task = calendar::operations::edit_task(
-            task.clone(),
-            settings,
-            Change::Reflow(start, end),
-            data.metadata.order,
-        )?;
-        *data = task.details.task_data.clone().ok_or("Missing task data")?;
-        return Ok(());
-    }
-    schedule_with(
-        task,
-        data,
-        database,
+    task.details.task_data = Some(data.clone());
+    *task = save(
+        task.clone(),
         settings,
-        &calendar::scheduled::Google { token },
-        start,
-        end,
+        Change::Reflow(start, end),
+        data.metadata.order,
+        google_access,
     )
-}
-
-pub fn schedule_with(
-    task: &mut Event,
-    data: &mut crate::task_db::TaskData,
-    database: &mut crate::task_db::Database,
-    settings: &CalendarSettings,
-    remote: &impl calendar::scheduled::Remote,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-) -> Result<(), String> {
-    let old = data.metadata.schedule.clone();
-    if let Some(link) = &old
-        && (task.id != format!("task:{}", link.task_id)
-            || task.calendar_id != format!("tasks:{}", link.list_id))
-    {
-        task.id = format!("task:{}", link.task_id);
-        task.calendar_id = format!("tasks:{}", link.list_id);
-        task.details.link = format!(
-            "https://tasks.google.com/task/{}",
-            urlencoding::encode(&link.task_id)
-        );
-    }
-    let (destination_calendar, destination_list) = remote.destinations(
-        settings
-            .app_calendar
-            .as_deref()
-            .or_else(|| old.as_ref().map(|l| l.calendar_id.as_str())),
-        settings
-            .time_block_list
-            .as_deref()
-            .or_else(|| old.as_ref().map(|l| l.list_id.as_str())),
-    )?;
-    let mut link = match old.clone() {
-        Some(link) => link,
-        None => calendar::scheduled::Link::new(destination_calendar.clone(), task)?,
-    };
-    // Reserve a stable event ID before any remote write. Preserve aliases and
-    // this reservation even if a later API call fails.
-    link.calendar_id = destination_calendar;
-    // Google uses the calendar default; task colors belong to the local UI.
-    link.pending = true;
-    link.block = data.metadata.block.clone();
-    link.order = data.metadata.order;
-    data.metadata.schedule = Some(link.clone());
-    remote.save_metadata(task, data)?;
-    database.save(task, data)?;
-    if link.list_id != destination_list {
-        let response = remote.move_task(&link, &destination_list)?;
-        link.task_id = response["id"]
-            .as_str()
-            .ok_or("Google did not return the moved task ID")?
-            .to_owned();
-        link.list_id = destination_list;
-        task.id = format!("task:{}", link.task_id);
-        task.calendar_id = format!("tasks:{}", link.list_id);
-        task.details.link = response["webViewLink"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!(
-                    "https://tasks.google.com/task/{}",
-                    urlencoding::encode(&link.task_id)
-                )
-            });
-        data.metadata.schedule = Some(link.clone());
-        // The move already succeeded; retain its returned identity even if
-        // publishing notes fails. Sync can also repair it from the moved notes.
-        database.save(task, data)?;
-        remote.save_metadata(task, data)?;
-    }
-    // Forced due dates stay independent of the child's position within the block.
-    let due = match &data.metadata.inherited {
-        Some(inherited) => inherited.fields.due.map(|due| due.date),
-        None => Some(start.date_naive()),
-    };
-    remote.set_day(&link, due)?;
-    task.details.task_data = Some(data.clone());
-    remote.save_event(task, &link, start, end).map_err(|e| {
-        format!("Task saved, but its calendar block could not be saved: {e}. Sync or retry.")
-    })?;
-    if let Some(old) = old.filter(|old| old.calendar_id != link.calendar_id) {
-        remote.remove_event(&old)?;
-    }
-    link.pending = false;
-    task.start = start;
-    task.end = end;
-    task.all_day = false;
-    task.details.scheduled = Some(link.clone());
-    data.metadata.schedule = Some(link);
-    remote.save_metadata(task, data)?;
-    database.save(task, data)?;
-    task.details.task_data = Some(data.clone());
+    .map_err(String::from)?;
+    *data = task.details.task_data.clone().ok_or("Missing task data")?;
     Ok(())
 }
 

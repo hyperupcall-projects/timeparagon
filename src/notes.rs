@@ -472,8 +472,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::Follow(link) => follow(state, link),
         Action::OpenLoaded(id) => {
-            if state.calendar.event(&id).is_some() {
-                Task::done(Message::Event(EventMessage::EventOpened(id)))
+            if let Some(event) = linked_event(state, &id) {
+                Task::done(Message::Event(EventMessage::EventOpened(event.id.clone())))
             } else {
                 Task::none()
             }
@@ -501,6 +501,18 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     }
 }
 
+fn linked_event<'a>(state: &'a State, id: &str) -> Option<&'a Event> {
+    state.calendar.event(id).or_else(|| {
+        state.calendar.events.iter().find(|e| {
+            e.is_task()
+                && e.details
+                    .task_data
+                    .as_ref()
+                    .is_some_and(|d| d.id.to_string() == id)
+        })
+    })
+}
+
 fn follow(state: &mut State, link: Link) -> Task<Message> {
     if link.kind == LinkKind::Habit {
         state.habits.form = None;
@@ -508,7 +520,7 @@ fn follow(state: &mut State, link: Link) -> Task<Message> {
         return go_to(Screen::Habits);
     }
     let mut task = go_to(Screen::Calendar);
-    if state.calendar.event(&link.id).is_none()
+    if linked_event(state, &link.id).is_none()
         && let Some(day) = link.day
     {
         task = task.chain(Task::done(Message::Calendar(
@@ -539,7 +551,16 @@ pub fn target_of(state: &State, event: &Event) -> Option<Link> {
     let day = event.start.date_naive();
     Some(Link {
         kind,
-        id: event.id.clone(),
+        id: if event.is_task() {
+            event
+                .details
+                .task_data
+                .as_ref()
+                .map(|d| d.id.to_string())
+                .unwrap_or_else(|| event.id.clone())
+        } else {
+            event.id.clone()
+        },
         title: event.title.clone(),
         day: (day != crate::timeblocking::UNDATED).then_some(day),
     })
@@ -563,10 +584,7 @@ pub fn current_title<'a>(state: &'a State, link: &'a Link) -> &'a str {
             .library
             .habit(&link.id)
             .map(|habit| habit.name.as_str()),
-        _ => state
-            .calendar
-            .event(&link.id)
-            .map(|event| event.title.as_str()),
+        _ => linked_event(state, &link.id).map(|event| event.title.as_str()),
     };
     match live.unwrap_or(&link.title) {
         "" => "(No title)",
@@ -644,6 +662,39 @@ mod tests {
             completed: false,
             details: Default::default(),
         }
+    }
+
+    #[test]
+    fn task_note_identity_survives_scheduling_and_returning_to_inbox() {
+        let state = state();
+        let mut task = event("task:original", "Task");
+        task.calendar_id = "tasks:inbox".into();
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 123,
+            metadata: Default::default(),
+        });
+        let original = target_of(&state, &task).unwrap();
+        let settings = crate::config::CalendarSettings {
+            app_calendar: Some("app".into()),
+            ..Default::default()
+        };
+        let scheduled = crate::calendar::calendar_tasks::apply(
+            task,
+            &settings,
+            &timeslay_core::task_edit::Change::Day(crate::clock::now().date_naive()),
+            0,
+        )
+        .unwrap();
+        assert!(scheduled.is_calendar_task());
+        assert!(original.same_target(&target_of(&state, &scheduled).unwrap()));
+        let inbox = crate::calendar::calendar_tasks::apply(
+            scheduled,
+            &settings,
+            &timeslay_core::task_edit::Change::Inbox,
+            0,
+        )
+        .unwrap();
+        assert!(original.same_target(&target_of(&state, &inbox).unwrap()));
     }
 
     #[test]

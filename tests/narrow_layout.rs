@@ -805,7 +805,6 @@ fn opening_an_event_shows_its_google_details() {
         .unwrap();
     standup.details = timeslay::calendar::Details {
         task_data: None,
-        scheduled: None,
         location: "Room 4".into(),
         description: "Bring notes".into(),
         status: "Confirmed".into(),
@@ -1251,7 +1250,6 @@ fn timeblocking_state() -> State {
     let mut snapshot = timeslay::calendar::sample_snapshot();
     snapshot.day = Local::now().date_naive();
     state.config.calendar.app_calendar = Some("work".into());
-    state.config.calendar.time_block_list = Some("tasks:list".into());
     // The backlog fixture uses this list as its parked list.
     state.config.calendar.backlog_list = Some("tasks:list".into());
     let block = snapshot

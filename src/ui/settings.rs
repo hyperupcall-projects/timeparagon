@@ -1035,22 +1035,6 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let (options, selected) = task_list_options(
         &task_lists,
-        crate::config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
-        settings.time_block_list.as_deref(),
-    );
-    section = section.push(field(
-        "Google Tasks list for time-blocked and scheduled tasks",
-        crate::ui::controls::pick_list(options, selected, |option: CalendarOption| {
-            Message::TimeBlocking(crate::timeblocking::Action::List(option.id))
-        })
-        .text_size(metrics.label())
-        .width(Fill)
-        .into(),
-        metrics,
-    ));
-
-    let (options, selected) = task_list_options(
-        &task_lists,
         crate::config::CalendarSettings::DEFAULT_BACKLOG_LIST,
         settings.backlog_list.as_deref(),
     );
@@ -1281,7 +1265,6 @@ mod tests {
     #[test]
     fn task_list_defaults_are_selected_once_and_keep_automatic_creation() {
         for default_name in [
-            config::CalendarSettings::DEFAULT_TIME_BLOCK_LIST,
             config::CalendarSettings::DEFAULT_BACKLOG_LIST,
             config::CalendarSettings::DEFAULT_TRIAGED_LIST,
             crate::inbox::DEFAULT_LIST,
@@ -1352,13 +1335,17 @@ mod tests {
         let mut ui =
             Simulator::with_size(Settings::default(), size, google_tasks(&state, &metrics));
         for label in [
-            "Google Tasks list for time-blocked and scheduled tasks",
             "Google Tasks list for backlog tasks",
             "Google Tasks list for triaged tasks",
             "Google Tasks list for new tasks (the Inbox)",
         ] {
             assert!(ui.find(label).is_ok(), "missing {label}");
         }
+
+        assert!(
+            ui.find("Google Tasks list for time-blocked and scheduled tasks")
+                .is_err()
+        );
 
         // The triage requirements belong to the Tasks section.
         let mut ui = Simulator::with_size(Settings::default(), size, tasks(&state, &metrics));

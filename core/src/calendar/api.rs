@@ -186,12 +186,12 @@ pub fn fetch_range(
     let mut calendars = fetch_calendars(access_token)?;
     // Every event TimeSlay writes lives on one calendar. Find it by name, or
     // create it the first time it is missing.
-    let app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
+    let _app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
     // Task refresh and independent calendar requests overlap. Bound concurrency
     // so an account with many calendars does not open an unbounded worker pool.
     let _ = disabled;
     let (mut events, task_result) = std::thread::scope(|scope| -> Result<_, String> {
-        let tasks = scope.spawn(|| fetch_tasks(access_token, day));
+        let tasks = scope.spawn(|| fetch_tasks(access_token, day, _app_calendar.as_deref()));
         let mut events = Vec::new();
         for chunk in calendars.chunks(4) {
             let workers: Vec<_> = chunk
@@ -213,35 +213,48 @@ pub fn fetch_range(
         Ok(tasks) => tasks,
         Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
     };
-    // Fetch app-owned task blocks independently of the day. This makes a task
-    // scheduled on another day/device stay scheduled in Backlog and block views.
-    let mut linked_calendars: std::collections::HashSet<String> = task_events
+    // Calendar owns every dated task; no cross-service mirror reconciliation.
+    // Retain non-recurring tasks outside this window for task lists and block planning.
+    if let Some(calendar) = calendars
         .iter()
-        .filter_map(|task| {
-            crate::timeblocking::metadata(task)
-                .schedule
-                .map(|link| link.calendar_id)
-        })
-        .collect();
-    linked_calendars.extend(app_calendar.clone());
-    let mut loaded_calendars = std::collections::HashSet::new();
-    for calendar in calendars
-        .iter()
-        .filter(|c| linked_calendars.contains(&c.id))
+        .find(|c| Some(&c.id) == _app_calendar.as_ref())
     {
-        match fetch_scheduled_events(access_token, calendar) {
-            Ok(linked) => {
-                loaded_calendars.insert(calendar.id.clone());
-                let ids: std::collections::HashSet<_> =
-                    linked.iter().map(|e| e.id.as_str()).collect();
-                events.retain(|e| e.calendar_id != calendar.id || !ids.contains(e.id.as_str()));
-                events.extend(linked);
+        let mut page: Option<String> = None;
+        loop {
+            let url = format!(
+                "{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&singleEvents=false&maxResults=2500{}",
+                urlencoding::encode(&calendar.id),
+                page.as_ref()
+                    .map(|p| format!("&pageToken={}", urlencoding::encode(p)))
+                    .unwrap_or_default()
+            );
+            let result: EventList = get(&url, access_token)?;
+            for mut entry in result.items {
+                if !entry.recurrence.is_empty()
+                    || entry.recurring_event_id.is_some()
+                    || entry.status.as_deref() == Some("cancelled")
+                {
+                    continue;
+                }
+                entry.options.default_reminders = result.default_reminders.clone();
+                if let Some(event) =
+                    parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX)
+                {
+                    if !events
+                        .iter()
+                        .any(|e| e.id == event.id && e.calendar_id == event.calendar_id)
+                    {
+                        events.push(event);
+                    }
+                }
             }
-            Err(error) => append_notice(&mut notice, &error),
+            page = result.next_page_token;
+            if page.is_none() {
+                break;
+            }
         }
     }
-    let (merged, changes) = super::scheduled::merge(events, task_events, &loaded_calendars);
-    events = merged;
+    events.extend(task_events);
     if let Some(path) = crate::task_db::path() {
         reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
             super::task_metadata::save(access_token, event, data)
@@ -260,22 +273,6 @@ pub fn fetch_range(
             if let Err(error) = super::deadline::check(&event.details.description) {
                 append_notice(&mut notice, &format!("{}: {error}", event.title));
             }
-        }
-    }
-    for (link, body) in changes
-        .into_iter()
-        .filter(|_| super::operations::list().is_ok_and(|rows| rows.is_empty()))
-    {
-        if let Err(error) =
-            super::scheduled::request("PATCH", &link.event_url(), access_token, Some(&body))
-        {
-            append_notice(
-                &mut notice,
-                &format!(
-                    "Could not update a task's calendar event: {}",
-                    error.message
-                ),
-            );
         }
     }
     calendars.extend(task_calendars);
@@ -309,7 +306,9 @@ fn reconcile_task_metadata_and_overlay(
         if let Some(data) = &event.details.task_data
             && database.lookup(event)?.as_ref() != Some(data)
         {
-            publish(event, data)?;
+            if !event.is_calendar_task() {
+                publish(event, data)?;
+            }
             database.save(event, data)?;
         }
     }
@@ -532,36 +531,6 @@ fn forget_cached_task(task_id: &str) {
             cached.items.remove(task_id);
         }
     }
-}
-
-fn fetch_scheduled_events(access_token: &str, calendar: &Calendar) -> Result<Vec<Event>, String> {
-    let mut page_token: Option<String> = None;
-    let mut events = Vec::new();
-    loop {
-        let mut url = format!(
-            "{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&maxResults=250",
-            urlencoding::encode(&calendar.id)
-        );
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
-        let page: EventList = get(&url, access_token)?;
-        for mut entry in page.items {
-            entry.options.default_reminders = page.default_reminders.clone();
-
-            if entry.status.as_deref() != Some("cancelled")
-                && let Some(event) = parse_event(entry, calendar, crate::clock::now().date_naive())
-            {
-                events.push(event);
-            }
-        }
-        page_token = page.next_page_token;
-        if page_token.is_none() {
-            break;
-        }
-    }
-    Ok(events)
 }
 
 /// A habit event as Google Calendar stores it: the master of a recurring
@@ -943,7 +912,11 @@ pub fn fetch_task_list(
 /// Task lists as calendars, their tasks, and a notice if some are unavailable.
 type FetchedTasks = (Vec<Calendar>, Vec<Event>, Option<String>);
 
-fn fetch_tasks(access_token: &str, day: NaiveDate) -> Result<FetchedTasks, GoogleError> {
+fn fetch_tasks(
+    access_token: &str,
+    day: NaiveDate,
+    app_calendar: Option<&str>,
+) -> Result<FetchedTasks, GoogleError> {
     let mut lists: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100"), access_token)?;
     while let Some(token) = lists.next_page_token.take() {
         let next: TaskLists = get(
@@ -975,7 +948,14 @@ fn fetch_tasks(access_token: &str, day: NaiveDate) -> Result<FetchedTasks, Googl
             selected_by_google: true,
         });
 
-        events.extend(fetch_task_items(access_token, &list.id, &id, color, day)?);
+        events.extend(fetch_task_items(
+            access_token,
+            &list.id,
+            &id,
+            color,
+            day,
+            app_calendar,
+        )?);
     }
 
     Ok((calendars, events, None))
@@ -987,6 +967,7 @@ fn fetch_task_items(
     calendar_id: &str,
     color: Color,
     _day: NaiveDate,
+    app_calendar: Option<&str>,
 ) -> Result<Vec<Event>, GoogleError> {
     let tasks = cached_task_items(access_token, list_id)?;
     let mut database = crate::task_db::open()?;
@@ -1007,6 +988,18 @@ fn fetch_task_items(
                 crate::timeblocking::apply_inherited(&mut event, &mut data, inherited);
             }
             event.details.task_data = Some(data);
+            if due != crate::timeblocking::UNDATED {
+                event = crate::task_edit::save(
+                    event,
+                    &CalendarSettings {
+                        app_calendar: app_calendar.map(str::to_owned),
+                        ..Default::default()
+                    },
+                    crate::task_edit::Change::Day(due),
+                    0,
+                    crate::task_edit::google_access,
+                )?;
+            }
             events.push(event);
         }
     }
@@ -1311,8 +1304,8 @@ pub fn patch_event_time(
         if notify { "all" } else { "none" },
     );
     let body = serde_json::json!({
-        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
-        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
+        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
+        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
     })
     .to_string();
 
@@ -1531,8 +1524,8 @@ fn event_patch_body(
 ) -> Result<serde_json::Value, String> {
     let mut body = serde_json::json!({
         "summary": title,
-        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339() },
-        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339() },
+        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
+        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
     });
     if let Some(options) = options {
         options.write(&mut body)?;
@@ -1636,6 +1629,21 @@ pub fn save_event_scope(
         &draft.labels,
         Some(&draft.options),
     )?;
+    if original.is_calendar_task() {
+        let mut data = original
+            .details
+            .task_data
+            .clone()
+            .ok_or("Missing calendar task metadata")?;
+        data.metadata.projects = draft.projects.ids.clone();
+        data.metadata.labels = draft.labels.clone();
+        data.metadata.minutes = if draft.all_day {
+            data.metadata.minutes
+        } else {
+            (draft.end - draft.start).num_minutes().clamp(0, 10080) as u32
+        };
+        super::calendar_tasks::write_data(&mut changes, &data)?;
+    }
     let request_id = super::meeting::request_id()?;
     if scope == SaveScope::Current || series_id.is_none() {
         let written = draft
@@ -2244,11 +2252,14 @@ fn parse_event_in_range(
         .and_then(colors::event)
         .unwrap_or(calendar.color);
     let mut details = details_of(&entry);
-    details.scheduled = super::scheduled::Link::from_properties(
-        &calendar.id,
-        &entry.id,
-        &entry.extended_properties,
-    );
+    if entry.extended_properties["private"]["ttKind"].as_str() == Some("task") {
+        details.task_data =
+            Some(super::calendar_tasks::read_data(&entry.extended_properties).ok()?);
+        if let Some(data) = &mut details.task_data {
+            data.metadata.projects = details.projects.clone();
+            data.metadata.labels = details.labels.clone();
+        }
+    }
     let completed = entry.extended_properties["private"]["ttCompleted"].as_str() == Some("true");
 
     Some(Event {
@@ -2319,7 +2330,6 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
         task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
         task_data: None,
-        scheduled: None,
         location: entry.location.trim().to_owned(),
         description: plain_text(&entry.description),
         status: match entry.status.as_deref() {
