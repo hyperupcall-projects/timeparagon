@@ -18,6 +18,12 @@ own screen and the rest of the app in sheets over it:
   its logs, archiving, deleting and CSV export (to the Download folder).
 - Reminders for events, tasks, time blocks, habits, sleep and travel, with a
   sound per kind (see [docs/reminders.md](../docs/reminders.md)).
+- People (**More → People**): search the contacts of the Google account the
+  calendar is signed in with, and its Workspace directory, then edit a
+  contact's name, company, emails, phones, addresses, websites, labels and
+  notes. A directory entry can be added to your contacts. The desktop's extra
+  Google accounts stay on the desktop, as the phone has no secure store for
+  their tokens yet.
 
 Habits, todos, the notepad, brain dumps, projects and work sessions sync
 through the Turso server configured in **Settings → Database sync** on each
@@ -44,8 +50,8 @@ caches and fetch timestamps stay local. Google Calendar and Tasks remain their
 own sources of truth. Settings in `config.toml` stay local to each device.
 
 These stay on the desktop: the dock and panel, global shortcuts, alarms and the
-Pomodoro timer (neither runs in the background here yet), voice input, People,
-and the Slack and browser integrations, which reach the phone as
+Pomodoro timer (neither runs in the background here yet), voice input, the
+extra Google accounts, and the Slack and browser integrations, which reach the phone as
 ordinary tasks.
 
 Both apps share data and code via the `timeslay-core` crate:
