@@ -2383,6 +2383,129 @@ fn dragging_an_event_without_guests_does_not_ask() {
 }
 
 #[test]
+fn recurring_moves_and_both_resize_edges_require_scope_and_cancel_restores_times() {
+    for kind in ["event", "block", "habit"] {
+        for edge in ["move", "start", "end"] {
+            for has_master in [false, true] {
+                let mut state = State::blank();
+                state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+                let event = state
+                    .calendar
+                    .events
+                    .iter_mut()
+                    .find(|e| !e.is_task() && !e.all_day)
+                    .unwrap();
+                event.details.attendance = Default::default();
+                event.details.habit = kind == "habit";
+                if kind == "block" {
+                    state.config.calendar.app_calendar = Some(event.calendar_id.clone());
+                }
+                event.details.recurring_event_id = has_master.then(|| "series".into());
+                event.details.recurrence = if has_master {
+                    vec![]
+                } else {
+                    vec!["RRULE:FREQ=DAILY".into()]
+                };
+                let original = event.clone();
+                let step = chrono::Duration::minutes(15);
+                let start = original.start
+                    + if edge == "end" {
+                        chrono::Duration::zero()
+                    } else {
+                        step
+                    };
+                let end = original.end
+                    + if edge == "start" {
+                        chrono::Duration::zero()
+                    } else {
+                        step
+                    };
+                let _ = update(
+                    &mut state,
+                    Message::Event(EventMessage::EventTimeChanged {
+                        id: original.id.clone(),
+                        start,
+                        end,
+                    }),
+                );
+                let pending = state
+                    .calendar
+                    .pending_move
+                    .as_ref()
+                    .expect("recurring timing changes need a scope");
+                assert_eq!(pending.scope, None);
+                assert_eq!(pending.original, original);
+                assert_eq!(state.calendar.event(&original.id).unwrap().start, start);
+                assert!(matches!(
+                    key_message(
+                        &mut state,
+                        Key::Named(keyboard::key::Named::Escape),
+                        keyboard::Modifiers::default()
+                    ),
+                    Some(Message::Event(EventMessage::EventMoveCancelled))
+                ));
+                // A stale notification answer cannot bypass scope selection.
+                let _ = update(
+                    &mut state,
+                    Message::Event(EventMessage::EventMoveConfirmed(false)),
+                );
+                assert!(state.calendar.pending_move.is_some());
+                let _ = update(&mut state, Message::Event(EventMessage::EventMoveCancelled));
+                assert_eq!(state.calendar.event(&original.id).unwrap(), &original);
+                assert!(state.calendar.pending_time(&original.id).is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn recurring_meetings_choose_scope_before_guest_notifications() {
+    for scope in [
+        calendar::SaveScope::Current,
+        calendar::SaveScope::CurrentAndFuture,
+        calendar::SaveScope::All,
+    ] {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let event = state
+            .calendar
+            .events
+            .iter_mut()
+            .find(|e| !e.is_task() && !e.all_day)
+            .unwrap();
+        event.details.recurring_event_id = Some("series".into());
+        event.details.attendance.organizer = true;
+        event
+            .details
+            .attendance
+            .guests
+            .push(calendar::meeting::Guest {
+                email: "ada@example.com".into(),
+                ..Default::default()
+            });
+        let original = event.clone();
+        let step = chrono::Duration::minutes(15);
+        let _ = update(
+            &mut state,
+            Message::Event(EventMessage::EventTimeChanged {
+                id: original.id.clone(),
+                start: original.start + step,
+                end: original.end + step,
+            }),
+        );
+        let _ = update(
+            &mut state,
+            Message::Event(EventMessage::EventMoveScoped(scope)),
+        );
+        let pending = state.calendar.pending_move.as_ref().unwrap();
+        assert_eq!(pending.scope, Some(scope));
+        assert_eq!(pending.original, original);
+        let _ = update(&mut state, Message::Event(EventMessage::EventMoveCancelled));
+        assert_eq!(state.calendar.event(&original.id).unwrap(), &original);
+    }
+}
+
+#[test]
 fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
     let mut state = State::blank();
     let start = calendar::at_clock(state.calendar.day, 9, 0);

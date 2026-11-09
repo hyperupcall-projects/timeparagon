@@ -311,39 +311,75 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
         EventMessage::EventTimeChanged { id, start, end } => {
-            if state
-                .calendar
-                .event(&id)
-                .is_some_and(|event| event.is_task())
-            {
+            if state.calendar.pending_move.is_some() {
+                return Task::none();
+            }
+            let Some(event) = state.calendar.event(&id).cloned() else {
+                return Task::none();
+            };
+            if event.start == start && event.end == end {
+                return Task::none();
+            }
+            if event.is_task() {
                 return crate::timeblocking::update(
                     state,
                     crate::timeblocking::Action::Schedule(id, start, end),
                 );
             }
-            let Some(event) = state.calendar.event(&id).filter(|event| !event.is_task()) else {
-                return Task::none();
-            };
-            let attendance = &event.details.attendance;
-            let ask = attendance.can_manage() && !attendance.guests.is_empty();
-
-            // The chip moves now; the lighter shade and the write follow. A
-            // second drag on the same event is refused until this one lands.
+            let ask = event.details.attendance.can_manage()
+                && !event.details.attendance.guests.is_empty();
             if !state.calendar.begin_time_change(&id, start, end) {
                 return Task::none();
             }
-
-            if ask {
-                state.calendar.pending_move = Some(calendar::PendingMove { id, start, end });
+            let recurring = event.is_recurring();
+            if ask || recurring {
+                state.calendar.pending_move = Some(calendar::PendingMove {
+                    original: event,
+                    scope: (!recurring).then_some(calendar::SaveScope::Current),
+                    id,
+                    start,
+                    end,
+                });
                 return Task::none();
             }
-            write_event_time(state, id, start, end, false)
+            write_event_time(
+                state,
+                event,
+                start,
+                end,
+                calendar::SaveScope::Current,
+                false,
+            )
         }
-        EventMessage::EventMoveConfirmed(notify) => {
-            let Some(pending) = state.calendar.pending_move.take() else {
+        EventMessage::EventMoveScoped(scope) => {
+            let Some(pending) = state.calendar.pending_move.as_mut() else {
                 return Task::none();
             };
-            write_event_time(state, pending.id, pending.start, pending.end, notify)
+            pending.scope = Some(scope);
+            let attendance = &pending.original.details.attendance;
+            if attendance.can_manage() && !attendance.guests.is_empty() {
+                return Task::none();
+            }
+            update(state, EventMessage::EventMoveConfirmed(false))
+        }
+        EventMessage::EventMoveConfirmed(notify) => {
+            if state
+                .calendar
+                .pending_move
+                .as_ref()
+                .is_none_or(|p| p.scope.is_none())
+            {
+                return Task::none();
+            }
+            let pending = state.calendar.pending_move.take().unwrap();
+            write_event_time(
+                state,
+                pending.original,
+                pending.start,
+                pending.end,
+                pending.scope.unwrap(),
+                notify,
+            )
         }
         EventMessage::EventMoveCancelled => {
             if let Some(pending) = state.calendar.pending_move.take() {
@@ -476,19 +512,31 @@ fn set_own_response(
 /// Sends a time already showing on the chip to Google.
 fn write_event_time(
     state: &mut State,
-    id: String,
+    original: calendar::Event,
     start: chrono::DateTime<chrono::Local>,
     end: chrono::DateTime<chrono::Local>,
+    scope: calendar::SaveScope,
     notify: bool,
 ) -> Task<Message> {
-    let Some(calendar_id) = state.calendar.event(&id).map(|e| e.calendar_id.clone()) else {
-        state.calendar.fail_time_change(&id);
-        return Task::none();
-    };
-    let request_id = id.clone();
+    let id = original.id.clone();
     state.calendar.error = None;
-    blocking::run(move || calendar::set_event_time(&calendar_id, &request_id, start, end, notify))
-        .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
+    blocking::run(move || {
+        if !original.is_recurring() {
+            return calendar::set_event_time(
+                &original.calendar_id,
+                &original.id,
+                start,
+                end,
+                notify,
+            );
+        }
+        let mut draft = calendar::EditDraft::from_event(&original);
+        draft.start = start;
+        draft.end = end;
+        draft.meeting.notify = notify;
+        calendar::save_event_scope(&original, &draft, scope, &draft.description, None).map(|_| ())
+    })
+    .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
 }
 
 #[cfg(test)]

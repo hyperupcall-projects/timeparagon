@@ -628,6 +628,7 @@ fn EventEditor(
     let mut save_menu = use_signal(|| false);
     let mut delete_menu = use_signal(|| false);
     let mut pending_delete = use_signal(|| None::<SaveScope>);
+    let mut pending_time_scope = use_signal(|| false);
     let mut completing = use_signal(|| false);
 
     let load_settings = context.settings.clone();
@@ -670,6 +671,7 @@ fn EventEditor(
         if busy() {
             return;
         }
+        pending_time_scope.set(false);
         save_menu.set(false);
         delete_menu.set(false);
         let current = draft();
@@ -797,7 +799,7 @@ fn EventEditor(
     .and_then(|id| context.places.place(id))
     .cloned();
     let title = source_event.title.clone();
-    let series = source_event.details.recurring_event_id.is_some();
+    let series = source_event.is_recurring();
     let anchor = values.start.date_naive();
     let organizer = source_event.details.organizer.clone();
     let attendees = source_event.details.attendees.clone();
@@ -808,7 +810,21 @@ fn EventEditor(
     let new = source_event.id == crate::habits::NEW_HABIT_ID;
 
     let footer = rsx! {
-        if let Some(scope) = pending_delete() {
+        if pending_time_scope() {
+            div { class: "editor-choices", role: "dialog", aria_label: "Apply this change to",
+                p { "Apply this change to…" }
+                for (label, scope) in [
+                    ("This event", SaveScope::Current),
+                    ("This and following events", SaveScope::CurrentAndFuture),
+                    ("All events", SaveScope::All),
+                ] {
+                    button { class: "btn editor-wide", disabled: is_busy,
+                        onclick: move |_| save.call(scope), "{label}"
+                    }
+                }
+                button { class: "btn editor-wide", onclick: move |_| pending_time_scope.set(false), "Cancel" }
+            }
+        } else if let Some(scope) = pending_delete() {
             div { class: "editor-confirm", role: "alert",
                 p {
                     match scope {
@@ -844,7 +860,15 @@ fn EventEditor(
                 button {
                     class: "btn primary editor-grow",
                     disabled: is_busy,
-                    onclick: move |_| save.call(SaveScope::Current),
+                    onclick: move |_| {
+                        let current = draft();
+                        let source = original();
+                        if !new && source.is_recurring() && (current.start != source.start || current.end != source.end || current.all_day != source.all_day) {
+                            pending_time_scope.set(true);
+                        } else {
+                            save.call(SaveScope::Current);
+                        }
+                    },
                     if busy() { "Saving…" } else if new { "Create" } else if series { "Save current event" } else { "Save" }
                 }
                 if series {

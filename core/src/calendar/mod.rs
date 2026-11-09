@@ -170,6 +170,11 @@ impl Event {
         self.id.starts_with(ids::TASK) || self.calendar_id.starts_with(ids::TASK_LIST)
     }
 
+    /// Whether changing this item needs a recurrence scope.
+    pub fn is_recurring(&self) -> bool {
+        self.details.recurring_event_id.is_some() || !self.details.recurrence.is_empty()
+    }
+
     /// The Google Task this is, when it is one.
     pub fn task_ref(&self) -> Option<ids::TaskRef<'_>> {
         ids::TaskRef::of(self)
@@ -1074,13 +1079,15 @@ pub struct Store {
     pub pending_delete_scope: SaveScope,
     /// Whether confirming that delete emails the event's guests.
     pub pending_delete_notify: bool,
-    /// A dragged meeting, moved on screen and asking whether to tell its guests.
+    /// A dragged item awaiting recurrence scope or guest notification choices.
     pub pending_move: Option<PendingMove>,
 }
 
-/// A move waiting on the user's answer to "email the guests?".
+/// A time change waiting for recurrence scope or guest notification choices.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingMove {
+    pub original: Event,
+    pub scope: Option<SaveScope>,
     pub id: String,
     pub start: DateTime<Local>,
     pub end: DateTime<Local>,
