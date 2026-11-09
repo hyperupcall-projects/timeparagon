@@ -313,6 +313,12 @@ pub fn fetch_range(
         })?;
         super::operations::observe_range(&path, &events, first, last, fetch_started)?;
     }
+    if let Err(error) = super::recurring_tasks::synchronize(&mut events) {
+        append_notice(
+            &mut notice,
+            &format!("Could not repeat time block tasks: {error}"),
+        );
+    }
     super::operations::cache_tasks(&events, false)?;
     for event in &events {
         if event.is_task() {
