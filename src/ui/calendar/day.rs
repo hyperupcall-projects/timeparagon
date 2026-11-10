@@ -130,7 +130,6 @@ pub(super) fn day_canvas<'a>(
                 },
                 editable: !calendar::deadline::is_marker(event)
                     && !hidden
-                    && event.details.sleep.is_none()
                     && (!event.is_task() || event.is_calendar_task()),
                 pending: event.details.sending
                     || state.calendar.pending_time(&event.id).is_some()

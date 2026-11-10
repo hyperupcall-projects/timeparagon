@@ -549,13 +549,10 @@ pub struct CalendarSettings {
     /// real date and time, it is just drawn at the foot of the day it belongs
     /// to.
     pub day_end_hour: u32,
-    /// Nightly sleep target in hours, clamped to 6–12.
-    pub sleep_goal_hours: u32,
-    /// Hour (0-6) at which a day starts for sleep calculations. Events before
-    /// it are ignored when looking for the first event after waking up.
-    pub sleep_day_start_hour: u32,
-    /// Latest wake-up hour (4-14). With no earlier event, sleep ends here.
-    pub latest_wakeup_hour: u32,
+    /// Bedtime and wake-up time by wake-up weekday, Monday first.
+    pub sleep_schedule: [crate::calendar::sleep::Times; 7],
+    /// Dated weekday changes keep earlier nights on their previous schedule.
+    pub sleep_schedule_changes: Vec<crate::calendar::sleep::ScheduleChange>,
     /// The first column of the month and two-week views, and the date pickers.
     pub first_day_of_week: crate::calendar::first_day::FirstDayOfWeek,
     /// Total visible days: 7 or 8 from the selected day, or 9 for 8 from the
@@ -622,9 +619,8 @@ impl Default for CalendarSettings {
             overdue_sort: Default::default(),
             triage: TriageRequirements::default(),
             day_end_hour: 0,
-            sleep_goal_hours: 8,
-            sleep_day_start_hour: 0,
-            latest_wakeup_hour: 8,
+            sleep_schedule: [Default::default(); 7],
+            sleep_schedule_changes: Vec::new(),
             first_day_of_week: Default::default(),
             weekly_days: 8,
             weekly_day_width: 150,
@@ -698,18 +694,6 @@ impl Default for TriageRequirements {
 }
 
 impl CalendarSettings {
-    pub fn sleep_day_start_hour(&self) -> u32 {
-        self.sleep_day_start_hour.min(6)
-    }
-
-    pub fn latest_wakeup_hour(&self) -> u32 {
-        self.latest_wakeup_hour.clamp(4, 14)
-    }
-
-    pub fn sleep_goal_hours(&self) -> u32 {
-        self.sleep_goal_hours.clamp(6, 12)
-    }
-
     /// Synthetic source shared by every Google Tasks list.
     pub const GOOGLE_TASKS_ID: &str = "tasks:";
 

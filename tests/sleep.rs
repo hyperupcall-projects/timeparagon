@@ -167,17 +167,44 @@ fn sleep_has_a_fixed_gray_source_and_an_independent_persisted_toggle() {
 }
 
 #[test]
-fn sleep_goal_defaults_to_eight_is_bounded_and_persists() {
+fn weekly_sleep_times_persist_and_invalid_input_is_ignored() {
     let mut state = state();
-    assert_eq!(state.config.calendar.sleep_goal_hours(), 8);
-    for (input, expected) in [(0, 6), (9, 9), (99, 12)] {
-        let _ = app::update(
-            &mut state,
-            Message::Settings(SettingsMessage::SleepGoalChanged(input)),
-        );
-        assert_eq!(state.config.calendar.sleep_goal_hours(), expected);
-        let saved: Config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
-        assert_eq!(saved.calendar.sleep_goal_hours(), expected);
+    let original = state.config.calendar.sleep_schedule;
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepTimeChanged(
+            chrono::Weekday::Tue,
+            true,
+            "22:45".into(),
+        )),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepTimeChanged(
+            chrono::Weekday::Tue,
+            false,
+            "07:15".into(),
+        )),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepTimeChanged(
+            chrono::Weekday::Tue,
+            false,
+            "invalid".into(),
+        )),
+    );
+    let saved: Config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
+    assert_eq!(
+        saved.calendar.sleep_schedule[1].bedtime.to_string(),
+        "22:45:00"
+    );
+    assert_eq!(
+        saved.calendar.sleep_schedule[1].wakeup.to_string(),
+        "07:15:00"
+    );
+    for index in [0, 2, 3, 4, 5, 6] {
+        assert_eq!(saved.calendar.sleep_schedule[index], original[index]);
     }
 }
 
@@ -206,7 +233,7 @@ fn a_new_sleep_type_opens_the_sleep_editor() {
 }
 
 #[test]
-fn switching_to_a_cached_day_without_sleep_requests_a_calculation() {
+fn switching_to_a_cached_day_without_sleep_does_not_request_detection() {
     let mut state = state();
     state.calendar.events.clear();
     let snapshot = calendar::sample_snapshot();
@@ -225,5 +252,170 @@ fn switching_to_a_cached_day_without_sleep_requests_a_calculation() {
         &mut state,
         Message::Calendar(CalendarMessage::CalendarDaySelected(day)),
     );
-    assert_eq!(state.calendar.sync, calendar::SyncState::Syncing);
+    assert_eq!(state.calendar.sync, calendar::SyncState::Idle);
+}
+
+#[test]
+fn sleep_moves_and_both_resize_edges_preview_then_cancel_without_changing_settings() {
+    for edge in ["move", "start", "end"] {
+        let mut state = state();
+        let original = state.calendar.event("sleep").unwrap().clone();
+        let config = state.config.calendar.clone();
+        let step = Duration::minutes(15);
+        let start = original.start
+            + if edge == "end" {
+                Duration::zero()
+            } else {
+                step
+            };
+        let end = original.end
+            + if edge == "start" {
+                Duration::zero()
+            } else {
+                step
+            };
+        let _ = app::update(
+            &mut state,
+            Message::Event(EventMessage::EventTimeChanged {
+                id: original.id.clone(),
+                start,
+                end,
+            }),
+        );
+        let pending = state.calendar.pending_move.as_ref().unwrap();
+        assert_eq!(pending.scope, None);
+        assert_eq!(pending.original, original);
+        assert_eq!(state.calendar.event("sleep").unwrap().start, start);
+        let _ = app::update(
+            &mut state,
+            Message::Event(EventMessage::EventMoveConfirmed(false)),
+        );
+        assert!(state.calendar.pending_move.is_some());
+        let _ = app::update(&mut state, Message::Event(EventMessage::EventMoveCancelled));
+        assert_eq!(state.calendar.event("sleep").unwrap(), &original);
+        assert_eq!(state.config.calendar, config);
+    }
+}
+
+#[test]
+fn sleep_scope_success_updates_only_the_selected_weekday_from_the_selected_night() {
+    for scope in [
+        calendar::SaveScope::Current,
+        calendar::SaveScope::CurrentAndFuture,
+    ] {
+        let mut state = state();
+        let mut event = state.calendar.event("sleep").unwrap().clone();
+        let day = event.details.sleep.as_ref().unwrap().wake_date;
+        let before = sleep::times_for(&state.config.calendar, day);
+        event.start += Duration::minutes(30);
+        event.end += Duration::minutes(15);
+        event.details.sleep.as_mut().unwrap().automatic =
+            scope == calendar::SaveScope::CurrentAndFuture;
+        let _ = app::update(
+            &mut state,
+            Message::Event(EventMessage::SleepTimeSaved(
+                event.id.clone(),
+                scope,
+                Ok(event.clone()),
+            )),
+        );
+        assert_eq!(
+            sleep::times_for(&state.config.calendar, day - Duration::days(7)),
+            before
+        );
+        let expected = if scope == calendar::SaveScope::CurrentAndFuture {
+            sleep::Times {
+                bedtime: event.start.time(),
+                wakeup: event.end.time(),
+            }
+        } else {
+            before
+        };
+        assert_eq!(sleep::times_for(&state.config.calendar, day), expected);
+        assert_eq!(
+            sleep::times_for(&state.config.calendar, day + Duration::days(7)),
+            expected
+        );
+        assert_eq!(state.config.calendar.sleep_schedule[0], expected);
+        assert_eq!(
+            sleep::times_for(&state.config.calendar, day + Duration::days(1)),
+            sleep::Times::default()
+        );
+        assert_eq!(
+            state
+                .calendar
+                .event("sleep")
+                .unwrap()
+                .details
+                .sleep
+                .as_ref()
+                .unwrap()
+                .automatic,
+            scope == calendar::SaveScope::CurrentAndFuture
+        );
+        let saved: Config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
+        assert_eq!(sleep::times_for(&saved.calendar, day), expected);
+    }
+}
+
+#[test]
+fn failed_sleep_drag_restores_times_and_leaves_the_schedule_unchanged() {
+    let mut state = state();
+    let original = state.calendar.event("sleep").unwrap().clone();
+    let settings = state.config.calendar.clone();
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventTimeChanged {
+            id: original.id.clone(),
+            start: original.start + Duration::hours(1),
+            end: original.end + Duration::hours(1),
+        }),
+    );
+    let _ = app::update(&mut state, Message::Event(EventMessage::EventMoveCancelled));
+    state.calendar.begin_time_change(
+        "sleep",
+        original.start + Duration::hours(1),
+        original.end + Duration::hours(1),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::SleepTimeSaved(
+            "sleep".into(),
+            calendar::SaveScope::CurrentAndFuture,
+            Err("offline".into()),
+        )),
+    );
+    assert_eq!(state.calendar.event("sleep").unwrap(), &original);
+    assert_eq!(state.config.calendar, settings);
+}
+
+#[test]
+fn sleep_editor_time_changes_use_the_same_scope_prompt() {
+    let mut state = state();
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("sleep".into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditEndChanged("09:30".into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepSaveRequested),
+    );
+    assert!(
+        state
+            .calendar
+            .pending_move
+            .as_ref()
+            .unwrap()
+            .scope
+            .is_none()
+    );
+    assert_eq!(
+        state.calendar.pending_move.as_ref().unwrap().end,
+        calendar::at_clock(state.calendar.day, 9, 30)
+    );
+    assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
 }

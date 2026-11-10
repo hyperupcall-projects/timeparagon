@@ -576,9 +576,7 @@ pub enum SettingsMessage {
     /// The hour the calendar day ends, so late-night events stay with the
     /// evening they belong to.
     CalendarDayEndChanged(u32),
-    SleepGoalChanged(u32),
-    SleepDayStartChanged(u32),
-    LatestWakeupChanged(u32),
+    SleepTimeChanged(chrono::Weekday, bool, String),
     SleepEstimatedStart(bool),
     SleepEstimatedEnd(bool),
     SleepSaveRequested,
@@ -759,6 +757,7 @@ pub enum EventMessage {
     },
     /// Google's answer to a dragged time change.
     EventTimeSaved(String, Result<(), String>),
+    SleepTimeSaved(String, calendar::SaveScope, Result<calendar::Event, String>),
     /// The user clicked Delete on an event's details card. The confirmation
     /// prompt opens before anything is sent to Google.
     /// Whether the delete being confirmed emails the guests.
@@ -2429,21 +2428,7 @@ fn empty_calendar_days(state: &State) -> Vec<chrono::NaiveDate> {
         vec![state.calendar.day]
     };
     days.into_iter()
-        .filter(|&day| {
-            !state.calendar.has_calendar_events_on(day)
-                || (!state.monthly()
-                    && [day, day.succ_opt().unwrap_or(day)].iter().any(|wake_day| {
-                        !state.calendar.loaded_days().iter().any(|&loaded| {
-                            state.calendar.events_on(loaded).iter().any(|event| {
-                                event
-                                    .details
-                                    .sleep
-                                    .as_ref()
-                                    .is_some_and(|sleep| sleep.wake_date == *wake_day)
-                            })
-                        })
-                    }))
-        })
+        .filter(|&day| !state.calendar.has_calendar_events_on(day))
         .collect()
 }
 
@@ -2490,6 +2475,10 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
     load_cached_calendar(state);
     if !state.calendar.is_signed_in()
         || state.calendar.is_busy()
+        || state.calendar.pending_move.is_some()
+        || state.calendar.events.iter().any(|event| {
+            event.details.sleep.is_some() && state.calendar.pending_time(&event.id).is_some()
+        })
         || !state.timeblocking.busy.is_empty()
         || state
             .calendar

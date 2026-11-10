@@ -153,12 +153,11 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             }
             if previous.calendar != state.config.calendar {
                 tasks.push(show_cached_calendar(state));
-                if previous.calendar.sleep_goal_hours() != state.config.calendar.sleep_goal_hours()
-                    || previous.calendar.sleep_day_start_hour()
-                        != state.config.calendar.sleep_day_start_hour()
-                    || previous.calendar.latest_wakeup_hour()
-                        != state.config.calendar.latest_wakeup_hour()
+                if previous.calendar.sleep_schedule != state.config.calendar.sleep_schedule
+                    || previous.calendar.sleep_schedule_changes
+                        != state.config.calendar.sleep_schedule_changes
                 {
+                    state.calendar.invalidate_other_days();
                     tasks.push(refresh_week_after_write(state));
                 }
             }
