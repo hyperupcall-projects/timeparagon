@@ -715,6 +715,7 @@ impl EditDraft {
             self.start = at_clock(self.start.date_naive(), hour, minute);
         }
         self.start_text = text;
+        self.infer_sleep_bedtime_date();
     }
 
     /// Applies the end field's text, with the same forgiving parse as the start.
@@ -723,6 +724,27 @@ impl EditDraft {
             self.end = at_clock(self.end.date_naive(), hour, minute);
         }
         self.end_text = text;
+        self.infer_sleep_bedtime_date();
+    }
+
+    /// A night ends on its wake-up day; later clock readings belong to the
+    /// previous evening. Recompute after either clock changes.
+    fn infer_sleep_bedtime_date(&mut self) {
+        if self.sleep.is_none() {
+            return;
+        }
+        let (Some(start), Some(end)) = (parse_clock(&self.start_text), parse_clock(&self.end_text))
+        else {
+            return;
+        };
+        let wake_day = self.end.date_naive();
+        let bedtime_day = if start >= end {
+            wake_day.pred_opt().unwrap_or(wake_day)
+        } else {
+            wake_day
+        };
+        self.start = at_clock(bedtime_day, start.0, start.1);
+        self.date_text = bedtime_day.to_string();
     }
 }
 

@@ -47,7 +47,9 @@ fn sleep_opens_its_editor_with_times_and_independent_estimate_toggles() {
         ui::calendar::details_pane(&state, &metrics),
     );
     for label in [
-        "Sleep start",
+        "Bedtime",
+        "8h",
+        "Nov. 4, 2030",
         "Wake-up time",
         "Estimated Sleep Start",
         "Estimated Sleep End",
@@ -91,6 +93,37 @@ fn sleep_opens_its_editor_with_times_and_independent_estimate_toggles() {
     );
     assert!(state.calendar.error.is_some());
     assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
+}
+
+#[test]
+fn bedtime_date_follows_the_clock_relative_to_wakeup() {
+    let mut state = state();
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("sleep".into())),
+    );
+    for (bedtime, wakeup, expected_date) in [
+        ("23:00", "09:00", "2030-11-03"),
+        ("01:00", "09:00", "2030-11-04"),
+        ("00:00", "09:00", "2030-11-04"),
+        ("08:00", "07:00", "2030-11-03"),
+        ("08:00", "09:00", "2030-11-04"),
+    ] {
+        let _ = app::update(
+            &mut state,
+            Message::EventEdit(EventEditMessage::EventEditStartChanged(bedtime.into())),
+        );
+        let _ = app::update(
+            &mut state,
+            Message::EventEdit(EventEditMessage::EventEditEndChanged(wakeup.into())),
+        );
+        let draft = state.calendar.edit_draft.as_ref().unwrap();
+        assert_eq!(draft.date_text, expected_date);
+        assert_eq!(draft.start.date_naive().to_string(), expected_date);
+        assert_eq!(draft.end_date_text, "2030-11-04");
+        assert_eq!(draft.end.date_naive().to_string(), "2030-11-04");
+        assert!(draft.start < draft.end);
+    }
 }
 
 #[test]

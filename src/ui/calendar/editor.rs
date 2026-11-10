@@ -632,27 +632,37 @@ pub(super) fn sleep_editor<'a>(
     let mut preview = event.clone();
     preview.start = draft.start;
     preview.end = draft.end;
-    let field = |label: &'static str, date: Element<'a, Message>, time: Element<'a, Message>| {
+    let field = |label: &'static str, day: NaiveDate, time: Element<'a, Message>| {
         column![
-            text(label).size(metrics.label()),
-            row![date, time].spacing(6)
+            crate::ui::controls::field_label(label, metrics.label()),
+            row![
+                text(format!(
+                    "{}, {}",
+                    calendar::month_day_label(day),
+                    day.year()
+                ))
+                .size(metrics.label())
+                .style(text::secondary)
+                .width(Fill),
+                container(time).width(110),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
         ]
         .spacing(4)
     };
     let mut body = column![
         titled(state, event, text("Sleep").size(metrics.label() + 3.0), metrics),
-        text(format!("{} · {}", calendar::sleep::duration(&preview), calendar::sleep::time_label(&preview, state.config.appearance.time_format))).size(metrics.label()),
-        field("Sleep start",
-            crate::ui::controls::text_input("YYYY-MM-DD", &draft.date_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))).into(),
-            crate::ui::controls::text_input("HH:MM", &draft.start_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))).into()),
-        crate::ui::controls::checkbox(record.estimated_start).label("Estimated Sleep Start").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedStart(v0))),
-        field("Wake-up time",
-            crate::ui::controls::text_input("YYYY-MM-DD", &draft.end_date_text).on_input(|v0| Message::Event(EventMessage::EventEndDateChanged(v0))).into(),
-            crate::ui::controls::text_input("HH:MM", &draft.end_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))).into()),
-        crate::ui::controls::checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
+        text(calendar::sleep::duration(&preview)).size(metrics.label() + 10.0),
         text(if record.automatic {
             "Calculated from the first timed event. Saving records your times and preserves them when your schedule changes."
         } else { "Recorded sleep. These times are preserved when your schedule changes." }).size(metrics.label() - 1.0).style(text::secondary),
+        field("Bedtime", draft.start.date_naive(),
+            crate::ui::controls::text_input("HH:MM", &draft.start_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0))).into()),
+        crate::ui::controls::checkbox(record.estimated_start).label("Estimated Sleep Start").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedStart(v0))),
+        field("Wake-up time", draft.end.date_naive(),
+            crate::ui::controls::text_input("HH:MM", &draft.end_text).on_input(|v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0))).into()),
+        crate::ui::controls::checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
     ].spacing(metrics.spacing).width(Fill);
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).style(text::danger));
