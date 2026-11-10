@@ -429,9 +429,6 @@ pub struct State {
     /// Why settings are not reaching the disk, shown above the app until a
     /// good config can be read or written.
     pub config_error: Option<String>,
-    /// The desktop notification shown while sleep is being timed, replaced
-    /// in place by the summary once it is finished.
-    pub sleep_notification: Option<u32>,
 
     /// The notepad's text as the editor widget holds it.
     ///
@@ -580,8 +577,6 @@ pub enum SettingsMessage {
     /// evening they belong to.
     CalendarDayEndChanged(u32),
     SleepTimeChanged(chrono::Weekday, bool, String),
-    SleepEstimatedStart(bool),
-    SleepEstimatedEnd(bool),
     SleepSaveRequested,
     SleepSaved(Result<calendar::Event, String>),
     /// The actual sleep start field of the open night was edited.
@@ -590,13 +585,7 @@ pub enum SettingsMessage {
     SleepActualEndChanged(String),
     /// The Start sleep or Finish sleep button of the night with this id.
     SleepTimerPressed(String),
-    SleepTimerSaved(
-        calendar::sleep::Timer,
-        String,
-        Result<calendar::Event, String>,
-    ),
-    /// The desktop notification for a running sleep timer, by its id.
-    SleepNotificationShown(Result<u32, String>),
+    SleepTimerSaved(String, Result<calendar::Event, String>),
     CalendarWeekRangeChanged(config::WeekRange),
 
     /// The calendar new events are created on was changed.
@@ -964,7 +953,6 @@ impl State {
             save_queued: false,
             disk_config: config.clone(),
             config_error: None,
-            sleep_notification: None,
             catalog,
             system_theme: iced::theme::Mode::None,
             config,

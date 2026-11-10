@@ -33,7 +33,7 @@ fn state() -> State {
 }
 
 #[test]
-fn sleep_opens_its_editor_with_times_and_independent_estimate_toggles() {
+fn sleep_opens_its_editor_with_its_times() {
     let mut state = state();
     let _ = app::update(
         &mut state,
@@ -51,25 +51,16 @@ fn sleep_opens_its_editor_with_times_and_independent_estimate_toggles() {
         "8h",
         "Nov. 4, 2030",
         "Wake-up time",
-        "Estimated Sleep Start",
-        "Estimated Sleep End",
+        "Scheduling",
+        "Actual sleep",
+        "Wake up at",
         "Save sleep",
     ] {
         assert!(view.find(label).is_ok(), "missing {label}");
     }
-    view.click("Estimated Sleep Start").unwrap();
-    assert!(view.into_messages().any(|m| matches!(
-        m,
-        Message::Settings(SettingsMessage::SleepEstimatedStart(false))
-    )));
-    let _ = app::update(
-        &mut state,
-        Message::Settings(SettingsMessage::SleepEstimatedStart(false)),
-    );
-    let _ = app::update(
-        &mut state,
-        Message::Settings(SettingsMessage::SleepEstimatedEnd(true)),
-    );
+    assert!(view.find("Estimated Sleep Start").is_err());
+    assert!(view.find("Estimated Sleep End").is_err());
+    drop(view);
     let _ = app::update(
         &mut state,
         Message::EventEdit(EventEditMessage::EventEditStartChanged("00:30".into())),
@@ -79,8 +70,6 @@ fn sleep_opens_its_editor_with_times_and_independent_estimate_toggles() {
         Message::EventEdit(EventEditMessage::EventEditEndChanged("09:15".into())),
     );
     let draft = state.calendar.edit_draft.as_ref().unwrap();
-    assert!(!draft.sleep.as_ref().unwrap().estimated_start);
-    assert!(draft.sleep.as_ref().unwrap().estimated_end);
     assert_eq!(draft.start_text, "00:30");
     assert_eq!(draft.end_text, "09:15");
     let _ = app::update(
@@ -467,7 +456,6 @@ fn actual_sleep_is_timed_shown_and_editable_beside_the_plan() {
     let _ = app::update(
         &mut state,
         Message::Settings(SettingsMessage::SleepTimerSaved(
-            sleep::Timer::Start,
             "sleep".into(),
             Ok(started),
         )),

@@ -485,28 +485,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             state.calendar.invalidate_other_days();
             Task::batch([queue_save(state), refresh_week_after_write(state)])
         }
-        SettingsMessage::SleepEstimatedStart(value) => {
-            if let Some(record) = state
-                .calendar
-                .edit_draft
-                .as_mut()
-                .and_then(|d| d.sleep.as_mut())
-            {
-                record.estimated_start = value;
-            }
-            Task::none()
-        }
-        SettingsMessage::SleepEstimatedEnd(value) => {
-            if let Some(record) = state
-                .calendar
-                .edit_draft
-                .as_mut()
-                .and_then(|d| d.sleep.as_mut())
-            {
-                record.estimated_end = value;
-            }
-            Task::none()
-        }
         SettingsMessage::SleepActualStartChanged(text) => {
             if let Some(draft) = state.calendar.edit_draft.as_mut() {
                 draft.set_actual_start_text(text);
@@ -536,18 +514,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             if state.calendar.pending_time(&id).is_some() || event.details.sending {
                 return Task::none();
             }
-            // An open editor's unsaved confidence flags travel with the timer.
-            if let Some(record) = state
-                .calendar
-                .edit_draft
-                .as_ref()
-                .filter(|draft| draft.id == id)
-                .and_then(|draft| draft.sleep.as_ref())
-                && let Some(current) = event.details.sleep.as_mut()
-            {
-                current.estimated_start = record.estimated_start;
-                current.estimated_end = record.estimated_end;
-            }
             if let Err(error) = calendar::sleep::apply_timer(&mut event, timer, now) {
                 state.calendar.error = Some(error);
                 return Task::none();
@@ -560,11 +526,11 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             let settings = state.config.calendar.clone();
             blocking::run(move || calendar::sleep::save(&settings, event, false)).map(
                 move |result| {
-                    Message::Settings(SettingsMessage::SleepTimerSaved(timer, id.clone(), result))
+                    Message::Settings(SettingsMessage::SleepTimerSaved(id.clone(), result))
                 },
             )
         }
-        SettingsMessage::SleepTimerSaved(timer, id, result) => {
+        SettingsMessage::SleepTimerSaved(id, result) => {
             let event = match result {
                 Ok(event) => event,
                 Err(error) => {
@@ -592,16 +558,8 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             {
                 state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
             }
-            let notification = sleep_notification(state, &event, timer);
             state.calendar.add_event(event);
-            Task::batch([notification, refresh_week_after_write(state)])
-        }
-        SettingsMessage::SleepNotificationShown(result) => {
-            match result {
-                Ok(id) => state.sleep_notification = Some(id),
-                Err(error) => log::warn!("could not post the sleep notification: {error}"),
-            }
-            Task::none()
+            refresh_week_after_write(state)
         }
         SettingsMessage::SleepSaveRequested => {
             let Some(draft) = state.calendar.edit_draft.as_ref() else {
@@ -698,21 +656,4 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             queue_save(state)
         }
     }
-}
-
-/// Posts the running-sleep notification when the timer starts, and replaces it
-/// with how long was slept when it finishes.
-fn sleep_notification(
-    state: &mut State,
-    event: &calendar::Event,
-    timer: calendar::sleep::Timer,
-) -> Task<Message> {
-    let format = state.config.appearance.time_format;
-    let (summary, body) = calendar::sleep::notification(event, timer, format);
-    let (ongoing, replaces) = match timer {
-        calendar::sleep::Timer::Start => (true, state.sleep_notification),
-        calendar::sleep::Timer::Finish => (false, state.sleep_notification.take()),
-    };
-    blocking::run(move || crate::notify::show_sleep(&summary, &body, ongoing, replaces))
-        .map(|result| Message::Settings(SettingsMessage::SleepNotificationShown(result)))
 }

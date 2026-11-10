@@ -66,34 +66,31 @@ pub fn minutes_label(minutes: i64) -> String {
         format!("{}h {}m", minutes / 60, minutes % 60)
     }
 }
-pub fn title(event: &Event) -> String {
-    format!("Sleep · {}", duration(event))
+pub fn title(_event: &Event) -> String {
+    "Sleep".into()
 }
+/// The times written on a night: once it is finished, when sleep actually
+/// happened and how long it was against the plan ("11p – 8a\n8h 35m / 9h");
+/// until then, the planned times and length ("11p – 8a\n9h").
 pub fn time_label(event: &Event, format: time_format::TimeFormat) -> String {
-    let planned = format!(
-        "Bedtime {}\nWake up {}",
-        time_format::clock(event.start, format),
-        time_format::clock(event.end, format)
-    );
-    match actual_label(event, format) {
-        Some(actual) => format!("{planned}\n{actual}"),
-        None => planned,
-    }
-}
-
-/// One line about the actual sleep recorded for a night, if any.
-pub fn actual_label(event: &Event, format: time_format::TimeFormat) -> Option<String> {
-    let record = event.details.sleep.as_ref()?;
-    let start = record.actual_start?;
-    Some(match record.actual_end {
-        Some(end) => format!(
-            "Actual {} – {} ({})",
-            time_format::clock(start, format),
-            time_format::clock(end, format),
-            minutes_label((end - start).num_minutes())
+    let actual = event
+        .details
+        .sleep
+        .as_ref()
+        .and_then(|record| Some((record.actual_start?, record.actual_end?)));
+    match actual {
+        Some((start, end)) => format!(
+            "{}\n{} / {}",
+            time_format::range(start, end, format),
+            minutes_label((end - start).num_minutes()),
+            duration(event)
         ),
-        None => format!("Sleeping since {}", time_format::clock(start, format)),
-    })
+        None => format!(
+            "{}\n{}",
+            time_format::range(event.start, event.end, format),
+            duration(event)
+        ),
+    }
 }
 
 /// What the sleep timer button on a night does.
@@ -692,7 +689,7 @@ mod tests {
         let parsed = api::parse_sleep(value, "app").unwrap();
         assert_eq!(parsed.details.sleep, Some(record));
         assert_eq!((parsed.start, parsed.end), (event.start, event.end));
-        assert_eq!(title(&parsed), "Sleep · 8h 30m");
+        assert_eq!(title(&parsed), "Sleep");
         let cached = serde_json::to_string(&parsed.details).unwrap();
         let details: super::super::Details = serde_json::from_str(&cached).unwrap();
         assert_eq!(details, parsed.details);
@@ -886,9 +883,10 @@ mod tests {
         let mut value = body(&event).unwrap();
         value["id"] = json!("sleep-id");
         let parsed = api::parse_sleep(value, "app").unwrap();
-        let record = parsed.details.sleep.unwrap();
+        let record = parsed.details.sleep.as_ref().unwrap();
         assert_eq!(record.actual_minutes(), Some(7 * 60 + 25));
-        assert!(parsed.details.description.contains("Actual"));
+        assert_eq!(parsed.details.description, "12:40 – 8:05AM\n7h 25m / 8h");
+        assert_eq!(title(&parsed), "Sleep");
     }
 
     #[test]
