@@ -339,6 +339,12 @@ pub(super) fn cache_key(
                 Some(Completion::Habit(true)) => 2,
                 Some(Completion::Task(false)) => 3,
                 Some(Completion::Task(true)) => 4,
+            })
+            .wrapping_mul(31)
+            .wrapping_add(match block.sleep_timer {
+                None => 0,
+                Some(calendar::sleep::Timer::Start) => 1,
+                Some(calendar::sleep::Timer::Finish) => 2,
             });
         for (id, title, minutes) in &block.tasks {
             hash = hash.wrapping_mul(31).wrapping_add(u64::from(*minutes));

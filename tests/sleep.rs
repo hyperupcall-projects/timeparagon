@@ -419,3 +419,112 @@ fn sleep_editor_time_changes_use_the_same_scope_prompt() {
     );
     assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
 }
+
+#[test]
+fn actual_sleep_is_timed_shown_and_editable_beside_the_plan() {
+    let mut state = state();
+    let night = state.calendar.event("sleep").unwrap().clone();
+    // Half an hour before the planned 01:00 bedtime.
+    let _clock =
+        timeslay::clock::freeze((night.start - Duration::minutes(30)).with_timezone(&chrono::Utc));
+    let _ = app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened("sleep".into())),
+    );
+    let metrics = ui::layout::Metrics::of(Size::new(420.0, 1400.0));
+    let mut view = Simulator::with_size(
+        Settings::default(),
+        metrics.size,
+        ui::calendar::details_pane(&state, &metrics),
+    );
+    for label in [
+        "Actual sleep",
+        "Actual sleep start",
+        "Actual wake-up",
+        "Wake up at",
+        "6h",
+        "9h",
+        "Target 8h",
+        "Start sleep",
+    ] {
+        assert!(view.find(label).is_ok(), "missing {label}");
+    }
+    view.click("Start sleep").unwrap();
+    assert!(view.into_messages().any(|m| matches!(
+        m,
+        Message::Settings(SettingsMessage::SleepTimerPressed(ref id)) if id == "sleep"
+    )));
+
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepTimerPressed("sleep".into())),
+    );
+    assert!(state.calendar.edit_draft.as_ref().unwrap().saving);
+
+    // What the write hands back: the night with its timer running.
+    let mut started = night.clone();
+    sleep::apply_timer(&mut started, sleep::Timer::Start, timeslay::clock::now()).unwrap();
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepTimerSaved(
+            sleep::Timer::Start,
+            "sleep".into(),
+            Ok(started),
+        )),
+    );
+    let active = state.calendar.active_sleep().expect("timer running");
+    assert_eq!(
+        sleep::timer(active, timeslay::clock::now()),
+        Some(sleep::Timer::Finish)
+    );
+    let draft = state.calendar.edit_draft.as_ref().unwrap();
+    assert!(!draft.saving);
+    assert_eq!(draft.actual_start_text, "00:30");
+    {
+        let mut view = Simulator::with_size(
+            Settings::default(),
+            metrics.size,
+            ui::calendar::details_pane(&state, &metrics),
+        );
+        assert!(view.find("Finish sleep").is_ok());
+    }
+
+    // Typed times land on the night: 23:40 is the evening before.
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepActualStartChanged("23:40".into())),
+    );
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepActualEndChanged("08:20".into())),
+    );
+    let record = state
+        .calendar
+        .edit_draft
+        .as_ref()
+        .unwrap()
+        .sleep
+        .clone()
+        .unwrap();
+    assert_eq!(
+        record.actual_start.unwrap(),
+        night.start - Duration::minutes(80)
+    );
+    assert_eq!(record.actual_minutes(), Some(8 * 60 + 40));
+    let _ = app::update(
+        &mut state,
+        Message::Settings(SettingsMessage::SleepActualEndChanged(String::new())),
+    );
+    assert!(
+        state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .unwrap()
+            .sleep
+            .as_ref()
+            .unwrap()
+            .actual_end
+            .is_none()
+    );
+}

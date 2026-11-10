@@ -26,6 +26,8 @@ pub(super) struct Block {
     pub(super) habit: Option<(String, NaiveDate)>,
     /// Completion of a visible task or habit occurrence.
     pub(super) completion: Option<Completion>,
+    /// The Start sleep or Finish sleep button a night offers.
+    pub(super) sleep_timer: Option<calendar::sleep::Timer>,
 }
 
 /// An alarm's needle on the day in view.
@@ -417,6 +419,15 @@ impl canvas::Program<Message> for DayCanvas {
 
                 if let Some((id, completion)) = self.completion_at(point, bounds.width) {
                     return Some(canvas::Action::publish(completion.toggle(id)).and_capture());
+                }
+
+                if let Some(id) = self.sleep_timer_at(point, bounds.width) {
+                    return Some(
+                        canvas::Action::publish(Message::Settings(
+                            crate::app::SettingsMessage::SleepTimerPressed(id.to_owned()),
+                        ))
+                        .and_capture(),
+                    );
                 }
 
                 if let Some((id, day)) = self.record_at(point, bounds.width) {
@@ -840,6 +851,8 @@ impl DayCanvas {
                 label_bounds = block_actions(block_bounds).0;
             } else if block.habit.is_some() {
                 label_bounds = habit_actions(block_bounds).0;
+            } else if block.sleep_timer.is_some() {
+                label_bounds = sleep_actions(block_bounds).0;
             }
             if let Some(completion) = block.completion {
                 let (label, checkbox) = completion_bounds(label_bounds);
@@ -862,6 +875,8 @@ impl DayCanvas {
                 draw_action(frame, plan, "Plan", ink);
             } else if block.habit.is_some() {
                 draw_action(frame, habit_actions(block_bounds).1, "Record", ink);
+            } else if let Some(timer) = block.sleep_timer {
+                draw_action(frame, sleep_actions(block_bounds).1, timer.label(), ink);
             }
         }
     }
@@ -1230,6 +1245,17 @@ impl DayCanvas {
             .then_some((block.id.as_str(), completion))
     }
 
+    /// The night whose Start/Finish sleep button is under a grid point.
+    pub(super) fn sleep_timer_at(&self, point: Point, width: f32) -> Option<&str> {
+        self.blocks.iter().rev().find_map(|block| {
+            block.sleep_timer?;
+            sleep_actions(self.block_rect(block, width))
+                .1
+                .contains(point)
+                .then_some(block.id.as_str())
+        })
+    }
+
     /// The habit and day of the Record button under a grid point, if any.
     pub(super) fn record_at(&self, point: Point, width: f32) -> Option<(&str, NaiveDate)> {
         self.blocks.iter().rev().find_map(|block| {
@@ -1548,6 +1574,25 @@ pub(super) fn habit_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
         ..bounds
     };
     (label, record)
+}
+
+/// The widest a night's Start/Finish sleep button gets.
+const SLEEP_TIMER_WIDTH: f32 = 72.0;
+
+/// A night is split like a habit event, with a slightly wider button for the
+/// longer label. Returns (label, timer).
+pub(super) fn sleep_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
+    let width = (bounds.width * (1.0 - TIME_BLOCK_LABEL_SHARE)).min(SLEEP_TIMER_WIDTH);
+    let label = Rectangle {
+        width: bounds.width - width,
+        ..bounds
+    };
+    let timer = Rectangle {
+        x: bounds.x + label.width,
+        width,
+        ..bounds
+    };
+    (label, timer)
 }
 
 /// One of the buttons drawn on a block.

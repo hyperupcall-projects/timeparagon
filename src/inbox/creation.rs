@@ -176,6 +176,8 @@ fn write(
                 automatic: false,
                 estimated_start: false,
                 estimated_end: false,
+                actual_start: None,
+                actual_end: None,
             });
             return calendar::sleep::save(settings, event, true);
         }

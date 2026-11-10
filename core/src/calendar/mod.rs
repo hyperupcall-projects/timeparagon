@@ -588,6 +588,12 @@ pub struct EditDraft {
     pub end_text: String,
     /// The shared repeat controls, seeded from the event's own recurrence.
     pub rule: crate::recurrence::Rule,
+    /// The `HH:MM` text of a night's actual sleep start; empty when unset.
+    #[serde(default)]
+    pub actual_start_text: String,
+    /// The `HH:MM` text of a night's actual wake-up; empty when unset.
+    #[serde(default)]
+    pub actual_end_text: String,
 }
 
 impl EditDraft {
@@ -645,7 +651,55 @@ impl EditDraft {
                 event.start.date_naive(),
                 &crate::recurrence::Recurrence::from_lines(&event.details.recurrence),
             ),
+            actual_start_text: event
+                .details
+                .sleep
+                .as_ref()
+                .and_then(|s| s.actual_start)
+                .map(clock_label)
+                .unwrap_or_default(),
+            actual_end_text: event
+                .details
+                .sleep
+                .as_ref()
+                .and_then(|s| s.actual_end)
+                .map(clock_label)
+                .unwrap_or_default(),
         }
+    }
+
+    /// Applies the actual sleep start field. Empty clears it; a clock time is
+    /// read as the moment nearest the planned bedtime.
+    pub fn set_actual_start_text(&mut self, text: String) {
+        let anchor = self.start;
+        if let Some(record) = self.sleep.as_mut() {
+            if text.trim().is_empty() {
+                record.actual_start = None;
+            } else if let Some(at) = sleep::nearest_clock(&text, anchor) {
+                record.actual_start = Some(at);
+            }
+        }
+        self.actual_start_text = text;
+    }
+
+    /// Applies the actual wake-up field, read nearest the planned wake-up.
+    pub fn set_actual_end_text(&mut self, text: String) {
+        let anchor = self.end;
+        if let Some(record) = self.sleep.as_mut() {
+            if text.trim().is_empty() {
+                record.actual_end = None;
+            } else if let Some(at) = sleep::nearest_clock(&text, anchor) {
+                record.actual_end = Some(at);
+            }
+        }
+        self.actual_end_text = text;
+    }
+
+    /// Whether both actual sleep fields are empty or a valid clock time.
+    pub fn actual_sleep_valid(&self) -> bool {
+        [&self.actual_start_text, &self.actual_end_text]
+            .iter()
+            .all(|text| text.trim().is_empty() || parse_clock(text).is_some())
     }
 
     /// Keep the selected habit occurrence's values and date while loading its
@@ -1823,6 +1877,22 @@ impl Store {
 
     /// A mutable handle to an event, whether it is on the day in view or parked
     /// in the cache. A write can land while the user is looking at another day.
+    /// The night whose sleep timer is running, on any loaded day.
+    pub fn active_sleep(&self) -> Option<&Event> {
+        self.detail_event
+            .iter()
+            .chain(self.events.iter())
+            .chain(self.cache.values().flatten())
+            .filter(|event| {
+                event
+                    .details
+                    .sleep
+                    .as_ref()
+                    .is_some_and(sleep::Record::sleeping)
+            })
+            .max_by_key(|event| event.start)
+    }
+
     pub fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
         if self
             .detail_event

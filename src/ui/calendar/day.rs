@@ -142,6 +142,9 @@ pub(super) fn day_canvas<'a>(
                     .flatten()
                     .map(|id| (id.to_owned(), event.start.date_naive())),
                 completion: event_completion(state, event),
+                sleep_timer: (!hidden)
+                    .then(|| calendar::sleep::timer(event, now))
+                    .flatten(),
                 // A block owns its task rows independently of standalone task visibility.
                 tasks: if time_block {
                     let key = crate::timeblocking::block_key(event);
