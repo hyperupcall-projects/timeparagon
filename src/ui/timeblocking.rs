@@ -472,13 +472,30 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 }
 
 /// A task in a time block takes its schedule from the block, so its own
-/// scheduling fields are shown grayed out.
+/// scheduling fields are shown grayed out. One repeating with the block
+/// repeats as the block does, and can only stop doing so.
 pub fn scheduled_by_block<'a>(
     task: &Event,
     content: impl Into<Element<'a, Message>>,
     metrics: &Metrics,
 ) -> Element<'a, Message> {
-    if task.is_task() && tb::metadata(task).block.is_some() {
+    if tb::is_follower(task) {
+        let stop = button(text("Stop from this day").size(metrics.label()))
+            .style(crate::ui::controls::secondary)
+            .on_press(msg(Action::StopRepeating(task.id.clone())));
+        return column![
+            super::controls::owned_elsewhere(
+                "Repeats with its time block, on the block's days and at its time. Change it from the time block.",
+                content,
+                metrics.label(),
+            ),
+            stop,
+        ]
+        .spacing(8)
+        .width(Fill)
+        .into();
+    }
+    if tb::is_assigned(task) {
         super::controls::owned_elsewhere(
             "Scheduled by its time block. Change it from the time block.",
             content,
@@ -1009,9 +1026,12 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .style(text::secondary),
         actions,
         super::controls::section_heading("Planned Tasks", Some(tasks.len()), 16.0),
-        planned_slot(state, &block_id, metrics),
     ]
     .spacing(10);
+    if tb::block_repeats(block) {
+        body = body.push(repeat_choice(state, metrics));
+    }
+    body = body.push(planned_slot(state, &block_id, metrics));
     if let Some(target) = crate::notes::target_of(state, block) {
         body = body.push(super::notes::section(state, target, metrics));
     }
@@ -1030,6 +1050,13 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             .into()
         } else {
             row![task_row(state, task, metrics, false), remove].into()
+        };
+        let card: Element<'a, Message> = if tb::is_follower(task) {
+            column![card, repeating_note(state, task, metrics)]
+                .spacing(2)
+                .into()
+        } else {
+            card
         };
         body = body.push(if elapsed > capacity {
             container(card)
@@ -1076,7 +1103,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     );
     let query = state.timeblocking.available_query.trim().to_lowercase();
     let all_tasks = state.timeblocking.available_all;
-    let this_block = tb::block_key(block);
+    let hour = tb::day_start_hour(state);
     let available: Vec<_> = state
         .calendar
         .events
@@ -1084,7 +1111,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         .filter(|event| {
             offers_available(
                 event,
-                &this_block,
+                tb::in_block(event, block, hour),
                 &query,
                 all_tasks,
                 state.timeblocking.available_planned,
@@ -1203,6 +1230,52 @@ fn available_habits<'a>(
         );
     }
     body.into()
+}
+
+/// Whether what is added to a repeating block repeats with it. An item in
+/// a time block either repeats with the block or is a one-off.
+fn repeat_choice<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let repeat = !state.timeblocking.one_off;
+    column![
+        row![
+            text("Repeat with this block")
+                .size(metrics.label())
+                .width(Fill),
+            crate::ui::controls::toggler(repeat).on_toggle(|repeat| msg(Action::OneOff(!repeat))),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
+        text(if repeat {
+            "Tasks added here come back every time the block does."
+        } else {
+            "Tasks added here are for this day only."
+        })
+        .size(metrics.label() - 1.0)
+        .style(text::secondary),
+    ]
+    .spacing(2)
+    .into()
+}
+
+/// Under a task repeating with its block: says so, and offers to stop it
+/// from this occurrence on.
+fn repeating_note<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let mut stop = button(text("Stop from this day").size(metrics.label() - 1.0))
+        .padding([2, 6])
+        .style(crate::ui::controls::ghost);
+    if state.timeblocking.busy.is_empty() {
+        stop = stop.on_press(msg(Action::StopRepeating(task.id.clone())));
+    }
+    row![
+        text("↻ Repeats with this block")
+            .size(metrics.label() - 1.0)
+            .style(text::secondary)
+            .width(Fill),
+        stop,
+    ]
+    .spacing(6)
+    .align_y(iced::Center)
+    .into()
 }
 
 /// The planned-tasks box. The plus sits in the middle until it is clicked,
@@ -1331,7 +1404,7 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
         .filter(|event| {
             event.is_task()
                 && !event.completed
-                && tb::metadata(event).block.is_none()
+                && !tb::is_assigned(event)
                 && tb::is_backlog_list(state, &event.calendar_id)
         })
         .collect();
@@ -1531,15 +1604,16 @@ pub fn recurring_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elemen
     let block_repeats = state
         .calendar
         .event(&pending.block)
-        .is_some_and(|block| block.is_recurring());
-    let mut detail = format!(
-        "“{name}” repeats. Move only this occurrence into the time block and keep the future ones separate, or move it and delete its future occurrences."
-    );
-    if block_repeats {
-        detail.push_str(&format!(
-            " The time block repeats, so the {kind} will repeat with it."
-        ));
-    }
+        .is_some_and(tb::block_repeats);
+    let detail = if block_repeats {
+        format!(
+            "“{name}” repeats. Put just this day's {kind} in the time block, or have it repeat with the time block from now on. Repeating with the block replaces this occurrence and the later ones."
+        )
+    } else {
+        format!(
+            "“{name}” repeats. Move just this occurrence into the time block and keep the rest, or move it and delete the later occurrences."
+        )
+    };
     let busy = !state.timeblocking.busy.is_empty();
     let size = metrics.label();
     let choice = |label: String, future: bool| {
@@ -1551,9 +1625,13 @@ pub fn recurring_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elemen
     let body = column![
         text(format!("Move recurring {kind}?")).size(20),
         text(detail).size(size),
-        choice(format!("Move this {kind} only"), false),
+        choice("Just this day".to_owned(), false),
         choice(
-            format!("Move this {kind} and delete future instances"),
+            if block_repeats {
+                "Repeat with this block from now".to_owned()
+            } else {
+                format!("Move this {kind} and delete later occurrences")
+            },
             true
         ),
         button(text("Cancel").size(size).center().width(Fill))
@@ -1588,7 +1666,8 @@ pub fn recurring_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elemen
     stack![backdrop, card].into()
 }
 
-/// Whether a block's "Available tasks" list offers `event`.
+/// Whether a block's "Available tasks" list offers `event`, which is in
+/// that block already when `here`.
 ///
 /// With "All tasks" on, every open task is offered: any task list, dated or
 /// not, timed on the calendar or planned in another block, whatever "Show
@@ -1597,17 +1676,13 @@ pub fn recurring_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elemen
 /// offered, and planned ones only when "Show planned tasks" is on.
 fn offers_available(
     event: &Event,
-    this_block: &str,
+    here: bool,
     query: &str,
     all_tasks: bool,
     show_planned: bool,
 ) -> bool {
     let meta = tb::metadata(event);
-    if !event.is_task()
-        || event.completed
-        || meta.ignored
-        || meta.block.as_deref() == Some(this_block)
-    {
+    if !event.is_task() || event.completed || meta.ignored || here {
         return false;
     }
     if !query.is_empty() && !event.title.to_lowercase().contains(query) {
@@ -1616,7 +1691,7 @@ fn offers_available(
     if all_tasks {
         return true;
     }
-    meta.block.is_none()
+    !tb::is_assigned(event)
         && (show_planned || (event.all_day && tb::in_backlog(event)))
         && (all_tasks || tb::on_today(event))
 }
@@ -1641,8 +1716,8 @@ mod tests {
             block: "standup".into(),
         });
         for (label, expected) in [
-            ("Move this habit only", Some(false)),
-            ("Move this habit and delete future instances", Some(true)),
+            ("Just this day", Some(false)),
+            ("Move this habit and delete later occurrences", Some(true)),
             ("Cancel", None),
         ] {
             let size = Size::new(360.0, 900.0);
@@ -1666,6 +1741,55 @@ mod tests {
                 )),
             }
         }
+    }
+
+    #[test]
+    fn a_repeating_block_asks_whether_new_tasks_repeat_and_marks_those_that_do() {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let block = state.calendar.event("standup").unwrap().clone();
+        state.config.calendar.app_calendar = Some(block.calendar_id.clone());
+        let size = Size::new(360.0, 1200.0);
+        let metrics = Metrics::of(size);
+        state.timeblocking.block = Some("standup".into());
+        {
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                size,
+                panel(&state, &metrics),
+            );
+            assert!(ui.find("Repeat with this block").is_err());
+        }
+        state
+            .calendar
+            .event_mut("standup")
+            .unwrap()
+            .details
+            .recurring_event_id = Some("standup-series".into());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "deep_1".into();
+        task.calendar_id = block.calendar_id.clone();
+        task.details.recurring_event_id = Some("deep".into());
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            metadata: tb::Metadata {
+                block_series: Some(format!("{}/standup-series", block.calendar_id)),
+                minutes: 30,
+                ..Default::default()
+            },
+        });
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            panel(&state, &metrics),
+        );
+        assert!(ui.find("Repeat with this block").is_ok());
+        assert!(ui.find("↻ Repeats with this block").is_ok());
+        let _ = ui.click("Stop from this day").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::TimeBlocking(Action::StopRepeating(id)) if id == "deep_1"
+        )));
     }
 
     #[test]
@@ -1780,7 +1904,10 @@ mod tests {
         task.title = "hh".into();
         task.all_day = false;
         let task = state.calendar.event("task:deep").unwrap().clone();
-        let offers = |event: &Event, query| offers_available(event, "cal/here", query, true, false);
+        let offers = |event: &Event, query| {
+            let here = tb::metadata(event).block.as_deref() == Some("cal/here");
+            offers_available(event, here, query, true, false)
+        };
         assert!(offers(&task, ""));
         assert!(offers(&task, "hh"));
         assert!(!offers(&task, "zz"));

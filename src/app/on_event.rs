@@ -189,12 +189,11 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             let id = calendar::deadline::source_id(&id).to_owned();
             if let Some(task) = state.calendar.event(&id)
                 && task.task_ref().is_some()
-                && let Some(key) = crate::timeblocking::metadata(task).block
-                && let Some(parent) = state
-                    .calendar
-                    .events
-                    .iter()
-                    .find(|e| !e.is_task() && crate::timeblocking::block_key(e) == key)
+                && let Some(parent) = crate::timeblocking::block_of(
+                    task,
+                    &state.calendar.events,
+                    crate::timeblocking::day_start_hour(state),
+                )
                 && state.timeblocking.block.as_deref() != Some(parent.id.as_str())
                 && state.timeblocking.focus.as_deref() != Some(parent.id.as_str())
             {
@@ -620,11 +619,6 @@ fn write_event_time(
             move |result| Message::Event(EventMessage::SleepTimeSaved(id.clone(), scope, result)),
         );
     }
-    let tasks = if scope == calendar::SaveScope::All {
-        follow_block_series(state, &original, start - original.start)
-    } else {
-        Vec::new()
-    };
     blocking::run(move || {
         if !original.is_recurring() {
             return calendar::set_event_time(
@@ -639,73 +633,11 @@ fn write_event_time(
         draft.start = start;
         draft.end = end;
         draft.meeting.notify = notify;
-        calendar::save_event_scope(&original, &draft, scope, &draft.description, None)?;
-        for (task, start, end) in tasks {
-            let mut draft = calendar::EditDraft::from_event(&task);
-            draft.start = start;
-            draft.end = end;
-            calendar::save_event_scope(&task, &draft, scope, &draft.description, None)?;
-        }
-        Ok(())
+        // Tasks repeating with a block series are moved with it once Google
+        // has the block's new time (see `timeblocking::reconcile`).
+        calendar::save_event_scope(&original, &draft, scope, &draft.description, None).map(|_| ())
     })
     .map(move |result| Message::Event(EventMessage::EventTimeSaved(id.clone(), result)))
-}
-
-/// A recurring time block moved as a whole takes the tasks repeating with it
-/// along. Shifts their loaded occurrences now and returns one occurrence of
-/// each task series with its new time, for the series write.
-fn follow_block_series(
-    state: &mut State,
-    block: &calendar::Event,
-    delta: chrono::Duration,
-) -> Vec<(
-    calendar::Event,
-    chrono::DateTime<chrono::Local>,
-    chrono::DateTime<chrono::Local>,
-)> {
-    use crate::timeblocking as tb;
-    if delta.is_zero() || !tb::is_block(block, &state.config.calendar) {
-        return Vec::new();
-    }
-    let Some(series) = tb::block_series(block) else {
-        return Vec::new();
-    };
-    let mut names = block.details.split_from.clone();
-    names.push(series);
-    let mut days = state.calendar.loaded_days();
-    days.push(state.calendar.day);
-    let mut tasks: Vec<calendar::Event> = Vec::new();
-    for day in days {
-        for task in state.calendar.events_on(day) {
-            let linked = task.is_calendar_task()
-                && task.details.recurring_event_id.is_some()
-                && tb::metadata(task)
-                    .block_series
-                    .is_some_and(|series| names.contains(&series));
-            if linked
-                && !tasks.iter().any(|seen| {
-                    seen.calendar_id == task.calendar_id
-                        && seen.details.recurring_event_id == task.details.recurring_event_id
-                })
-            {
-                tasks.push(task.clone());
-            }
-        }
-    }
-    for task in &tasks {
-        if let Some(series) = &task.details.recurring_event_id {
-            state
-                .calendar
-                .shift_series(&task.calendar_id, series, delta);
-        }
-    }
-    tasks
-        .into_iter()
-        .map(|task| {
-            let (start, end) = (task.start + delta, task.end + delta);
-            (task, start, end)
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -737,53 +669,5 @@ mod tests {
         assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
         let _ = update(&mut state, EventMessage::EventClosed);
         assert_eq!(state.calendar.edit_draft.as_ref().unwrap().id, "standup");
-    }
-
-    #[test]
-    fn moving_a_block_series_takes_the_tasks_repeating_with_it_along() {
-        let mut state = State::blank();
-        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-        let mut block = state.calendar.event("standup").unwrap().clone();
-        state.config.calendar.app_calendar = Some(block.calendar_id.clone());
-        block.details.recurring_event_id = Some("standup-series".into());
-        *state.calendar.event_mut("standup").unwrap() = block.clone();
-        let link = |task: &mut calendar::Event, id: &str, series: &str| {
-            task.id = id.into();
-            task.calendar_id = block.calendar_id.clone();
-            task.details.recurring_event_id = Some(series.into());
-            task.details.task_data = Some(crate::task_db::TaskData {
-                id: 100,
-                metadata: crate::timeblocking::Metadata {
-                    block_series: Some(format!("{}/standup-series", block.calendar_id)),
-                    minutes: 30,
-                    ..Default::default()
-                },
-            });
-        };
-        let mut task = state.calendar.event("deep").unwrap().clone();
-        link(&mut task, "task-series_1", "task-series");
-        let before = task.start;
-        state.calendar.add_event(task.clone());
-        let mut other = task.clone();
-        link(&mut other, "loose", "loose-series");
-        other
-            .details
-            .task_data
-            .as_mut()
-            .unwrap()
-            .metadata
-            .block_series = None;
-        state.calendar.add_event(other.clone());
-
-        let delta = chrono::Duration::minutes(30);
-        let writes = follow_block_series(&mut state, &block, delta);
-        assert_eq!(writes.len(), 1);
-        assert_eq!(writes[0].0.id, "task-series_1");
-        assert_eq!(writes[0].1, before + delta);
-        assert_eq!(
-            state.calendar.event("task-series_1").unwrap().start,
-            before + delta
-        );
-        assert_eq!(state.calendar.event("loose").unwrap().start, other.start);
     }
 }

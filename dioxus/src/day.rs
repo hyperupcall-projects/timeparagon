@@ -355,19 +355,14 @@ fn agenda_rows(
     settings: &CalendarSettings,
     schedule: bool,
 ) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
-    let assigned: HashSet<String> = snapshot
-        .events
-        .iter()
-        .filter(|event| event.is_task())
-        .filter_map(|event| tb::metadata(event).block)
-        .collect();
-    let blocks: HashSet<String> = snapshot
+    let hour = settings.day_start_hour();
+    let assigned = tb::holding_blocks(&snapshot.events, hour);
+    let blocks: Vec<Event> = snapshot
         .events
         .iter()
         .filter(|event| is_time_block(event, settings, &assigned))
-        .map(tb::block_key)
+        .cloned()
         .collect();
-    let hour = settings.day_start_hour();
     let mut display_events = snapshot.events.clone();
     display_events.extend(
         snapshot
@@ -383,11 +378,8 @@ fn agenda_rows(
                 .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
                 .filter(|event| !managed_copy(event, settings, &blocks))
                 .filter(|event| {
-                    !(event.is_task()
-                        && !calendar::deadline::is_marker(event)
-                        && tb::metadata(event)
-                            .block
-                            .is_some_and(|key| blocks.contains(&key)))
+                    !(!calendar::deadline::is_marker(event)
+                        && in_loaded_block(event, &blocks, settings))
                 })
                 .filter(|event| {
                     if schedule {
@@ -647,15 +639,11 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
     // Tasks remember their block by key, including tasks the calendar settings
     // currently hide. Detect those blocks even if the time-block calendar is no
     // longer configured, so the day view can still show what was planned.
-    let assigned_keys: HashSet<String> = events
-        .iter()
-        .filter(|event| event.is_task())
-        .filter_map(|event| tb::metadata(event).block)
-        .collect();
-    let loaded_block_keys: HashSet<String> = events
+    let assigned_keys = tb::holding_blocks(&events, settings.day_start_hour());
+    let loaded_blocks: Vec<Event> = events
         .iter()
         .filter(|event| is_time_block(event, settings, &assigned_keys))
-        .map(tb::block_key)
+        .cloned()
         .collect();
 
     let blocks = build_blocks(&events, snapshot, settings, &assigned_keys);
@@ -675,7 +663,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         &display_events,
         &snapshot.calendars,
         settings,
-        &loaded_block_keys,
+        &loaded_blocks,
         &priority,
     );
     let timed = timed_events(
@@ -686,7 +674,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         offset,
         view_start,
         view_end,
-        &loaded_block_keys,
+        &loaded_blocks,
         &priority,
         &blocks,
     );
@@ -770,7 +758,7 @@ fn is_time_block(
 
 /// Mirrors `omit_managed_tasks_event`: app-owned scheduled copies are shown
 /// beside their task or inside their block, not as a second calendar chip.
-fn managed_copy(event: &Event, settings: &CalendarSettings, block_keys: &HashSet<String>) -> bool {
+fn managed_copy(event: &Event, settings: &CalendarSettings, blocks: &[Event]) -> bool {
     if calendar::deadline::is_marker(event) {
         return false;
     }
@@ -779,10 +767,12 @@ fn managed_copy(event: &Event, settings: &CalendarSettings, block_keys: &HashSet
     };
     event.is_calendar_task()
         && event.calendar_id == managed
-        && tb::metadata(event)
-            .block
-            .as_ref()
-            .is_some_and(|key| block_keys.contains(key))
+        && in_loaded_block(event, blocks, settings)
+}
+
+/// Whether `event` is a task in one of the loaded `blocks`.
+fn in_loaded_block(event: &Event, blocks: &[Event], settings: &CalendarSettings) -> bool {
+    event.is_task() && tb::block_of(event, blocks, settings.day_start_hour()).is_some()
 }
 
 fn calendar_name(snapshot: &Snapshot, id: &str) -> String {
@@ -805,14 +795,14 @@ fn all_day_events(
     events: &[Event],
     calendars: &[calendar::Calendar],
     settings: &CalendarSettings,
-    block_keys: &HashSet<String>,
+    block_events: &[Event],
     priority: &impl Fn(&Event) -> usize,
 ) -> Vec<Event> {
     let mut all_day: Vec<_> = events
         .iter()
         .filter(|event| (!event.is_task() || calendar::deadline::is_marker(event)) && event.all_day)
         .filter(|event| calendar::event_enabled(calendars, event, settings))
-        .filter(|event| !managed_copy(event, settings, block_keys))
+        .filter(|event| !managed_copy(event, settings, block_events))
         .cloned()
         .collect();
     all_day.sort_by_key(|event| (priority(event), event.title.clone()));
@@ -828,7 +818,7 @@ fn timed_events(
     offset: i32,
     view_start: DateTime<Local>,
     view_end: DateTime<Local>,
-    block_keys: &HashSet<String>,
+    block_events: &[Event],
     priority: &impl Fn(&Event) -> usize,
     blocks: &[TimeBlock],
 ) -> Vec<TimedEvent> {
@@ -836,22 +826,19 @@ fn timed_events(
         .iter()
         .map(|block| (tb::block_key(&block.event), block))
         .collect();
+    let shown_blocks: Vec<Event> = blocks.iter().map(|block| block.event.clone()).collect();
 
     let mut visible: Vec<&Event> = events
         .iter()
         .filter(|event| !event.all_day)
         .filter(|event| event.start < view_end && event.end > view_start)
         .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
-        .filter(|event| !managed_copy(event, settings, block_keys))
+        .filter(|event| !managed_copy(event, settings, block_events))
         // A task that already sits inside a visible block is read in that
         // block's popup, not drawn a second time as a chip on the grid.
         .filter(|event| {
-            !(event.is_task()
-                && !calendar::deadline::is_marker(event)
-                && tb::metadata(event)
-                    .block
-                    .as_ref()
-                    .is_some_and(|key| blocks_by_key.contains_key(key)))
+            !(!calendar::deadline::is_marker(event)
+                && in_loaded_block(event, &shown_blocks, settings))
         })
         .collect();
     visible.sort_by_key(|event| (event.start, std::cmp::Reverse(event.end)));
@@ -913,13 +900,7 @@ fn build_blocks(
         .filter(|event| is_time_block(event, settings, assigned_keys))
         .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
         .map(|block| {
-            let key = tb::block_key(block);
-            let mut tasks: Vec<&Event> = events
-                .iter()
-                .filter(|event| event.is_task())
-                .filter(|event| tb::metadata(event).block.as_deref() == Some(key.as_str()))
-                .collect();
-            tasks.sort_by_key(|event| (tb::metadata(event).order, event.id.clone()));
+            let tasks = tb::tasks_in(block, events, settings.day_start_hour());
             let tasks: Vec<AssignedTask> = tasks
                 .into_iter()
                 .map(|task| AssignedTask {
@@ -1385,7 +1366,7 @@ pub fn assignable_tasks(events: &[Event]) -> Vec<Event> {
         .iter()
         .filter(|event| event.is_task())
         .filter(|event| tb::task_status(event) == tb::TaskStatus::Active)
-        .filter(|event| tb::metadata(event).block.is_none())
+        .filter(|event| !tb::is_assigned(event))
         .cloned()
         .collect();
     tasks.sort_by_key(|task| (tb::metadata(task).order, task.title.clone()));
@@ -1429,11 +1410,7 @@ pub fn save_task(task: Event, change: Change, context: &EditContext) -> Result<E
 
 /// Every event of the day that holds, or could hold, assigned tasks.
 fn block_events(events: &[Event], settings: &CalendarSettings) -> Vec<Event> {
-    let assigned: HashSet<String> = events
-        .iter()
-        .filter(|event| event.is_task())
-        .filter_map(|event| tb::metadata(event).block)
-        .collect();
+    let assigned = tb::holding_blocks(events, settings.day_start_hour());
     events
         .iter()
         .filter(|event| is_time_block(event, settings, &assigned))
@@ -1857,6 +1834,44 @@ mod tests {
         assert_eq!(block.capacity_minutes, 120);
         assert_eq!(block.tasks[0].list_name, "Work");
         assert!(!model.tasks_hidden);
+    }
+
+    #[test]
+    fn a_task_repeating_with_a_block_sits_in_that_days_occurrence() {
+        let mut block = event("b_1", "blocks", "Deep work", at(9, 0), at(11, 0));
+        block.details.recurring_event_id = Some("b".into());
+        // Moved from the day before: its tasks of that day come with it.
+        block.details.original_start = Some(at(9, 0) - Duration::days(1));
+        let repeating = |id: &str, original| {
+            let mut task = event(id, "blocks", "Inbox zero", at(9, 0), at(9, 30));
+            task.details.recurring_event_id = Some("t".into());
+            task.details.original_start = Some(original);
+            task.details.task_data = Some(TaskData {
+                id: 100,
+                metadata: Metadata {
+                    block_series: Some("blocks/b".into()),
+                    // Google copies the first day's key to every occurrence.
+                    block: Some("blocks/elsewhere".into()),
+                    minutes: 30,
+                    ..Metadata::default()
+                },
+            });
+            task
+        };
+        let yesterdays = repeating("t_1", at(9, 0) - Duration::days(1));
+        let todays = repeating("t_2", at(9, 0));
+        let snapshot = snapshot(vec![block, yesterdays, todays.clone()]);
+        let model = build_model(&snapshot, &settings());
+        let ids: Vec<_> = model.blocks[0]
+            .tasks
+            .iter()
+            .map(|task| task.event.id.as_str())
+            .collect();
+        assert_eq!(ids, ["t_1"]);
+        assert!(!model.timed.iter().any(|timed| timed.event.id == "t_1"));
+        // Neither is offered to a block again.
+        assert!(assignable_tasks(&snapshot.events).is_empty());
+        assert!(tb::is_follower(&todays));
     }
 
     #[test]

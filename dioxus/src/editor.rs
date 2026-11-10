@@ -1709,6 +1709,10 @@ pub fn BlockTasks(
     let mut busy = busy;
     let mut adding = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    // An item in a repeating block either repeats with it or is a one-off.
+    let mut repeat = use_signal(|| true);
+    let block_repeats = block.event.details.recurring_event_id.is_some();
+    let join = Change::join_block_series(&block.event);
 
     let write_context = context.clone();
     let apply = use_callback(move |(task, change): (Event, Change)| {
@@ -1718,11 +1722,46 @@ pub fn BlockTasks(
         busy.set(true);
         error.set(None);
         let context = write_context.clone();
+        // A task that does not repeat yet repeats with a repeating block
+        // when asked to; one that repeats already only goes in this day.
+        let join = join
+            .clone()
+            .filter(|_| matches!(change, Change::Block(..)) && repeat() && !task.is_recurring());
         spawn(async move {
-            let result = worker(move || day::save_task(task, change, &context)).await;
+            let result = worker(move || {
+                let saved = day::save_task(task, change, &context)?;
+                match join {
+                    Some(join) => day::save_task(saved, join, &context),
+                    None => Ok(saved),
+                }
+            })
+            .await;
             busy.set(false);
             match result {
                 Ok(_) => on_saved.call(()),
+                Err(message) => error.set(Some(message)),
+            }
+        });
+    });
+    let stop = use_callback(move |task: Event| {
+        if busy() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        spawn(async move {
+            let result = worker(move || {
+                calendar::delete_event_scope(
+                    &task.calendar_id,
+                    &task.id,
+                    calendar::SaveScope::CurrentAndFuture,
+                    false,
+                )
+            })
+            .await;
+            busy.set(false);
+            match result {
+                Ok(()) => on_saved.call(()),
                 Err(message) => error.set(Some(message)),
             }
         });
@@ -1751,6 +1790,7 @@ pub fn BlockTasks(
                         busy: is_busy,
                         on_open,
                         on_remove: move |event: Event| apply.call((event, Change::Unassign)),
+                        on_stop: move |event: Event| stop.call(event),
                     }
                 }
             }
@@ -1761,6 +1801,24 @@ pub fn BlockTasks(
             disabled: is_busy,
             onclick: move |_| adding.toggle(),
             if adding() { "Done" } else { "+ Add task" }
+        }
+        if adding() && block_repeats {
+            label { class: "editor-check",
+                input {
+                    r#type: "checkbox",
+                    checked: repeat(),
+                    disabled: is_busy,
+                    onchange: move |event: FormEvent| repeat.set(event.checked()),
+                }
+                span { "Repeat with this block" }
+            }
+            p { class: "empty-note",
+                if repeat() {
+                    "Tasks added here come back every time the block does. Ones that already repeat go in this day only."
+                } else {
+                    "Tasks added here are for this day only."
+                }
+            }
         }
         if adding() {
             if assignable.is_empty() {
@@ -1795,6 +1853,8 @@ fn AssignedRow(
     busy: bool,
     on_open: EventHandler<Event>,
     on_remove: EventHandler<Event>,
+    /// Stop a task repeating with its block from this occurrence on.
+    on_stop: EventHandler<Event>,
 ) -> Element {
     let status_class = match task.status {
         tb::TaskStatus::Active => "active",
@@ -1813,6 +1873,8 @@ fn AssignedRow(
     };
     let opened = task.event.clone();
     let removed = task.event.clone();
+    let stopped = task.event.clone();
+    let repeating = tb::is_follower(&task.event);
     let title = task.event.title.clone();
     let minutes = day::duration_label(task.minutes);
 
@@ -1828,9 +1890,22 @@ fn AssignedRow(
                     div { class: "task-meta",
                         span { class: "meta-pill", "{task.list_name}" }
                         span { class: "meta-pill", "{status_note}" }
+                        if repeating {
+                            span { class: "meta-pill", "↻ Repeats with this block" }
+                        }
                     }
                 }
                 span { class: "assigned-minutes", "{minutes}" }
+            }
+            if repeating {
+                button {
+                    class: "btn small",
+                    title: "Stop repeating from this day",
+                    aria_label: "Stop {title} repeating from this day",
+                    disabled: busy,
+                    onclick: move |_| on_stop.call(stopped.clone()),
+                    "Stop"
+                }
             }
             button {
                 class: "modal-close",
