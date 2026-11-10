@@ -13,6 +13,8 @@ use super::{Calendar, Event, Snapshot};
 use crate::config::CalendarSettings;
 use crate::hex;
 
+pub mod block_sync;
+
 const CALENDAR_LIST: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 pub const EVENTS: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
@@ -101,6 +103,8 @@ struct EventEntry {
     recurrence: Vec<String>,
     #[serde(default, rename = "recurringEventId")]
     recurring_event_id: Option<String>,
+    #[serde(default, rename = "originalStartTime")]
+    original_start_time: Option<EventTime>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -251,8 +255,10 @@ pub fn fetch_range(
         })?;
         super::operations::observe_range(&path, &events, first, last, fetch_started)?;
     }
-    crate::timeblocking::resolve_block_series(&mut events);
     super::operations::cache_tasks(&events, tasks_loaded)?;
+    // Changes made elsewhere (Google's site, another device) may have left
+    // time blocks out of step.
+    super::operations::request_reconcile();
     calendars.extend(task_calendars);
     events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
 
@@ -2388,6 +2394,19 @@ fn parse_date_time(value: &str) -> Option<DateTime<Local>> {
         })
 }
 
+/// A start or end Google gave as a time, or as a date (taken as midnight).
+fn event_time(time: &EventTime) -> Option<DateTime<Local>> {
+    time.date_time
+        .as_deref()
+        .and_then(parse_date_time)
+        .or_else(|| {
+            time.date
+                .as_deref()
+                .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+                .map(|date| date_at(date, 0, 0))
+        })
+}
+
 fn date_at(date: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
     super::at_clock(date, hour, minute)
 }
@@ -2453,6 +2472,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .as_str()
             .map(str::to_owned),
         recurring_event_id: entry.recurring_event_id.clone(),
+        original_start: entry.original_start_time.as_ref().and_then(event_time),
         recurrence: entry.recurrence.clone(),
         split_from: split_from(&entry.extended_properties),
         color_id: entry.color_id.clone(),

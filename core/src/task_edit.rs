@@ -166,10 +166,11 @@ pub fn save_and_reflow(
     mut related: Vec<Event>,
     access: Access,
 ) -> Result<Vec<Event>, String> {
+    let hour = settings.day_start_hour();
     let original_id = task.id.clone();
-    let old_block = metadata(&task).block;
+    let old_block = crate::timeblocking::block_of(&task, &blocks, hour).map(block_key);
     let saved = save(task, &settings, change, order, access)?;
-    let new_block = metadata(&saved).block;
+    let new_block = crate::timeblocking::block_of(&saved, &blocks, hour).map(block_key);
     related.retain(|e| e.id != original_id);
     related.push(saved.clone());
     let mut changed = vec![saved];
@@ -189,26 +190,19 @@ pub fn save_and_reflow(
 }
 
 /// Lays a block's tasks end to end from its start, rewriting those that moved.
+/// The same layout the reconciler keeps Google to; see
+/// [`crate::timeblocking::layout`].
 pub fn reflow(
     block: &Event,
     tasks: &[Event],
     settings: &CalendarSettings,
     access: Access,
 ) -> Result<Vec<Event>, String> {
-    let key = block_key(block);
-    let mut tasks: Vec<_> = tasks
-        .iter()
-        .filter(|e| metadata(e).block.as_deref() == Some(&key))
-        .cloned()
-        .collect();
-    tasks.sort_by_key(|e| (metadata(e).order, e.id.clone()));
-    let mut start = block.start;
+    let tasks = crate::timeblocking::tasks_in(block, tasks, settings.day_start_hour());
+    let slots = crate::timeblocking::layout(block, &tasks);
     let mut changed = Vec::new();
     let mut token = None;
-    for task in tasks {
-        let minutes = metadata(&task).minutes;
-        let end =
-            start + chrono::Duration::minutes(i64::from(if minutes == 0 { 30 } else { minutes }));
+    for (task, (start, end)) in tasks.into_iter().cloned().zip(slots) {
         // Completed blocks are history and are never shifted by later planning.
         if !task.completed && (task.all_day || task.start != start || task.end != end) {
             let token = match &token {
@@ -229,7 +223,6 @@ pub fn reflow(
             )?;
             changed.push(task);
         }
-        start = end;
     }
     Ok(changed)
 }

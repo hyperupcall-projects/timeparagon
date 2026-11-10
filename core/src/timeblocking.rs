@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::calendar::{self, Event};
 use crate::config::CalendarSettings;
 
+pub mod membership;
+pub mod reconcile;
+pub use membership::{
+    block_of, holding_blocks, in_block, is_assigned, is_follower, layout, lineage, original_start,
+    repeats_with_block, tasks_in,
+};
+
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -177,41 +184,6 @@ pub fn block_series(block: &Event) -> Option<String> {
         .map(|series| format!("{}/{series}", block.calendar_id))
 }
 
-/// Google copies a series' metadata to every occurrence, so each occurrence
-/// of a task repeating with a block series still names the block it was
-/// first put in. Point it at the occurrence of the block on its own day, or
-/// at none when that day has no such block.
-///
-/// Editing a block "this and following" splits its series; the new series
-/// names the ones it continues, so their tasks follow it.
-pub fn resolve_block_series(events: &mut [Event]) {
-    let blocks: Vec<(Vec<String>, NaiveDate, String)> = events
-        .iter()
-        .filter(|event| !event.is_task())
-        .filter_map(|block| {
-            let mut series = block.details.split_from.clone();
-            series.push(block_series(block)?);
-            Some((series, block.start.date_naive(), block_key(block)))
-        })
-        .collect();
-    for task in events
-        .iter_mut()
-        .filter(|event| event.is_task() && event.details.recurring_event_id.is_some())
-    {
-        let day = task.start.date_naive();
-        let Some(data) = task.details.task_data.as_mut() else {
-            continue;
-        };
-        let Some(series) = data.metadata.block_series.as_ref() else {
-            continue;
-        };
-        data.metadata.block = blocks
-            .iter()
-            .find(|(s, d, _)| *d == day && s.contains(series))
-            .map(|(_, _, key)| key.clone());
-    }
-}
-
 pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
     !event.is_task()
         && !event.details.habit
@@ -223,8 +195,7 @@ pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
 
 /// A task that still needs a time: unscheduled, or waiting on a schedule write.
 pub fn in_backlog(event: &Event) -> bool {
-    let meta = metadata(event);
-    event.is_task() && !event.completed && event.task_ref().is_some() && meta.block.is_none()
+    event.is_task() && !event.completed && event.task_ref().is_some() && !is_assigned(event)
 }
 
 /// A task whose date is the current day. An undated task is not.
@@ -260,17 +231,14 @@ pub fn unslotted_on(
         && !meta.ignored
         && event.all_day
         && event.start.date_naive() == day
-        && meta.block.is_none()
+        && !is_assigned(event)
         && !past_due(event, now)
 }
 
-/// A day task needs a slot unless its linked block is among the day's `events`.
-pub fn needs_slot(event: &Event, events: &[Event]) -> bool {
-    metadata(event).block.as_ref().is_none_or(|key| {
-        !events
-            .iter()
-            .any(|block| !block.is_task() && block_key(block) == *key)
-    })
+/// A day task needs a slot unless the block it is in is among the day's
+/// `events`.
+pub fn needs_slot(event: &Event, events: &[Event], day_start_hour: u32) -> bool {
+    block_of(event, events, day_start_hour).is_none()
 }
 
 #[cfg(test)]
@@ -309,76 +277,6 @@ mod tests {
         assert!(past_due(&task, now));
         task.completed = true;
         assert!(!past_due(&task, now));
-    }
-
-    #[test]
-    fn task_occurrences_belong_to_the_block_occurrence_on_their_day() {
-        let day = NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
-        let occurrence = |id: &str, days: i64, hour: u32| {
-            let start = calendar::at_clock(day + chrono::Duration::days(days), hour, 0);
-            Event {
-                id: id.into(),
-                calendar_id: "app".into(),
-                title: id.into(),
-                start,
-                end: start + chrono::Duration::hours(1),
-                all_day: false,
-                color: calendar::colors::TASK,
-                completed: false,
-                details: calendar::Details {
-                    recurring_event_id: Some(id.split('_').next().unwrap().into()),
-                    ..Default::default()
-                },
-            }
-        };
-        let task = |id: &str, days: i64| {
-            let mut task = occurrence(id, days, 10);
-            task.details.task_data = Some(crate::task_db::TaskData {
-                id: 123,
-                metadata: Metadata {
-                    block: Some("app/block_0".into()),
-                    block_series: Some("app/block".into()),
-                    minutes: 30,
-                    ..Default::default()
-                },
-            });
-            task
-        };
-        let mut unrelated = task("other_0", 1);
-        unrelated
-            .details
-            .task_data
-            .as_mut()
-            .unwrap()
-            .metadata
-            .block_series = None;
-        let mut events = vec![
-            occurrence("block_0", 0, 10),
-            occurrence("block_1", 1, 10),
-            task("task_0", 0),
-            task("task_1", 1),
-            task("task_2", 2),
-            unrelated,
-        ];
-        assert_eq!(block_series(&events[0]).as_deref(), Some("app/block"));
-        resolve_block_series(&mut events);
-        let block = |id: &str| metadata(events.iter().find(|event| event.id == id).unwrap()).block;
-        assert_eq!(block("task_0").as_deref(), Some("app/block_0"));
-        assert_eq!(block("task_1").as_deref(), Some("app/block_1"));
-        // No block that day: the occurrence stands alone.
-        assert_eq!(block("task_2"), None);
-        assert_eq!(block("other_0").as_deref(), Some("app/block_0"));
-
-        // Moving the block "this and following" from day 1 ends its series
-        // and continues it as a new one; the task follows.
-        events.retain(|event| event.id != "block_1");
-        let mut split = occurrence("later_1", 1, 11);
-        split.details.split_from = vec!["app/block".into()];
-        events.push(split);
-        resolve_block_series(&mut events);
-        let block = |id: &str| metadata(events.iter().find(|event| event.id == id).unwrap()).block;
-        assert_eq!(block("task_0").as_deref(), Some("app/block_0"));
-        assert_eq!(block("task_1").as_deref(), Some("app/later_1"));
     }
 
     #[test]

@@ -202,12 +202,10 @@ impl Search {
         if !timeblocking::is_block(event, settings) {
             return false;
         }
-        let key = timeblocking::block_key(event);
-        day_events.iter().any(|task| {
-            task.is_task()
-                && timeblocking::metadata(task).block.as_deref() == Some(key.as_str())
-                && self.matches_content(task)
-        })
+        let hour = settings.day_start_hour();
+        day_events
+            .iter()
+            .any(|task| timeblocking::in_block(task, event, hour) && self.matches_content(task))
     }
 }
 
