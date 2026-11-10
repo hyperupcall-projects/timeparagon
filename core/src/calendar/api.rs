@@ -1808,6 +1808,12 @@ pub fn save_event_scope(
     for (key, value) in changes.as_object().unwrap() {
         replacement[key] = value.clone();
     }
+    // Tasks repeating with the old series must find the new one.
+    let mut ancestry = split_from(&replacement["extendedProperties"]);
+    ancestry.push(format!("{source}/{series_id}"));
+    replacement["extendedProperties"]["private"][SPLIT_FROM] = serde_json::to_string(&ancestry)
+        .map_err(|e| e.to_string())?
+        .into();
     // The new series starts out on the destination; the old one just ends. The
     // conference it copied only survives if Google is asked to read it.
     let query = super::meeting::write_query(&replacement, notify);
@@ -2448,8 +2454,19 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
             .map(str::to_owned),
         recurring_event_id: entry.recurring_event_id.clone(),
         recurrence: entry.recurrence.clone(),
+        split_from: split_from(&entry.extended_properties),
         color_id: entry.color_id.clone(),
     }
+}
+
+/// Private property naming the series a split series continues.
+const SPLIT_FROM: &str = "ttSplitFrom";
+
+fn split_from(properties: &serde_json::Value) -> Vec<String> {
+    properties["private"][SPLIT_FROM]
+        .as_str()
+        .and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or_default()
 }
 
 fn attendance_of(entry: &EventEntry) -> super::meeting::Attendance {

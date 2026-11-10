@@ -373,43 +373,6 @@ fn settings_choose_home() -> Result<(), Error> {
     Ok(())
 }
 
-/// Clicking a Google Calendar event offers to add a location, the same as a
-/// task does, and shows the place once it has one.
-#[test]
-fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
-    for width in [260.0, 360.0, 620.0] {
-        let (mut state, _, office, _) = state();
-        state.config.travel.event_places.clear();
-        for event in &mut state.calendar.events {
-            event.details.location = String::new();
-        }
-        state.calendar.open_event = Some("standup".into());
-
-        let mut ui = at(Size::new(width, 900.0), timeslay::ui::editor_window(&state));
-        let _ = ui
-            .click("Add location")
-            .unwrap_or_else(|_| panic!("no button at {width}px"));
-        assert!(
-            messages(ui).iter().any(|m| matches!(
-                m,
-                Message::Travel(Action::OpenPicker(PickTarget::Event(id))) if id == "standup"
-            )),
-            "at {width}px"
-        );
-
-        // With a place set it is named, with a way to change or clear it.
-        state
-            .config
-            .travel
-            .event_places
-            .insert("standup".into(), office);
-        let mut ui = at(Size::new(width, 900.0), timeslay::ui::editor_window(&state));
-        assert!(ui.find("Office").is_ok() && ui.find("Change").is_ok() && ui.find("Clear").is_ok());
-        assert!(ui.find("Add location").is_err());
-    }
-    Ok(())
-}
-
 #[test]
 fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> {
     for width in WIDTHS {

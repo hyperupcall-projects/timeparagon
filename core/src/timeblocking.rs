@@ -181,16 +181,17 @@ pub fn block_series(block: &Event) -> Option<String> {
 /// of a task repeating with a block series still names the block it was
 /// first put in. Point it at the occurrence of the block on its own day, or
 /// at none when that day has no such block.
+///
+/// Editing a block "this and following" splits its series; the new series
+/// names the ones it continues, so their tasks follow it.
 pub fn resolve_block_series(events: &mut [Event]) {
-    let blocks: Vec<(String, NaiveDate, String)> = events
+    let blocks: Vec<(Vec<String>, NaiveDate, String)> = events
         .iter()
         .filter(|event| !event.is_task())
         .filter_map(|block| {
-            Some((
-                block_series(block)?,
-                block.start.date_naive(),
-                block_key(block),
-            ))
+            let mut series = block.details.split_from.clone();
+            series.push(block_series(block)?);
+            Some((series, block.start.date_naive(), block_key(block)))
         })
         .collect();
     for task in events
@@ -206,7 +207,7 @@ pub fn resolve_block_series(events: &mut [Event]) {
         };
         data.metadata.block = blocks
             .iter()
-            .find(|(s, d, _)| s == series && *d == day)
+            .find(|(s, d, _)| *d == day && s.contains(series))
             .map(|(_, _, key)| key.clone());
     }
 }
@@ -367,6 +368,17 @@ mod tests {
         // No block that day: the occurrence stands alone.
         assert_eq!(block("task_2"), None);
         assert_eq!(block("other_0").as_deref(), Some("app/block_0"));
+
+        // Moving the block "this and following" from day 1 ends its series
+        // and continues it as a new one; the task follows.
+        events.retain(|event| event.id != "block_1");
+        let mut split = occurrence("later_1", 1, 11);
+        split.details.split_from = vec!["app/block".into()];
+        events.push(split);
+        resolve_block_series(&mut events);
+        let block = |id: &str| metadata(events.iter().find(|event| event.id == id).unwrap()).block;
+        assert_eq!(block("task_0").as_deref(), Some("app/block_0"));
+        assert_eq!(block("task_1").as_deref(), Some("app/later_1"));
     }
 
     #[test]

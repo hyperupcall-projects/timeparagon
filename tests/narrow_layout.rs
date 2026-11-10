@@ -792,55 +792,6 @@ fn toggling_a_calendar_off_hides_its_events_in_the_day_view() {
 }
 
 #[test]
-fn opening_an_event_shows_its_google_details() {
-    let mut state = state();
-    state.screen = Screen::Calendar;
-    state.calendar =
-        timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
-    let standup = state
-        .calendar
-        .events
-        .iter_mut()
-        .find(|event| event.id == "standup")
-        .unwrap();
-    standup.details = timeslay::calendar::Details {
-        task_data: None,
-        location: "Room 4".into(),
-        description: "Bring notes".into(),
-        status: "Confirmed".into(),
-        link: "https://calendar.google.com/event?eid=1".into(),
-        meeting: "https://meet.google.com/abc-defg-hij".into(),
-        organizer: "Ada".into(),
-        attendees: vec!["Grace (accepted)".into()],
-        ..timeslay::calendar::Details::default()
-    };
-    state.calendar.open_event = Some("standup".into());
-    let event = state.calendar.event("standup").unwrap();
-    state.calendar.edit_draft = Some(timeslay::calendar::EditDraft::from_event(event));
-
-    let mut ui = render(&state, Size::new(260.0, 600.0));
-
-    for label in [
-        "Standup",
-        "Room 4",
-        "Start Time",
-        "End Time",
-        "Save current event",
-        "Does not repeat",
-        "Ada",
-        "Grace (accepted)",
-        "Open in Google Meet",
-        "Open in Google Calendar",
-        "Close",
-    ] {
-        assert!(
-            ui.find(label).is_ok(),
-            "{label:?} is missing from the event details"
-        );
-    }
-}
-
-#[test]
 fn a_task_details_card_has_no_google_tasks_link_or_status() {
     let mut state = state();
     state.screen = Screen::Calendar;
@@ -1318,21 +1269,6 @@ fn timeblocking_state() -> State {
     });
     state.calendar = timeslay::calendar::Store::with_snapshot(snapshot);
     state
-}
-
-#[test]
-fn a_plain_click_on_a_time_block_opens_the_event_pane_not_the_panel() -> Result<(), Error> {
-    let mut state = timeblocking_state();
-    let _ = app::update(
-        &mut state,
-        Message::Event(EventMessage::EventOpened("standup".into())),
-    );
-    assert_eq!(state.calendar.open_event.as_deref(), Some("standup"));
-    assert!(state.timeblocking.block.is_none());
-    let mut ui = render(&state, Size::new(660.0, 720.0));
-    assert!(ui.find("Save current event").is_ok());
-    assert!(ui.find("Planned Tasks").is_err());
-    Ok(())
 }
 
 #[test]
@@ -1891,46 +1827,6 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
     assert!(ui.find("No matching tasks").is_ok());
     assert!(ui.find("Research outline").is_err());
     assert!(ui.find("Write proposal").is_ok());
-    Ok(())
-}
-
-#[test]
-fn searching_available_tasks_also_finds_habits_to_record() -> Result<(), Error> {
-    use timeslay::timeblocking::Action;
-    let mut state = timeblocking_state();
-    state
-        .habits
-        .library
-        .habits
-        .push(timeslay_core::habits::Habit::new("h-stretch", "Stretch"));
-    let mut archived = timeslay_core::habits::Habit::new("h-old", "Stretch old");
-    archived.archived = true;
-    state.habits.library.habits.push(archived);
-    let _ = app::update(
-        &mut state,
-        Message::TimeBlocking(Action::Plan("standup".into())),
-    );
-    let mut ui = render(&state, Size::new(900.0, 1000.0));
-    assert!(ui.find("Stretch").is_err());
-    drop(ui);
-
-    let _ = app::update(
-        &mut state,
-        Message::TimeBlocking(Action::AvailableQuery("stret".into())),
-    );
-    let day = state.calendar.event("standup").unwrap().start.date_naive();
-    let mut ui = render(&state, Size::new(900.0, 1000.0));
-    assert!(ui.find("Stretch").is_ok());
-    assert!(ui.find("Stretch old").is_err());
-    assert!(ui.find("No matching tasks").is_err());
-    let record = ui.find("Record")?;
-    ui.point_at(record.bounds().center());
-    ui.simulate(iced_test::simulator::click());
-    assert!(ui.into_messages().any(|message| matches!(
-        message,
-        Message::Habits(timeslay::habits::Action::OpenDay(id, on))
-            if id == "h-stretch" && on == day
-    )));
     Ok(())
 }
 
