@@ -21,7 +21,7 @@ pub(crate) fn select(state: &mut State, kind: DraftKind) -> Task<Message> {
             task.title.clone(),
             task.event
                 .as_ref()
-                .map(|event| tb::description(&event.details.description))
+                .map(|event| event.details.description.clone())
                 .unwrap_or_default(),
         )
     } else {

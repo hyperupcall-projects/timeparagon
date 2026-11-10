@@ -225,10 +225,16 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         // appearing on every date.
         if event.is_task() {
             if event.start.date_naive() == day {
-                items.push(task_row(state, event, metrics));
+                items.push(crate::ui::controls::locked(
+                    task_row(state, event, metrics),
+                    event.details.sending,
+                ));
             }
         } else {
-            items.push(all_day_row(state, event, event.end <= now, metrics));
+            items.push(crate::ui::controls::locked(
+                all_day_row(state, event, event.end <= now, metrics),
+                event.details.sending,
+            ));
         }
     }
     for event in state.calendar.timed_events_on(day, &state.config.calendar) {
@@ -241,7 +247,10 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         // An event past midnight is listed where it starts, not on each day it
         // touches, unless the day it started on is out of view.
         if calendar::day_at(event.start, day_start_hour) == day || day == first_shown {
-            items.push(timed_row(state, event, event.end <= now, metrics));
+            items.push(crate::ui::controls::locked(
+                timed_row(state, event, event.end <= now, metrics),
+                event.details.sending,
+            ));
         }
     }
     items

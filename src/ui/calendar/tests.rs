@@ -2607,7 +2607,22 @@ fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
     task.details = Default::default();
     let mut overdue = task.clone();
     overdue.id = "task:overdue".into();
-    overdue.details.description = format!("DEADLINE: {} 00:00", today.pred_opt().unwrap());
+    overdue.details.description = "".into();
+    overdue
+        .details
+        .task_data
+        .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+            id: 100,
+            metadata: Default::default(),
+        })
+        .metadata
+        .deadline = Some(
+        timeslay_core::calendar::deadline::parse_input(&format!(
+            "{} 00:00",
+            today.pred_opt().unwrap()
+        ))
+        .unwrap(),
+    );
     let mut done = task.clone();
     done.id = "task:done".into();
     done.completed = true;

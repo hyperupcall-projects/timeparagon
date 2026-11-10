@@ -8,7 +8,7 @@ The task's description holds the **whole message** (text, attachments and file
 links) plus a link that opens the message in Slack. Slack redirects that link
 to the desktop app when it is installed. The link form also takes an optional
 **due date** and **deadline**, stored the way the app stores them (the due day
-on the task, the deadline as a line in its notes).
+on the task, the deadline in structured task metadata).
 
 ## What you get
 

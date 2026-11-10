@@ -37,7 +37,7 @@ fn default_storage_is_temporary() {
             .as_deref(),
         Some("temporary")
     );
-    calendar::operations::enqueue(
+    calendar::operations::submit(
         calendar::operations::Job::Delete {
             calendar: "tasks:inbox".into(),
             id: "task:a".into(),
@@ -49,7 +49,13 @@ fn default_storage_is_temporary() {
         "task:a",
     )
     .unwrap();
-    assert_eq!(calendar::operations::list_in(&database).unwrap().len(), 1);
+    // The write is answered locally, without reaching Google.
+    assert!(
+        calendar::operations::log_since(0)
+            .iter()
+            .any(|entry| entry.text.starts_with("Saved to Google: Delete event"))
+    );
+    assert_eq!(calendar::operations::sending(), 0);
 }
 
 #[test]

@@ -611,6 +611,48 @@ pub fn summary_surface(theme: &Theme) -> container::Style {
     }
 }
 
+/// Greys out an event or task whose change is still on its way to Google
+/// ([`timeslay_core::calendar::Details::sending`]), and keeps the pointer off
+/// it until Google answers, so it cannot be changed again in the meantime.
+pub fn locked<'a>(content: impl Into<Element<'a, Message>>, locked: bool) -> Element<'a, Message> {
+    let content = content.into();
+    if !locked {
+        return content;
+    }
+    stack![
+        content,
+        iced::widget::opaque(
+            mouse_area(
+                container(Space::new())
+                    .width(Fill)
+                    .height(Fill)
+                    .style(locked_veil)
+            )
+            .interaction(mouse::Interaction::NotAllowed)
+        ),
+    ]
+    .into()
+}
+
+fn locked_veil(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(
+            theme
+                .extended_palette()
+                .background
+                .base
+                .color
+                .scale_alpha(0.6)
+                .into(),
+        ),
+        border: Border {
+            radius: RADIUS_ROW.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
 /// Floating dialogs and menus: the same card, lifted well off the page.
 pub fn surface(theme: &Theme) -> container::Style {
     container::Style {

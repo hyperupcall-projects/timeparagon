@@ -34,7 +34,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
+
+/// Older schemas [`Database::set_up`] can bring up to date.
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 3..=3;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
     db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -64,7 +67,7 @@ impl Database {
         // open the database many times a minute. Once a file has been brought
         // to the current version it is not set up again.
         let version = schema_version(&db)?;
-        if version != 0 && version != SCHEMA_VERSION {
+        if version != 0 && version != SCHEMA_VERSION && !UPGRADABLE.contains(&version) {
             return Err(format!(
                 "Unsupported database schema {version}; expected {SCHEMA_VERSION}"
             ));
@@ -80,7 +83,7 @@ impl Database {
         {
             return Err("Unversioned task databases are no longer supported".into());
         }
-        if memory || version == 0 {
+        if memory || version != SCHEMA_VERSION {
             Self::set_up(&db, path, memory)?;
         }
         Ok(Self(db))
@@ -100,14 +103,13 @@ impl Database {
             CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_records (id TEXT PRIMARY KEY, event TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
             CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT);
+            CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT);
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
         crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
+        Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
 
         if !memory {
@@ -134,16 +136,53 @@ impl Database {
         Ok(())
     }
 
+    /// Schema 4: writes go to Google as they are made instead of through a
+    /// durable queue. The queue's tables go, and an item marked as sending
+    /// gets `google_entities.sending_since`. Edits still waiting in the old
+    /// queue are dropped with it, so those items show what Google has.
+    fn remove_write_queue(tx: &Connection) -> rusqlite::Result<()> {
+        let has_column = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('google_entities') WHERE name='sending_since')",
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+        if !has_column {
+            tx.execute_batch("ALTER TABLE google_entities ADD COLUMN sending_since TEXT;")?;
+        }
+        let had_queue = tx
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='google_operations'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if had_queue {
+            tx.execute_batch(
+                "DELETE FROM google_entities WHERE id IN (SELECT entity FROM google_operations);
+                 DELETE FROM google_entities WHERE acknowledged_at IS NULL AND sending_since IS NULL;
+                 DROP TRIGGER IF EXISTS timeslay_change_google_operations_insert;
+                 DROP TRIGGER IF EXISTS timeslay_change_google_operations_update;
+                 DROP TRIGGER IF EXISTS timeslay_change_google_operations_delete;
+                 DROP TABLE IF EXISTS google_operation_progress;
+                 DROP TABLE IF EXISTS google_operations;
+                 DELETE FROM timeslay_change_counters WHERE name='google.queue';",
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn connection(&mut self) -> &mut Connection {
         &mut self.0
     }
 
-    /// Queued metadata remains authoritative while Google refreshes in parallel.
+    /// Metadata on its way to Google remains authoritative while Google
+    /// refreshes in parallel.
     pub(crate) fn pending_task_data(&self, event: &Event) -> Result<Option<TaskData>, String> {
         let stable = event.details.task_data.as_ref().map(|data| data.id).or(
             crate::calendar::task_metadata::read(&event.details.description)?.map(|data| data.id),
         );
-        let json:Option<String>=self.0.query_row("SELECT e.event FROM google_entities e WHERE (json_extract(e.event,'$.id')=?1 OR json_extract(e.event,'$.details.task_data.id')=?2) AND EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=e.id AND o.dead_at IS NULL)",params![event.id,stable],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+        let json:Option<String>=self.0.query_row("SELECT e.event FROM google_entities e WHERE (json_extract(e.event,'$.id')=?1 OR json_extract(e.event,'$.details.task_data.id')=?2) AND e.sending_since IS NOT NULL",params![event.id,stable],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
         json.map(|json| {
             serde_json::from_str::<Event>(&json)
                 .map(|e| e.details.task_data)
@@ -160,20 +199,6 @@ impl Database {
 
     /// Allocate and record the mapping in one transaction. No ID escapes until commit.
     pub fn import(&mut self, event: &Event) -> Result<TaskData, String> {
-        if let Some(id) = crate::calendar::operations::operation_id() {
-            let json: Option<String> = self
-                .0
-                .query_row(
-                    "SELECT data FROM google_operation_progress WHERE operation_id=?1",
-                    [id],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?;
-            if let Some(json) = json {
-                return serde_json::from_str(&json).map_err(|e| e.to_string());
-            }
-        }
         if let Some(data) = &event.details.task_data {
             return Ok(data.clone());
         }
@@ -248,18 +273,21 @@ impl Database {
 
     /// Keep both old and new Google identifiers when a move changes the task ID.
     pub fn save(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
-        if let Some(id) = crate::calendar::operations::operation_id() {
+        // While a write is being sent, what it saves is what Google now
+        // holds. The tasks table keeps the user's wanted state, which a later
+        // edit may already have moved on from.
+        if crate::calendar::operations::replaying() {
             let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
             let tx = self
                 .0
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|e| e.to_string())?;
-            tx.execute("INSERT INTO google_operation_progress(operation_id,data) VALUES(?1,?2) ON CONFLICT(operation_id) DO UPDATE SET data=excluded.data",params![id,json]).map_err(|e|e.to_string())?;
-            if event.is_task() {
-                let local:Option<String>=tx.query_row("SELECT COALESCE(json_extract(payload,'$.TaskEdit.task.id'),json_extract(payload,'$.Status.task.id'),json_extract(payload,'$.CreateTask.task.id')) FROM google_operations WHERE id=?1",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
-                if let Some(local) = local {
-                    tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![ids::bare_task(&local),ids::bare_task(&event.id),event.calendar_id]).map_err(|e|e.to_string())?;
-                }
+            tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",params![data.id,json]).map_err(|e|e.to_string())?;
+            if event.is_task()
+                && let Some(local) = crate::calendar::operations::sending_task()
+                && ids::bare_task(&local) != ids::bare_task(&event.id)
+            {
+                tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![ids::bare_task(&local),ids::bare_task(&event.id),event.calendar_id]).map_err(|e|e.to_string())?;
             }
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(());
@@ -396,6 +424,50 @@ mod tests {
         );
         remove_document(&path, "a").unwrap();
         assert_eq!(read_document::<String>(&path, "a").unwrap(), None);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn upgrading_drops_the_old_write_queue_and_its_unsent_edits() {
+        let path = path("queue-upgrade");
+        Database::open(&path).unwrap();
+        {
+            // Put the file back as schema 3 left it: a queue holding one
+            // unsent edit, and an edit Google had already confirmed.
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
+                 CREATE TABLE google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
+                 CREATE TRIGGER timeslay_change_google_operations_insert AFTER INSERT ON google_operations BEGIN SELECT 1; END;
+                 INSERT INTO google_operations(kind,payload,entity,created_at) VALUES('Edit event','{}','cal
+unsent','now');
+                 INSERT INTO google_entities(id,event,acknowledged_at) VALUES('cal
+unsent','{}',NULL);
+                 INSERT INTO google_entities(id,event,acknowledged_at) VALUES('cal
+confirmed','{}','2026-01-01T00:00:00+00:00');
+                 ALTER TABLE google_entities DROP COLUMN sending_since;
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        }
+        let mut db = Database::open(&path).unwrap();
+        let connection = db.connection();
+        assert_eq!(schema_version(connection).unwrap(), SCHEMA_VERSION);
+        let tables: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name LIKE 'google_operation%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        let kept: Vec<String> = connection
+            .prepare("SELECT id FROM google_entities WHERE sending_since IS NULL")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kept, ["cal\nconfirmed"]);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
     #[cfg(unix)]

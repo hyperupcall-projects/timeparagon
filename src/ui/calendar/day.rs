@@ -113,7 +113,8 @@ pub(super) fn day_canvas<'a>(
                 editable: !hidden
                     && event.details.sleep.is_none()
                     && (!event.is_task() || event.is_calendar_task()),
-                pending: state.calendar.pending_time(&event.id).is_some()
+                pending: event.details.sending
+                    || state.calendar.pending_time(&event.id).is_some()
                     || state.timeblocking.busy.contains_task(&event.id),
                 time_block,
                 habit: (event.details.habit && !hidden)

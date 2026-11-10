@@ -15,8 +15,9 @@ pub(super) struct Block {
     pub(super) color: Color,
     /// Timed task blocks and calendar events can both be dragged.
     pub(super) editable: bool,
-    /// Whether a time change for this event is still being written to Google.
-    /// The block is drawn lighter until the write is confirmed.
+    /// Whether a change to this event is still being written to Google.
+    /// The block is drawn lighter, and cannot be opened, dragged or ticked
+    /// off, until the write is confirmed.
     pub(super) pending: bool,
     pub(super) tasks: Vec<(String, String, u32)>,
     pub(super) time_block: bool,
@@ -381,6 +382,13 @@ impl canvas::Program<Message> for DayCanvas {
                         )))
                         .and_capture(),
                     );
+                }
+
+                // A block whose change is still on its way to Google is locked.
+                if let Some(index) = self.hit(Some(point), bounds.width)
+                    && self.blocks.get(index).is_some_and(|block| block.pending)
+                {
+                    return Some(canvas::Action::capture());
                 }
 
                 for block in &self.blocks {

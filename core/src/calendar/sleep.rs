@@ -336,7 +336,7 @@ fn reconcile_with(
 
 /// Save user-entered times and confidence flags as a recorded night. Recorded
 /// nights are preserved during subsequent schedule/goal changes.
-/// Saves a night locally and queues it for Google.
+/// Saves a night locally and sends it to Google.
 pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<Event, String> {
     if event.end <= event.start {
         return Err("Wake-up time must be after sleep start".into());
@@ -355,7 +355,7 @@ pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<
                 .wake_date,
         );
     }
-    super::operations::enqueue(
+    super::operations::submit(
         super::operations::Job::Sleep {
             event: event.clone(),
             new,
@@ -367,7 +367,7 @@ pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<
     Ok(event)
 }
 
-/// Sends a night queued by [`save`] to Google. Only the queue calls this.
+/// Sends a night saved by [`save`] to Google. Only `operations` calls this.
 pub(crate) fn send(
     client: &super::GoogleClient,
     mut event: Event,

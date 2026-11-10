@@ -196,7 +196,7 @@ pub fn quick_task(text: &str, today: NaiveDate, projects: &ProjectsSettings) -> 
 ///
 /// Blocking: callers run this on a worker thread.
 pub fn create_task(
-    task: QuickTask,
+    mut task: QuickTask,
     day: Option<NaiveDate>,
     settings: &CalendarSettings,
 ) -> Result<Event, String> {
@@ -210,18 +210,15 @@ pub fn create_task(
             task_edit::MAX_TITLE_CHARS
         ));
     }
-    let notes = match task.deadline {
-        Some(day) => {
-            calendar::deadline::write("", Some(calendar::deadline::parse_input(&day.to_string())?))
-        }
-        None => String::new(),
-    };
+    task.metadata.deadline = task
+        .deadline
+        .map(|date| calendar::deadline::Deadline { date, time: None });
     let token = task_edit::google_access(settings)?;
     task_edit::create_inbox_task(
         settings,
         &token,
         title,
-        &notes,
+        "",
         task.due.or(day),
         Some(task.metadata),
     )
@@ -1147,11 +1144,10 @@ pub struct TaskFields {
 
 impl TaskFields {
     pub fn new(task: &Event) -> Self {
-        let deadline = calendar::deadline::input_text(&task.details.description);
+        let deadline = calendar::deadline::input_text(task);
         Self {
             title: task.title.clone(),
-            description: calendar::notes::Notes::new(&tb::description(&task.details.description))
-                .without(&["DUE:", "DEADLINE:"]),
+            description: task.details.description.clone(),
             estimate: tb::metadata(task).minutes.to_string(),
             date: if task.start.date_naive() == tb::UNDATED {
                 String::new()
@@ -1710,7 +1706,18 @@ mod tests {
         let mut late = task("d", "Late", None, 4, 30, false);
         late.start = at(0, 0) - Duration::days(400);
         late.end = late.start + Duration::days(1);
-        late.details.description = format!("DUE: {}", late.start.date_naive());
+        late.details.description = "".into();
+        late.details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline = Some(
+            timeslay_core::calendar::deadline::parse_input(&format!("{}", late.start.date_naive()))
+                .unwrap(),
+        );
         let model = build_model(&snapshot(vec![late]), &settings());
         assert!(model.task_groups[0].tasks[0].overdue);
         assert!(!model.task_groups[0].tasks[0].inbox);
@@ -1733,7 +1740,18 @@ mod tests {
         let mut late = task("d", "Late", None, 4, 30, false);
         late.start = at(0, 0) - Duration::days(400);
         late.end = late.start + Duration::days(1);
-        late.details.description = format!("DUE: {}", late.start.date_naive());
+        late.details.description = "".into();
+        late.details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline = Some(
+            timeslay_core::calendar::deadline::parse_input(&format!("{}", late.start.date_naive()))
+                .unwrap(),
+        );
         let snapshot = snapshot(vec![block, slotted, unslotted, finished, late]);
 
         let summary = build_model(&snapshot, &settings()).summary;
@@ -1754,7 +1772,21 @@ mod tests {
         open.end = open.start + Duration::days(1);
         let mut late = open.clone();
         late.id = "task:late".into();
-        late.details.description = format!("DEADLINE: {} 00:00", today.pred_opt().unwrap());
+        late.details.description = "".into();
+        late.details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline = Some(
+            timeslay_core::calendar::deadline::parse_input(&format!(
+                "{} 00:00",
+                today.pred_opt().unwrap()
+            ))
+            .unwrap(),
+        );
         let mut finished = open.clone();
         finished.id = "task:finished".into();
         finished.completed = true;
@@ -2029,7 +2061,17 @@ mod tests {
         timed.all_day = false;
         timed.start = at(9, 0);
         timed.end = at(9, 45);
-        timed.details.description = "Notes\nDEADLINE: 2026-11-05 17:30".to_owned();
+        timed.details.description = "Notes".into();
+        timed
+            .details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline =
+            Some(timeslay_core::calendar::deadline::parse_input("2026-11-05 17:30").unwrap());
         let mut fields = TaskFields::new(&timed);
         assert_eq!(fields.description, "Notes");
         assert_eq!(fields.estimate, "45");

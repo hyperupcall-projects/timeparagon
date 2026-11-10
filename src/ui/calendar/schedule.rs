@@ -85,7 +85,7 @@ pub fn schedule_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
                     .align_y(Alignment::Center)
                     .into()
             };
-            rows = rows.push(
+            rows = rows.push(crate::ui::controls::locked(
                 button(content)
                     .padding([9, 12])
                     .width(Fill)
@@ -94,7 +94,8 @@ pub fn schedule_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
                         day,
                         Box::new(Message::Event(EventMessage::EventOpened(event.id.clone()))),
                     ))),
-            );
+                event.details.sending,
+            ));
         }
         if day == today && !needle {
             rows = rows.push(rule::horizontal(1).style(|theme: &Theme| rule::Style {

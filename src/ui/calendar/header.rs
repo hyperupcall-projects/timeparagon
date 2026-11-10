@@ -306,7 +306,7 @@ pub(crate) fn weekly_task_chip<'a>(
         .width(Fill)
         .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
         .style(crate::ui::controls::ghost);
-    super::super::task_drag::task_drag(
+    let chip = super::super::task_drag::task_drag(
         container(row![check, title].spacing(2).align_y(Alignment::Center))
             .width(Fill)
             .style(|theme: &Theme| container::Style {
@@ -320,7 +320,8 @@ pub(crate) fn weekly_task_chip<'a>(
             }),
         &task.id,
         state.timeblocking.dragging.as_deref(),
-    )
+    );
+    crate::ui::controls::locked(chip, task.details.sending)
 }
 
 pub(super) fn all_day_chip<'a>(
@@ -345,12 +346,14 @@ pub(super) fn all_day_chip<'a>(
     };
 
     let id = event.id.clone();
-    button(event_label(state, event, title, metrics.label()))
-        .padding([4.0, 8.0])
-        .width(Fill)
-        .on_press(Message::Event(EventMessage::EventOpened(id)))
-        .style(move |_theme, status| event_chip_style(color, ink, status))
-        .into()
+    crate::ui::controls::locked(
+        button(event_label(state, event, title, metrics.label()))
+            .padding([4.0, 8.0])
+            .width(Fill)
+            .on_press(Message::Event(EventMessage::EventOpened(id)))
+            .style(move |_theme, status| event_chip_style(color, ink, status)),
+        event.details.sending,
+    )
 }
 
 pub(super) fn event_chip_style(color: Color, ink: Color, status: button::Status) -> button::Style {

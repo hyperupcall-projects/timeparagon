@@ -1,5 +1,6 @@
 //! Task editing shared by both apps. Dated tasks are native Calendar events;
-//! undated tasks live in Google Tasks. All changes use the durable offline queue.
+//! undated tasks live in Google Tasks. Every change is shown locally at once
+//! and sent to Google straight away (see `calendar::operations`).
 
 use crate::calendar::google::GoogleError;
 use crate::calendar::ids;

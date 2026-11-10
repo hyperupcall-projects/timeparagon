@@ -265,7 +265,7 @@ fn schedule_grid(
                             {
                                 let opened = event.clone();
                                 rsx! {
-                                    button { class: "all-day-chip", style: "background:{crate::css_color(event.display_color(settings))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings)))};",
+                                    button { class: "all-day-chip", "data-sending": event.details.sending, style: "background:{crate::css_color(event.display_color(settings))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings)))};",
                                         onclick: move |_| on_open.call(opened.clone()), "{event.title}"
                                     }
                                 }
@@ -296,7 +296,7 @@ fn schedule_grid(
                                     let mut shown = timed.clone();
                                     shown.time_block = count == 1 && is_block;
                                     rsx! {
-                                        button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" },
+                                        button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" }, "data-sending": timed.event.details.sending,
                                             style: "{crate::event_style(&shown)}",
                                             title: "{timed.title}\n{crate::event_when(&timed.event, time_format)}",
                                             onclick: move |_| { if is_block { on_block.call(opened.clone()); } else { on_open.call(opened.clone()); } },
@@ -637,7 +637,7 @@ fn schedule_list(
                                         let past = !event.all_day && event.end <= now;
                                         let time = calendar::schedule::time_label(&event, format);
                                         rsx! {
-                                            div { key: "{event.id}", class: "schedule-entry",
+                                            div { key: "{event.id}", class: "schedule-entry", "data-sending": event.details.sending,
                                             if needle == Some(index) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
                                             button {
                                                 class: if past { "schedule-row past" } else { "schedule-row" },

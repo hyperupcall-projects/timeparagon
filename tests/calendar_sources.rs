@@ -245,8 +245,8 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
     let mut state = state();
     let base = state.calendar.events[0].clone();
     for (id, list, notes) in [
-        ("due-time", "tasks:one", "DEADLINE: 2026-10-30 17:00\nNotes"),
-        ("day-only", "tasks:two", "DUE: 2026-10-30\nNotes"),
+        ("due-time", "tasks:one", "2026-10-30 17:00"),
+        ("day-only", "tasks:two", "2026-10-30"),
     ] {
         let mut task = Event {
             id: format!("task:{id}"),
@@ -254,7 +254,14 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
             title: id.into(),
             ..base.clone()
         };
-        task.details.description = notes.into();
+        task.details.description = "Notes".into();
+        task.details.task_data = Some(timeslay_core::task_db::TaskData {
+            id: 100,
+            metadata: timeslay_core::timeblocking::Metadata {
+                deadline: Some(deadline::parse_input(notes).unwrap()),
+                ..Default::default()
+            },
+        });
         state.calendar.events.push(task);
     }
     // Give the first task a real Calendar-backed time; a task is on the grid
@@ -285,11 +292,7 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
     let original = tasks(&state);
     assert_eq!(original.len(), 2);
     assert!(!original[0].all_day);
-    assert!(
-        deadline::read_deadline(&original[0].details.description)
-            .unwrap()
-            .is_some()
-    );
+    assert!(deadline::get(&original[0]).is_some());
     let _ = app::update(
         &mut state,
         Message::Settings(SettingsMessage::ShowTasksToggled(false)),

@@ -366,13 +366,13 @@ pub fn is_backlog_list(state: &State, calendar_id: &str) -> bool {
         })
 }
 
-/// When a task is due: its notes deadline if it has one, otherwise the
+/// When a task is due: its metadata deadline if it has one, otherwise the
 /// Google Tasks due day. `None` for a task with neither.
 pub fn due(event: &Event) -> Option<calendar::deadline::Deadline> {
     if let Some(inherited) = metadata(event).inherited {
         return inherited.fields.due;
     }
-    if let Ok(Some(deadline)) = calendar::deadline::read_deadline(&event.details.description) {
+    if let Some(deadline) = calendar::deadline::get(event) {
         return Some(deadline);
     }
     let date = event.start.date_naive();
@@ -2130,15 +2130,24 @@ mod tests {
     }
 
     #[test]
-    fn overdue_uses_the_description_deadline_independently_of_scheduling() {
+    fn overdue_uses_metadata_deadline_independently_of_scheduling() {
         let mut task = calendar::sample_snapshot().events.remove(0);
         task.id = "task:deadline".into();
         task.calendar_id = "tasks:list".into();
         task.start = crate::clock::now() + chrono::Duration::days(5);
         let yesterday = (crate::clock::now() - chrono::Duration::days(1)).date_naive();
-        task.details.description = format!("DUE: {yesterday}\nNotes");
+        task.details.description = "Notes".into();
+        task.details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline =
+            Some(timeslay_core::calendar::deadline::parse_input(&format!("{yesterday}")).unwrap());
         assert!(overdue(&task));
-        task.details.description.clear();
+        task.details.task_data.as_mut().unwrap().metadata.deadline = None;
         task.start = crate::clock::now() - chrono::Duration::days(5);
         assert!(!overdue(&task));
     }

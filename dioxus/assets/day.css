@@ -3163,3 +3163,10 @@ textarea {
         padding: 12px;
     }
 }
+
+/* A change on its way to Google: greyed out and locked until Google answers. */
+[data-sending="true"] {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+  pointer-events: none;
+}

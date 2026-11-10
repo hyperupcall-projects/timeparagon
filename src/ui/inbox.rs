@@ -222,9 +222,7 @@ fn task_card<'a>(
         let due = scheduled_label(task, state.config.appearance.time_format)
             .unwrap_or_else(|| "None".into());
         card = card.push(field_line("Due Date", text(due).size(size).into(), metrics));
-        if let Ok(Some(deadline)) =
-            crate::calendar::deadline::read_deadline(&task.details.description)
-        {
+        if let Some(deadline) = crate::calendar::deadline::get(task) {
             card = card.push(field_line(
                 "Deadline",
                 text(deadline.value()).size(size).into(),
@@ -270,7 +268,10 @@ fn task_card<'a>(
                 ..super::controls::row_surface(theme)
             }
         });
-    super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref())
+    super::controls::locked(
+        super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref()),
+        task.details.sending,
+    )
 }
 
 /// Every piece of metadata a task carries: the project, labels, priority,
@@ -409,9 +410,8 @@ fn metadata_rows<'a>(
         ));
     }
 
-    // The notes deadline.
-    if let Ok(Some(deadline)) = crate::calendar::deadline::read_deadline(&task.details.description)
-    {
+    // The structured deadline.
+    if let Some(deadline) = crate::calendar::deadline::get(task) {
         rows.push(field_line(
             "Deadline",
             text(deadline.value())
@@ -1139,11 +1139,29 @@ mod tests {
             state.screen = crate::app::Screen::Overdue;
             state.calendar.events[0].start =
                 calendar::at_clock(crate::clock::now().date_naive().pred_opt().unwrap(), 0, 0);
-            state.calendar.events[0].details.description =
-                format!("DUE: {}", state.calendar.events[0].start.date_naive());
+            state.calendar.events[0].details.description = "".into();
+            state.calendar.events[0]
+                .details
+                .task_data
+                .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                    id: 100,
+                    metadata: Default::default(),
+                })
+                .metadata
+                .deadline = Some(
+                timeslay_core::calendar::deadline::parse_input(&format!(
+                    "{}",
+                    state.calendar.events[0].start.date_naive()
+                ))
+                .unwrap(),
+            );
             state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
                 id: 100,
                 metadata: tb::Metadata {
+                    deadline: Some(calendar::deadline::Deadline {
+                        date: state.calendar.events[0].start.date_naive(),
+                        time: None,
+                    }),
                     minutes: 90,
                     ..Default::default()
                 },
@@ -1171,7 +1189,14 @@ mod tests {
 
     #[test]
     fn overdue_without_a_due_date_or_estimate_shows_deadline_and_missing_values() {
-        let mut state = state_with_task("DUE: 2020-01-02");
+        let mut state = state_with_task("");
+        state.calendar.events[0].details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            metadata: tb::Metadata {
+                deadline: Some(calendar::deadline::parse_input("2020-01-02").unwrap()),
+                ..Default::default()
+            },
+        });
         state.screen = crate::app::Screen::Overdue;
         let mut ui = simulator(&state, 320.0);
         for label in [
@@ -1536,7 +1561,7 @@ mod tests {
     #[test]
     fn a_task_from_gmail_is_marked_and_a_plain_one_is_not() {
         let link = "https://mail.google.com/mail/u/0/#inbox/FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW";
-        let state = state_with_task(&format!("DUE: 2026-11-03\n{link}"));
+        let state = state_with_task(link);
         let source = integrations::source_in(&state.calendar.events[0].details.description);
         assert_eq!(source.unwrap().url, link);
         // Drawing the row with the icon must not disturb the rest of it.

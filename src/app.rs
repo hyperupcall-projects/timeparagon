@@ -147,7 +147,6 @@ pub enum Screen {
     Notes,
     /// Contacts from every signed-in Google account, and their directories.
     People,
-    Operations,
     Settings,
 }
 
@@ -325,9 +324,6 @@ impl Flash {
 
 pub struct State {
     pub picker: Option<crate::ui::controls::Picker>,
-    /// Local edits still waiting for Google, as last read from the database.
-    /// Refreshed on a timer, so drawing never touches SQLite.
-    pub operations: Result<Vec<timeslay_core::calendar::operations::Operation>, String>,
     /// Background work under way, and the log of what it has done.
     pub activity: crate::activity::Activity,
     /// Local edits not yet sent by database sync, as last read.
@@ -612,11 +608,6 @@ pub enum SystemMessage {
     DatabaseSyncPolled,
     /// What that look found, read on a worker thread.
     DatabasePolled(Option<Box<crate::local_poll::Polled>>),
-    /// The Operations screen's buttons for a write Google refused for good.
-    OperationRetried(i64),
-    OperationDiscarded(i64),
-    /// A retry or discard finished.
-    OperationChanged(Result<(), String>),
     /// Time to show the next of several things under way.
     ActivityTick,
     AudioStatusPolled,
@@ -897,7 +888,6 @@ impl State {
 
         Self {
             picker: None,
-            operations: Ok(Vec::new()),
             activity: crate::activity::Activity::default(),
             database_unsent: 0,
             draft_kind_focus: None,
@@ -1047,36 +1037,15 @@ impl State {
         Self::new(Config::default(), Catalog::built_in())
     }
 
-    /// Rereads the queue of edits waiting for Google.
-    pub fn refresh_operations(&mut self) {
-        self.operations = timeslay_core::calendar::operations::list();
-        match &self.operations {
-            Ok(rows) => self.activity.observe_operations(rows),
-            Err(error) => self
-                .activity
-                .record(format!("Cannot read the Google queue: {error}"), true),
-        }
-    }
-
     /// Background work under way now, in the order it is rotated through.
     pub fn current_activities(&self) -> Vec<crate::activity::Current> {
         use crate::activity::{Current, Kind};
         let mut current = Vec::new();
-        // Writes Google refused for good no longer hold up the queue; they
-        // are logged and listed under Operations instead.
-        let pending: Vec<_> = match &self.operations {
-            Ok(rows) => rows.iter().filter(|row| row.pending()).collect(),
-            Err(_) => Vec::new(),
-        };
-        if !pending.is_empty() {
-            let label = if pending.iter().any(|row| row.error.is_some()) {
-                format!("Retrying save to cloud ({})", pending.len())
-            } else {
-                format!("Saving to cloud ({})", pending.len())
-            };
+        let sending = timeslay_core::calendar::operations::sending();
+        if sending > 0 {
             current.push(Current {
                 kind: Kind::SavingToCloud,
-                label,
+                label: format!("Saving to cloud ({sending})"),
             });
         }
         if self.calendar_loading() {
@@ -1321,10 +1290,6 @@ fn boot_state() -> State {
 
     // Start sync only for the running app; hand-built test states stay offline.
     crate::database_sync::start();
-    // Uploads edits that were saved locally but not yet accepted by Google,
-    // including ones left over from a previous run.
-    timeslay_core::calendar::operations::start();
-    state.refresh_operations();
 
     // Days are kept under the XDG cache directory as well as in memory, so a
     // restart opens on what the last run saw rather than an empty grid. This

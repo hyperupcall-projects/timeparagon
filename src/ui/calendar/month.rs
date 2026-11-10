@@ -103,7 +103,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 } else {
                     event.display_color(&state.config.calendar)
                 };
-                events = events.push(
+                events = events.push(crate::ui::controls::locked(
                     button(event_label(state, event, label, cell_metrics.label()))
                         .width(Fill)
                         .padding([3, 4])
@@ -117,7 +117,8 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                             };
                             style
                         }),
-                );
+                    event.details.sending,
+                ));
             }
             if state.habits.calendar_habit.is_some()
                 && !state

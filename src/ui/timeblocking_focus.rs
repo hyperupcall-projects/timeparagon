@@ -261,12 +261,9 @@ fn task_list<'a>(
     let current = tb::current_task(state, block).map(|task| task.id.as_str());
     let mut lines = column![].spacing(2);
     for task in tasks {
-        lines = lines.push(task_line(
-            state,
-            task,
-            now,
-            current == Some(task.id.as_str()),
-            narrow,
+        lines = lines.push(crate::ui::controls::locked(
+            task_line(state, task, now, current == Some(task.id.as_str()), narrow),
+            task.details.sending,
         ));
     }
     let mut card = column![].spacing(2);
@@ -764,7 +761,10 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
                 Space::new().height(Length::Fixed(offset)),
                 row![
                     Space::new().width(gutter),
-                    timeline_card(state, task, (seconds * scale - 2.0).max(1.0)),
+                    crate::ui::controls::locked(
+                        timeline_card(state, task, (seconds * scale - 2.0).max(1.0)),
+                        task.details.sending,
+                    ),
                     Space::new().width(8.0 + lane)
                 ]
             ]

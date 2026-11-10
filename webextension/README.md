@@ -28,7 +28,7 @@ debug trace if anything fails.
 | Title | The task's title (the page title is prefilled; a Gmail link's subject replaces a blank or bare-link title) |
 | Description | The task's notes, with the page's URL appended |
 | Due date | Google Tasks' `due` day |
-| Deadline | A `DEADLINE:`/`DUE:` line in the notes (Google Tasks has no deadline field); day only, or day and time |
+| Deadline | Structured task metadata; day only, or day and time |
 
 ## 1. Build TimeSlay
 
