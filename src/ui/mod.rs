@@ -346,7 +346,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                         .width(Fill)
                         .height(PANEL_ACTION_HEIGHT)
                         .padding(0)
-                        .style(crate::ui::controls::secondary)
+                        .style(crate::ui::controls::square)
                         .on_press(Message::Inbox(crate::inbox::Action::NewTask)),
                     text("Create new item").size(12),
                     tooltip::Position::Top,
@@ -361,7 +361,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             base = base.push(
                 container(
                     row![activity_button(state), add]
-                        .spacing(4)
+                        .spacing(0)
                         .align_y(Alignment::Center),
                 )
                 .id("panel-footer")
@@ -1051,7 +1051,7 @@ fn activity_button<'a>(state: &State) -> Element<'a, Message> {
         .width(Fill)
         .height(PANEL_ACTION_HEIGHT)
         .padding([0, 6])
-        .style(crate::ui::controls::ghost)
+        .style(crate::ui::controls::square)
         .on_press(Message::Navigation(NavigationMessage::ActivityLogToggled)),
     )
     .id("activity-status")
@@ -1101,26 +1101,27 @@ fn activity_log<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
     }
 
     let panel = column![
-        text("Logs").size(metrics.label() + 2.0),
+        text("Logs").size(metrics.label() + 2.0).font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        }),
         container(crate::ui::controls::scrollable(entries).width(Fill))
             .max_height((metrics.size.height * 0.6).max(120.0)),
     ]
     .spacing(8.0)
     .width(Fill);
 
-    let width = (metrics.size.width - metrics.padding * 2.0).clamp(160.0, 360.0);
     let card = container(panel)
         .id("activity-log")
-        .width(Length::Fixed(width))
+        .width(Fill)
         .padding(10.0)
         .style(crate::ui::controls::surface);
 
     let aligned = column![
         Space::new().height(Fill),
-        container(row![iced::widget::opaque(card), Space::new().width(Fill)])
+        container(iced::widget::opaque(card))
             .padding(Padding {
-                left: metrics.padding,
-                bottom: PANEL_ACTION_HEIGHT + metrics.spacing,
+                bottom: PANEL_ACTION_HEIGHT,
                 ..Default::default()
             })
             .width(Fill),

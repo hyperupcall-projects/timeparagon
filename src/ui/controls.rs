@@ -768,6 +768,14 @@ pub fn secondary(t: &Theme, s: button::Status) -> button::Style {
     )
 }
 
+/// The secondary button with square corners, for buttons flush against the
+/// panel's edges.
+pub fn square(t: &Theme, s: button::Status) -> button::Style {
+    let mut style = secondary(t, s);
+    style.border.radius = 0.0.into();
+    style
+}
+
 /// A quiet primary tint that keeps the normal button's readable text and edge.
 pub fn subtle_primary(t: &Theme, s: button::Status) -> button::Style {
     let mut style = secondary(t, s);
