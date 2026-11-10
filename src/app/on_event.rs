@@ -225,18 +225,6 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                     // Events are edited in place in the details pane, so the
                     // draft opens with the card rather than behind an Edit
                     // button.
-                    state.timeblocking.child_due = draft
-                        .options
-                        .child_metadata
-                        .due
-                        .map(|d| d.value())
-                        .unwrap_or_default();
-                    state.timeblocking.child_deadline = draft
-                        .options
-                        .child_metadata
-                        .deadline
-                        .map(|d| d.value())
-                        .unwrap_or_default();
                     state.calendar.edit_draft = Some(draft);
                 }
                 if is_task {
