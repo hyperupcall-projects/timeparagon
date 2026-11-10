@@ -37,6 +37,17 @@ const NTH_LABELS: [(i8, &str); 6] = [
 
 const NO_PROJECT_COLOR: &str = "#9a9a9e";
 
+/// Shared visual grouping for every editor except sleep.
+#[component]
+fn FormSection(title: &'static str, children: Element) -> Element {
+    rsx! {
+        section { class: "editor-section", aria_label: title,
+            h3 { class: "editor-section-title", "{title}" }
+            {children}
+        }
+    }
+}
+
 /// Runs a blocking write off the UI thread.
 pub(crate) async fn worker<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -372,233 +383,239 @@ fn TaskEditor(
                     },
                 }
             }
-            Field { label: "Due Date",
-                input {
-                    class: "client-input",
-                    r#type: "date",
-                    disabled: is_busy,
-                    value: "{values.date}",
-                    oninput: move |event| fields.write().date = event.value(),
-                }
-                button {
-                    class: "btn primary editor-wide",
-                    disabled: is_busy,
-                    onclick: move |_| submit(fields.peek().day_change()),
-                    "Schedule Day"
-                }
-                div { class: "editor-row",
-                    button {
-                        class: "btn editor-grow",
+            FormSection { title: "Scheduling",
+                Field { label: "Due Date",
+                    input {
+                        class: "client-input",
+                        r#type: "date",
                         disabled: is_busy,
-                        onclick: move |_| editing_due_time.toggle(),
-                        "Schedule Time"
+                        value: "{values.date}",
+                        oninput: move |event| fields.write().date = event.value(),
                     }
                     button {
-                        class: "btn editor-grow",
+                        class: "btn primary editor-wide",
                         disabled: is_busy,
                         onclick: move |_| submit(fields.peek().day_change()),
-                        "Reset Time"
+                        "Schedule Day"
                     }
-                }
-                if editing_due_time() {
                     div { class: "editor-row",
-                        input {
-                            class: "client-input",
-                            r#type: "time",
-                            aria_label: "Start time",
+                        button {
+                            class: "btn editor-grow",
                             disabled: is_busy,
-                            value: "{values.start}",
-                            oninput: move |event| fields.write().start = event.value(),
+                            onclick: move |_| editing_due_time.toggle(),
+                            "Schedule Time"
                         }
-                        if metadata.minutes == 0 {
+                        button {
+                            class: "btn editor-grow",
+                            disabled: is_busy,
+                            onclick: move |_| submit(fields.peek().day_change()),
+                            "Reset Time"
+                        }
+                    }
+                    if editing_due_time() {
+                        div { class: "editor-row",
                             input {
                                 class: "client-input",
                                 r#type: "time",
-                                aria_label: "End time",
+                                aria_label: "Start time",
                                 disabled: is_busy,
-                                value: "{values.end}",
-                                oninput: move |event| fields.write().end = event.value(),
+                                value: "{values.start}",
+                                oninput: move |event| fields.write().start = event.value(),
+                            }
+                            if metadata.minutes == 0 {
+                                input {
+                                    class: "client-input",
+                                    r#type: "time",
+                                    aria_label: "End time",
+                                    disabled: is_busy,
+                                    value: "{values.end}",
+                                    oninput: move |event| fields.write().end = event.value(),
+                                }
                             }
                         }
-                    }
-                    if metadata.minutes > 0 {
-                        p { class: "hint", "Lasts {day::duration_label(metadata.minutes)}, its estimate." }
-                    }
-                    button {
-                        class: "btn primary editor-wide",
-                        disabled: is_busy,
-                        onclick: move |_| {
-                            let estimate = tb::metadata(&task.peek()).minutes;
-                            submit(fields.peek().time_change(estimate));
-                        },
-                        "Save time"
-                    }
-                }
-            }
-            if current.is_calendar_task() {
-                RepeatEditor {
-                    rule: task_rule(),
-                    anchor: current.start.date_naive(),
-                    first_day: context.settings.first_day_of_week,
-                    busy: is_busy || repeat_loading(),
-                    on_action: move |action| repeat.call(action),
-                }
-            }
-            Field { label: "Deadline",
-                input {
-                    class: "client-input",
-                    r#type: "date",
-                    disabled: is_busy,
-                    value: "{values.deadline}",
-                    oninput: move |event| fields.write().deadline = event.value(),
-                }
-                button {
-                    class: "btn primary editor-wide",
-                    disabled: is_busy,
-                    onclick: move |_| submit(fields.peek().deadline_change(false)),
-                    "Schedule Day"
-                }
-                div { class: "editor-row",
-                    button {
-                        class: "btn editor-grow",
-                        disabled: is_busy,
-                        onclick: move |_| editing_deadline_time.toggle(),
-                        "Schedule Time"
-                    }
-                    button {
-                        class: "btn editor-grow",
-                        disabled: is_busy,
-                        onclick: move |_| submit(fields.peek().deadline_change(false)),
-                        "Reset Time"
+                        if metadata.minutes > 0 {
+                            p { class: "hint", "Lasts {day::duration_label(metadata.minutes)}, its estimate." }
+                        }
+                        button {
+                            class: "btn primary editor-wide",
+                            disabled: is_busy,
+                            onclick: move |_| {
+                                let estimate = tb::metadata(&task.peek()).minutes;
+                                submit(fields.peek().time_change(estimate));
+                            },
+                            "Save time"
+                        }
                     }
                 }
-                if editing_deadline_time() {
+                if current.is_calendar_task() {
+                    RepeatEditor {
+                        rule: task_rule(),
+                        anchor: current.start.date_naive(),
+                        first_day: context.settings.first_day_of_week,
+                        busy: is_busy || repeat_loading(),
+                        on_action: move |action| repeat.call(action),
+                    }
+                }
+                Field { label: "Deadline",
                     input {
                         class: "client-input",
-                        r#type: "time",
-                        aria_label: "Deadline time",
+                        r#type: "date",
                         disabled: is_busy,
-                        value: "{values.deadline_time}",
-                        oninput: move |event| fields.write().deadline_time = event.value(),
+                        value: "{values.deadline}",
+                        oninput: move |event| fields.write().deadline = event.value(),
                     }
                     button {
                         class: "btn primary editor-wide",
                         disabled: is_busy,
-                        onclick: move |_| submit(fields.peek().deadline_change(true)),
-                        "Save time"
+                        onclick: move |_| submit(fields.peek().deadline_change(false)),
+                        "Schedule Day"
+                    }
+                    div { class: "editor-row",
+                        button {
+                            class: "btn editor-grow",
+                            disabled: is_busy,
+                            onclick: move |_| editing_deadline_time.toggle(),
+                            "Schedule Time"
+                        }
+                        button {
+                            class: "btn editor-grow",
+                            disabled: is_busy,
+                            onclick: move |_| submit(fields.peek().deadline_change(false)),
+                            "Reset Time"
+                        }
+                    }
+                    if editing_deadline_time() {
+                        input {
+                            class: "client-input",
+                            r#type: "time",
+                            aria_label: "Deadline time",
+                            disabled: is_busy,
+                            value: "{values.deadline_time}",
+                            oninput: move |event| fields.write().deadline_time = event.value(),
+                        }
+                        button {
+                            class: "btn primary editor-wide",
+                            disabled: is_busy,
+                            onclick: move |_| submit(fields.peek().deadline_change(true)),
+                            "Save time"
+                        }
                     }
                 }
             }
-            Field { label: "Description",
-                textarea {
-                    class: "client-input editor-notes",
-                    rows: "4",
-                    placeholder: "Add description…",
-                    disabled: is_busy,
-                    value: "{values.description}",
-                    oninput: move |event| fields.write().description = event.value(),
-                    onchange: move |_| {
-                        let value = fields.peek().description.clone();
-                        if value != TaskFields::new(&task.peek()).description {
-                            apply.call(Change::Description(value));
-                        }
-                    },
+            FormSection { title: "Information",
+                Field { label: "Description",
+                    textarea {
+                        class: "client-input editor-notes",
+                        rows: "4",
+                        placeholder: "Add description…",
+                        disabled: is_busy,
+                        value: "{values.description}",
+                        oninput: move |event| fields.write().description = event.value(),
+                        onchange: move |_| {
+                            let value = fields.peek().description.clone();
+                            if value != TaskFields::new(&task.peek()).description {
+                                apply.call(Change::Description(value));
+                            }
+                        },
+                    }
+                }
+                if let Some(target) = crate::notes::target_of(&event, &context.settings) {
+                    crate::notes::LinkedNotes { target }
                 }
             }
-            ProjectsField {
-                selected: projects,
-                projects: context.projects.clone(),
-                busy: is_busy,
-                on_add: move |id| {
-                    let mut ids = projects_to_add.clone();
-                    ids.push(id);
-                    ids.sort_unstable();
-                    apply.call(Change::Projects(ids));
-                },
-                on_remove: move |id| {
-                    let mut ids = projects_to_remove.clone();
-                    ids.retain(|existing| *existing != id);
-                    apply.call(Change::Projects(ids));
-                },
-            }
-            Field { label: "Estimate (minutes)",
-                input {
-                    class: "client-input",
-                    r#type: "number",
-                    inputmode: "numeric",
-                    min: "0",
-                    max: "10080",
-                    disabled: is_busy,
-                    value: "{values.estimate}",
-                    oninput: move |event| fields.write().estimate = event.value(),
-                    onchange: move |_| {
-                        match fields.peek().estimate_change() {
-                            Ok(minutes) if minutes != tb::metadata(&task.peek()).minutes => {
-                                apply.call(Change::Estimate(minutes));
-                            }
-                            Ok(_) => {}
+            FormSection { title: "Organization",
+                ProjectsField {
+                    selected: projects,
+                    projects: context.projects.clone(),
+                    busy: is_busy,
+                    on_add: move |id| {
+                        let mut ids = projects_to_add.clone();
+                        ids.push(id);
+                        ids.sort_unstable();
+                        apply.call(Change::Projects(ids));
+                    },
+                    on_remove: move |id| {
+                        let mut ids = projects_to_remove.clone();
+                        ids.retain(|existing| *existing != id);
+                        apply.call(Change::Projects(ids));
+                    },
+                }
+                LabelsField {
+                    labels: metadata.labels.clone(),
+                    events: context.events.clone(),
+                    busy: is_busy,
+                    on_add: move |label: String| {
+                        match day::with_label(&label_task, &label) {
+                            Ok(Some(labels)) => apply.call(Change::Labels(labels)),
+                            Ok(None) => {}
                             Err(message) => error.set(Some(message)),
                         }
                     },
+                    on_remove: move |label: String| {
+                        let mut labels = remove_labels.clone();
+                        labels.retain(|existing| !existing.eq_ignore_ascii_case(&label));
+                        apply.call(Change::Labels(labels));
+                    },
                 }
-            }
-            LabelsField {
-                labels: metadata.labels.clone(),
-                events: context.events.clone(),
-                busy: is_busy,
-                on_add: move |label: String| {
-                    match day::with_label(&label_task, &label) {
-                        Ok(Some(labels)) => apply.call(Change::Labels(labels)),
-                        Ok(None) => {}
-                        Err(message) => error.set(Some(message)),
-                    }
-                },
-                on_remove: move |label: String| {
-                    let mut labels = remove_labels.clone();
-                    labels.retain(|existing| !existing.eq_ignore_ascii_case(&label));
-                    apply.call(Change::Labels(labels));
-                },
-            }
-            Field { label: "Priority",
-                div { class: "editor-row",
-                    {
-                        std::iter::once((None, "None"))
-                            .chain(tb::Priority::ALL.into_iter().map(|priority| (Some(priority), priority.label())))
-                            .map(|(priority, label)| {
-                                let selected = priority == metadata.priority;
-                                rsx! {
-                                    button {
-                                        key: "{label}",
-                                        class: if selected { "btn primary editor-grow" } else { "btn editor-grow" },
-                                        aria_pressed: selected.to_string(),
-                                        disabled: is_busy,
-                                        onclick: move |_| {
-                                            if !selected {
-                                                apply.call(Change::Priority(priority));
-                                            }
-                                        },
-                                        "{label}"
-                                    }
+                LocationField {
+                    current: place,
+                    text: String::new(),
+                    places: context.places.clone(),
+                    busy: is_busy,
+                    on_error: move |message| error.set(Some(message)),
+                    on_pick: move |place: Option<Place>| {
+                        if let Some(config) = place.as_ref().map(|_| day::load_config()) {
+                            on_config.call(config);
+                        }
+                        apply.call(Change::Location(place.map(|place| place.id)));
+                    },
+                }
+                Field { label: "Estimate (minutes)",
+                    input {
+                        class: "client-input",
+                        r#type: "number",
+                        inputmode: "numeric",
+                        min: "0",
+                        max: "10080",
+                        disabled: is_busy,
+                        value: "{values.estimate}",
+                        oninput: move |event| fields.write().estimate = event.value(),
+                        onchange: move |_| {
+                            match fields.peek().estimate_change() {
+                                Ok(minutes) if minutes != tb::metadata(&task.peek()).minutes => {
+                                    apply.call(Change::Estimate(minutes));
                                 }
-                            })
+                                Ok(_) => {}
+                                Err(message) => error.set(Some(message)),
+                            }
+                        },
                     }
                 }
-            }
-            LocationField {
-                current: place,
-                text: String::new(),
-                places: context.places.clone(),
-                busy: is_busy,
-                on_error: move |message| error.set(Some(message)),
-                on_pick: move |place: Option<Place>| {
-                    if let Some(config) = place.as_ref().map(|_| day::load_config()) {
-                        on_config.call(config);
+                Field { label: "Priority",
+                    div { class: "editor-row",
+                        {
+                            std::iter::once((None, "None"))
+                                .chain(tb::Priority::ALL.into_iter().map(|priority| (Some(priority), priority.label())))
+                                .map(|(priority, label)| {
+                                    let selected = priority == metadata.priority;
+                                    rsx! {
+                                        button {
+                                            key: "{label}",
+                                            class: if selected { "btn primary editor-grow" } else { "btn editor-grow" },
+                                            aria_pressed: selected.to_string(),
+                                            disabled: is_busy,
+                                            onclick: move |_| {
+                                                if !selected {
+                                                    apply.call(Change::Priority(priority));
+                                                }
+                                            },
+                                            "{label}"
+                                        }
+                                    }
+                                })
+                        }
                     }
-                    apply.call(Change::Location(place.map(|place| place.id)));
-                },
-            }
-            if let Some(target) = crate::notes::target_of(&event, &context.settings) {
-                crate::notes::LinkedNotes { target }
+                }
             }
             div { class: "editor-actions",
                 if untriaged {
@@ -1068,147 +1085,163 @@ fn EventEditor(
                     oninput: move |event| draft.write().title = event.value(),
                 }
             }
-            Field { label: if habit { "Start day" } else { "Start Time" },
-                div { class: "editor-row",
-                    input {
-                        class: "client-input",
-                        r#type: "date",
-                        aria_label: "Start date",
-                        disabled: is_busy,
-                        value: "{values.date_text}",
-                        oninput: move |event| set_start_date(&mut draft.write(), event.value(), habit),
-                    }
-                    input {
-                        class: "client-input",
-                        r#type: "time",
-                        aria_label: "Start time",
-                        disabled: is_busy,
-                        value: "{values.start_text}",
-                        oninput: move |event| set_start_time(&mut draft.write(), event.value(), habit),
-                    }
-                }
-            }
-            if !habit {
-                Field { label: "End Time",
+            FormSection { title: "Scheduling",
+                Field { label: if habit { "Start day" } else { "Start Time" },
                     div { class: "editor-row",
                         input {
                             class: "client-input",
                             r#type: "date",
-                            aria_label: "End date",
+                            aria_label: "Start date",
                             disabled: is_busy,
-                            value: "{values.end_date_text}",
-                            oninput: move |event| draft.write().set_end_date_text(event.value()),
+                            value: "{values.date_text}",
+                            oninput: move |event| set_start_date(&mut draft.write(), event.value(), habit),
                         }
                         input {
                             class: "client-input",
                             r#type: "time",
-                            aria_label: "End time",
+                            aria_label: "Start time",
                             disabled: is_busy,
-                            value: "{values.end_text}",
-                            oninput: move |event| {
-                                let mut draft = draft.write();
-                                draft.set_end_text(event.value());
-                                draft.all_day = false;
-                            },
+                            value: "{values.start_text}",
+                            oninput: move |event| set_start_time(&mut draft.write(), event.value(), habit),
                         }
                     }
                 }
-            }
-            RepeatEditor {
-                rule: values.rule.clone(),
-                anchor,
-                first_day: context.settings.first_day_of_week,
-                busy: is_busy,
-                on_action: move |action: recurrence::Action| {
-                    let mut draft = draft.write();
-                    draft.recurrence_changed = true;
-                    let anchor = draft.start.date_naive();
-                    draft.rule.apply_action(action, anchor);
-                },
-            }
-            Field { label: "Description",
-                textarea {
-                    class: "client-input editor-notes",
-                    rows: "4",
-                    placeholder: "Add description…",
-                    disabled: is_busy,
-                    value: "{values.description}",
-                    oninput: move |event| draft.write().description = event.value(),
-                }
-            }
-            if habit && !new {
-                Field { label: "Completion",
-                    button {
-                        class: if completed { "btn editor-wide" } else { "btn primary editor-wide" },
-                        disabled: completing(),
-                        onclick: move |_| toggle_completed.call(()),
-                        if completing() {
-                            "Saving…"
-                        } else if completed {
-                            "Mark as not done"
-                        } else {
-                            "Mark as done"
+                if !habit {
+                    Field { label: "End Time",
+                        div { class: "editor-row",
+                            input {
+                                class: "client-input",
+                                r#type: "date",
+                                aria_label: "End date",
+                                disabled: is_busy,
+                                value: "{values.end_date_text}",
+                                oninput: move |event| draft.write().set_end_date_text(event.value()),
+                            }
+                            input {
+                                class: "client-input",
+                                r#type: "time",
+                                aria_label: "End time",
+                                disabled: is_busy,
+                                value: "{values.end_text}",
+                                oninput: move |event| {
+                                    let mut draft = draft.write();
+                                    draft.set_end_text(event.value());
+                                    draft.all_day = false;
+                                },
+                            }
                         }
                     }
                 }
-            }
-            ProjectsField {
-                selected: values.projects.ids.clone(),
-                projects: context.projects.clone(),
-                busy: is_busy,
-                on_add: move |id| draft.write().projects.update(calendar::projects::Action::Add(id)),
-                on_remove: move |id| draft.write().projects.update(calendar::projects::Action::Remove(id)),
-            }
-            if !habit {
-                LabelsField {
-                    labels: values.labels.clone(),
-                    events: context.events.clone(),
+                RepeatEditor {
+                    rule: values.rule.clone(),
+                    anchor,
+                    first_day: context.settings.first_day_of_week,
                     busy: is_busy,
-                    on_add: move |label: String| {
-                        let label = label.trim().trim_start_matches('#').to_owned();
+                    on_action: move |action: recurrence::Action| {
                         let mut draft = draft.write();
-                        if !label.is_empty() && !draft.labels.contains(&label) {
-                            draft.labels.push(label);
-                        }
+                        draft.recurrence_changed = true;
+                        let anchor = draft.start.date_naive();
+                        draft.rule.apply_action(action, anchor);
                     },
-                    on_remove: move |label: String| draft.write().labels.retain(|existing| existing != &label),
                 }
-            }
-            if !new {
-                LocationField {
-                    current: place,
-                    text: location_text,
-                    places: context.places.clone(),
+                NotificationsEditor {
+                    options: values.options.clone(),
                     busy: is_busy,
-                    on_error: move |message| error.set(Some(message)),
-                    on_pick: move |place| set_place.call(place),
+                    on_action: move |action| draft.write().options.update(action),
                 }
             }
-            OptionsEditor {
-                options: values.options.clone(),
-                busy: is_busy,
-                on_action: move |action| draft.write().options.update(action),
-            }
-            if !new {
-                MeetingActions {
-                    event: source_event.clone(),
-                    settings: context.settings.clone(),
-                    on_saved,
+            FormSection { title: "Information",
+                Field { label: "Description",
+                    textarea {
+                        class: "client-input editor-notes",
+                        rows: "4",
+                        placeholder: "Add description…",
+                        disabled: is_busy,
+                        value: "{values.description}",
+                        oninput: move |event| draft.write().description = event.value(),
+                    }
                 }
-            }
-            if let Some(target) = crate::notes::target_of(&source_event, &context.settings) {
-                crate::notes::LinkedNotes { target }
-            }
-            if !organizer.is_empty() {
-                Field { label: "Organizer", p { class: "editor-value", "{organizer}" } }
-            }
-            if !attendees.is_empty() {
-                Field { label: "Guests",
-                    for guest in attendees {
-                        p { key: "{guest}", class: "editor-value", "{guest}" }
+                if let Some(target) = crate::notes::target_of(&source_event, &context.settings) {
+                    crate::notes::LinkedNotes { target }
+                }
+                if habit && !new {
+                    Field { label: "Completion",
+                        button {
+                            class: if completed { "btn editor-wide" } else { "btn primary editor-wide" },
+                            disabled: completing(),
+                            onclick: move |_| toggle_completed.call(()),
+                            if completing() {
+                                "Saving…"
+                            } else if completed {
+                                "Mark as not done"
+                            } else {
+                                "Mark as done"
+                            }
+                        }
                     }
                 }
             }
+            FormSection { title: "Organization",
+                ProjectsField {
+                    selected: values.projects.ids.clone(),
+                    projects: context.projects.clone(),
+                    busy: is_busy,
+                    on_add: move |id| draft.write().projects.update(calendar::projects::Action::Add(id)),
+                    on_remove: move |id| draft.write().projects.update(calendar::projects::Action::Remove(id)),
+                }
+                if !habit {
+                    LabelsField {
+                        labels: values.labels.clone(),
+                        events: context.events.clone(),
+                        busy: is_busy,
+                        on_add: move |label: String| {
+                            let label = label.trim().trim_start_matches('#').to_owned();
+                            let mut draft = draft.write();
+                            if !label.is_empty() && !draft.labels.contains(&label) {
+                                draft.labels.push(label);
+                            }
+                        },
+                        on_remove: move |label: String| draft.write().labels.retain(|existing| existing != &label),
+                    }
+                }
+                if !new {
+                    LocationField {
+                        current: place,
+                        text: location_text,
+                        places: context.places.clone(),
+                        busy: is_busy,
+                        on_error: move |message| error.set(Some(message)),
+                        on_pick: move |place| set_place.call(place),
+                    }
+                }
+            }
+            if !habit && !source_event.is_task() {
+                FormSection { title: "Meeting",
+                    if !new {
+                        MeetingActions {
+                            event: source_event.clone(),
+                            settings: context.settings.clone(),
+                            on_saved,
+                        }
+                    }
+                    if !organizer.is_empty() {
+                        Field { label: "Organizer", p { class: "editor-value", "{organizer}" } }
+                    }
+                    if !attendees.is_empty() {
+                        Field { label: "Guests",
+                            for guest in attendees {
+                                p { key: "{guest}", class: "editor-value", "{guest}" }
+                            }
+                        }
+                    }
+                    PresenceEditor {
+                        options: values.options.clone(),
+                        busy: is_busy,
+                        on_action: move |action| draft.write().options.update(action),
+                    }
+                }
+            }
+
         }
     }
 }
@@ -2225,7 +2258,7 @@ fn RepeatEditor(
 
 /// Google-style notification rows followed by availability and visibility.
 #[component]
-fn OptionsEditor(
+fn NotificationsEditor(
     options: EventOptions,
     busy: bool,
     on_action: EventHandler<OptionAction>,
@@ -2233,15 +2266,6 @@ fn OptionsEditor(
     let use_default = options.reminders.use_default;
     let overrides = options.reminders.overrides.clone();
     let can_add = overrides.len() < 5;
-    // Confidential is only kept, not offered, the same as in the iced app.
-    let visibilities: Vec<Visibility> =
-        [Visibility::Default, Visibility::Public, Visibility::Private]
-            .into_iter()
-            .chain(
-                (options.visibility == Visibility::Confidential)
-                    .then_some(Visibility::Confidential),
-            )
-            .collect();
 
     rsx! {
         Field { label: "Notifications",
@@ -2325,6 +2349,26 @@ fn OptionsEditor(
                 "Add notification"
             }
         }
+    }
+}
+
+#[component]
+fn PresenceEditor(
+    options: EventOptions,
+    busy: bool,
+    on_action: EventHandler<OptionAction>,
+) -> Element {
+    // Confidential is only kept, not offered, the same as in the iced app.
+    let visibilities: Vec<Visibility> =
+        [Visibility::Default, Visibility::Public, Visibility::Private]
+            .into_iter()
+            .chain(
+                (options.visibility == Visibility::Confidential)
+                    .then_some(Visibility::Confidential),
+            )
+            .collect();
+
+    rsx! {
         Field { label: "Availability",
             select {
                 class: "client-input",

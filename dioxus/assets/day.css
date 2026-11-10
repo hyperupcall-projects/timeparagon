@@ -1403,6 +1403,36 @@ textarea {
     border-top: 1px solid var(--hairline);
 }
 
+.editor-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: color-mix(in srgb, currentColor 2.5%, transparent);
+}
+
+.editor-section-title {
+    margin: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--muted);
+}
+
+:root[data-theme$="high-contrast"] .editor-section {
+    border: 2px solid var(--edge-strong);
+    background: var(--hover);
+}
+
+:root[data-theme$="high-contrast"] .editor-section-title {
+    border-bottom-color: var(--edge-strong);
+    color: var(--text);
+}
+
 .editor-field {
     display: flex;
     flex-direction: column;

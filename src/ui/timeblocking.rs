@@ -424,17 +424,40 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     } else {
         super::description::preview(&task.id, &task.details.description.clone(), metrics)
     };
+    let mut information = column![description].spacing(metrics.spacing);
+    if task.id != crate::inbox::DRAFT_ID {
+        if let Some(target) = crate::notes::target_of(state, task) {
+            information = information.push(super::notes::section(state, target, metrics));
+        }
+    }
     column![
         super::calendar::titled(state, task, title, metrics),
-        editor(state, task, metrics),
-        description,
+        super::calendar::form_section(
+            "Scheduling",
+            column![
+                date_field(state, task, metrics, false),
+                date_field(state, task, metrics, true),
+            ]
+            .spacing(12),
+            metrics
+        ),
+        super::calendar::form_section("Information", information, metrics),
+        super::calendar::form_section(
+            "Organization",
+            organization_fields(state, task, metrics),
+            metrics
+        ),
     ]
     .spacing(metrics.spacing)
     .width(Fill)
     .into()
 }
 
-pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+fn organization_fields<'a>(
+    state: &'a State,
+    task: &'a Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
     let busy = state.timeblocking.busy.contains_task(&task.id)
         || (task.id == crate::inbox::DRAFT_ID
             && state.inbox.draft.as_ref().is_some_and(|d| d.saving));
@@ -472,13 +495,11 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         .into();
     }
     column![
-        date_field(state, task, metrics, false),
-        date_field(state, task, metrics, true),
         project_field(state, task, metrics),
-        column![field_label("Estimate", metrics), estimate].spacing(6),
         labels_field(state, task, metrics),
-        priority_field(state, task, metrics),
         location_field(state, task, metrics),
+        column![field_label("Estimate", metrics), estimate].spacing(6),
+        priority_field(state, task, metrics),
     ]
     .spacing(12)
     .into()
