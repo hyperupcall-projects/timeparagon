@@ -1523,11 +1523,6 @@ pub fn propagation_controls<'a>(
         .spacing(4)
         .width(Fill),
     )
-    .push(
-        button("Save time block metadata").on_press(Message::EventEdit(
-            crate::app::EventEditMessage::EventEditSaveRequested,
-        )),
-    )
     .into()
 }
 
