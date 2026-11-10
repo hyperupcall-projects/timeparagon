@@ -80,7 +80,7 @@ pub fn Editor(
         event
     };
     if event.details.sleep.is_some() {
-        rsx! { SleepEditor { event, context, on_close, on_saved } }
+        rsx! { SleepEditor { event, context, on_close, on_saved, on_config } }
     } else if event.is_task() {
         rsx! { TaskEditor { event, context, on_close, on_saved, on_config } }
     } else {
@@ -1365,19 +1365,26 @@ fn set_start_time(draft: &mut EditDraft, text: String, habit: bool) {
 
 // ------------------------------------------------------------------- sleep
 
-/// A night has just two timestamps and independent confidence flags.
+/// A night has its planned times with independent confidence flags, and the
+/// sleep actually recorded, from the timer or typed in.
 #[component]
 fn SleepEditor(
     event: Event,
     context: EditContext,
     on_close: EventHandler<()>,
     on_saved: EventHandler<()>,
+    on_config: EventHandler<Config>,
 ) -> Element {
     let seed = event.clone();
     let mut draft = use_signal(move || EditDraft::from_event(&seed));
+    // The night as Google has it, which the timer works from.
+    let seed = event.clone();
+    let mut saved_night = use_signal(move || seed);
     let mut busy = use_signal(|| false);
     let mut closing = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    // Moving a night's times asks whether its weekday's schedule moves too.
+    let mut pending_scope = use_signal(|| false);
 
     let close = move |_: ()| {
         if busy() {
@@ -1387,16 +1394,69 @@ fn SleepEditor(
         }
     };
 
-    let original = event.clone();
+    let time_format = context.time_format;
     let settings = context.settings.clone();
+    let write = use_callback(move |scope: Option<SaveScope>| {
+        if busy() {
+            return;
+        }
+        pending_scope.set(false);
+        let values = draft();
+        let Some(mut record) = values.sleep.clone() else {
+            return;
+        };
+        let mut night = saved_night();
+        let new = night.id == calendar::sleep::NEW_ID;
+        // A single night becomes an exception to the schedule; following the
+        // schedule keeps it planned from it.
+        record.automatic = scope == Some(SaveScope::CurrentAndFuture);
+        if new {
+            record.wake_date = values.end.date_naive();
+        }
+        night.start = values.start;
+        night.end = values.end;
+        night.details.sleep = Some(record);
+        let settings = settings.clone();
+        busy.set(true);
+        error.set(None);
+        spawn(async move {
+            let result = worker(move || {
+                let saved = calendar::sleep::save(&settings, night, new)?;
+                let config = (scope == Some(SaveScope::CurrentAndFuture))
+                    .then(|| crate::sleep::save_from_night(&saved))
+                    .transpose()?;
+                Ok((saved, config))
+            })
+            .await;
+            busy.set(false);
+            match result {
+                Ok((_, config)) => {
+                    if let Some(config) = config {
+                        on_config.call(config);
+                    }
+                    on_saved.call(());
+                    on_close.call(());
+                }
+                Err(message) => {
+                    closing.set(false);
+                    error.set(Some(message));
+                }
+            }
+        });
+    });
+
+    let original = event.clone();
     let save = use_callback(move |()| {
         if busy() {
             return;
         }
         let values = draft();
-        let Some(mut record) = values.sleep.clone() else {
+        if !values.actual_sleep_valid() {
+            error.set(Some(
+                "Enter actual sleep times as HH:MM, or leave them empty".to_owned(),
+            ));
             return;
-        };
+        }
         if calendar::parse_clock(&values.start_text).is_none()
             || calendar::parse_clock(&values.end_text).is_none()
             || calendar::deadline::parse_date(&values.date_text).is_err()
@@ -1408,25 +1468,54 @@ fn SleepEditor(
             ));
             return;
         }
-        let mut night = original.clone();
-        let new = night.id == calendar::sleep::NEW_ID;
-        record.automatic = false;
-        if new {
-            record.wake_date = values.end.date_naive();
+        if original.id != calendar::sleep::NEW_ID
+            && (original.start != values.start || original.end != values.end)
+        {
+            pending_scope.set(true);
+            return;
         }
-        night.start = values.start;
-        night.end = values.end;
-        night.details.sleep = Some(record);
-        let settings = settings.clone();
+        write.call(None);
+    });
+
+    let timer_settings = context.settings.clone();
+    let press = use_callback(move |()| {
+        if busy() {
+            return;
+        }
+        let mut night = saved_night();
+        // Unsaved confidence flags travel with the timer, as on the desktop.
+        if let (Some(edited), Some(current)) = (draft().sleep, night.details.sleep.as_mut()) {
+            current.estimated_start = edited.estimated_start;
+            current.estimated_end = edited.estimated_end;
+        }
+        if calendar::sleep::timer(&night, timeslay_core::clock::now())
+            == Some(calendar::sleep::Timer::Start)
+            && crate::reminders::notifications_blocked()
+        {
+            crate::reminders::request_permission();
+        }
+        let settings = timer_settings.clone();
         busy.set(true);
         error.set(None);
         spawn(async move {
-            let result = worker(move || calendar::sleep::save(&settings, night, new)).await;
+            let result = worker(move || crate::sleep::press(&settings, night, time_format)).await;
             busy.set(false);
             match result {
-                Ok(_) => {
+                Ok(saved) => {
+                    // Keep unsaved time edits; take the recorded sleep.
+                    draft.with_mut(|draft| {
+                        let record = saved.details.sleep.as_ref();
+                        let clock = |at: Option<chrono::DateTime<chrono::Local>>| {
+                            at.map(calendar::clock_label).unwrap_or_default()
+                        };
+                        draft.set_actual_start_text(clock(record.and_then(|r| r.actual_start)));
+                        draft.set_actual_end_text(clock(record.and_then(|r| r.actual_end)));
+                    });
+                    saved_night.set(saved);
                     on_saved.call(());
-                    on_close.call(());
+                    if closing() {
+                        on_close.call(());
+                    }
                 }
                 Err(message) => {
                     closing.set(false);
@@ -1449,14 +1538,70 @@ fn SleepEditor(
         calendar::sleep::duration(&preview),
         calendar::event_time_label(&preview)
     );
+    let now = timeslay_core::clock::now();
+    let actual_summary = match (record.actual_start, record.actual_end) {
+        (Some(start), Some(end)) => format!(
+            "Slept {} (planned {})",
+            calendar::sleep::minutes_label((end - start).num_minutes()),
+            calendar::sleep::duration(&preview)
+        ),
+        (Some(start), None) => format!(
+            "Sleeping since {} · {} so far",
+            calendar::time_format::clock(start, time_format),
+            calendar::sleep::minutes_label((now - start).num_minutes())
+        ),
+        _ => "Not recorded yet. Use Start sleep at bedtime, or enter the times.".to_owned(),
+    };
+    preview.details.sleep = Some(record.clone());
+    let predictions: Vec<(String, String)> = calendar::sleep::wake_predictions(&preview)
+        .into_iter()
+        .map(|(label, at)| (label, calendar::time_format::clock(at, time_format)))
+        .collect();
+    let basis = if record.actual_start.is_some() {
+        "Counted from when sleep actually started."
+    } else {
+        "Counted from the planned bedtime."
+    };
+    // The timer works from the saved night, not from unsaved edits.
+    let night = saved_night();
+    let timer = (night.id != calendar::sleep::NEW_ID)
+        .then(|| calendar::sleep::timer(&night, now))
+        .flatten();
+    let timer_disabled = is_busy || !crate::sleep::can_press(&night);
     let source = day::source_label(&event, &context);
     let color = css_color(event.color);
-    let footer = rsx! {
-        button {
-            class: "btn primary editor-wide",
-            disabled: is_busy,
-            onclick: move |_| save.call(()),
-            if is_busy { "Saving…" } else { "Save sleep" }
+    let weekday = calendar::sleep::weekday_label(record.wake_date);
+    let footer = if pending_scope() {
+        rsx! {
+            p { class: "editor-status", "Change only this night, or the {weekday} schedule from here on?" }
+            button {
+                class: "btn editor-wide",
+                onclick: move |_| write.call(Some(SaveScope::Current)),
+                "This {weekday}"
+            }
+            button {
+                class: "btn editor-wide",
+                onclick: move |_| write.call(Some(SaveScope::CurrentAndFuture)),
+                "This and future {weekday}s"
+            }
+            button { class: "btn editor-wide", onclick: move |_| pending_scope.set(false), "Cancel" }
+        }
+    } else {
+        rsx! {
+            if let Some(timer) = timer {
+                button {
+                    class: "btn editor-wide",
+                    disabled: timer_disabled,
+                    onclick: move |_| press.call(()),
+                    "{timer.label()}"
+                }
+            }
+            button {
+                class: "btn primary editor-wide",
+                disabled: is_busy,
+                onclick: move |_| save.call(()),
+                if is_busy { "Saving…" } else { "Save sleep" }
+            }
         }
     };
 
@@ -1544,6 +1689,56 @@ fn SleepEditor(
                     "Recorded sleep. These times are preserved when your schedule changes."
                 }
             }
+            h3 { class: "editor-section-title", "Actual sleep" }
+            p { class: "hint", "{actual_summary}" }
+            Field { label: "Actual sleep start",
+                div { class: "editor-row",
+                    input {
+                        class: "client-input",
+                        r#type: "time",
+                        aria_label: "Actual sleep start",
+                        disabled: is_busy,
+                        value: "{values.actual_start_text}",
+                        oninput: move |event| draft.write().set_actual_start_text(event.value()),
+                    }
+                    if !values.actual_start_text.is_empty() && !is_busy {
+                        button {
+                            class: "btn small",
+                            onclick: move |_| draft.write().set_actual_start_text(String::new()),
+                            "Clear"
+                        }
+                    }
+                }
+            }
+            Field { label: "Actual wake-up",
+                div { class: "editor-row",
+                    input {
+                        class: "client-input",
+                        r#type: "time",
+                        aria_label: "Actual wake-up",
+                        disabled: is_busy,
+                        value: "{values.actual_end_text}",
+                        oninput: move |event| draft.write().set_actual_end_text(event.value()),
+                    }
+                    if !values.actual_end_text.is_empty() && !is_busy {
+                        button {
+                            class: "btn small",
+                            onclick: move |_| draft.write().set_actual_end_text(String::new()),
+                            "Clear"
+                        }
+                    }
+                }
+            }
+            h3 { class: "editor-section-title", "Wake up at" }
+            div { class: "sleep-predictions",
+                for (label, at) in predictions {
+                    div { key: "{label}", class: "sleep-prediction",
+                        span { "{label}" }
+                        span { "{at}" }
+                    }
+                }
+            }
+            p { class: "hint", "{basis}" }
         }
     }
 }
@@ -2464,6 +2659,7 @@ mod tests {
                 selected_by_google: true,
             }],
             events: vec![task()],
+            time_format: calendar::time_format::TimeFormat::TwelveHour,
         }
     }
 
@@ -2628,6 +2824,59 @@ mod tests {
                 ">Save<",
             ],
         );
+    }
+
+    #[test]
+    fn a_night_offers_its_timer_actual_sleep_and_wake_up_times() {
+        let mut night = event("s1", "blocks", "Sleep");
+        night.start = at(1);
+        night.end = at(9);
+        night.details.sleep = Some(sleep::Record::planned(at(9).date_naive()));
+        // Half an hour before the planned bedtime.
+        let _clock = timeslay_core::clock::freeze(
+            (at(1) - chrono::Duration::minutes(30)).with_timezone(&chrono::Utc),
+        );
+        let html = render(night.clone());
+        assert_offers(
+            &html,
+            &[
+                "Actual sleep",
+                "Actual sleep start",
+                "Actual wake-up",
+                "Not recorded yet",
+                "Wake up at",
+                "6h",
+                "9h",
+                "Target 8h",
+                "Counted from the planned bedtime.",
+                ">Start sleep<",
+            ],
+        );
+
+        sleep::apply_timer(&mut night, sleep::Timer::Start, at(1)).unwrap();
+        let html = render(night);
+        assert_offers(
+            &html,
+            &[
+                ">Finish sleep<",
+                "Sleeping since",
+                "Counted from when sleep actually started.",
+            ],
+        );
+        assert!(!html.contains(">Start sleep<"));
+    }
+
+    #[test]
+    fn a_night_far_from_now_offers_no_timer() {
+        let mut night = event("s1", "blocks", "Sleep");
+        night.start = at(1);
+        night.end = at(9);
+        night.details.sleep = Some(sleep::Record::planned(at(9).date_naive()));
+        let _clock = timeslay_core::clock::freeze(
+            (at(1) - chrono::Duration::days(2)).with_timezone(&chrono::Utc),
+        );
+        let html = render(night);
+        assert!(!html.contains(">Start sleep<") && !html.contains(">Finish sleep<"));
     }
 
     #[test]

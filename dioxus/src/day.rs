@@ -13,6 +13,7 @@ use timeslay_core::calendar::first_day::FirstDayOfWeek;
 use timeslay_core::calendar::layout::{self, Span};
 use timeslay_core::calendar::search::Search;
 use timeslay_core::calendar::sources::TimeSlaySource;
+use timeslay_core::calendar::time_format::TimeFormat;
 use timeslay_core::calendar::{self, Event, Snapshot};
 use timeslay_core::config::{CalendarSettings, Config, ProjectsSettings};
 use timeslay_core::places::{self, Found, Place, PlaceSettings};
@@ -1114,6 +1115,8 @@ pub struct EditContext {
     pub calendars: Vec<calendar::Calendar>,
     /// Everything loaded for the day, which a task write lays out around.
     pub events: Vec<Event>,
+    /// How clock times are written, as in Settings.
+    pub time_format: TimeFormat,
 }
 
 impl EditContext {
@@ -1124,6 +1127,7 @@ impl EditContext {
             places: config.travel.clone(),
             calendars: snapshot.calendars.clone(),
             events: snapshot.events.clone(),
+            time_format: config.appearance.time_format,
         }
     }
 }
@@ -2206,6 +2210,7 @@ mod tests {
                 calendar("tasks:work", "Work"),
             ],
             events: Vec::new(),
+            time_format: TimeFormat::TwelveHour,
         };
         assert!(untriaged(&waiting, &context));
 
@@ -2225,6 +2230,7 @@ mod tests {
             places: PlaceSettings::default(),
             calendars: vec![calendar("blocks", "Focus"), calendar("work", "Work")],
             events: Vec::new(),
+            time_format: TimeFormat::TwelveHour,
         };
         let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
         let kind = |event: &Event| source_label(event, &context).name;

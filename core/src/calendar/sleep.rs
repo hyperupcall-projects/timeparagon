@@ -166,6 +166,56 @@ pub fn predictions_line(event: &Event, format: time_format::TimeFormat) -> Strin
         .join(" · ")
 }
 
+/// What the sleep notification says once the timer has started or finished,
+/// as (summary, body): while sleeping, since when and the wake-up times; once
+/// finished, how long was slept against the plan.
+pub fn notification(
+    event: &Event,
+    timer: Timer,
+    format: time_format::TimeFormat,
+) -> (String, String) {
+    let record = event.details.sleep.as_ref();
+    match timer {
+        Timer::Start => {
+            let since = record
+                .and_then(|r| r.actual_start)
+                .map(|at| time_format::clock(at, format))
+                .unwrap_or_default();
+            (
+                format!("Sleeping since {since}"),
+                format!("Wake up for {}", predictions_line(event, format)),
+            )
+        }
+        Timer::Finish => {
+            let slept = record
+                .and_then(Record::actual_minutes)
+                .map(minutes_label)
+                .unwrap_or_default();
+            (
+                format!("Slept {slept}"),
+                format!("Planned {}", duration(event)),
+            )
+        }
+    }
+}
+
+/// The first night on or after `today` that wakes on `weekday`: where a
+/// change to that weekday's schedule in Settings takes effect.
+pub fn next_night(today: NaiveDate, weekday: chrono::Weekday) -> NaiveDate {
+    today + Duration::days(i64::from(weekday.days_since(today.weekday())))
+}
+
+/// Where "this and future" nights start when one night's times are edited.
+/// A past night moves the schedule from its next occurrence, since history
+/// is never re-planned.
+pub fn change_from(wake_date: NaiveDate, today: NaiveDate) -> NaiveDate {
+    if wake_date < today {
+        next_night(today, wake_date.weekday())
+    } else {
+        wake_date
+    }
+}
+
 /// Reads a typed clock time as the moment nearest `anchor`, so an actual
 /// bedtime of 23:40 lands the evening before a 00:30 plan, and 01:10 the
 /// morning after an 23:30 plan.
@@ -884,6 +934,40 @@ mod tests {
         apply_timer(&mut event, Timer::Start, at(2) + Duration::minutes(30)).unwrap();
         assert_eq!(times(&event)[0].1, "08:30:00");
         assert_eq!(times(&event)[4].1, "10:30:00");
+    }
+
+    #[test]
+    fn notifications_say_since_when_then_how_long() {
+        let format = time_format::TimeFormat::TwentyFourHour;
+        let mut event = night();
+        apply_timer(&mut event, Timer::Start, at(1) - Duration::minutes(20)).unwrap();
+        let (summary, body) = notification(&event, Timer::Start, format);
+        assert_eq!(summary, "Sleeping since 00:40");
+        assert!(body.starts_with("Wake up for 6h 06:40"), "{body}");
+        apply_timer(&mut event, Timer::Finish, at(8)).unwrap();
+        assert_eq!(
+            notification(&event, Timer::Finish, format),
+            ("Slept 7h 20m".to_owned(), "Planned 8h".to_owned())
+        );
+    }
+
+    #[test]
+    fn schedule_changes_start_on_the_next_matching_night() {
+        // 2030-11-04 is a Monday.
+        let monday = date();
+        assert_eq!(next_night(monday, chrono::Weekday::Mon), monday);
+        assert_eq!(
+            next_night(monday, chrono::Weekday::Sun),
+            monday + Duration::days(6)
+        );
+        assert_eq!(
+            change_from(monday + Duration::days(1), monday),
+            monday + Duration::days(1)
+        );
+        assert_eq!(
+            change_from(monday - Duration::days(6), monday),
+            monday + Duration::days(1)
+        );
     }
 
     #[test]

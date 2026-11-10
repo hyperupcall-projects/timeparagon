@@ -1,8 +1,9 @@
-//! Adding things: a task with the quick-add keywords, an event, a time block.
+//! Adding things: a task with the quick-add keywords, an event, a time block,
+//! or a night's sleep.
 
-use chrono::{NaiveDate, Timelike};
+use chrono::{Datelike, NaiveDate, Timelike};
 use dioxus::prelude::*;
-use timeslay_core::calendar::Calendar;
+use timeslay_core::calendar::{Calendar, Details, Event, sleep};
 use timeslay_core::config::{CalendarSettings, ProjectsSettings};
 use timeslay_core::task_input::{self, Value};
 
@@ -14,6 +15,7 @@ enum Kind {
     Task,
     Event,
     Block,
+    Sleep,
 }
 
 /// When a new event starts by default: the next hour today, or 9 on another day.
@@ -24,6 +26,49 @@ fn default_times(day: NaiveDate, today: NaiveDate, now_hour: u32) -> (String, St
         9
     };
     (format!("{hour:02}:00"), format!("{:02}:00", hour + 1))
+}
+
+/// A night ending on `day`, starting from the weekly schedule: (start date,
+/// wake-up date, bedtime, wake-up).
+fn sleep_defaults(day: NaiveDate, settings: &CalendarSettings) -> (String, String, String, String) {
+    let mut schedule = settings.sleep_schedule;
+    schedule[day.weekday().num_days_from_monday() as usize] = sleep::times_for(settings, day);
+    let (start, end) = sleep::plan(day, &schedule);
+    (
+        start.date_naive().to_string(),
+        end.date_naive().to_string(),
+        start.format("%H:%M").to_string(),
+        end.format("%H:%M").to_string(),
+    )
+}
+
+/// Records a night typed in by hand. Blocking: callers run it on a worker.
+fn create_sleep(new: &NewEvent, settings: &CalendarSettings) -> Result<(), String> {
+    let (start, end) = NewEvent {
+        title: "Sleep".to_owned(),
+        ..new.clone()
+    }
+    .range()?;
+    let event = Event {
+        id: sleep::NEW_ID.into(),
+        calendar_id: settings.app_calendar.clone().unwrap_or_default(),
+        title: "Sleep".into(),
+        start,
+        end,
+        all_day: false,
+        color: sleep::COLOR,
+        completed: false,
+        details: Details {
+            sleep: Some(sleep::Record {
+                automatic: false,
+                estimated_start: false,
+                estimated_end: false,
+                ..sleep::Record::planned(end.date_naive())
+            }),
+            ..Default::default()
+        },
+    };
+    sleep::save(settings, event, true).map(|_| ())
 }
 
 /// What a recognized keyword will set, in words.
@@ -94,13 +139,22 @@ pub fn CreateSheet(
     } else {
         Vec::new()
     };
+    let sleep_settings = settings.clone();
     let tab = |label: &'static str, this: Kind| {
+        let sleep_settings = sleep_settings.clone();
         rsx! {
             button {
                 class: "nav-tab",
                 r#type: "button",
                 aria_pressed: (kind() == this).to_string(),
                 onclick: move |_| {
+                    if this == Kind::Sleep && kind() != Kind::Sleep {
+                        let (first, last, bedtime, wakeup) = sleep_defaults(day, &sleep_settings);
+                        date.set(first);
+                        end_date.set(last);
+                        start.set(bedtime);
+                        end.set(wakeup);
+                    }
                     kind.set(this);
                     error.set(None);
                 },
@@ -142,6 +196,7 @@ pub fn CreateSheet(
                 Kind::Event if target.is_empty() => Err("Choose a calendar".to_owned()),
                 Kind::Event => day::create_event(&new, &target),
                 Kind::Block => day::create_time_block(&new, &settings),
+                Kind::Sleep => create_sleep(&new, &settings),
             })
             .await;
             busy.set(false);
@@ -172,19 +227,20 @@ pub fn CreateSheet(
                     {tab("Task", Kind::Task)}
                     {tab("Event", Kind::Event)}
                     {tab("Time block", Kind::Block)}
+                    {tab("Sleep", Kind::Sleep)}
                 }
                 div { class: "modal-body editor-body",
                     if let Some(message) = error() {
                         p { class: "editor-error", role: "alert", "{message}" }
                     }
-                    input {
+                    if kind() != Kind::Sleep { input {
                         class: "client-input",
                         r#type: "text",
                         placeholder: if kind() == Kind::Task { "Pay rent tomorrow p1 @home ~30m" } else { "Title" },
                         aria_label: "Title",
                         value: "{title}",
                         oninput: move |event| title.set(event.value()),
-                    }
+                    } }
                     if kind() == Kind::Task {
                         div { class: "token-row",
                             for token in tokens {
@@ -254,26 +310,28 @@ pub fn CreateSheet(
                                 input {
                                     class: "client-input",
                                     r#type: "time",
-                                    aria_label: "Start",
+                                    aria_label: if kind() == Kind::Sleep { "Bedtime" } else { "Start" },
                                     value: "{start}",
                                     oninput: move |event| start.set(event.value()),
                                 }
                                 input {
                                     class: "client-input",
                                     r#type: "time",
-                                    aria_label: "End",
+                                    aria_label: if kind() == Kind::Sleep { "Wake-up" } else { "End" },
                                     value: "{end}",
                                     oninput: move |event| end.set(event.value()),
                                 }
                             }
                         }
-                        textarea {
+                        if kind() == Kind::Sleep {
+                            p { class: "hint", "Bedtime and wake-up, from your weekly schedule. A night added here is kept when the schedule changes." }
+                        } else { textarea {
                             class: "client-input",
                             placeholder: "Description",
                             aria_label: "Description",
                             value: "{description}",
                             oninput: move |event| description.set(event.value()),
-                        }
+                        } }
                     }
                 }
                 div { class: "editor-footer",

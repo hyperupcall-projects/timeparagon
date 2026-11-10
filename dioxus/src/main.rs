@@ -20,6 +20,7 @@ mod reminders;
 mod schedule;
 mod scratch;
 mod search;
+mod sleep;
 mod style;
 #[cfg(any(target_os = "android", test))]
 mod widget;
@@ -191,6 +192,9 @@ fn App() -> Element {
     let mut selected_block = use_signal(|| None::<String>);
     let mut editing = use_signal(|| None::<Event>);
     let block_writing = use_signal(|| false);
+    // A Start sleep or Finish sleep press from the grid or the strip.
+    let mut sleep_busy = use_signal(|| false);
+    let mut sleep_error = use_signal(|| None::<String>);
     // The calendar, planning period, task lists or Habits.
     let mut page = use_signal(|| Page::Do);
     let plan_view = use_signal(|| PlanView::Day);
@@ -537,6 +541,68 @@ fn App() -> Element {
     };
 
     let time_format = config.read().appearance.time_format;
+
+    // The night being timed, wherever the view is, kept in the notification.
+    let running = sleep::running(snapshot.as_ref(), &cached_days.read(), today);
+    let settled = snapshot
+        .as_ref()
+        .is_some_and(|snapshot| (snapshot.day - today).num_days().abs() <= 1);
+    sleep::sync_notification(running.as_ref(), settled, time_format);
+    let press_sleep = use_callback(move |night: Event| {
+        if sleep_busy() {
+            return;
+        }
+        let settings = config.peek().calendar.clone();
+        let format = config.peek().appearance.time_format;
+        if calendar::sleep::timer(&night, timeslay_core::clock::now())
+            == Some(calendar::sleep::Timer::Start)
+            && reminders::notifications_blocked()
+        {
+            reminders::request_permission();
+        }
+        sleep_busy.set(true);
+        sleep_error.set(None);
+        spawn(async move {
+            let result = editor::worker(move || sleep::press(&settings, night, format)).await;
+            sleep_busy.set(false);
+            match result {
+                Ok(saved) => {
+                    // Other cached days holding the night must not say it is
+                    // still running.
+                    cached_days.write().replace_habit_occurrence(&saved);
+                    revision.set(revision() + 1);
+                }
+                Err(message) => sleep_error.set(Some(message)),
+            }
+        });
+    });
+    let sleep_timer = SleepTimer {
+        busy: sleep_busy(),
+        press: press_sleep,
+    };
+    let sleep_strip = running.map(|event| {
+        rsx! {
+            sleep::SleepStrip {
+                event,
+                time_format,
+                busy: sleep_busy(),
+                error: sleep_error(),
+                on_finish: move |night| press_sleep.call(night),
+            }
+        }
+    });
+    // A failed Start has no strip to show its error in.
+    let sleep_banner = sleep_error()
+        .filter(|_| sleep_strip.is_none())
+        .map(|message| {
+            rsx! {
+                div { class: "banner error",
+                    span { class: "banner-text", "Sleep: {message}" }
+                    div { class: "spacer" }
+                    button { class: "btn small", onclick: move |_| sleep_error.set(None), "Dismiss" }
+                }
+            }
+        });
     let day_nav = DayNav {
         current_day,
         selected_block,
@@ -792,7 +858,7 @@ fn App() -> Element {
                             div { class: "sidebar-scroll", {lists} }
                         }
                     }
-                    {timeline(model, &travel, &settings, time_format, selected_block, editing)}
+                    {timeline(model, &travel, &settings, time_format, selected_block, editing, sleep_timer)}
                 }
             }
         }
@@ -1272,6 +1338,7 @@ fn App() -> Element {
                         p { class: "hint", "{database_sync_status}" }
                         notes::NotesSettings { config }
                         reminders::ReminderSection { config }
+                        sleep::SleepSettings { config }
                         h3 { class: "settings-heading", "Google" }
                         form {
                             class: "client-form settings-form",
@@ -1477,6 +1544,8 @@ fn App() -> Element {
         div { class: "app",
             {topbar}
             {banner}
+            {sleep_banner}
+            {sleep_strip}
             if page() == Page::Habits {
                 habits::HabitsScreen {
                     today,
@@ -1850,6 +1919,7 @@ fn all_day_chip(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn timeline(
     model: &DayModel,
     travel: &[day::TravelBox],
@@ -1857,6 +1927,7 @@ fn timeline(
     time_format: TimeFormat,
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
+    sleep_timer: SleepTimer,
 ) -> Element {
     let grid_height = 24.0 * HOUR_HEIGHT;
     let hours: Vec<Element> = (0..24u32)
@@ -1884,7 +1955,7 @@ fn timeline(
     let events: Vec<Element> = model
         .timed
         .iter()
-        .map(|timed| timed_event_view(timed, time_format, open_block, editing))
+        .map(|timed| timed_event_view(timed, time_format, open_block, editing, sleep_timer))
         .collect();
     let block_tasks: Vec<Element> = model
         .timed
@@ -2016,11 +2087,20 @@ fn event_label(timed: &TimedEvent, height: f32, time_format: TimeFormat) -> Elem
     }
 }
 
+/// The Start sleep or Finish sleep button nights offer on the grid.
+#[derive(Clone, Copy)]
+struct SleepTimer {
+    /// A press is being saved, so the buttons wait.
+    busy: bool,
+    press: Callback<Event>,
+}
+
 fn timed_event_view(
     timed: &TimedEvent,
     time_format: TimeFormat,
     open_block: Signal<Option<String>>,
     editing: Signal<Option<Event>>,
+    sleep_timer: SleepTimer,
 ) -> Element {
     let mut editing = editing;
     let opened = timed.event.clone();
@@ -2051,6 +2131,31 @@ fn timed_event_view(
                 div { class: "block-filled", style: "height:{filled:.2}%;" }
                 div { class: "block-label", {label} }
                 span { class: "block-plan", "Plan" }
+            }
+        }
+    } else if let Some(timer) = calendar::sleep::timer(&timed.event, timeslay_core::clock::now()) {
+        // A night splits like a time block: its label opens it, and the
+        // button beside it starts or finishes the timer.
+        let night = timed.event.clone();
+        let disabled = sleep_timer.busy || !sleep::can_press(&night);
+        rsx! {
+            div {
+                key: "{id}",
+                class: "grid-event sleep",
+                "data-sending": timed.event.details.sending,
+                style: "{style}",
+                title: "{tooltip}",
+                button {
+                    class: "sleep-open",
+                    onclick: move |_| editing.set(Some(opened.clone())),
+                    {label}
+                }
+                button {
+                    class: "sleep-timer",
+                    disabled,
+                    onclick: move |_| sleep_timer.press.call(night.clone()),
+                    "{timer.label()}"
+                }
             }
         }
     } else {

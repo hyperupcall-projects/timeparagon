@@ -433,15 +433,10 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             let mut tasks = Vec::new();
             if scope == calendar::SaveScope::CurrentAndFuture {
                 let record = event.details.sleep.as_ref().unwrap();
-                let today = crate::clock::now().date_naive();
-                let from = if record.wake_date < today {
-                    today
-                        + chrono::Duration::days(i64::from(
-                            record.wake_date.weekday().days_since(today.weekday()),
-                        ))
-                } else {
-                    record.wake_date
-                };
+                let from = calendar::sleep::change_from(
+                    record.wake_date,
+                    crate::clock::now().date_naive(),
+                );
                 calendar::sleep::set_weekday_times(
                     &mut state.config.calendar,
                     from,

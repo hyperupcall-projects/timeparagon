@@ -7,8 +7,9 @@ import android.util.Log
 
 /**
  * Everything reminders react to: a new plan from the app, an alarm coming
- * due, a test from the settings sheet, and the system events that clear
- * alarms (a reboot, an app update, the clock changing).
+ * due, a test from the settings sheet, the sleep timer starting or
+ * finishing, and the system events that clear alarms (a reboot, an app
+ * update, the clock changing).
  */
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -22,6 +23,7 @@ class ReminderReceiver : BroadcastReceiver() {
                         context, intent.getStringExtra(Reminders.EXTRA_CATEGORY),
                     )
                     Reminders.ACTION_DEVICE_INFO -> Reminders.writeDeviceInfo(context)
+                    SleepNotification.ACTION -> SleepNotification.handle(context, intent)
                     Reminders.ACTION_SYNC,
                     Intent.ACTION_BOOT_COMPLETED,
                     Intent.ACTION_MY_PACKAGE_REPLACED,
