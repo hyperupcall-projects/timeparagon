@@ -888,6 +888,7 @@ fn canvas_with_one_block() -> DayCanvas {
             time_block: false,
             habit: None,
             completion: None,
+            sleep_timer: None,
         }],
         travel: Vec::new(),
         needle: None,
@@ -1050,6 +1051,7 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
         time_block: false,
         habit: None,
         completion: None,
+        sleep_timer: None,
     };
     let blocks = [at("standup", 540, 570), at("review", 840, 900)];
 
@@ -1237,6 +1239,7 @@ fn the_cache_key_holds_until_a_traced_detail_changes() {
         time_block: false,
         habit: None,
         completion: None,
+        sleep_timer: None,
     };
 
     let key = cache_key(

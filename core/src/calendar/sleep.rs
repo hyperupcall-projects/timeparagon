@@ -19,6 +19,13 @@ pub struct Record {
     pub automatic: bool,
     pub estimated_start: bool,
     pub estimated_end: bool,
+    /// When sleep actually began, as started from the Start sleep button or
+    /// entered by hand. The event's own times stay the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_start: Option<DateTime<Local>>,
+    /// When sleep actually ended. Unset while the night is still running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_end: Option<DateTime<Local>>,
 }
 impl Record {
     pub fn planned(wake_date: NaiveDate) -> Self {
@@ -27,7 +34,17 @@ impl Record {
             automatic: true,
             estimated_start: true,
             estimated_end: true,
+            actual_start: None,
+            actual_end: None,
         }
+    }
+    /// Started with the timer and not finished yet.
+    pub fn sleeping(&self) -> bool {
+        self.actual_start.is_some() && self.actual_end.is_none()
+    }
+    /// The recorded length of actual sleep, once both ends are known.
+    pub fn actual_minutes(&self) -> Option<i64> {
+        Some((self.actual_end? - self.actual_start?).num_minutes())
     }
     pub fn from_properties(properties: &Value) -> Option<Self> {
         if properties["private"]["ttKind"].as_str() != Some("sleep") {
@@ -38,7 +55,11 @@ impl Record {
 }
 
 pub fn duration(event: &Event) -> String {
-    let minutes = (event.end - event.start).num_minutes();
+    minutes_label((event.end - event.start).num_minutes())
+}
+/// "8h" or "7h 45m".
+pub fn minutes_label(minutes: i64) -> String {
+    let minutes = minutes.max(0);
     if minutes % 60 == 0 {
         format!("{}h", minutes / 60)
     } else {
@@ -49,11 +70,113 @@ pub fn title(event: &Event) -> String {
     format!("Sleep · {}", duration(event))
 }
 pub fn time_label(event: &Event, format: time_format::TimeFormat) -> String {
-    format!(
+    let planned = format!(
         "Bedtime {}\nWake up {}",
         time_format::clock(event.start, format),
         time_format::clock(event.end, format)
-    )
+    );
+    match actual_label(event, format) {
+        Some(actual) => format!("{planned}\n{actual}"),
+        None => planned,
+    }
+}
+
+/// One line about the actual sleep recorded for a night, if any.
+pub fn actual_label(event: &Event, format: time_format::TimeFormat) -> Option<String> {
+    let record = event.details.sleep.as_ref()?;
+    let start = record.actual_start?;
+    Some(match record.actual_end {
+        Some(end) => format!(
+            "Actual {} – {} ({})",
+            time_format::clock(start, format),
+            time_format::clock(end, format),
+            minutes_label((end - start).num_minutes())
+        ),
+        None => format!("Sleeping since {}", time_format::clock(start, format)),
+    })
+}
+
+/// What the sleep timer button on a night does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Timer {
+    Start,
+    Finish,
+}
+impl Timer {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start sleep",
+            Self::Finish => "Finish sleep",
+        }
+    }
+}
+
+/// How far ahead of a planned bedtime the Start sleep button is offered.
+const START_WINDOW_HOURS: i64 = 12;
+
+/// Which timer button a night offers. A running night can always be
+/// finished. Start is offered only on the night about to begin or underway,
+/// so the four weeks of planned nights do not all carry a button.
+pub fn timer(event: &Event, now: DateTime<Local>) -> Option<Timer> {
+    let record = event.details.sleep.as_ref()?;
+    if record.sleeping() {
+        return Some(Timer::Finish);
+    }
+    (record.actual_start.is_none()
+        && now < event.end
+        && now >= event.start - Duration::hours(START_WINDOW_HOURS))
+    .then_some(Timer::Start)
+}
+
+/// The moment the wake-up predictions count from: when sleep actually began,
+/// else the planned bedtime.
+pub fn prediction_start(event: &Event) -> DateTime<Local> {
+    event
+        .details
+        .sleep
+        .as_ref()
+        .and_then(|record| record.actual_start)
+        .unwrap_or(event.start)
+}
+
+/// The fixed amounts of sleep wake-up times are predicted for.
+pub const PREDICTED_HOURS: [i64; 4] = [6, 7, 8, 9];
+
+/// Wake-up times for 6, 7, 8 and 9 hours of sleep, then for the planned
+/// (target) amount, each as (amount label, wake-up time).
+pub fn wake_predictions(event: &Event) -> Vec<(String, DateTime<Local>)> {
+    let start = prediction_start(event);
+    let target = event.end - event.start;
+    PREDICTED_HOURS
+        .iter()
+        .map(|&hours| (format!("{hours}h"), start + Duration::hours(hours)))
+        .chain(std::iter::once((
+            format!("Target {}", minutes_label(target.num_minutes())),
+            start + target,
+        )))
+        .collect()
+}
+
+/// The predictions on one line, e.g. "6h 5:12a · 7h 6:12a · … · Target 8h 7:12a".
+pub fn predictions_line(event: &Event, format: time_format::TimeFormat) -> String {
+    wake_predictions(event)
+        .into_iter()
+        .map(|(label, at)| format!("{label} {}", time_format::clock(at, format)))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Reads a typed clock time as the moment nearest `anchor`, so an actual
+/// bedtime of 23:40 lands the evening before a 00:30 plan, and 01:10 the
+/// morning after an 23:30 plan.
+pub fn nearest_clock(text: &str, anchor: DateTime<Local>) -> Option<DateTime<Local>> {
+    let (hour, minute) = super::parse_clock(text)?;
+    let day = anchor.date_naive();
+    [day.pred_opt(), Some(day), day.succ_opt()]
+        .into_iter()
+        .flatten()
+        .map(|day| super::at_clock(day, hour, minute))
+        .min_by_key(|at| (*at - anchor).num_seconds().abs())
 }
 
 /// Clock times for the night ending on this weekday.
@@ -139,6 +262,31 @@ fn planning_dates(today: NaiveDate) -> impl Iterator<Item = NaiveDate> {
 /// Description kept on the Google event, regenerated whenever the times change.
 pub fn description(event: &Event) -> String {
     time_label(event, time_format::TimeFormat::TwelveHour)
+}
+
+/// Starts or finishes the night's sleep timer at `now`.
+pub fn apply_timer(event: &mut Event, timer: Timer, now: DateTime<Local>) -> Result<(), String> {
+    let record = event
+        .details
+        .sleep
+        .as_mut()
+        .ok_or("Missing sleep metadata")?;
+    let now = now
+        .with_second(0)
+        .and_then(|t| t.with_nanosecond(0))
+        .unwrap_or(now);
+    match timer {
+        Timer::Start => {
+            record.actual_start = Some(now);
+            record.actual_end = None;
+        }
+        Timer::Finish => {
+            let start = record.actual_start.ok_or("Sleep was never started")?;
+            record.actual_end = Some(now.max(start));
+        }
+    }
+    event.details.description = description(event);
+    Ok(())
 }
 
 fn collection(calendar_id: &str) -> String {
@@ -350,7 +498,18 @@ fn reconcile_with(
         color: COLOR,
         completed: false,
         details: super::Details {
-            sleep: Some(Record::planned(day)),
+            sleep: Some(Record {
+                // A schedule change must not throw away sleep already recorded.
+                actual_start: existing
+                    .as_ref()
+                    .and_then(|e| e.details.sleep.as_ref())
+                    .and_then(|s| s.actual_start),
+                actual_end: existing
+                    .as_ref()
+                    .and_then(|e| e.details.sleep.as_ref())
+                    .and_then(|s| s.actual_end),
+                ..Record::planned(day)
+            }),
             ..Default::default()
         },
     };
@@ -378,6 +537,15 @@ pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<
     if event.end <= event.start {
         return Err("Wake-up time must be after sleep start".into());
     }
+    if let Some(record) = &event.details.sleep {
+        if record.actual_end.is_some() && record.actual_start.is_none() {
+            return Err("Enter when sleep actually started".into());
+        }
+        if record.actual_minutes().is_some_and(|minutes| minutes < 0) {
+            return Err("Actual wake-up must be after actual sleep start".into());
+        }
+    }
+    event.details.description = description(&event);
     if new {
         event.calendar_id = settings
             .app_calendar
@@ -645,6 +813,114 @@ mod tests {
         assert_eq!(
             times_for(&settings, first + Duration::days(1)),
             Times::default()
+        );
+    }
+    fn night() -> Event {
+        let mut event = appointment(1);
+        event.calendar_id = "app".into();
+        event.end = at(9);
+        event.details.sleep = Some(Record::planned(date()));
+        event
+    }
+
+    #[test]
+    fn records_without_actual_sleep_still_parse_and_actuals_round_trip() {
+        let old = r#"{"wake_date":"2030-11-04","automatic":true,"estimated_start":true,"estimated_end":true}"#;
+        let record: Record = serde_json::from_str(old).unwrap();
+        assert_eq!(record, Record::planned(date()));
+        assert!(!serde_json::to_string(&record).unwrap().contains("actual"));
+
+        let mut event = night();
+        apply_timer(&mut event, Timer::Start, at(1) - Duration::minutes(20)).unwrap();
+        apply_timer(&mut event, Timer::Finish, at(8) + Duration::minutes(5)).unwrap();
+        let mut value = body(&event).unwrap();
+        value["id"] = json!("sleep-id");
+        let parsed = api::parse_sleep(value, "app").unwrap();
+        let record = parsed.details.sleep.unwrap();
+        assert_eq!(record.actual_minutes(), Some(7 * 60 + 25));
+        assert!(parsed.details.description.contains("Actual"));
+    }
+
+    #[test]
+    fn the_timer_offers_start_only_near_the_night_and_finish_while_sleeping() {
+        let event = night();
+        assert_eq!(timer(&event, at(1) - Duration::hours(13)), None);
+        assert_eq!(
+            timer(&event, at(1) - Duration::hours(3)),
+            Some(Timer::Start)
+        );
+        assert_eq!(timer(&event, at(5)), Some(Timer::Start));
+        assert_eq!(timer(&event, at(9)), None);
+
+        let mut sleeping = event.clone();
+        apply_timer(&mut sleeping, Timer::Start, at(2)).unwrap();
+        assert!(sleeping.details.sleep.as_ref().unwrap().sleeping());
+        // A forgotten timer can still be finished long after the plan ended.
+        assert_eq!(timer(&sleeping, at(23)), Some(Timer::Finish));
+        apply_timer(&mut sleeping, Timer::Finish, at(10)).unwrap();
+        assert_eq!(timer(&sleeping, at(5)), None);
+        assert!(apply_timer(&mut night(), Timer::Finish, at(5)).is_err());
+    }
+
+    #[test]
+    fn wake_predictions_count_from_actual_start_else_the_plan() {
+        let mut event = night();
+        let times = |event: &Event| {
+            wake_predictions(event)
+                .into_iter()
+                .map(|(label, at)| (label, at.time().to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            times(&event),
+            [
+                ("6h".into(), "07:00:00".into()),
+                ("7h".into(), "08:00:00".into()),
+                ("8h".into(), "09:00:00".into()),
+                ("9h".into(), "10:00:00".into()),
+                ("Target 8h".into(), "09:00:00".into()),
+            ]
+        );
+        apply_timer(&mut event, Timer::Start, at(2) + Duration::minutes(30)).unwrap();
+        assert_eq!(times(&event)[0].1, "08:30:00");
+        assert_eq!(times(&event)[4].1, "10:30:00");
+    }
+
+    #[test]
+    fn typed_actual_times_land_on_the_day_nearest_the_plan() {
+        let anchor = at(1);
+        assert_eq!(
+            nearest_clock("23:40", anchor),
+            Some(super::super::at_clock(date().pred_opt().unwrap(), 23, 40))
+        );
+        assert_eq!(
+            nearest_clock("02:10", anchor),
+            Some(at(2) + Duration::minutes(10))
+        );
+        assert_eq!(nearest_clock("nope", anchor), None);
+    }
+
+    #[test]
+    fn schedule_changes_keep_the_actual_sleep_already_recorded() {
+        let mut event = night();
+        event.end = at(8);
+        apply_timer(&mut event, Timer::Start, at(1)).unwrap();
+        let mut events = vec![event];
+        reconcile_with(
+            "app",
+            &mut events,
+            date(),
+            &[Times::default(); 7],
+            at(0),
+            |_| panic!(),
+            |event, _| Ok(event.clone()),
+        )
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].end, at(8));
+        assert_eq!(
+            events[0].details.sleep.as_ref().unwrap().actual_start,
+            Some(at(1))
         );
     }
 }
