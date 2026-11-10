@@ -333,10 +333,12 @@ pub(super) fn cache_key(
             .wrapping_mul(31)
             .wrapping_add(u64::from(block.habit.is_some()))
             .wrapping_mul(31)
-            .wrapping_add(match block.habit_completed {
+            .wrapping_add(match block.completion {
                 None => 0,
-                Some(false) => 1,
-                Some(true) => 2,
+                Some(Completion::Habit(false)) => 1,
+                Some(Completion::Habit(true)) => 2,
+                Some(Completion::Task(false)) => 3,
+                Some(Completion::Task(true)) => 4,
             });
         for (id, title, minutes) in &block.tasks {
             hash = hash.wrapping_mul(31).wrapping_add(u64::from(*minutes));

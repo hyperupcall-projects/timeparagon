@@ -221,6 +221,52 @@ fn habit_occurrence<'a>(
     .into()
 }
 
+/// A calendar checkbox uses the existing persistence flow for its item type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Completion {
+    Habit(bool),
+    Task(bool),
+}
+
+impl Completion {
+    fn completed(self) -> bool {
+        match self {
+            Self::Habit(completed) | Self::Task(completed) => completed,
+        }
+    }
+
+    fn toggle(self, id: &str) -> Message {
+        match self {
+            Self::Habit(_) => {
+                Message::Habits(crate::habits::Action::ToggleCompleted(id.to_owned()))
+            }
+            Self::Task(_) => Message::Task(TaskMessage::TaskToggled(id.to_owned())),
+        }
+    }
+
+    fn enabled(self, state: &State, event: &Event) -> bool {
+        if event.details.sending {
+            return false;
+        }
+        match self {
+            Self::Habit(_) => !state.habits.completing.contains(&event.id),
+            Self::Task(_) => state.timeblocking.busy.is_empty(),
+        }
+    }
+}
+
+fn event_completion(state: &State, event: &Event) -> Option<Completion> {
+    if state.calendar.search.hides_details(event) || calendar::deadline::is_marker(event) {
+        None
+    } else if event.is_task() {
+        Some(Completion::Task(event.completed))
+    } else if event.details.habit {
+        Some(Completion::Habit(event.completed))
+    } else {
+        None
+    }
+}
+
 /// The same completion control in all-day bars and compact calendar lists.
 fn event_label<'a>(state: &State, event: &Event, label: String, size: f32) -> Element<'a, Message> {
     let mut content = row![
@@ -232,13 +278,11 @@ fn event_label<'a>(state: &State, event: &Event, label: String, size: f32) -> El
     .spacing(6)
     .align_y(Alignment::Center)
     .width(Fill);
-    if event.details.habit && !state.calendar.search.hides_details(event) {
+    if let Some(completion) = event_completion(state, event) {
         let id = event.id.clone();
         let mut checkbox = crate::ui::controls::checkbox(event.completed).size(14);
-        if !state.habits.completing.contains(&event.id) {
-            checkbox = checkbox.on_toggle(move |_| {
-                Message::Habits(crate::habits::Action::ToggleCompleted(id.clone()))
-            });
+        if completion.enabled(state, event) {
+            checkbox = checkbox.on_toggle(move |_| completion.toggle(&id));
         }
         content = content.push(checkbox);
     }

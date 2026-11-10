@@ -887,7 +887,7 @@ fn canvas_with_one_block() -> DayCanvas {
             tasks: Vec::new(),
             time_block: false,
             habit: None,
-            habit_completed: None,
+            completion: None,
         }],
         travel: Vec::new(),
         needle: None,
@@ -1049,7 +1049,7 @@ fn the_trips_of_a_day_become_boxes_on_the_events_they_lead_to() {
         tasks: Vec::new(),
         time_block: false,
         habit: None,
-        habit_completed: None,
+        completion: None,
     };
     let blocks = [at("standup", 540, 570), at("review", 840, 900)];
 
@@ -1236,7 +1236,7 @@ fn the_cache_key_holds_until_a_traced_detail_changes() {
         tasks: Vec::new(),
         time_block: false,
         habit: None,
-        habit_completed: None,
+        completion: None,
     };
 
     let key = cache_key(
@@ -2510,26 +2510,31 @@ fn quick_create_focuses_the_title_before_the_first_keystroke() {
 }
 
 #[test]
-fn habit_checkboxes_toggle_without_opening_or_dragging_the_event() {
+fn calendar_checkboxes_toggle_without_opening_or_dragging_the_event() {
     for compact in [false, true] {
-        for linked in [false, true] {
-            for completed in [false, true] {
+        for completion in [
+            Completion::Habit(false),
+            Completion::Habit(true),
+            Completion::Task(false),
+            Completion::Task(true),
+        ] {
+            for linked in [false, true] {
                 let mut canvas = canvas_with_one_block();
                 canvas.compact = compact;
-                canvas.blocks[0].habit_completed = Some(completed);
-                if linked {
+                canvas.blocks[0].completion = Some(completion);
+                if linked && matches!(completion, Completion::Habit(_)) {
                     canvas.blocks[0].habit = Some(("h".into(), canvas.day));
                 }
                 let bounds = canvas.block_rect(&canvas.blocks[0], 600.0);
-                let label = if linked {
+                let label = if canvas.blocks[0].habit.is_some() {
                     habit_actions(bounds).0
                 } else {
                     bounds
                 };
-                let checkbox = habit_completion_bounds(label).1;
+                let checkbox = completion_bounds(label).1;
                 assert_eq!(
                     canvas.completion_at(checkbox.center(), 600.0),
-                    Some("standup")
+                    Some(("standup", completion))
                 );
                 assert!(canvas.record_at(checkbox.center(), 600.0).is_none());
                 let element: Element<'_, Message> =
@@ -2546,24 +2551,113 @@ fn habit_checkboxes_toggle_without_opening_or_dragging_the_event() {
                 ]);
                 let messages: Vec<_> = ui.into_messages().collect();
                 assert_eq!(messages.len(), 1, "{messages:?}");
-                assert!(
-                    matches!(&messages[0], Message::Habits(crate::habits::Action::ToggleCompleted(id)) if id == "standup")
-                );
+                match completion {
+                    Completion::Habit(_) => assert!(
+                        matches!(&messages[0], Message::Habits(crate::habits::Action::ToggleCompleted(id)) if id == "standup")
+                    ),
+                    Completion::Task(_) => assert!(
+                        matches!(&messages[0], Message::Task(TaskMessage::TaskToggled(id)) if id == "standup")
+                    ),
+                }
             }
         }
     }
 }
 
 #[test]
-fn a_habits_completion_change_invalidates_the_grid_cache() {
+fn a_completion_change_invalidates_the_grid_cache() {
     let mut canvas = canvas_with_one_block();
     let mut keys = Vec::new();
-    for completed in [None, Some(false), Some(true)] {
-        canvas.blocks[0].habit_completed = completed;
-        keys.push(cache_key(&canvas.blocks, 48.0, GUTTER, false, 0, None));
+    for completion in [
+        None,
+        Some(Completion::Habit(false)),
+        Some(Completion::Habit(true)),
+        Some(Completion::Task(false)),
+        Some(Completion::Task(true)),
+    ] {
+        canvas.blocks[0].completion = completion;
+        let key = cache_key(&canvas.blocks, 48.0, GUTTER, false, 0, None);
+        assert!(!keys.contains(&key));
+        keys.push(key);
     }
-    assert_ne!(keys[0], keys[1]);
-    assert_ne!(keys[1], keys[2]);
+}
+
+#[test]
+fn calendar_tasks_offer_completion_but_deadline_markers_and_events_do_not() {
+    let mut state = State::blank();
+    let mut event = calendar::sample_snapshot().events.remove(0);
+    assert_eq!(event_completion(&state, &event), None);
+    event.id = "task:checkbox".into();
+    assert_eq!(
+        event_completion(&state, &event),
+        Some(Completion::Task(false))
+    );
+    event.completed = true;
+    assert_eq!(
+        event_completion(&state, &event),
+        Some(Completion::Task(true))
+    );
+    search_action(
+        &mut state,
+        calendar::search::Action::DetailsByVisibility(true),
+    );
+    assert_eq!(event_completion(&state, &event), None);
+    search_action(
+        &mut state,
+        calendar::search::Action::DetailsByVisibility(false),
+    );
+    event.id = "calendar-task".into();
+    event.details.task_data = Some(timeslay_core::task_db::TaskData {
+        id: 100,
+        metadata: Default::default(),
+    });
+    assert!(event.is_calendar_task());
+    assert_eq!(
+        event_completion(&state, &event),
+        Some(Completion::Task(true))
+    );
+    event.id = "deadline:calendar-task".into();
+    assert_eq!(event_completion(&state, &event), None);
+}
+
+#[test]
+fn a_compact_task_checkbox_captures_the_click_inside_the_event_button() {
+    let mut state = State::blank();
+    let mut event = calendar::sample_snapshot().events.remove(0);
+    event.id = "task:checkbox".into();
+    let metrics = Metrics::of(Size::new(400.0, 100.0));
+    for completed in [false, true] {
+        event.completed = completed;
+        for busy in [false, true] {
+            state.timeblocking.busy.remove_task(&event.id);
+            if busy {
+                state.timeblocking.busy.insert(event.id.clone());
+            }
+            let mut ui = iced_test::Simulator::with_size(
+                Default::default(),
+                Size::new(400.0, 100.0),
+                all_day_chip(&state, &event, &metrics),
+            );
+            ui.point_at(Point::new(385.0, 13.0));
+            ui.simulate([
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
+            let messages: Vec<_> = ui.into_messages().collect();
+            if !busy {
+                assert_eq!(messages.len(), 1, "{messages:?}");
+                assert!(
+                    matches!(&messages[0], Message::Task(TaskMessage::TaskToggled(id)) if id == &event.id)
+                );
+            } else {
+                assert!(
+                    !messages
+                        .iter()
+                        .any(|message| matches!(message, Message::Task(_)))
+                );
+            }
+        }
+    }
 }
 
 #[test]
