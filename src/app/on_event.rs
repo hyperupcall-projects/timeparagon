@@ -112,6 +112,21 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             }
             Task::none()
         }
+        EventMessage::SeriesRuleLoaded(id, result) => {
+            // Only the repeat rule is taken: the rest of the draft may have
+            // been edited while the master loaded. A failed load leaves the
+            // event editable, just without its schedule shown.
+            if state.calendar.open_event.as_deref() == Some(id.as_str())
+                && let Ok((_, loaded)) = result
+                && let Some(draft) = &mut state.calendar.edit_draft
+                && draft.id == id
+                && !draft.recurrence_changed
+            {
+                draft.rule = loaded.rule;
+                draft.series_id = loaded.series_id;
+            }
+            Task::none()
+        }
         EventMessage::EventTitleEdit => {
             if let Some(draft) = &mut state.calendar.edit_draft {
                 draft.editing_title = true;
@@ -285,11 +300,36 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                         Message::Event(EventMessage::HabitDetailsLoaded(id.clone(), result))
                     })
                 });
+            // Ordinary recurring events: occurrences carry no recurrence of
+            // their own, so fetch the series' rule without blocking the editor.
+            let series_load = state
+                .calendar
+                .event(&id)
+                .filter(|event| {
+                    !event.details.habit
+                        && !event.is_calendar_task()
+                        && event.task_ref().is_none()
+                        && event.details.recurring_event_id.is_some()
+                })
+                .cloned()
+                .map(|event| {
+                    let settings = state.config.calendar.clone();
+                    let id = id.clone();
+                    blocking::run(move || {
+                        calendar::habit_edit_draft(
+                            &calendar::GoogleClient::from_settings(&settings),
+                            &event,
+                        )
+                    })
+                    .map(move |result| {
+                        Message::Event(EventMessage::SeriesRuleLoaded(id.clone(), result))
+                    })
+                });
             state.calendar.open_event = Some(id);
             // Recorded during this click, before the message is handled.
             state.calendar.details_below = ui::calendar::click_was_in_the_top_half();
             state.inbox.picker = None;
-            Task::batch(close_block.into_iter().chain(habit_load))
+            Task::batch(close_block.into_iter().chain(habit_load).chain(series_load))
         }
         EventMessage::EventClosed => {
             state.calendar.open_event = None;

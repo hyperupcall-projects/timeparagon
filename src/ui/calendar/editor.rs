@@ -575,15 +575,43 @@ pub(super) fn event_scope_control<'a>(
             .edit_draft
             .as_ref()
             .is_some_and(|draft| draft.loading);
-    let toggle = if deleting {
-        Message::EventEdit(EventEditMessage::EventEditDeleteMenuToggled)
-    } else {
-        Message::EventEdit(EventEditMessage::EventEditSaveMenuToggled)
-    };
     let request = if deleting {
         Message::Event(EventMessage::EventDeleteRequested(event.id.clone()))
     } else {
         Message::EventEdit(EventEditMessage::EventEditSaveRequested)
+    };
+    let height = 40.0;
+    // "Current and future" and "all" only mean something for a series. Sleep
+    // uses "current and future" to change its shared schedule, and a habit is
+    // always a series even before its master has loaded.
+    let scoped_choices =
+        event.is_recurring() || event.details.habit || event.details.sleep.is_some();
+    if !scoped_choices {
+        let single = button(
+            text(if deleting {
+                "Delete"
+            } else if saving {
+                "Saving…"
+            } else {
+                "Save"
+            })
+            .size(metrics.label())
+            .center()
+            .width(Fill),
+        )
+        .width(Fill)
+        .height(height)
+        .on_press_maybe((!busy).then_some(request))
+        .style(super::super::view_half_style(!deleting));
+        return container(single)
+            .clip(true)
+            .style(super::super::view_button_style(!deleting))
+            .into();
+    }
+    let toggle = if deleting {
+        Message::EventEdit(EventEditMessage::EventEditDeleteMenuToggled)
+    } else {
+        Message::EventEdit(EventEditMessage::EventEditSaveMenuToggled)
     };
     let scoped = |scope| {
         if deleting {
@@ -592,7 +620,6 @@ pub(super) fn event_scope_control<'a>(
             Message::EventEdit(EventEditMessage::EventEditSaveScoped(scope))
         }
     };
-    let height = 40.0;
     let main = button(
         text(if deleting {
             "Delete"
