@@ -59,10 +59,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 if let Some(draft) = state.calendar.edit_draft.as_ref().filter(|d| d.id == id) {
                     draft.description.clone()
                 } else if let Some(event) = state.calendar.event(&id) {
-                    calendar::notes::Notes::new(&crate::timeblocking::description(
-                        &event.details.description,
-                    ))
-                    .without(&["DUE:", "DEADLINE:"])
+                    event.details.description.clone()
                 } else {
                     return Task::none();
                 };
@@ -254,8 +251,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                         } else {
                             event.start.date_naive().to_string()
                         };
-                    state.timeblocking.deadline =
-                        calendar::deadline::input_text(&event.details.description);
+                    state.timeblocking.deadline = calendar::deadline::input_text(&event);
                     state.timeblocking.deadline_time = state
                         .timeblocking
                         .deadline

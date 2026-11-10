@@ -48,21 +48,12 @@ unless `--no-enable` is passed.
 Google Tasks and Calendar sync use the public Google APIs and require no
 browser helper. Every event TimeSlay writes lives on a single **TimeSlay**
 calendar, created automatically on the first sync that needs it; in Settings,
-choose the Google Tasks list scheduled tasks go to, or let the first scheduling
-operation create/reuse. Reconnect Google once to authorize
-calendar creation. Google Tasks only stores a day for a task, so times and
-deadlines live in reserved lines anywhere in the task's notes:
-
-```text
-DEADLINE: 2026-10-30 17:00   deadline, day and time
-DUE: 2026-10-30              deadline, day only (DEADLINE wins if both exist)
-DUE_TIME: 09:30              show the task at 09:30 on its due day
-```
-
-`DUE_TIME` uses the task's Google due day and lasts as long as its estimate
-(30 minutes if none). A task scheduled through the app takes its time from
-Calendar instead. Moving a time block preserves the deadline. Completing a
-task retains its Calendar event and work history.
+scheduled tasks are native Calendar events with their task fields in private
+extended properties. Undated tasks live in Google Tasks, whose API has no
+custom properties; their structured task data is stored in a namespaced JSON
+footer. Descriptions are user text and are never parsed for task fields.
+Moving a time block preserves the deadline. Completing a task retains its
+Calendar event and work history.
 
 To remove it again:
 

@@ -231,9 +231,13 @@ fn App() -> Element {
     // Kept while the app runs, so the sheet reopens on what it showed.
     let people_store = use_signal(people::Store::live);
     let mut show_alarms = use_signal(|| false);
-    let mut show_operations = use_signal(|| false);
-    let mut google_operations = use_signal(Vec::<calendar::operations::Operation>::new);
-    calendar::operations::start();
+    let mut show_log = use_signal(|| false);
+    // Writes to Google as they are sent, saved or refused, newest last.
+    let mut google_log = use_signal(Vec::<calendar::operations::LogEntry>::new);
+    let mut google_sending = use_signal(|| 0usize);
+    // Bumped when the local edits change (a write was answered, say), so the
+    // day is drawn again with its items unlocked.
+    let mut local_edits = use_signal(|| 0u64);
     let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
     let search_state = use_signal(Search::default);
     // A note's connection or an agenda row, waiting for its day to load.
@@ -358,9 +362,9 @@ fn App() -> Element {
             config_watch::generation(),
             timeslay_core::database_sync::generation(),
         );
-        // The queue is only read again when the database says it changed,
-        // which is one small query instead of a full read, and the notes only
-        // when their directory's fingerprint moved.
+        // The local edits are only drawn again when the database says they
+        // changed, which is one small query instead of a full read, and the
+        // notes only when their directory's fingerprint moved.
         let mut changes: Option<timeslay_core::local_changes::Counters> = None;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -371,10 +375,23 @@ fn App() -> Element {
             let moved = |part: fn(&timeslay_core::local_changes::Counters) -> i64| {
                 counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
             };
-            if moved(|c| c.queue)
-                && let Ok(rows) = calendar::operations::list()
-            {
-                google_operations.set(rows);
+            let new = calendar::operations::log_since(
+                google_log.peek().last().map_or(0, |entry| entry.sequence),
+            );
+            if !new.is_empty() {
+                // A refused write had its local copy dropped: fetch what Google
+                // has so the item shows that again.
+                if new.iter().any(|entry| entry.failed) {
+                    revision.set(revision() + 1);
+                }
+                google_log.with_mut(|log| log.extend(new));
+            }
+            let sending = calendar::operations::sending();
+            if sending != *google_sending.peek() {
+                google_sending.set(sending);
+            }
+            if moved(|c| c.overlay) {
+                local_edits.set(local_edits() + 1);
             }
             if moved(|c| c.alarms) {
                 reminders::republish(&config.peek());
@@ -474,6 +491,9 @@ fn App() -> Element {
             .filter(|snapshot| snapshot.day == requested_day),
     };
     drop(resource);
+    // Drawn again whenever the local edits change, so an item unlocks as soon
+    // as Google accepts its change.
+    let _ = local_edits();
     if let (Some(snapshot), Some(path)) = (&mut snapshot, timeslay_core::task_db::path())
         && let Err(error) =
             calendar::operations::overlay(&path, &mut snapshot.events, Some(snapshot.fetched_at))
@@ -547,7 +567,7 @@ fn App() -> Element {
     let more_active = show_more()
         || page() == Page::Habits
         || show_notes()
-        || show_operations()
+        || show_log()
         || matches!(show_scratch(), Some(scratch::Page::BrainDump));
     let task_tabs = TaskTab::ALL.into_iter().map(|tab| {
         let mut task_tab = task_tab;
@@ -666,8 +686,7 @@ fn App() -> Element {
     };
     let status = move || {
         rsx! {
-            if google_operations().iter().any(|operation| operation.pending()) {span { class: "hint", role: "status", "Saving…" }}
-            if google_operations().iter().any(|operation| !operation.pending()) {span { class: "hint", role: "status", "Some changes could not be saved" }}
+            if google_sending() > 0 {span { class: "hint", role: "status", "Saving…" }}
             if pending {
                 p { class: "day-loading", "Loading..." }
             }
@@ -1070,7 +1089,7 @@ fn App() -> Element {
                             "Projects"
                         }
                         button { class: "btn", onclick: move |_| { show_more.set(false); show_alarms.set(true); }, "Alarms" }
-                        button { class: "btn", onclick: move |_| {show_more.set(false);show_operations.set(true);}, "Operations" }
+                        button { class: "btn", onclick: move |_| {show_more.set(false);show_log.set(true);}, "Log" }
                         p { class: "hint", "{database_sync_status}" }
                     }
                 }
@@ -1497,26 +1516,18 @@ fn App() -> Element {
             {more_sheet}
             if show_alarms() { alarms::AlarmsSheet { config, day: selected_day, on_close: move |_| show_alarms.set(false) } }
             {people_sheet}
-            if show_operations() {
-                div { class: "modal-backdrop", onclick: move |_| show_operations.set(false),
+            if show_log() {
+                div { class: "modal-backdrop", onclick: move |_| show_log.set(false),
                     div { class: "modal", onclick: move |event| event.stop_propagation(),
-                        div { class: "modal-head", h2 { class: "modal-title", "Operations" }
-                            button { class: "btn", onclick: move |_| show_operations.set(false), "Close" }
+                        div { class: "modal-head", h2 { class: "modal-title", "Log" }
+                            button { class: "btn", onclick: move |_| show_log.set(false), "Close" }
                         }
                         div { class: "modal-body",
-                            if google_operations().is_empty() {p { "All changes saved to Google." }}
-                            for operation in google_operations() {
-                                div { key: "{operation.id}",
-                                    p { "#{operation.id} · {operation.kind} · {operation.created_at}" }
-                                    p { "{operation.entity} · Attempts: {operation.attempts}" }
-                                    if !operation.pending() {
-                                        p { "Could not be saved: {operation.error.clone().unwrap_or_default()}" }
-                                        div { class: "editor-row",
-                                            button { class: "btn", onclick: move |_| { let _ = calendar::operations::retry(operation.id); }, "Try again" }
-                                            button { class: "btn", onclick: move |_| { let _ = calendar::operations::discard(operation.id); }, "Discard" }
-                                        }
-                                    } else if let Some(error)=operation.error.clone() {p { "Will try again: {error}" }} else {p { "Waiting for Google" }}
-                                    pre { "{operation.payload}" }
+                            if google_log().is_empty() {p { "Nothing has been sent to Google yet." }}
+                            for (sequence, time, text, failed) in google_log().into_iter().rev().map(|entry| (entry.sequence, entry.at.format("%H:%M:%S").to_string(), entry.text, entry.failed)) {
+                                p { key: "{sequence}", class: if failed { "editor-error" } else { "" },
+                                    span { class: "hint", "{time} " }
+                                    "{text}"
                                 }
                             }
                         }
@@ -1830,6 +1841,7 @@ fn all_day_chip(
     rsx! {
         button {
             class: "all-day-chip",
+            "data-sending": event.details.sending,
             style: "{style}",
             title: "{title}",
             onclick: move |_| editing.set(Some(opened.clone())),
@@ -2032,6 +2044,7 @@ fn timed_event_view(
             button {
                 key: "{id}",
                 class: "grid-event block",
+                "data-sending": timed.event.details.sending,
                 style: "{style}",
                 title: "{tooltip}",
                 onclick: move |_| open.set(Some(id.clone())),
@@ -2045,6 +2058,7 @@ fn timed_event_view(
             button {
                 key: "{id}",
                 class: "grid-event",
+                "data-sending": timed.event.details.sending,
                 style: "{style}",
                 title: "{tooltip}",
                 onclick: move |_| editing.set(Some(opened.clone())),
@@ -2091,6 +2105,7 @@ fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<E
                 button {
                     key: "{task.event.id}",
                     class: "{class}",
+                    "data-sending": task.event.details.sending,
                     style: "top:{row_top:.1}px;left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
                     onclick: move |_| on_open.call(opened.clone()),
                     "{icon} {title} · {minutes}m"

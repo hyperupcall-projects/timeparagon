@@ -109,3 +109,8 @@ The documentation below (and pretty  much everywhere else) is AI-generated.
 - [Reminders](./docs/reminders.md)
 - [Shortcut](./docs/shortcut.md)
 - [Voice input](./docs/voice-input.md)
+
+## Internals
+
+- [Data model](./docs/data-model.md): what is stored where, identifiers, and the shape of every record.
+- [Database schema](./docs/database-schema.md): every SQLite table, trigger and JSON column, plus sync internals.

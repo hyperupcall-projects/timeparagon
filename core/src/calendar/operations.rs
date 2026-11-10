@@ -1,18 +1,40 @@
-//! Durable local edits. Acknowledging one operation never discards a newer edit.
+//! Writes to Google, sent as soon as they are made.
+//!
+//! An edit is recorded locally first (the item's wanted state in
+//! `google_entities`, marked as sending) so the interface can show it, greyed
+//! out and locked, straight away. A worker thread then sends it to Google.
+//! Success clears the mark; failure drops the local copy so the item falls
+//! back to what Google has. Nothing is retried and nothing waits in a queue:
+//! every write is logged (see [`log_since`]) instead.
 use super::*;
 use crate::{config::CalendarSettings, task_db, task_edit};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
-use std::{cell::Cell, collections::HashMap, sync::OnceLock, time::Duration};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+};
 
-thread_local! { static OPERATION_ID:Cell<Option<i64>>=const {Cell::new(None)};
+thread_local! {
     static REPLAY: Cell<bool> = const { Cell::new(false) };
-static INSERT_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }
+    static INSERT_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// The local ID of the task the write being sent is for.
+    static SENDING_TASK: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
 pub(super) fn insert_id() -> Option<String> {
     INSERT_ID.with(|id| id.borrow().clone())
 }
-pub(crate) fn operation_id() -> Option<i64> {
-    OPERATION_ID.with(Cell::get)
+/// The local ID of the task whose write is being sent on this thread, if any.
+pub(crate) fn sending_task() -> Option<String> {
+    SENDING_TASK.with(|id| id.borrow().clone())
 }
+/// This thread is sending a write to Google, so the calls it makes must talk
+/// to Google rather than record another write.
 pub fn replaying() -> bool {
     REPLAY.with(Cell::get)
 }
@@ -98,113 +120,121 @@ pub enum Job {
         metadata: Option<crate::timeblocking::Metadata>,
     },
 }
-/// One queued write, as the Operations screen shows it.
-#[derive(Debug, Clone)]
-pub struct Operation {
-    pub id: i64,
-    pub kind: String,
-    pub entity: String,
-    pub created_at: String,
-    pub attempts: i64,
-    pub error: Option<String>,
-    pub payload: String,
-    /// When it was given up on. Such a write stays listed, with its error,
-    /// until it is retried or discarded; it no longer holds up the queue.
-    pub failed_at: Option<String>,
-    /// Seconds since the epoch before which it will not be tried again.
-    pub retry_at: i64,
+/// A write that has been recorded locally and is on its way to Google.
+#[derive(Clone)]
+struct Write {
+    /// `google_entities.id` of the item it changes.
+    entity: String,
+    /// What it does, for the log: "Edit task Title “Buy milk”".
+    label: String,
+    job: Job,
+    /// The cached task record it replaced, restored if Google refuses it:
+    /// the record's ID and its JSON before (`None` when there was none).
+    previous_task: Option<(String, Option<String>)>,
 }
 
-impl Operation {
-    /// Still waiting to reach Google, as opposed to given up on.
-    pub fn pending(&self) -> bool {
-        self.failed_at.is_none()
+/// One write the log mentions: being sent, saved, or refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEntry {
+    /// Increases with every entry, so a reader can ask for what is new.
+    pub sequence: u64,
+    pub at: DateTime<Local>,
+    pub text: String,
+    pub failed: bool,
+}
+
+static LOG: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
+static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// How many entries [`LOG`] keeps.
+const LOG_LIMIT: usize = 200;
+
+/// Log entries written after `sequence`, oldest first.
+pub fn log_since(sequence: u64) -> Vec<LogEntry> {
+    LOG.lock()
+        .map(|log| {
+            log.iter()
+                .filter(|entry| entry.sequence > sequence)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn log_write(text: String, failed: bool) {
+    if failed {
+        log::warn!("Google: {text}");
+    } else {
+        log::info!("Google: {text}");
+    }
+    if let Ok(mut log) = LOG.lock() {
+        log.push(LogEntry {
+            sequence: LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1,
+            at: crate::clock::now(),
+            text,
+            failed,
+        });
+        let excess = log.len().saturating_sub(LOG_LIMIT);
+        log.drain(..excess);
     }
 }
 
-pub fn list() -> Result<Vec<Operation>, String> {
-    list_in(&task_db::path().ok_or("Cannot locate database")?)
+/// Writes recorded by this process and not yet answered, per database and
+/// item. An item's mark is only cleared when its last write is answered.
+static IN_FLIGHT: Mutex<Option<HashMap<(PathBuf, String), usize>>> = Mutex::new(None);
+
+fn begin(path: &Path, entity: &str) {
+    if let Ok(mut map) = IN_FLIGHT.lock() {
+        *map.get_or_insert_with(HashMap::new)
+            .entry((path.to_owned(), entity.to_owned()))
+            .or_default() += 1;
+    }
 }
 
-pub fn list_in(path: &std::path::Path) -> Result<Vec<Operation>, String> {
-    let mut db = task_db::Database::open(path)?;
-    let mut q=db.connection().prepare("SELECT id,kind,entity,created_at,attempts,error,payload,dead_at,lease_until FROM google_operations ORDER BY id").map_err(|e|e.to_string())?;
-    q.query_map([], |r| {
-        Ok(Operation {
-            id: r.get(0)?,
-            kind: r.get(1)?,
-            entity: r.get(2)?,
-            created_at: r.get(3)?,
-            attempts: r.get(4)?,
-            error: r.get(5)?,
-            payload: r.get(6)?,
-            failed_at: r.get(7)?,
-            retry_at: r.get(8)?,
-        })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<_, _>>()
-    .map_err(|e| e.to_string())
-}
-
-/// Gives a failed write another go, straight away.
-pub fn retry(id: i64) -> Result<(), String> {
-    let path = task_db::path().ok_or("Cannot locate database")?;
-    retry_in(&path, id)?;
-    start();
-    Ok(())
-}
-
-fn retry_in(path: &std::path::Path, id: i64) -> Result<(), String> {
-    let mut db = task_db::Database::open(path)?;
-    db.connection()
-        .execute(
-            "UPDATE google_operations SET dead_at=NULL,lease_until=0,attempts=0 WHERE id=?1",
-            [id],
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Drops a failed write. The local copy of what it changed goes too once no
-/// other write for the same item is waiting, so the next sync shows Google's
-/// version instead of an edit that will never arrive.
-pub fn discard(id: i64) -> Result<(), String> {
-    discard_in(&task_db::path().ok_or("Cannot locate database")?, id)
-}
-
-fn discard_in(path: &std::path::Path, id: i64) -> Result<(), String> {
-    let mut db = task_db::Database::open(path)?;
-    let tx = db
-        .connection()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    let entity: Option<String> = tx
-        .query_row(
-            "SELECT entity FROM google_operations WHERE id=?1 AND dead_at IS NOT NULL",
-            [id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let Some(entity) = entity else {
-        return Err("Only a write that failed can be discarded".into());
+/// Counts one write for `entity` as answered. True when it was the last.
+fn end(path: &Path, entity: &str) -> bool {
+    let Ok(mut map) = IN_FLIGHT.lock() else {
+        return true;
     };
-    tx.execute("DELETE FROM google_operations WHERE id=?1", [id])
-        .map_err(|e| e.to_string())?;
-    release_entity(&tx, &entity).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    let map = map.get_or_insert_with(HashMap::new);
+    let key = (path.to_owned(), entity.to_owned());
+    match map.get_mut(&key) {
+        Some(count) if *count > 1 => {
+            *count -= 1;
+            false
+        }
+        _ => {
+            map.remove(&key);
+            true
+        }
+    }
 }
 
-/// Forgets the local snapshot of `entity` unless a write for it is still
-/// waiting, so the overlay stops showing a change Google never got.
-fn release_entity(tx: &rusqlite::Connection, entity: &str) -> rusqlite::Result<()> {
-    tx.execute(
-        "DELETE FROM google_entities WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM google_operations WHERE entity=?1 AND dead_at IS NULL)",
-        [entity],
-    )?;
-    Ok(())
+/// How many writes this process is still waiting on Google for.
+pub fn sending() -> usize {
+    IN_FLIGHT
+        .lock()
+        .ok()
+        .and_then(|map| map.as_ref().map(|map| map.values().sum()))
+        .unwrap_or(0)
 }
+
+/// A write still marked as sending after this long was cut off (the process
+/// that sent it quit or crashed). Its item is unlocked and falls back to what
+/// Google has.
+const STALE_SENDING: chrono::Duration = chrono::Duration::minutes(10);
+
+fn stale_cutoff() -> String {
+    (crate::clock::utc_now() - STALE_SENDING).to_rfc3339()
+}
+
+/// Forgets local copies whose write was cut off before Google answered.
+fn release_stale(tx: &rusqlite::Connection) -> rusqlite::Result<usize> {
+    tx.execute(
+        "DELETE FROM google_entities WHERE sending_since IS NOT NULL AND sending_since < ?1",
+        [stale_cutoff()],
+    )
+}
+
 pub fn new_id() -> Result<String, String> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b).map_err(|e| e.to_string())?;
@@ -213,25 +243,72 @@ pub fn new_id() -> Result<String, String> {
 fn key(calendar: &str, id: &str) -> String {
     format!("{calendar}\n{id}")
 }
-pub fn enqueue(job: Job, event: Option<&Event>, calendar: &str, id: &str) -> Result<(), String> {
+
+/// Shows `event` (or, for `None`, the item's removal) locally at once, locked
+/// until Google answers, and sends `job` to Google in the background.
+pub fn submit(job: Job, event: Option<&Event>, calendar: &str, id: &str) -> Result<(), String> {
     let path = task_db::path().ok_or("Cannot locate database")?;
-    enqueue_in(&path, job, event, calendar, id)?;
-    start();
+    let writes = record_in(&path, job, event, calendar, id)?;
+    for write in writes {
+        log_write(format!("Saving to Google: {}", write.label), false);
+        // Test runs keep everything local: nothing may reach Google.
+        if crate::config::isolated() {
+            send_in(&path, write, |_| Ok(None))?;
+        } else {
+            worker(&path).send(write);
+        }
+    }
     Ok(())
 }
-fn enqueue_in(
-    path: &std::path::Path,
+
+/// The thread that sends this process's writes, one at a time and in the
+/// order they were made, so an edit cannot overtake its item's creation.
+struct Worker(Mutex<mpsc::Sender<Write>>);
+
+impl Worker {
+    fn send(&self, write: Write) {
+        let sent = self.0.lock().is_ok_and(|sender| sender.send(write).is_ok());
+        if !sent {
+            log_write("Could not hand a write to the Google worker".into(), true);
+        }
+    }
+}
+
+fn worker(path: &Path) -> &'static Worker {
+    static WORKER: OnceLock<Worker> = OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<Write>();
+        let path = path.to_owned();
+        std::thread::spawn(move || {
+            for write in receiver {
+                let result = send_in(&path, write, |job| {
+                    let settings = crate::config::Config::load().calendar;
+                    execute(&GoogleClient::from_settings(&settings), &settings, job)
+                });
+                if let Err(error) = result {
+                    log_write(format!("Could not record a Google answer: {error}"), true);
+                }
+            }
+        });
+        Worker(Mutex::new(sender))
+    })
+}
+
+/// Records the wanted state locally, marked as sending, in one transaction,
+/// and returns the writes that carry it to Google.
+fn record_in(
+    path: &Path,
     job: Job,
     event: Option<&Event>,
     calendar: &str,
     id: &str,
-) -> Result<(), String> {
+) -> Result<Vec<Write>, String> {
     let mut db = task_db::Database::open(path)?;
     let tx = db
         .connection()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    enqueue_tx(&tx, &job, event, calendar, id)?;
+    let mut writes = vec![record_tx(&tx, job.clone(), event, calendar, id)?];
     if let Job::Delete { calendar, id, .. } = &job {
         // Removing a container releases its children; deleting the container
         // and recording all child edits is one local transaction.
@@ -264,9 +341,9 @@ fn enqueue_in(
             released.all_day = true;
             released.start = at_clock(original.start.date_naive(), 0, 0);
             released.end = released.start + chrono::Duration::days(1);
-            enqueue_tx(
+            writes.push(record_tx(
                 &tx,
-                &Job::TaskEdit {
+                Job::TaskEdit {
                     task: original.clone(),
                     change: task_edit::Change::Unassign,
                     order: 0,
@@ -274,27 +351,26 @@ fn enqueue_in(
                 Some(&released),
                 &original.calendar_id,
                 &original.id,
-            )?;
+            )?);
         }
     }
-    tx.commit().map_err(|e| e.to_string())
+    tx.commit().map_err(|e| e.to_string())?;
+    for write in &writes {
+        begin(path, &write.entity);
+    }
+    Ok(writes)
 }
 
-fn enqueue_tx(
-    tx: &rusqlite::Connection,
-    job: &Job,
-    event: Option<&Event>,
-    calendar: &str,
-    id: &str,
-) -> Result<(), String> {
-    let mut entity = key(calendar, id);
-    let mut kind = match &job {
+/// What a job does, as the log says it.
+fn describe(job: &Job, event: Option<&Event>) -> String {
+    let kind = match job {
         Job::Edit { .. } => "Edit event",
         Job::Time { .. } => "Change time",
         Job::Location { .. } => "Change location",
         Job::Status { .. } => "Task status",
         Job::TaskEdit { .. } => "Edit task",
-        Job::Delete { .. } | Job::DeleteTask { .. } => "Delete",
+        Job::Delete { .. } => "Delete event",
+        Job::DeleteTask { .. } => "Delete task",
         Job::Create { .. } => "Create event",
         Job::CreateTask { .. } | Job::CreateCalendarTask { .. } => "Create task",
         Job::Sleep { .. } => "Save sleep",
@@ -302,21 +378,41 @@ fn enqueue_tx(
         Job::Reply { .. } => "Reply to invitation",
         Job::CreateHabit { .. } => "Create habit",
     };
-    let lane = match &job {
-        Job::TaskEdit { change, .. } => {
-            let value = serde_json::to_value(change).map_err(|e| e.to_string())?;
-            value
-                .as_object()
-                .and_then(|o| o.keys().next().cloned())
-                .or_else(|| value.as_str().map(str::to_owned))
-                .unwrap_or_default()
-        }
+    let lane = match job {
+        Job::TaskEdit { change, .. } => serde_json::to_value(change)
+            .ok()
+            .and_then(|value| {
+                value
+                    .as_object()
+                    .and_then(|o| o.keys().next().cloned())
+                    .or_else(|| value.as_str().map(str::to_owned))
+            })
+            .unwrap_or_default(),
         Job::Edit { scope, .. } => format!("{scope:?}"),
         _ => String::new(),
     };
-    let kind_owned = format!("{kind} {lane}").trim().to_owned();
-    kind = &kind_owned;
-    let payload = serde_json::to_string(&job).map_err(|e| e.to_string())?;
+    let title = match job {
+        Job::DeleteTask { task, .. } | Job::Status { task, .. } => Some(task.title.as_str()),
+        Job::Create { title, .. } => Some(title.as_str()),
+        _ => event.map(|event| event.title.as_str()),
+    }
+    .filter(|title| !title.trim().is_empty());
+    let mut label = format!("{kind} {lane}").trim().to_owned();
+    if let Some(title) = title {
+        label.push_str(&format!(" “{}”", title.trim()));
+    }
+    label
+}
+
+fn record_tx(
+    tx: &rusqlite::Connection,
+    job: Job,
+    event: Option<&Event>,
+    calendar: &str,
+    id: &str,
+) -> Result<Write, String> {
+    let mut entity = key(calendar, id);
+    let label = describe(&job, event);
     let saved = event
         .map(serde_json::to_string)
         .transpose()
@@ -332,8 +428,21 @@ fn enqueue_tx(
     {
         entity = existing;
     }
+    let record_id = event.filter(|e| e.is_task()).map_or(id, |e| e.id.as_str());
+    let previous_task = tx
+        .query_row(
+            "SELECT event FROM google_task_records WHERE id=?1",
+            [record_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let touches_task = previous_task.is_some() || event.is_some_and(Event::is_task);
     (|| -> rusqlite::Result<()> {
-        tx.execute("INSERT INTO google_entities(id,event,acknowledged_at) VALUES(?1,?2,NULL) ON CONFLICT(id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL",params![entity,saved])?;
+        tx.execute(
+            "INSERT INTO google_entities(id,event,acknowledged_at,observed_at,sending_since) VALUES(?1,?2,NULL,NULL,?3) ON CONFLICT(id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL,sending_since=excluded.sending_since",
+            params![entity, saved, crate::clock::utc_now().to_rfc3339()],
+        )?;
         if event.is_none() {
             tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])?;
         }
@@ -355,11 +464,15 @@ fn enqueue_tx(
                 )?;
             }
         }
-        tx.execute("DELETE FROM google_operations WHERE entity=?1 AND kind=?2 AND error IS NOT NULL",params![entity,kind])?;
-        tx.execute("INSERT INTO google_operations(kind,payload,entity,created_at,version) VALUES(?1,?2,?3,?4,?5)",params![kind,payload,entity,crate::clock::now().to_rfc3339(),JOB_VERSION])?;
         Ok(())
-    })().map_err(|e|e.to_string())?;
-    Ok(())
+    })()
+    .map_err(|e| e.to_string())?;
+    Ok(Write {
+        entity,
+        label,
+        job,
+        previous_task: touches_task.then(|| (record_id.to_owned(), previous_task)),
+    })
 }
 /// What [`overlay`] applies, read from the database in one go so the reading
 /// can happen on a worker thread and the applying on the UI thread.
@@ -378,6 +491,8 @@ struct OverlayEntity {
     /// `None` for an item deleted locally.
     event: Option<Event>,
     acknowledged_at: Option<DateTime<chrono::FixedOffset>>,
+    /// Its write is on its way to Google, so the item is shown locked.
+    sending: bool,
 }
 
 /// Reads the local snapshots of edited items and the ID map.
@@ -412,19 +527,26 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
     let mut entities = Vec::new();
     {
         let mut q = tx
-            .prepare("SELECT id,event,acknowledged_at FROM google_entities")
+            .prepare("SELECT id,event,acknowledged_at,sending_since FROM google_entities")
             .map_err(|e| e.to_string())?;
+        let cutoff = stale_cutoff();
         for row in q
             .query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
                 ))
             })
             .map_err(|e| e.to_string())?
         {
-            let (key, json, ack) = row.map_err(|e| e.to_string())?;
+            let (key, json, ack, sending_since) = row.map_err(|e| e.to_string())?;
+            // A write cut off long ago no longer counts: the item is unlocked
+            // and shows what Google has.
+            if sending_since.as_ref().is_some_and(|since| *since < cutoff) {
+                continue;
+            }
             let Some((calendar, id)) = key.split_once('\n') else {
                 continue;
             };
@@ -436,6 +558,7 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
                     .transpose()
                     .map_err(|e| e.to_string())?,
                 acknowledged_at: ack.and_then(|ack| DateTime::parse_from_rfc3339(&ack).ok()),
+                sending: sending_since.is_some(),
             });
         }
     }
@@ -531,7 +654,9 @@ impl Overlay {
                         )))
             });
             if let Some(event) = &entity.event {
-                events.push(event.clone());
+                let mut event = event.clone();
+                event.details.sending = entity.sending;
+                events.push(event);
             }
         }
     }
@@ -585,163 +710,103 @@ pub fn cached_event(calendar: &str, id: &str) -> Result<Option<Event>, String> {
     }
     Ok(None)
 }
-/// The payload format [`enqueue`] writes, kept in each row's `version`.
-///
-/// A change to [`Job`] that older rows cannot be read as bumps this, and
-/// [`decode`] learns to read the previous version, so writes queued by an
-/// older build still go out after an update. A row from a newer build is left
-/// for that build rather than misread.
-pub const JOB_VERSION: i64 = 1;
-
-/// Why a queued payload could not be turned back into a [`Job`].
-#[derive(Debug)]
-enum Undecodable {
-    /// Written by a newer build; that build will send it.
-    Newer(i64),
-    /// Cannot be read by any build: it will never be sent.
-    Broken(String),
-}
-
-fn decode(version: i64, value: serde_json::Value) -> Result<Job, Undecodable> {
-    match version {
-        1 => serde_json::from_value(value).map_err(|e| Undecodable::Broken(e.to_string())),
-        newer if newer > JOB_VERSION => Err(Undecodable::Newer(newer)),
-        older => Err(Undecodable::Broken(format!(
-            "unknown queue format version {older}"
-        ))),
-    }
-}
-
-/// What to do with a write Google did not accept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Disposition {
-    /// Try again after this many seconds.
-    Retry(i64),
-    /// Give up: trying again would get the same answer.
-    Fail,
-}
-
-/// The first retry waits this long; each further one waits twice as long, up
-/// to [`MAX_BACKOFF`].
-const FIRST_BACKOFF: i64 = 15;
-const MAX_BACKOFF: i64 = 30 * 60;
-/// An error whose cause is unknown is retried at least this many times, and
-/// for at least [`UNKNOWN_PATIENCE`], before it is given up on.
-const UNKNOWN_ATTEMPTS: i64 = 12;
-const UNKNOWN_PATIENCE: i64 = 24 * 60 * 60;
-
-fn backoff(attempts: i64) -> i64 {
-    let doublings = attempts.saturating_sub(1).clamp(0, 20) as u32;
-    FIRST_BACKOFF
-        .saturating_mul(1 << doublings)
-        .min(MAX_BACKOFF)
-}
-
-/// Decides between retrying and giving up from what went wrong.
-///
-/// Anything the user or the network can fix (no connection, a rate limit, a
-/// server error, an expired or missing sign-in, a scope or API to enable) is
-/// retried for as long as it takes, so edits made offline or while signed out
-/// are never lost. A refusal that will not change (the item is gone, the
-/// request is invalid, permission is denied) is given up on at once, so it
-/// stops holding up later writes for the same item. An error from a layer that
-/// does not say which it was is retried patiently first.
-fn disposition(error: &google::GoogleError, attempts: i64, age_seconds: i64) -> Disposition {
-    use google::Kind;
-    let retry = Disposition::Retry(backoff(attempts));
-    match &error.kind {
-        Kind::Transport | Kind::Auth | Kind::MissingScope | Kind::ApiDisabled => retry,
-        Kind::RateLimited { retry_after } => {
-            Disposition::Retry(backoff(attempts).max(retry_after.map_or(0, |d| d.as_secs() as i64)))
-        }
-        Kind::NotFound => Disposition::Fail,
-        Kind::Http => match error.status {
-            Some(408 | 425 | 429) | Some(500..=599) | None => retry,
-            Some(_) => Disposition::Fail,
-        },
-        Kind::Other => {
-            if attempts >= UNKNOWN_ATTEMPTS && age_seconds >= UNKNOWN_PATIENCE {
-                Disposition::Fail
-            } else {
-                retry
-            }
-        }
-    }
-}
-
-pub fn start() {
-    // Test runs keep their queue local: it must never reach Google.
-    if crate::config::isolated() {
-        return;
-    }
-    static START: OnceLock<()> = OnceLock::new();
-    START.get_or_init(|| {
-        std::thread::spawn(|| {
-            loop {
-                if let Err(e) = drain_one() {
-                    log::warn!("Google queue: {e}");
-                }
-                std::thread::sleep(Duration::from_secs(2));
-            }
-        });
-    });
-}
-fn drain_one() -> Result<(), String> {
-    let path = task_db::path().ok_or("Cannot locate database")?;
-    drain_in(&path, |job| {
-        let settings = crate::config::Config::load().calendar;
-        execute(&GoogleClient::from_settings(&settings), &settings, job)
-    })
-}
-
 /// A successful write that gave something a new ID: the local ID, Google's,
 /// and the calendar or task list it is on.
 type Mapping = Option<(String, String, String)>;
 
-/// Sends the oldest due write with no earlier pending write for its item.
-///
-/// Preserve order for each item, so edits cannot overtake its creation or
-/// move. A failed write waiting to retry does not hold up unrelated items.
-fn drain_in(
-    path: &std::path::Path,
+/// Sends one recorded write and records Google's answer: on success the item
+/// is unlocked, on failure its local copy is dropped so it shows what Google
+/// has. Either way the outcome is logged.
+fn send_in(
+    path: &Path,
+    write: Write,
     run: impl FnOnce(Job) -> Result<Mapping, google::GoogleError>,
+) -> Result<(), String> {
+    let Write {
+        entity,
+        label,
+        job,
+        previous_task,
+    } = write;
+    let task = match &job {
+        Job::TaskEdit { task, .. } | Job::Status { task, .. } => Some(task.id.clone()),
+        Job::CreateTask { task, .. } => Some(task.id.clone()),
+        _ => None,
+    };
+    let outcome = remapped(path, job)
+        .map_err(google::GoogleError::from)
+        .and_then(|job| {
+            REPLAY.with(|r| r.set(true));
+            SENDING_TASK.with(|t| *t.borrow_mut() = task);
+            let result = run(job);
+            SENDING_TASK.with(|t| *t.borrow_mut() = None);
+            REPLAY.with(|r| r.set(false));
+            result
+        });
+    let last = end(path, &entity);
+    let recorded = finish(path, &entity, &outcome, last, previous_task);
+    match &outcome {
+        Ok(_) => log_write(format!("Saved to Google: {label}"), false),
+        Err(error) => log_write(format!("Could not save to Google: {label}: {error}"), true),
+    }
+    recorded
+}
+
+fn finish(
+    path: &Path,
+    entity: &str,
+    outcome: &Result<Mapping, google::GoogleError>,
+    last: bool,
+    previous_task: Option<(String, Option<String>)>,
 ) -> Result<(), String> {
     let mut db = task_db::Database::open(path)?;
     let tx = db
         .connection()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    let now = crate::clock::utc_now().timestamp();
-    let item: Option<(i64, String, String, i64, i64, i64, String)> = tx
-        .query_row(
-            "SELECT op.id,op.payload,op.entity,op.lease_until,op.version,op.attempts,op.created_at FROM google_operations op WHERE op.dead_at IS NULL AND op.lease_until<=?1 AND NOT EXISTS(SELECT 1 FROM google_operations earlier WHERE earlier.entity=op.entity AND earlier.id<op.id AND earlier.dead_at IS NULL) ORDER BY op.id LIMIT 1",
-            [now],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let Some((id, payload, entity, lease, version, attempts, created_at)) = item else {
-        return Ok(());
-    };
-    if lease > now {
-        return Ok(());
-    }
-    let age =
-        DateTime::parse_from_rfc3339(&created_at).map_or(0, |created| now - created.timestamp());
-    let mut value: serde_json::Value = match serde_json::from_str(&payload) {
-        Ok(value) => value,
-        Err(error) => {
-            fail(
-                &tx,
-                id,
-                &entity,
-                &format!("This change could not be read: {error}"),
-            )?;
-            return tx.commit().map_err(|e| e.to_string());
+    match outcome {
+        Ok(mapping) => {
+            if let Some((local, remote, calendar)) = mapping {
+                tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local,remote,calendar]).map_err(|e|e.to_string())?;
+            }
+            // A later write for the same item is still on its way, and its
+            // wanted state is the one to keep showing, locked.
+            if last {
+                tx.execute(
+                    "UPDATE google_entities SET acknowledged_at=?2,sending_since=NULL WHERE id=?1",
+                    params![entity, crate::clock::now().to_rfc3339()],
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
-    };
+        Err(_) if last => {
+            tx.execute("DELETE FROM google_entities WHERE id=?1", [entity])
+                .map_err(|e| e.to_string())?;
+            match previous_task {
+                Some((id, Some(json))) => tx.execute(
+                    "INSERT INTO google_task_records(id,event) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET event=excluded.event",
+                    params![id, json],
+                ),
+                Some((id, None)) => {
+                    tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
+                }
+                None => Ok(0),
+            }
+            .map_err(|e| e.to_string())?;
+        }
+        Err(_) => {}
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// The job with any local IDs replaced by the IDs Google has given those
+/// items since it was made (an edit made just after a creation names the
+/// item by the ID it was created under).
+fn remapped(path: &Path, job: Job) -> Result<Job, String> {
+    let mut db = task_db::Database::open(path)?;
     let aliases = {
-        let mut q = tx
+        let mut q = db
+            .connection()
             .prepare("SELECT local,remote,calendar FROM google_id_map")
             .map_err(|e| e.to_string())?;
         q.query_map([], |r| {
@@ -755,111 +820,14 @@ fn drain_in(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?
     };
+    if aliases.is_empty() {
+        return Ok(job);
+    }
+    let mut value = serde_json::to_value(&job).map_err(|e| e.to_string())?;
     remap(&mut value, &aliases);
-    let job = match decode(version, value) {
-        Ok(job) => job,
-        Err(Undecodable::Newer(newer)) => {
-            // Leave it for the newer build, without counting an attempt. It
-            // stays first, so later writes keep their order behind it.
-            tx.execute(
-                "UPDATE google_operations SET error=?2 WHERE id=?1",
-                params![
-                    id,
-                    format!("Waiting for a newer version of TimeSlay (queue format {newer})")
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            return tx.commit().map_err(|e| e.to_string());
-        }
-        Err(Undecodable::Broken(error)) => {
-            fail(
-                &tx,
-                id,
-                &entity,
-                &format!("This change was saved in a form TimeSlay can no longer send: {error}"),
-            )?;
-            return tx.commit().map_err(|e| e.to_string());
-        }
-    };
-    tx.execute(
-        "UPDATE google_operations SET lease_until=?2,attempts=attempts+1 WHERE id=?1",
-        params![id, now + 600],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
-
-    REPLAY.with(|r| r.set(true));
-    OPERATION_ID.with(|op| op.set(Some(id)));
-    let result = run(job);
-    OPERATION_ID.with(|op| op.set(None));
-    REPLAY.with(|r| r.set(false));
-
-    // All edits to an entity commit independently. Only delete the exact job
-    // that succeeded, then acknowledge if no newer job exists.
-    let tx = db
-        .connection()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    let progress: Option<String> = tx
-        .query_row(
-            "SELECT data FROM google_operation_progress WHERE operation_id=?1",
-            [id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    if let Some(json) = progress {
-        let data: crate::task_db::TaskData =
-            serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",params![data.id,json]).map_err(|e|e.to_string())?;
-    }
-    match result {
-        Ok(mapping) => {
-            if let Some((local, remote, calendar)) = mapping {
-                tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local,remote,calendar]).map_err(|e|e.to_string())?;
-            }
-            tx.execute("DELETE FROM google_operations WHERE id=?1", [id])
-                .map_err(|e| e.to_string())?;
-            tx.execute("UPDATE google_entities SET acknowledged_at=?2 WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM google_operations WHERE entity=?1 AND dead_at IS NULL)",params![entity,crate::clock::now().to_rfc3339()]).map_err(|e|e.to_string())?;
-        }
-        Err(error) => {
-            let message = error.to_string();
-            // A newer write of the same kind for the same item supersedes this
-            // one, so it does not need to succeed at all.
-            let superseded = tx.execute("DELETE FROM google_operations WHERE id=?1 AND EXISTS(SELECT 1 FROM google_operations newer WHERE newer.entity=?2 AND newer.kind=(SELECT kind FROM google_operations WHERE id=?1) AND newer.id>?1 AND newer.dead_at IS NULL)",params![id,entity]).map_err(|e|e.to_string())?;
-            if superseded == 0 {
-                match disposition(&error, attempts + 1, age) {
-                    Disposition::Retry(delay) => {
-                        tx.execute(
-                            "UPDATE google_operations SET error=?2,lease_until=?3 WHERE id=?1",
-                            params![id, message, now + delay],
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                    Disposition::Fail => {
-                        log::warn!("Google queue: giving up on write {id}: {message}");
-                        fail(&tx, id, &entity, &message)?;
-                    }
-                }
-            }
-        }
-    }
-    tx.commit().map_err(|e| e.to_string())
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
-
-/// Sets a write aside as failed, with the reason, and stops showing the local
-/// change it carried unless a later write for the same item is still waiting.
-fn fail(tx: &rusqlite::Connection, id: i64, entity: &str, error: &str) -> Result<(), String> {
-    tx.execute(
-        "UPDATE google_operations SET error=?2,dead_at=?3,lease_until=0 WHERE id=?1",
-        params![id, error, crate::clock::now().to_rfc3339()],
-    )
-    .map_err(|e| e.to_string())?;
-    release_entity(tx, entity).map_err(|e| e.to_string())
-}
-
-/// Rewrites local IDs in a queued payload to the IDs Google gave the items
-/// since it was queued.
+/// Rewrites local IDs in a job to the IDs Google gave the items since.
 fn remap(v: &mut serde_json::Value, a: &[(String, String, String)]) {
     if let Some(obj) = v.as_object_mut() {
         for _ in 0..a.len() {
@@ -1095,7 +1063,7 @@ pub fn edit_task(
     }
     let original = task.clone();
     task = super::calendar_tasks::apply(task, settings, &change, order)?;
-    enqueue(
+    submit(
         Job::TaskEdit {
             task: original.clone(),
             change,
@@ -1143,7 +1111,7 @@ pub fn create_task(
     task.details.task_data = Some(data);
     if let Some(day) = due {
         task = super::calendar_tasks::apply(task, settings, &task_edit::Change::Day(day), 0)?;
-        enqueue(
+        submit(
             Job::CreateCalendarTask {
                 task: Box::new(task.clone()),
             },
@@ -1153,7 +1121,7 @@ pub fn create_task(
         )?;
         return Ok(task);
     }
-    enqueue(
+    submit(
         Job::CreateTask {
             task: Box::new(task.clone()),
             notes: notes.into(),
@@ -1255,6 +1223,7 @@ pub(super) fn observe_range(
         }
     }
     prune_observed(&tx, fetched).map_err(|e| e.to_string())?;
+    release_stale(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -1268,7 +1237,7 @@ const OBSERVED_RETENTION: chrono::Duration = chrono::Duration::hours(1);
 fn prune_observed(tx: &rusqlite::Connection, now: DateTime<Local>) -> rusqlite::Result<usize> {
     let cutoff = (now - OBSERVED_RETENTION).with_timezone(&Utc).to_rfc3339();
     tx.execute(
-        "DELETE FROM google_entities WHERE observed_at IS NOT NULL AND observed_at < ?1 AND NOT EXISTS(SELECT 1 FROM google_operations o WHERE o.entity=google_entities.id AND o.dead_at IS NULL)",
+        "DELETE FROM google_entities WHERE observed_at IS NOT NULL AND observed_at < ?1 AND sending_since IS NULL",
         [cutoff],
     )
 }
@@ -1282,138 +1251,67 @@ mod tests {
         task_db::Database::open(&path).unwrap();
         (dir, path)
     }
-    fn edit(path: &std::path::Path, title: &str) -> Event {
-        let mut event = super::super::sample_snapshot().events.remove(0);
-        event.title = title.into();
-        let draft = EditDraft::from_event(&event);
-        enqueue_in(
-            path,
-            Job::Edit {
-                original: Box::new(event.clone()),
-                draft,
-                scope: SaveScope::Current,
-                description: String::new(),
-                color: None,
-            },
-            Some(&event),
-            &event.calendar_id,
-            &event.id,
-        )
-        .unwrap();
-        event
+    fn edit_job(event: &Event) -> Job {
+        Job::Edit {
+            original: Box::new(event.clone()),
+            draft: EditDraft::from_event(event),
+            scope: SaveScope::Current,
+            description: String::new(),
+            color: None,
+        }
     }
-    fn count(path: &std::path::Path) -> i64 {
-        let mut db = task_db::Database::open(path).unwrap();
-        db.connection()
-            .query_row("SELECT count(*) FROM google_operations", [], |r| r.get(0))
-            .unwrap()
+    /// Records an edit of the sample event, returning it and its write.
+    fn edit(path: &Path, title: &str) -> (Event, Write) {
+        edit_other(path, &super::super::sample_snapshot().events[0].id, title)
     }
-    fn edit_other(path: &std::path::Path, id: &str, title: &str) -> Event {
+    fn edit_other(path: &Path, id: &str, title: &str) -> (Event, Write) {
         let mut event = super::super::sample_snapshot().events.remove(0);
         event.id = id.into();
         event.title = title.into();
-        let draft = EditDraft::from_event(&event);
-        enqueue_in(
+        let mut writes = record_in(
             path,
-            Job::Edit {
-                original: Box::new(event.clone()),
-                draft,
-                scope: SaveScope::Current,
-                description: String::new(),
-                color: None,
-            },
+            edit_job(&event),
             Some(&event),
             &event.calendar_id,
             &event.id,
         )
         .unwrap();
-        event
+        (event, writes.remove(0))
     }
-    fn due_now(path: &std::path::Path) {
+    fn entities(path: &Path) -> i64 {
         task_db::Database::open(path)
             .unwrap()
             .connection()
-            .execute("UPDATE google_operations SET lease_until=0", [])
-            .unwrap();
+            .query_row("SELECT count(*) FROM google_entities", [], |r| r.get(0))
+            .unwrap()
     }
-    fn titles_sent(path: &std::path::Path) -> Vec<String> {
-        let mut sent = Vec::new();
-        for _ in 0..4 {
-            due_now(path);
-            drain_in(path, |job| {
-                if let Job::Edit { draft, .. } = job {
-                    sent.push(draft.title);
-                }
-                Ok(None)
-            })
-            .unwrap();
+    /// The events as they would be without the sending marks, for comparing
+    /// with the events they were made from.
+    fn settled(mut events: Vec<Event>) -> Vec<Event> {
+        for event in &mut events {
+            event.details.sending = false;
         }
-        sent
+        events
     }
     #[test]
-    fn retrying_an_item_does_not_block_other_items_or_reorder_its_edits() {
+    fn an_edit_is_shown_locked_at_once_and_unlocked_when_google_accepts_it() {
         let (_dir, path) = db();
-        let event = edit(&path, "first edit");
-        drain_in(&path, |_| Err("temporary failure".into())).unwrap();
-        let mut draft = EditDraft::from_event(&event);
-        draft.title = "later edit of same item".into();
-        // A different scope is not coalesced with the failed edit.
-        enqueue_in(
-            &path,
-            Job::Edit {
-                original: Box::new(event.clone()),
-                draft,
-                scope: SaveScope::All,
-                description: String::new(),
-                color: None,
-            },
-            Some(&event),
-            &event.calendar_id,
-            &event.id,
-        )
-        .unwrap();
-        edit_other(&path, "unrelated", "unrelated edit");
-
-        let mut sent = Vec::new();
-        drain_in(&path, |job| {
-            if let Job::Edit { draft, .. } = job {
-                sent.push(draft.title);
-            }
-            Ok(None)
-        })
-        .unwrap();
-        assert_eq!(sent, ["unrelated edit"]);
-        assert_eq!(list_in(&path).unwrap().len(), 2);
-        drain_in(&path, |_| panic!("same item must wait for its first write")).unwrap();
-        assert_eq!(
-            titles_sent(&path),
-            ["first edit", "later edit of same item"]
-        );
+        let (event, write) = edit(&path, "locked");
+        let mut shown = Vec::new();
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(shown[0].title, "locked");
+        assert!(shown[0].details.sending);
+        send_in(&path, write, |_| Ok(None)).unwrap();
+        let mut shown = vec![event.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(shown, [event]);
+        assert!(!shown[0].details.sending);
     }
-
     #[test]
-    fn invalid_google_task_list_is_skipped_as_a_permanent_failure() {
+    fn a_refused_write_drops_the_local_copy_so_google_shows_through() {
         let (_dir, path) = db();
-        edit(&path, "invalid list");
-        edit_other(&path, "valid", "valid edit");
-        drain_in(&path, |_| {
-            Err(google::GoogleError::from_status(
-                "Google Tasks",
-                400,
-                "Invalid task list ID",
-            ))
-        })
-        .unwrap();
-        assert!(!list_in(&path).unwrap()[0].pending());
-        assert_eq!(titles_sent(&path), ["valid edit"]);
-    }
-
-    #[test]
-    fn a_refusal_that_will_not_change_is_set_aside_and_unblocks_the_queue() {
-        let (_dir, path) = db();
-        edit_other(&path, "gone", "edited after deletion elsewhere");
-        edit_other(&path, "fine", "still wanted");
-        drain_in(&path, |_| {
+        let (_, write) = edit(&path, "refused");
+        send_in(&path, write, |_| {
             Err(google::GoogleError::from_status(
                 "Google Calendar",
                 404,
@@ -1421,141 +1319,108 @@ mod tests {
             ))
         })
         .unwrap();
-        let rows = list_in(&path).unwrap();
-        assert!(!rows[0].pending());
-        assert_eq!(rows[0].error.as_deref(), Some("Google Calendar: Not Found"));
-        assert!(rows[1].pending());
-        // The failed edit's local copy is no longer shown over Google's data.
-        let mut fetched = Vec::new();
-        overlay(&path, &mut fetched, None).unwrap();
-        assert_eq!(
-            fetched.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
-            ["fine"]
-        );
-        // The write behind it goes out; the failed one stays listed.
-        assert_eq!(titles_sent(&path), ["still wanted"]);
-        assert_eq!(list_in(&path).unwrap().len(), 1);
-    }
-    #[test]
-    fn offline_and_signed_out_writes_are_retried_for_as_long_as_it_takes() {
-        let (_dir, path) = db();
-        edit(&path, "made offline");
-        for error in [
-            google::GoogleError::transport("Google Calendar", "Connection Failed"),
-            google::GoogleError::auth("Not connected to Google Calendar"),
-            google::GoogleError::from_status("Google Calendar", 503, "Backend Error"),
-        ] {
-            for _ in 0..30 {
-                due_now(&path);
-                drain_in(&path, |_| Err(error.clone())).unwrap();
-            }
-            assert!(list_in(&path).unwrap()[0].pending(), "{error}");
-        }
-        // An error with no known cause is given up on, but only eventually.
-        task_db::Database::open(&path)
-            .unwrap()
-            .connection()
-            .execute(
-                "UPDATE google_operations SET created_at='2000-01-01T00:00:00+00:00'",
-                [],
-            )
-            .unwrap();
-        due_now(&path);
-        drain_in(&path, |_| Err("something odd".into())).unwrap();
-        assert!(!list_in(&path).unwrap()[0].pending());
-    }
-    #[test]
-    fn retries_back_off_up_to_a_limit() {
-        assert_eq!(backoff(1), FIRST_BACKOFF);
-        assert_eq!(backoff(2), FIRST_BACKOFF * 2);
-        assert_eq!(backoff(100), MAX_BACKOFF);
-        let limited = google::GoogleError {
-            kind: google::Kind::RateLimited {
-                retry_after: Some(Duration::from_secs(5000)),
-            },
-            status: Some(429),
-            context: String::new(),
-            detail: String::new(),
-        };
-        assert_eq!(disposition(&limited, 1, 0), Disposition::Retry(5000));
-        let fresh_unknown: google::GoogleError = "odd".into();
-        assert!(matches!(
-            disposition(&fresh_unknown, UNKNOWN_ATTEMPTS, 60),
-            Disposition::Retry(_)
-        ));
-        assert_eq!(
-            disposition(&fresh_unknown, UNKNOWN_ATTEMPTS, UNKNOWN_PATIENCE),
-            Disposition::Fail
-        );
-        let invalid = google::GoogleError::from_status("Google Calendar", 400, "Invalid");
-        assert_eq!(disposition(&invalid, 1, 0), Disposition::Fail);
-    }
-    #[test]
-    fn a_payload_from_a_newer_build_waits_and_a_broken_one_is_set_aside() {
-        let (_dir, path) = db();
-        edit(&path, "from the future");
-        edit_other(&path, "later", "behind it");
-        task_db::Database::open(&path)
-            .unwrap()
-            .connection()
-            .execute(
-                "UPDATE google_operations SET version=?1 WHERE id=(SELECT min(id) FROM google_operations)",
-                [JOB_VERSION + 1],
-            )
-            .unwrap();
-        drain_in(&path, |_| panic!("a newer payload must not be read")).unwrap();
-        let rows = list_in(&path).unwrap();
-        assert!(rows[0].pending());
-        assert_eq!(rows[0].attempts, 0);
-        assert!(rows[0].error.as_deref().unwrap().contains("newer version"));
-
-        // A payload no build can read is set aside instead of blocking forever.
-        task_db::Database::open(&path)
-            .unwrap()
-            .connection()
-            .execute(
-                "UPDATE google_operations SET version=?1, payload='{\"Unknown\":{}}' WHERE id=(SELECT min(id) FROM google_operations)",
-                [JOB_VERSION],
-            )
-            .unwrap();
-        drain_in(&path, |_| panic!("an unreadable payload must not run")).unwrap();
-        assert!(!list_in(&path).unwrap()[0].pending());
-        assert_eq!(titles_sent(&path), ["behind it"]);
-    }
-    #[test]
-    fn a_failed_write_can_be_retried_or_discarded() {
-        let (_dir, path) = db();
-        edit(&path, "refused");
-        drain_in(&path, |_| {
-            Err(google::GoogleError::from_status(
-                "Google Calendar",
-                403,
-                "Forbidden",
-            ))
-        })
-        .unwrap();
-        let id = list_in(&path).unwrap()[0].id;
-        retry_in(&path, id).unwrap();
-        let row = &list_in(&path).unwrap()[0];
-        assert!(row.pending());
-        assert_eq!(row.attempts, 0);
-        drain_in(&path, |_| {
-            Err(google::GoogleError::from_status(
-                "Google Calendar",
-                403,
-                "Forbidden",
-            ))
-        })
-        .unwrap();
-        discard_in(&path, id).unwrap();
-        assert!(list_in(&path).unwrap().is_empty());
+        assert_eq!(entities(&path), 0);
         let mut fetched = Vec::new();
         overlay(&path, &mut fetched, None).unwrap();
         assert!(fetched.is_empty());
-        // Only failed writes can be discarded; a waiting one is never dropped.
-        edit(&path, "waiting");
-        let waiting = list_in(&path).unwrap()[0].id;
-        assert!(discard_in(&path, waiting).is_err());
+    }
+    #[test]
+    fn a_refused_task_write_restores_the_cached_task() {
+        let (_dir, path) = db();
+        let mut task = super::super::sample_snapshot().events.remove(0);
+        task.id = "task:cached".into();
+        task.calendar_id = "tasks:list".into();
+        cache_tasks_in(&path, std::slice::from_ref(&task), true).unwrap();
+        let mut edited = task.clone();
+        edited.title = "never reached Google".into();
+        let mut writes = record_in(
+            &path,
+            Job::Status {
+                task: task.clone(),
+                status: crate::timeblocking::TaskStatus::Active,
+            },
+            Some(&edited),
+            &task.calendar_id,
+            &task.id,
+        )
+        .unwrap();
+        send_in(&path, writes.remove(0), |_| Err("offline".into())).unwrap();
+        let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+        let restored = restored.iter().find(|e| e.id == task.id).unwrap();
+        assert_eq!(restored.title, task.title);
+        assert!(!restored.details.sending);
+    }
+    #[test]
+    fn an_item_stays_locked_until_its_last_write_is_answered() {
+        let (_dir, path) = db();
+        let (_, first) = edit(&path, "first");
+        let (_, second) = edit(&path, "second");
+        // The first is refused, but the second still carries what is wanted.
+        send_in(&path, first, |_| Err("refused".into())).unwrap();
+        let mut shown = Vec::new();
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(shown[0].title, "second");
+        assert!(shown[0].details.sending);
+        send_in(&path, second, |_| Ok(None)).unwrap();
+        let mut shown = Vec::new();
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(shown[0].title, "second");
+        assert!(!shown[0].details.sending);
+    }
+    #[test]
+    fn edit_while_sending_survives_the_older_acknowledgement() {
+        let (_dir, path) = db();
+        let (first, write) = edit(&path, "first");
+        let mut later = None;
+        send_in(&path, write, |_| {
+            later = Some(edit(&path, "edited during network request").1);
+            Ok(None)
+        })
+        .unwrap();
+        let mut fetched = vec![first];
+        overlay(&path, &mut fetched, Some(crate::clock::now())).unwrap();
+        assert_eq!(fetched[0].title, "edited during network request");
+        assert!(fetched[0].details.sending);
+        send_in(&path, later.unwrap(), |_| Ok(None)).unwrap();
+        let mut fetched = Vec::new();
+        overlay(&path, &mut fetched, None).unwrap();
+        assert!(!fetched[0].details.sending);
+    }
+    #[test]
+    fn a_write_cut_off_long_ago_unlocks_its_item() {
+        let (_dir, path) = db();
+        let (event, _write) = edit(&path, "the app quit before Google answered");
+        task_db::Database::open(&path)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE google_entities SET sending_since='2000-01-01T00:00:00+00:00'",
+                [],
+            )
+            .unwrap();
+        let mut fetched = Vec::new();
+        overlay(&path, &mut fetched, None).unwrap();
+        assert!(fetched.is_empty());
+        let day = event.start.date_naive();
+        observe_range(&path, &[], day, day, crate::clock::now()).unwrap();
+        assert_eq!(entities(&path), 0);
+    }
+    #[test]
+    fn writes_are_labelled_with_what_they_do() {
+        let (_dir, path) = db();
+        let (_, write) = edit_other(&path, "a", "Standup");
+        assert_eq!(write.label, "Edit event Current “Standup”");
+        let task = super::super::sample_snapshot().events.remove(0);
+        assert_eq!(
+            describe(
+                &Job::DeleteTask {
+                    task: task.clone(),
+                    calendar: None
+                },
+                None
+            ),
+            format!("Delete task “{}”", task.title)
+        );
     }
     #[test]
     fn ids_follow_chains_of_moves_only_from_the_matching_calendar() {
@@ -1582,30 +1447,18 @@ mod tests {
     #[test]
     fn edits_and_deletions_preserve_matching_ids_on_other_calendars() {
         let (_dir, path) = db();
-        let a = edit(&path, "calendar A edit");
+        let (a, _) = edit(&path, "calendar A edit");
         let mut b = a.clone();
         b.calendar_id = "other-calendar".into();
         b.title = "calendar B edit".into();
-        enqueue_in(
-            &path,
-            Job::Edit {
-                original: Box::new(b.clone()),
-                draft: EditDraft::from_event(&b),
-                scope: SaveScope::Current,
-                description: String::new(),
-                color: None,
-            },
-            Some(&b),
-            &b.calendar_id,
-            &b.id,
-        )
-        .unwrap();
+        record_in(&path, edit_job(&b), Some(&b), &b.calendar_id, &b.id).unwrap();
         let mut events = vec![a.clone(), b.clone()];
         overlay(&path, &mut events, None).unwrap();
+        let events = settled(events);
         assert_eq!(events.len(), 2);
         assert!(events.contains(&a));
         assert!(events.contains(&b));
-        enqueue_in(
+        record_in(
             &path,
             Job::Delete {
                 calendar: a.calendar_id.clone(),
@@ -1618,15 +1471,16 @@ mod tests {
             &a.id,
         )
         .unwrap();
+        let mut events = events;
         overlay(&path, &mut events, None).unwrap();
-        assert_eq!(events, [b]);
+        assert_eq!(settled(events), [b]);
     }
 
     #[test]
     fn moved_ids_on_other_calendars_are_not_remapped_or_removed() {
         let (_dir, path) = db();
-        let local = edit(&path, "local");
-        drain_in(&path, |_| {
+        let (local, write) = edit(&path, "local");
+        send_in(&path, write, |_| {
             Ok(Some((
                 local.id.clone(),
                 "remote".into(),
@@ -1648,10 +1502,10 @@ mod tests {
     #[test]
     fn a_moved_overlay_does_not_consume_another_calendars_local_id() {
         let (_dir, path) = db();
-        let original = edit(&path, "original");
+        let (original, _) = edit(&path, "original");
         let mut moved = original.clone();
         moved.calendar_id = "destination".into();
-        enqueue_in(
+        record_in(
             &path,
             Job::Edit {
                 original: Box::new(original.clone()),
@@ -1667,15 +1521,9 @@ mod tests {
         .unwrap();
         let mut other = original.clone();
         other.calendar_id = "unrelated".into();
-        enqueue_in(
+        record_in(
             &path,
-            Job::Edit {
-                original: Box::new(other.clone()),
-                draft: EditDraft::from_event(&other),
-                scope: SaveScope::Current,
-                description: String::new(),
-                color: None,
-            },
+            edit_job(&other),
             Some(&other),
             &other.calendar_id,
             &other.id,
@@ -1689,6 +1537,7 @@ mod tests {
         remote.id = "remote".into();
         let mut events = vec![remote, other.clone()];
         overlay(&path, &mut events, None).unwrap();
+        let events = settled(events);
         assert_eq!(events.len(), 2);
         assert!(events.contains(&moved));
         assert!(events.contains(&other));
@@ -1697,15 +1546,8 @@ mod tests {
     #[test]
     fn snapshots_google_has_since_confirmed_are_pruned_after_an_hour() {
         let (_dir, path) = db();
-        let event = edit(&path, "confirmed");
-        drain_in(&path, |_| Ok(None)).unwrap();
-        let entities = |path: &std::path::Path| -> i64 {
-            task_db::Database::open(path)
-                .unwrap()
-                .connection()
-                .query_row("SELECT count(*) FROM google_entities", [], |r| r.get(0))
-                .unwrap()
-        };
+        let (event, write) = edit(&path, "confirmed");
+        send_in(&path, write, |_| Ok(None)).unwrap();
         assert_eq!(entities(&path), 1);
         let day = event.start.date_naive();
         let fetched = crate::clock::now() + chrono::Duration::seconds(1);
@@ -1736,7 +1578,7 @@ mod tests {
         assert_eq!(entities(&path), 0);
     }
     #[test]
-    fn queued_creation_requires_an_explicit_all_day_flag() {
+    fn creation_requires_an_explicit_all_day_flag() {
         let event = super::super::sample_snapshot().events.remove(0);
         let job = Job::Create {
             id: event.id,
@@ -1760,34 +1602,17 @@ mod tests {
         assert!(serde_json::from_value::<Job>(value).is_err());
     }
     #[test]
-    fn restart_and_stale_google_data_preserve_the_latest_local_edit() {
+    fn stale_google_data_does_not_hide_the_latest_local_edit() {
         let (_dir, path) = db();
-        let old = edit(&path, "first");
-        let latest = edit(&path, "second");
-        assert_eq!(count(&path), 2);
+        let (old, _) = edit(&path, "first");
+        let (latest, _) = edit(&path, "second");
         let mut fetched = vec![old];
         overlay(&path, &mut fetched, Some(crate::clock::now())).unwrap();
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].title, latest.title);
     }
     #[test]
-    fn edit_while_uploading_survives_the_older_acknowledgement() {
-        let (_dir, path) = db();
-        let first = edit(&path, "first");
-        drain_in(&path, |_| {
-            edit(&path, "edited during network request");
-            Ok(None)
-        })
-        .unwrap();
-        assert_eq!(count(&path), 1);
-        let mut fetched = vec![first];
-        overlay(&path, &mut fetched, Some(crate::clock::now())).unwrap();
-        assert_eq!(fetched[0].title, "edited during network request");
-        drain_in(&path, |_| Ok(None)).unwrap();
-        assert_eq!(count(&path), 0);
-    }
-    #[test]
-    fn deleting_a_block_releases_children_durably_and_atomically() {
+    fn deleting_a_block_releases_children_atomically() {
         let (_dir, path) = db();
         let block = super::super::sample_snapshot().events.remove(0);
         let mut child = block.clone();
@@ -1804,19 +1629,21 @@ mod tests {
             scope: SaveScope::Current,
             notify: false,
         };
-        database.connection().execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON google_operations WHEN NEW.kind='Edit task Unassign' BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
-        assert!(enqueue_in(&path, delete.clone(), None, &block.calendar_id, &block.id).is_err());
-        assert_eq!(count(&path), 0);
+        database.connection().execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON google_entities WHEN instr(NEW.id,'task:child')>0 BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+        assert!(record_in(&path, delete.clone(), None, &block.calendar_id, &block.id).is_err());
+        assert_eq!(entities(&path), 0);
         database
             .connection()
             .execute_batch("DROP TRIGGER reject_child")
             .unwrap();
-        enqueue_in(&path, delete, None, &block.calendar_id, &block.id).unwrap();
-        assert_eq!(count(&path), 2);
+        let writes = record_in(&path, delete, None, &block.calendar_id, &block.id).unwrap();
+        assert_eq!(writes.len(), 2);
+        assert!(writes[1].label.starts_with("Edit task Unassign"));
         let mut restored = vec![block.clone(), child];
         overlay(&path, &mut restored, None).unwrap();
         assert_eq!(restored.len(), 1);
         assert!(restored[0].all_day);
+        assert!(restored[0].details.sending);
         assert!(crate::timeblocking::metadata(&restored[0]).block.is_none());
         assert_eq!(restored[0].start.date_naive(), block.start.date_naive());
     }
@@ -1832,7 +1659,7 @@ mod tests {
         // A stale fetch finishes after an edit has already committed.
         let mut edited = task.clone();
         edited.title = "new local title".into();
-        enqueue_in(
+        record_in(
             &path,
             Job::Status {
                 task: task.clone(),
@@ -1848,7 +1675,7 @@ mod tests {
         let restored = restored.iter().find(|e| e.id == task.id).unwrap();
         assert_eq!(restored.title, edited.title);
         assert!(!restored.all_day);
-        enqueue_in(
+        record_in(
             &path,
             Job::DeleteTask {
                 task: task.clone(),
@@ -1882,32 +1709,10 @@ mod tests {
     }
 
     #[test]
-    fn failed_upload_keeps_both_the_transaction_and_local_value() {
+    fn deletion_hides_the_item_while_it_is_sent() {
         let (_dir, path) = db();
-        let event = edit(&path, "saved offline");
-        drain_in(&path, |_| Err("network unavailable".into())).unwrap();
-        assert_eq!(count(&path), 1);
-        let mut db = task_db::Database::open(&path).unwrap();
-        let error: String = db
-            .connection()
-            .query_row("SELECT error FROM google_operations", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(error, "network unavailable");
-        let mut fetched = Vec::new();
-        overlay(&path, &mut fetched, None).unwrap();
-        assert_eq!(fetched[0].title, event.title);
-        drain_in(&path, |_| panic!("retry backoff must be respected")).unwrap();
-        db.connection()
-            .execute("UPDATE google_operations SET lease_until=0", [])
-            .unwrap();
-        drain_in(&path, |_| Ok(None)).unwrap();
-        assert_eq!(count(&path), 0);
-    }
-    #[test]
-    fn deletion_is_a_durable_tombstone_until_google_accepts_it() {
-        let (_dir, path) = db();
-        let event = edit(&path, "delete me");
-        enqueue_in(
+        let (event, _) = edit(&path, "delete me");
+        record_in(
             &path,
             Job::Delete {
                 calendar: event.calendar_id.clone(),
@@ -1925,39 +1730,11 @@ mod tests {
         assert!(fetched.is_empty());
     }
     #[test]
-    fn sql_failure_rolls_back_the_projection_and_queue_together() {
-        let (_dir, path) = db();
-        let mut db = task_db::Database::open(&path).unwrap();
-        db.connection().execute_batch("CREATE TRIGGER reject_queue BEFORE INSERT ON google_operations BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
-        let event = super::super::sample_snapshot().events.remove(0);
-        assert!(
-            enqueue_in(
-                &path,
-                Job::Delete {
-                    calendar: event.calendar_id.clone(),
-                    id: event.id.clone(),
-                    scope: SaveScope::Current,
-                    notify: false
-                },
-                None,
-                &event.calendar_id,
-                &event.id
-            )
-            .is_err()
-        );
-        assert_eq!(count(&path), 0);
-        let entities: i64 = db
-            .connection()
-            .query_row("SELECT count(*) FROM google_entities", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(entities, 0);
-    }
-    #[test]
     fn task_id_changes_are_resolved_through_multiple_moves() {
         let (_dir, path) = db();
-        let local = edit(&path, "first");
+        let (local, write) = edit(&path, "first");
         let local_id = local.id.clone();
-        drain_in(&path, |_| {
+        send_in(&path, write, |_| {
             Ok(Some((
                 local_id.clone(),
                 "remote-one".into(),
@@ -1965,8 +1742,8 @@ mod tests {
             )))
         })
         .unwrap();
-        edit(&path, "second");
-        drain_in(&path, |job| {
+        let (_, write) = edit(&path, "second");
+        send_in(&path, write, |job| {
             let Job::Edit { original, .. } = job else {
                 panic!("expected edit")
             };
@@ -1979,8 +1756,8 @@ mod tests {
             )))
         })
         .unwrap();
-        edit(&path, "third");
-        drain_in(&path, |job| {
+        let (_, write) = edit(&path, "third");
+        send_in(&path, write, |job| {
             let Job::Edit { original, .. } = job else {
                 panic!("expected edit")
             };
@@ -1999,23 +1776,10 @@ mod tests {
         assert_eq!(fetched[0].title, "third");
     }
     #[test]
-    fn corrected_value_can_replace_a_failed_inflight_value() {
-        let (_dir, path) = db();
-        edit(&path, "invalid old value");
-        drain_in(&path, |_| {
-            edit(&path, "corrected value");
-            Err("Google rejected the old value".into())
-        })
-        .unwrap();
-        assert_eq!(count(&path), 1);
-        drain_in(&path, |_| Ok(None)).unwrap();
-        assert_eq!(count(&path), 0);
-    }
-    #[test]
     fn confirmed_remote_changes_update_the_disk_projection_and_reject_older_fetches() {
         let (_dir, path) = db();
-        let mut remote = edit(&path, "local edit");
-        drain_in(&path, |_| Ok(None)).unwrap();
+        let (mut remote, write) = edit(&path, "local edit");
+        send_in(&path, write, |_| Ok(None)).unwrap();
         let fetched = crate::clock::now() + chrono::Duration::seconds(1);
         remote.title = "later Google edit".into();
         let mut events = vec![remote.clone()];
@@ -2047,8 +1811,10 @@ mod tests {
         let snapshot = super::super::sample_snapshot();
         let mut store = Store::with_snapshot(snapshot);
         store.cache_days_in(Some(path.clone()));
-        let latest = edit(&path, "immediate edit");
+        let (latest, _) = edit(&path, "immediate edit");
         store.apply_local_operations().unwrap();
-        assert_eq!(store.event(&latest.id).unwrap().title, "immediate edit");
+        let shown = store.event(&latest.id).unwrap();
+        assert_eq!(shown.title, "immediate edit");
+        assert!(shown.details.sending);
     }
 }

@@ -236,7 +236,6 @@ fn TaskEditor(
     let color = css_color(current.color);
     let untriaged = day::untriaged(&current, &context);
     let triage_error = task_edit::triage_error(&current, &context.settings.triage);
-    let deadline_error = calendar::deadline::check(&current.details.description).err();
     let place = places::place_of(
         &context.places.places,
         &context.places.event_places,
@@ -435,9 +434,6 @@ fn TaskEditor(
                         onclick: move |_| submit(fields.peek().deadline_change(true)),
                         "Save time"
                     }
-                }
-                if let Some(message) = deadline_error {
-                    p { class: "editor-error", "{message}" }
                 }
             }
             LabelsField {
@@ -1536,7 +1532,7 @@ fn AssignedRow(
     let minutes = day::duration_label(task.minutes);
 
     rsx! {
-        div { class: "assigned-task",
+        div { class: "assigned-task", "data-sending": task.event.details.sending,
             button {
                 class: "assigned-open",
                 title: "Edit this task",

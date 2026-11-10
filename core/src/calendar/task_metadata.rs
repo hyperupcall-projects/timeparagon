@@ -44,13 +44,9 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
     if fields.remove("version") != Some(json!(1)) {
         return Err("Unsupported TimeSlay metadata version".into());
     }
-    if let Some(value) = fields.remove("deadline")
-        && !value.is_null()
-    {
-        super::deadline::parse_input(value.as_str().ok_or("Invalid metadata deadline")?)?;
-    }
     let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
     let allowed = [
+        "deadline",
         "repeat_source",
         "inherited",
         "backlog_section",
@@ -78,9 +74,7 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
 pub fn write(notes: &str, data: &TaskData) -> Result<String, String> {
     // Validate before replacing: never erase malformed or future-version data.
     read(notes)?;
-    let notes = crate::timeblocking::description(notes);
-    let deadline = super::deadline::read_deadline(&notes)?;
-    let prose = super::notes::Notes::new(&notes).without(&["DUE:", "DEADLINE:"]);
+    let prose = prose(notes);
     let mut result = if prose.is_empty() {
         String::new()
     } else {
@@ -88,10 +82,6 @@ pub fn write(notes: &str, data: &TaskData) -> Result<String, String> {
     };
     result.push_str("---\ntt-version: 1\n");
     result.push_str(&format!("tt-id: {}", data.id));
-    result.push_str(&format!(
-        "\ntt-deadline: {}",
-        json!(deadline.map(|d| d.value()))
-    ));
     let fields = serde_json::to_value(&data.metadata).map_err(|e| e.to_string())?;
     for (key, value) in fields.as_object().expect("metadata object") {
         result.push_str(&format!("\ntt-{key}: {value}"));
@@ -162,34 +152,11 @@ pub fn save(token: &str, event: &super::Event, data: &TaskData) -> Result<(), St
 mod tests {
     use super::*;
     #[test]
-    fn deadlines_migrate_to_footer_and_remain_editable_without_metadata_loss() {
-        let data = TaskData {
-            id: 100,
-            metadata: Default::default(),
-        };
-        let notes = "Human notes\nDEADLINE: 2026-10-30 17:05\nMore notes";
-        let remote = write(notes, &data).unwrap();
-        assert_eq!(prose(&remote), "Human notes\nMore notes");
-        assert!(remote.contains("tt-deadline: \"2026-10-30 17:05\""));
-        assert_eq!(
-            super::super::deadline::read_deadline(&remote).unwrap(),
-            super::super::deadline::read_deadline(notes).unwrap()
-        );
-        let display = crate::timeblocking::description(&remote);
-        let cleared = super::super::deadline::write(&display, None);
-        let remote = write(&cleared, &data).unwrap();
-        assert_eq!(
-            super::super::deadline::read_deadline(&remote).unwrap(),
-            None
-        );
-        assert_eq!(read(&remote).unwrap(), Some(data));
-    }
-
-    #[test]
     fn all_metadata_round_trips_and_prose_rules_are_preserved() {
         let data = TaskData {
             id: 123,
             metadata: crate::timeblocking::Metadata {
+                deadline: Some(super::super::deadline::parse_input("2026-10-28 17:00").unwrap()),
                 created_at: Some(
                     chrono::DateTime::parse_from_rfc3339("2026-10-29T19:30:12.123Z")
                         .unwrap()

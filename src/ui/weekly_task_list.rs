@@ -398,7 +398,10 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
     .spacing(5)
     .width(Fill);
     // Markdown checklist notes are useful context without opening the editor.
-    for line in tb::description(&event.details.description)
+    for line in event
+        .details
+        .description
+        .clone()
         .lines()
         .filter_map(|line| {
             let line = line.trim().strip_prefix("- ").unwrap_or(line.trim());
@@ -522,11 +525,12 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
     ])
     .width(Fill)
     .style(card_style);
-    if task {
+    let content = if task {
         super::task_drag::task_drag(content, &event.id, state.timeblocking.dragging.as_deref())
     } else {
         content.into()
-    }
+    };
+    super::controls::locked(content, event.details.sending)
 }
 
 fn drop_target<'a>(

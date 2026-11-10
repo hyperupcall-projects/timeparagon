@@ -307,7 +307,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
         let nav_metrics = Metrics::of(size);
 
         let content: Element<'_, Message> = match (state.screen, metrics.breakpoint) {
-            (Screen::Operations, _) => operations_view(state),
             (Screen::Settings, _) => settings::view(state, &metrics),
             // The notepad takes the whole window for the same reason: it is
             // somewhere to write, not somewhere to watch the clock from.
@@ -605,14 +604,7 @@ pub fn plan_view_label(state: &State) -> &'static str {
 pub const TASKS_LABELS: [&str; 4] = ["Overdue", "Inbox", "Today", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 6] = [
-    "Travel",
-    "Habits",
-    "Notes",
-    "People",
-    "Brain dump",
-    "Operations",
-];
+pub const MORE_LABELS: [&str; 5] = ["Travel", "Habits", "Notes", "People", "Brain dump"];
 
 /// A little breathing room between the menu and the top of the window.
 const TAB_TOP_MARGIN: f32 = 6.0;
@@ -701,12 +693,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let more_active = state.more_menu_open
         || matches!(
             state.screen,
-            Screen::Travel
-                | Screen::Habits
-                | Screen::Notes
-                | Screen::People
-                | Screen::BrainDump
-                | Screen::Operations
+            Screen::Travel | Screen::Habits | Screen::Notes | Screen::People | Screen::BrainDump
         );
 
     let view = tab(
@@ -1009,7 +996,6 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         Screen::Notes,
         Screen::People,
         Screen::BrainDump,
-        Screen::Operations,
     ]) {
         panel = panel.push(
             button(text(*label).size(metrics.label()).center().width(Fill))
@@ -1114,28 +1100,13 @@ fn activity_log<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
         );
     }
 
-    let mut panel = column![
+    let panel = column![
         text("Logs").size(metrics.label() + 2.0),
         container(crate::ui::controls::scrollable(entries).width(Fill))
             .max_height((metrics.size.height * 0.6).max(120.0)),
     ]
     .spacing(8.0)
     .width(Fill);
-    if matches!(&state.operations, Ok(rows) if !rows.is_empty()) {
-        panel = panel.push(
-            button(
-                text("Open operations")
-                    .size(metrics.label())
-                    .center()
-                    .width(Fill),
-            )
-            .width(Fill)
-            .style(crate::ui::controls::secondary)
-            .on_press(Message::Navigation(NavigationMessage::ScreenSelected(
-                Screen::Operations,
-            ))),
-        );
-    }
 
     let width = (metrics.size.width - metrics.padding * 2.0).clamp(160.0, 360.0);
     let card = container(panel)
@@ -1159,58 +1130,4 @@ fn activity_log<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 
     let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
     iced::widget::stack(layers).into()
-}
-fn operations_view<'a>(state: &State) -> Element<'a, Message> {
-    let mut panel = column![text("Operations").size(24)].spacing(12).padding(16);
-    match &state.operations {
-        Ok(rows) => {
-            if rows.is_empty() {
-                panel = panel.push(text("All changes saved to Google."));
-            }
-            for row in rows {
-                let status = if row.pending() {
-                    row.error
-                        .as_deref()
-                        .map_or("Waiting for Google".to_owned(), |error| {
-                            format!("Will try again: {error}")
-                        })
-                } else {
-                    format!(
-                        "Could not be saved: {}",
-                        row.error.as_deref().unwrap_or("Google refused it")
-                    )
-                };
-                panel = panel.push(
-                    text(format!(
-                        "#{} · {} · {}\n{} · Attempts: {}\n{}\n{}",
-                        row.id,
-                        row.kind,
-                        row.created_at,
-                        row.entity,
-                        row.attempts,
-                        status,
-                        row.payload
-                    ))
-                    .size(13),
-                );
-                if !row.pending() {
-                    panel = panel.push(
-                        row![
-                            button(text("Try again").size(13))
-                                .on_press(Message::System(SystemMessage::OperationRetried(row.id)))
-                                .style(crate::ui::controls::secondary),
-                            button(text("Discard").size(13))
-                                .on_press(Message::System(SystemMessage::OperationDiscarded(
-                                    row.id
-                                )))
-                                .style(crate::ui::controls::danger),
-                        ]
-                        .spacing(8),
-                    );
-                }
-            }
-        }
-        Err(error) => panel = panel.push(text(error.clone())),
-    }
-    iced::widget::scrollable(panel).height(Fill).into()
 }

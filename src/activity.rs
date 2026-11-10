@@ -4,9 +4,8 @@
 //! The two are kept apart on purpose. What is under way (saving to Google,
 //! loading the calendar, database sync) is worked out afresh from the app's
 //! state after every update, and shown at the foot of the panel. The log is
-//! written when something finishes, in words a person cares about ("Synced 12
-//! events and 24 tasks from Google") rather than the queue of single
-//! operations that the Operations screen lists.
+//! written as things happen, in words a person cares about ("Synced 12 events
+//! and 24 tasks from Google", "Saved to Google: Edit task Title “Buy milk”").
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -55,9 +54,8 @@ pub struct Activity {
     log: VecDeque<LogEntry>,
     /// The last database sync log entry already copied into [`Self::log`].
     database_sequence: u64,
-    /// Google operations last seen waiting, with their errors, to tell when
-    /// they are saved or fail.
-    operations: Vec<(i64, Option<String>)>,
+    /// The last Google write log entry already copied into [`Self::log`].
+    google_sequence: u64,
     /// The popup listing the log is open.
     pub open: bool,
 }
@@ -165,31 +163,17 @@ impl Activity {
         }
     }
 
-    /// Compares a fresh read of the Google queue with the last one, and logs
-    /// what was saved and what newly failed.
-    pub fn observe_operations(&mut self, rows: &[timeslay_core::calendar::operations::Operation]) {
-        let saved = self
-            .operations
-            .iter()
-            .filter(|(id, _)| !rows.iter().any(|row| row.id == *id))
-            .count();
-        if saved > 0 {
-            let plural = if saved == 1 { "" } else { "s" };
-            self.record(format!("Saved {saved} change{plural} to Google"), false);
+    /// Copies in the writes to Google made since it was last asked: each
+    /// one being sent, saved, or refused. True when one was refused, so the
+    /// caller can fetch Google's version of what it changed.
+    pub fn pull_google_log(&mut self) -> bool {
+        let mut refused = false;
+        for entry in timeslay_core::calendar::operations::log_since(self.google_sequence) {
+            self.google_sequence = self.google_sequence.max(entry.sequence);
+            refused |= entry.failed;
+            self.record_at(entry.at, entry.text, entry.failed);
         }
-        for row in rows {
-            let Some(error) = &row.error else {
-                continue;
-            };
-            let known = self
-                .operations
-                .iter()
-                .any(|(id, seen)| *id == row.id && seen.as_ref() == Some(error));
-            if !known {
-                self.record(format!("Could not save to Google: {error}"), true);
-            }
-        }
-        self.operations = rows.iter().map(|row| (row.id, row.error.clone())).collect();
+        refused
     }
 }
 
@@ -307,39 +291,5 @@ mod tests {
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].text, "Saved 1 change to Google");
         assert_eq!(log[1].repeats, 2);
-    }
-
-    #[test]
-    fn saved_and_failed_operations_are_logged_once() {
-        use timeslay_core::calendar::operations::Operation;
-        let operation = |id, error: Option<&str>| Operation {
-            id,
-            kind: "time".into(),
-            entity: "event".into(),
-            created_at: String::new(),
-            attempts: 1,
-            error: error.map(Into::into),
-            payload: String::new(),
-            failed_at: None,
-            retry_at: 0,
-        };
-        let mut activity = Activity::default();
-        activity.observe_operations(&[operation(1, None), operation(2, None)]);
-        assert_eq!(activity.log().count(), 0);
-        activity.observe_operations(&[operation(2, Some("offline"))]);
-        activity.observe_operations(&[operation(2, Some("offline"))]);
-        let log: Vec<_> = activity.log().map(|entry| entry.text.as_str()).collect();
-        assert_eq!(
-            log,
-            [
-                "Could not save to Google: offline",
-                "Saved 1 change to Google"
-            ]
-        );
-        activity.observe_operations(&[]);
-        assert_eq!(
-            activity.log().next().unwrap().text,
-            "Saved 1 change to Google"
-        );
     }
 }

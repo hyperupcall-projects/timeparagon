@@ -171,9 +171,9 @@ pub fn backlog_tasks<'a>(
     tasks
 }
 
-/// When a task is due: its notes deadline if it has one, otherwise its day.
+/// When a task is due: its metadata deadline if it has one, otherwise its day.
 fn due(event: &Event) -> Option<deadline::Deadline> {
-    if let Ok(Some(deadline)) = deadline::read_deadline(&event.details.description) {
+    if let Some(deadline) = deadline::get(event) {
         return Some(deadline);
     }
     let date = event.start.date_naive();
@@ -436,7 +436,7 @@ fn task_card(
             "Due Date",
             plain(scheduled_label(task, time_format).unwrap_or_else(|| "None".into())),
         ));
-        if let Ok(Some(deadline)) = deadline::read_deadline(&task.details.description) {
+        if let Some(deadline) = deadline::get(task) {
             fields.push(field("Deadline", plain(deadline.value())));
         }
         fields.push(field(
@@ -514,7 +514,7 @@ fn task_card(
         if let Some(place) = m.location.and_then(|id| config.travel.place(id)) {
             fields.push(field("Location", plain(format!("📍 {}", place.name))));
         }
-        if let Ok(Some(deadline)) = deadline::read_deadline(&task.details.description) {
+        if let Some(deadline) = deadline::get(task) {
             let class = if tb::overdue(task) {
                 "plan-missing"
             } else {
@@ -534,6 +534,7 @@ fn task_card(
         div {
             key: "{task.id}",
             class: "plan-card",
+            "data-sending": task.details.sending,
             role: "button",
             tabindex: "0",
             onclick: move |_| editing.set(Some(opened.clone())),
@@ -717,7 +718,7 @@ fn backlog_row(
     });
     let current = m.backlog_section;
     rsx! {
-        div { key: "{task.id}", class: "plan-card backlog-row",
+        div { key: "{task.id}", class: "plan-card backlog-row", "data-sending": task.details.sending,
             div { class: "backlog-line",
                 button {
                     class: "backlog-check",
@@ -851,7 +852,16 @@ mod tests {
             task("planned", "tasks:inbox", "Planned", today),
             Event {
                 details: calendar::Details {
-                    description: format!("DUE: {}", today - Duration::days(3)),
+                    task_data: Some(timeslay_core::task_db::TaskData {
+                        id: 100,
+                        metadata: tb::Metadata {
+                            deadline: Some(deadline::Deadline {
+                                date: today - Duration::days(3),
+                                time: None,
+                            }),
+                            ..Default::default()
+                        },
+                    }),
                     ..Default::default()
                 },
                 ..task("late", "tasks:work", "Late", today - Duration::days(3))

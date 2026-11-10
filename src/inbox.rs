@@ -786,7 +786,7 @@ pub(crate) fn write(
     let mut prose = task
         .event
         .as_ref()
-        .map(|e| tb::description(&e.details.description))
+        .map(|e| e.details.description.clone())
         .unwrap_or_default();
     if let Some(source) = &task.source
         && !prose.contains(&source.url)
@@ -796,15 +796,10 @@ pub(crate) fn write(
         }
         prose.push_str(&source.url);
     }
-    let notes = deadline::write(&prose, task.deadline);
-    let mut event = create_event_with_metadata(
-        settings,
-        &token,
-        &title,
-        &notes,
-        task.due,
-        task.event.as_ref().map(tb::metadata),
-    )?;
+    let mut metadata = task.event.as_ref().map(tb::metadata).unwrap_or_default();
+    metadata.deadline = task.deadline;
+    let mut event =
+        create_event_with_metadata(settings, &token, &title, &prose, task.due, Some(metadata))?;
     if let Some(draft) = task.event
         && !draft.all_day
     {
@@ -824,27 +819,20 @@ pub fn add(
     deadline: Option<Deadline>,
 ) -> Result<Event, String> {
     let token = tb::access(settings)?;
-    // A deadline lives in the notes, since Google Tasks has no such field.
-    // With none there is nothing to add, so the notes are left exactly as the
-    // caller wrote them.
-    let notes = match deadline {
-        Some(deadline) => deadline::write(notes, Some(deadline)),
-        None => notes.to_owned(),
-    };
-    create_event(settings, &token, title, &notes, due)
+    create_event_with_metadata(
+        settings,
+        &token,
+        title,
+        notes,
+        due,
+        Some(tb::Metadata {
+            deadline,
+            ..Default::default()
+        }),
+    )
 }
 
 /// Writes one task to the inbox list and builds the local [`Event`] for it.
-fn create_event(
-    settings: &crate::config::CalendarSettings,
-    token: &str,
-    title: &str,
-    notes: &str,
-    due: Option<NaiveDate>,
-) -> Result<Event, String> {
-    create_event_with_metadata(settings, token, title, notes, due, None)
-}
-
 fn create_event_with_metadata(
     settings: &crate::config::CalendarSettings,
     token: &str,
@@ -1376,7 +1364,22 @@ mod tests {
             },
         });
         let mut overdue = task("overdue", "inbox", today);
-        overdue.details.description = format!("DEADLINE: {} 00:00", today.pred_opt().unwrap());
+        overdue.details.description = "".into();
+        overdue
+            .details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline = Some(
+            timeslay_core::calendar::deadline::parse_input(&format!(
+                "{} 00:00",
+                today.pred_opt().unwrap()
+            ))
+            .unwrap(),
+        );
         let mut event = task("event", "calendar", today);
         event.id = "event".into();
         event.calendar_id = "calendar".into();
@@ -1423,10 +1426,30 @@ mod tests {
         future.id = "task:future".into();
         future.start = now + Duration::minutes(1);
         let mut deadline = task("deadline", "inbox", UNDATED);
-        deadline.details.description = "DEADLINE: 2026-10-30 11:59".into();
+        deadline.details.description = "".into();
+        deadline
+            .details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline =
+            Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
         let mut later_deadline = deadline.clone();
         later_deadline.id = "task:later".into();
-        later_deadline.details.description = "DEADLINE: 2026-10-30 12:01".into();
+        later_deadline.details.description = "".into();
+        later_deadline
+            .details
+            .task_data
+            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline =
+            Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
         let mut done = task("done", "inbox", today.pred_opt().unwrap());
         done.completed = true;
         let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());

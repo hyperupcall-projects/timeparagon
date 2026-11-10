@@ -74,7 +74,16 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
             .unwrap();
         task.end = task.start + Duration::days(1);
         if id.starts_with("overdue-") {
-            task.details.description = format!("DUE: {day}");
+            task.details.description = "".into();
+            task.details
+                .task_data
+                .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                    id: 100,
+                    metadata: Default::default(),
+                })
+                .metadata
+                .deadline =
+                Some(timeslay_core::calendar::deadline::parse_input(&format!("{day}")).unwrap());
         }
         state.calendar.events.push(task);
     }

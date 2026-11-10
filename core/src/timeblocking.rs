@@ -3,7 +3,6 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::calendar::notes::Notes;
 use crate::calendar::{self, Event};
 use crate::config::CalendarSettings;
 
@@ -12,6 +11,8 @@ pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<calendar::deadline::Deadline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat_source: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,10 +102,7 @@ pub fn apply_inherited(
     data.metadata.labels = inherited.labels.clone();
     data.metadata.priority = inherited.fields.priority;
     data.metadata.location = inherited.fields.location;
-    task.details.description = calendar::deadline::write(
-        &description(&task.details.description),
-        inherited.fields.deadline,
-    );
+    data.metadata.deadline = inherited.fields.deadline;
     task.details.recurrence = inherited.recurrence.clone();
     task.details.options = inherited.options.clone();
     data.metadata.inherited = Some(Box::new(inherited));
@@ -198,33 +196,12 @@ pub fn task_label(task: &Event) -> String {
     }
 }
 
-pub fn description(notes: &str) -> String {
-    let prose = calendar::task_metadata::prose(notes);
-    let expanded;
-    let notes = if prose != notes {
-        expanded = calendar::deadline::write(
-            prose,
-            calendar::deadline::read_deadline(notes).ok().flatten(),
-        );
-        Notes::new(&expanded)
-    } else {
-        Notes::new(notes)
-    };
-    notes.text().to_owned()
-}
-
 pub fn metadata(event: &Event) -> Metadata {
     event
         .details
         .task_data
         .as_ref()
         .map(|data| data.metadata.clone())
-        .or_else(|| {
-            calendar::task_metadata::read(&event.details.description)
-                .ok()
-                .flatten()
-                .map(|data| data.metadata)
-        })
         .unwrap_or_default()
 }
 
@@ -277,9 +254,8 @@ pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
     event.is_task()
         && !event.completed
         && !metadata(event).ignored
-        && calendar::deadline::read_deadline(&event.details.description)
-            .ok()
-            .flatten()
+        && metadata(event)
+            .deadline
             .is_some_and(|deadline| deadline.is_past(now.naive_local()))
 }
 
@@ -327,7 +303,21 @@ mod tests {
             task.all_day = all_day;
             assert!(!past_due(&task, now));
         }
-        task.details.description = format!("DUE: {}", now.date_naive().pred_opt().unwrap());
+        task.details.description = "".into();
+        task.details
+            .task_data
+            .get_or_insert_with(|| crate::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline = Some(
+            crate::calendar::deadline::parse_input(&format!(
+                "{}",
+                now.date_naive().pred_opt().unwrap()
+            ))
+            .unwrap(),
+        );
         assert!(past_due(&task, now));
         task.completed = true;
         assert!(!past_due(&task, now));
@@ -373,7 +363,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        child.details.description = calendar::task_metadata::write("Child notes", &data).unwrap();
+        child.details.description = "Child notes".into();
         let inherited = inherited_metadata(&parent);
         apply_inherited(&mut child, &mut data, inherited.clone());
         child.details.task_data = Some(data.clone());
@@ -392,10 +382,7 @@ mod tests {
         let notes = calendar::task_metadata::write(&child.details.description, &data).unwrap();
         let read = calendar::task_metadata::read(&notes).unwrap().unwrap();
         assert_eq!(read.metadata.inherited.as_deref(), Some(&inherited));
-        assert_eq!(
-            calendar::deadline::read_deadline(&notes).unwrap(),
-            inherited.fields.deadline
-        );
+        assert_eq!(read.metadata.deadline, inherited.fields.deadline);
         assert_eq!(calendar::task_metadata::prose(&notes), "Child notes");
         assert!(
             crate::task_edit::validate_child_edit(
@@ -419,10 +406,7 @@ mod tests {
         assert!(data.metadata.labels.is_empty());
         assert!(data.metadata.priority.is_none());
         assert!(child.details.recurrence.is_empty());
-        assert_eq!(
-            calendar::deadline::read_deadline(&child.details.description).unwrap(),
-            None
-        );
+        assert_eq!(data.metadata.deadline, None);
     }
 
     #[test]

@@ -115,9 +115,7 @@ pub fn task_row<'a>(
                     .style(if late { text::danger } else { text::secondary }),
             );
         }
-    } else if let Ok(Some(deadline)) =
-        crate::calendar::deadline::read_deadline(&task.details.description)
-    {
+    } else if let Some(deadline) = crate::calendar::deadline::get(task) {
         content = content.push(
             text(deadline.to_string())
                 .size(metrics.label() - 1.0)
@@ -154,7 +152,10 @@ pub fn task_row<'a>(
                 ..crate::ui::controls::row_surface(theme)
             }
         });
-    super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref())
+    crate::ui::controls::locked(
+        super::task_drag::task_drag(card, &task.id, state.timeblocking.dragging.as_deref()),
+        task.details.sending,
+    )
 }
 
 /// The floating card that follows the pointer while a task is in the air.
@@ -421,12 +422,7 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         }
         description.into()
     } else {
-        super::description::preview(
-            &task.id,
-            &crate::calendar::notes::Notes::new(&tb::description(&task.details.description))
-                .without(&["DUE:", "DEADLINE:"]),
-            metrics,
-        )
+        super::description::preview(&task.id, &task.details.description.clone(), metrics)
     };
     column![
         super::calendar::titled(state, task, title, metrics),
@@ -604,9 +600,6 @@ fn date_field<'a>(
             }));
         }
         body = body.push(times).push(save);
-    }
-    if deadline && let Err(error) = crate::calendar::deadline::check(&task.details.description) {
-        body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
     body.into()
 }

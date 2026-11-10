@@ -1,7 +1,7 @@
 //! Cheap change detection for the local database.
 //!
 //! The apps poll the database every couple of seconds for edits made by other
-//! TimeSlay processes, the Turso worker and the Google queue. Reading and
+//! TimeSlay processes, the Turso worker and writes to Google. Reading and
 //! parsing every document on every poll is what made that poll expensive, so
 //! triggers bump a counter whenever a watched table changes, and a poll reads
 //! the counters first. Only the parts whose counter moved are read again.
@@ -22,9 +22,6 @@ fn document(key: &str) -> String {
 /// reads: the local snapshots of edited Google items and the local-to-remote
 /// ID map.
 const OVERLAY: &str = "google.overlay";
-/// Bumped by changes to the queue of edits waiting for Google, including a
-/// retry being scheduled, so the queue's status stays current.
-const QUEUE: &str = "google.queue";
 
 /// The counters a poll compares against what it last applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,7 +29,6 @@ pub struct Counters {
     pub habits: i64,
     pub alarms: i64,
     pub overlay: i64,
-    pub queue: i64,
 }
 
 /// Creates the counter table and the triggers that maintain it. Idempotent.
@@ -61,11 +57,7 @@ pub(crate) fn install(db: &Connection) -> rusqlite::Result<()> {
             body = bump(&name),
         ))?;
     }
-    for (table, counter) in [
-        ("google_entities", OVERLAY),
-        ("google_id_map", OVERLAY),
-        ("google_operations", QUEUE),
-    ] {
+    for (table, counter) in [("google_entities", OVERLAY), ("google_id_map", OVERLAY)] {
         for operation in ["INSERT", "UPDATE", "DELETE"] {
             db.execute_batch(&format!(
                 "CREATE TRIGGER IF NOT EXISTS timeslay_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",
@@ -99,7 +91,6 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
         alarms: value(&document(crate::task_db::keys::ALARMS))?,
         habits: value(&document(crate::task_db::keys::HABITS))?,
         overlay: value(OVERLAY)?,
-        queue: value(QUEUE)?,
     })
 }
 
@@ -133,15 +124,6 @@ mod tests {
             .unwrap();
         let after_map = read(&path).unwrap();
         assert!(after_map.overlay > after_routes.overlay);
-        assert_eq!(after_map.queue, after_routes.queue);
-
-        database
-            .connection()
-            .execute(
-                "INSERT INTO google_operations(kind,payload,entity,created_at) VALUES('k','{}','e','now')",
-                [],
-            )
-            .unwrap();
-        assert!(read(&path).unwrap().queue > after_map.queue);
+        assert_eq!(after_map.habits, after_routes.habits);
     }
 }

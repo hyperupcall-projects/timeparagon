@@ -63,12 +63,7 @@ pub fn apply(
         Change::ReleaseInheritance => data.metadata.inherited = None,
         Change::Inherit(value) => tb::apply_inherited(&mut task, &mut data, value.clone()),
         Change::Title(v) => task.title = v.clone(),
-        Change::Description(v) => {
-            task.details.description = super::deadline::write(
-                v,
-                super::deadline::read_deadline(&task.details.description)?,
-            )
-        }
+        Change::Description(v) => task.details.description = v.clone(),
         Change::Estimate(v) => {
             data.metadata.minutes = *v;
             if !task.all_day && *v > 0 {
@@ -79,9 +74,7 @@ pub fn apply(
         Change::Labels(v) => data.metadata.labels = v.clone(),
         Change::Priority(v) => data.metadata.priority = *v,
         Change::Location(v) => data.metadata.location = *v,
-        Change::Deadline(v) => {
-            task.details.description = super::deadline::write(&task.details.description, *v)
-        }
+        Change::Deadline(v) => data.metadata.deadline = *v,
         Change::BacklogSection(v) => data.metadata.backlog_section = *v,
         Change::Time(start, end) | Change::Reflow(start, end) | Change::Block(_, start, end) => {
             if let Change::Block(key, _, _) = change {
@@ -315,10 +308,19 @@ mod tests {
         task.start = super::super::at_clock(tb::UNDATED, 0, 0);
         task.end = task.start + Duration::days(1);
         task.details = Default::default();
-        task.details.description = "Human notes\nDEADLINE: 2030-11-04 17:00".into();
+        task.details.description = "Human notes".into();
+        task.details
+            .task_data
+            .get_or_insert_with(|| crate::task_db::TaskData {
+                id: 100,
+                metadata: Default::default(),
+            })
+            .metadata
+            .deadline = Some(crate::calendar::deadline::parse_input("2030-11-04 17:00").unwrap());
         task.details.task_data = Some(crate::task_db::TaskData {
             id: 123,
             metadata: tb::Metadata {
+                deadline: Some(super::super::deadline::parse_input("2030-11-04 17:00").unwrap()),
                 minutes: 45,
                 projects: vec![7],
                 labels: vec!["work".into()],
@@ -334,6 +336,29 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn deadline_and_description_are_independent_and_round_trip_in_event_metadata() {
+        let original = task();
+        let expected = original
+            .details
+            .task_data
+            .as_ref()
+            .unwrap()
+            .metadata
+            .deadline;
+        let prose = "DEADLINE: this is user text\nDUE: also user text\nPRIORITY: my notes";
+        let edited = apply(original, &settings(), &Change::Description(prose.into()), 0).unwrap();
+        assert_eq!(edited.details.description, prose);
+        assert_eq!(super::super::deadline::get(&edited), expected);
+        let body = body(&edited).unwrap();
+        assert_eq!(body["description"], prose);
+        let data = read_data(&body["extendedProperties"]).unwrap();
+        assert_eq!(data.metadata.deadline, expected);
+        let changed = apply(edited, &settings(), &Change::Deadline(None), 0).unwrap();
+        assert_eq!(changed.details.description, prose);
+        assert_eq!(super::super::deadline::get(&changed), None);
+    }
+
     #[test]
     fn assigning_any_day_creates_a_calendar_task_with_all_metadata() {
         let task = task();
@@ -446,10 +471,6 @@ mod tests {
                 .unwrap()
                 .contains("Updated notes")
         );
-        assert!(
-            super::super::deadline::read_deadline(&task.details.description)
-                .unwrap()
-                .is_some()
-        );
+        assert!(super::super::deadline::get(&task).is_some());
     }
 }

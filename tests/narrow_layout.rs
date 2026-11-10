@@ -1297,11 +1297,14 @@ fn timeblocking_state() -> State {
     task.title = "Send invoice".into();
     set_task_metadata(
         &mut task,
-        &format!(
-            "DUE: {}",
-            (Local::now() - chrono::Duration::days(8)).date_naive()
-        ),
-        Metadata::default(),
+        "",
+        Metadata {
+            deadline: Some(timeslay_core::calendar::deadline::Deadline {
+                date: (Local::now() - chrono::Duration::days(8)).date_naive(),
+                time: None,
+            }),
+            ..Default::default()
+        },
     );
     task.start = Local::now() - chrono::Duration::days(8);
     task.end = task.start + chrono::Duration::days(1);
@@ -2810,12 +2813,10 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
     for width in WIDTHS {
         let mut state = timeblocking_state();
         state.screen = Screen::Backlog;
-        state
-            .calendar
-            .event_mut("task:backlog")
-            .unwrap()
-            .details
-            .description = "DUE: 2026-12-31\nNotes".into();
+        let task = state.calendar.event_mut("task:backlog").unwrap();
+        task.details.description = "Notes".into();
+        task.details.task_data.as_mut().unwrap().metadata.deadline =
+            Some(timeslay_core::calendar::deadline::parse_input("2026-12-31").unwrap());
         let _ = app::update(
             &mut state,
             Message::Event(EventMessage::EventOpened("task:backlog".into())),

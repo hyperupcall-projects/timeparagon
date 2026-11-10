@@ -55,17 +55,12 @@ fn adding_four_tasks_keeps_all_four_assigned_after_automatic_layout() {
         assert_eq!(task.end, next_start);
     }
 
-    // The queued operation must retain this distinction when replayed online.
-    let jobs = calendar::operations::list().unwrap();
-    assert!(jobs.iter().any(|job| {
-        matches!(
-            serde_json::from_str::<calendar::operations::Job>(&job.payload).unwrap(),
-            calendar::operations::Job::TaskEdit {
-                change: task_edit::Change::Reflow(_, _),
-                ..
-            }
-        )
-    }));
+    // The write sent to Google must keep this distinction.
+    assert!(
+        calendar::operations::log_since(0)
+            .iter()
+            .any(|entry| entry.text.contains("Edit task Reflow"))
+    );
 
     // A deliberate manual move still removes a task from its time block.
     let moved = task_edit::save(

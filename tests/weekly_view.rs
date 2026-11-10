@@ -959,7 +959,16 @@ fn weekly_task_view_omits_all_day_tasks_without_hiding_scheduled_cards() -> Resu
             .unwrap();
         task.end = task.start + Duration::days(1);
         if id == "overdue" {
-            task.details.description = "DUE: 2020-01-01".into();
+            task.details.description = "".into();
+            task.details
+                .task_data
+                .get_or_insert_with(|| timeslay_core::task_db::TaskData {
+                    id: 100,
+                    metadata: Default::default(),
+                })
+                .metadata
+                .deadline =
+                Some(timeslay_core::calendar::deadline::parse_input("2020-01-01").unwrap());
         }
         if id == "linked" {
             let mut metadata = timeslay::timeblocking::metadata(&task);

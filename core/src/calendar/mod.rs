@@ -12,7 +12,6 @@ pub mod first_day;
 pub mod google;
 pub mod layout;
 pub mod meeting;
-pub mod notes;
 pub mod oauth;
 pub mod operations;
 pub mod projects;
@@ -915,6 +914,11 @@ pub struct Details {
     /// color.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_id: Option<String>,
+    /// A change to this item is on its way to Google. The interface shows it
+    /// greyed out and does not let it be changed again until Google answers.
+    /// Set by [`operations::Overlay::apply`]; never stored.
+    #[serde(skip)]
+    pub sending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1424,14 +1428,13 @@ impl Store {
         }
     }
 
-    /// Refresh loaded views from committed local rows without waiting for Google.
-    /// The database the day cache and the queued edits live in, when this
+    /// The database the day cache and the local edits live in, when this
     /// store is backed by one.
     pub fn local_database(&self) -> Option<&std::path::Path> {
         self.day_cache.as_deref()
     }
 
-    /// Reads the queued local edits and puts them over every day in memory.
+    /// Reads the local edits and puts them over every day in memory.
     /// Blocking: the poll reads the overlay on a worker thread with
     /// [`operations::load_overlay`] and hands it to [`Store::apply_overlay`].
     pub fn apply_local_operations(&mut self) -> Result<(), String> {
@@ -2325,9 +2328,10 @@ pub fn habit_edit_draft(
     Ok((occurrence, draft))
 }
 
-// Writes. Each of these saves the change locally and queues it for Google
-// (see `operations`); none of them talks to Google itself, so none needs a
-// client. The queue sends them through the matching function in `send`.
+// Writes. Each of these saves the change locally and hands it to
+// `operations`, which sends it to Google in the background through the
+// matching function in `send`; none of them talks to Google itself, so none
+// needs a client.
 
 /// Creates a habit event using the shared details editor's fields, counting
 /// towards the habit `habit_id`.
@@ -2365,7 +2369,7 @@ pub fn create_habit(
             ..Default::default()
         },
     };
-    operations::enqueue(
+    operations::submit(
         operations::Job::CreateHabit {
             id: id.clone(),
             draft: draft.clone(),
@@ -2429,7 +2433,7 @@ pub fn set_linked_task_status(
     let mut db = crate::task_db::open()?;
     event.details.task_data = Some(db.import(task)?);
     crate::timeblocking::apply_status(&mut event, status);
-    operations::enqueue(
+    operations::submit(
         operations::Job::Status {
             task: task.clone(),
             status,
@@ -2443,7 +2447,7 @@ pub fn set_linked_task_status(
 
 /// Deletes a task from Google Tasks, and the calendar blocks that point at it.
 pub fn delete_task(task: &Event, app_calendar: Option<&str>) -> Result<(), String> {
-    operations::enqueue(
+    operations::submit(
         operations::Job::DeleteTask {
             task: task.clone(),
             calendar: app_calendar.map(str::to_owned),
@@ -2467,7 +2471,7 @@ pub fn delete_task_instance(
 
 /// Store completion on one habit occurrence.
 pub fn set_habit_completed(event: &Event) -> Result<(), String> {
-    operations::enqueue(
+    operations::submit(
         operations::Job::HabitCompleted {
             event: event.clone(),
         },
@@ -2482,7 +2486,7 @@ pub fn set_event_location(calendar_id: &str, event_id: &str, location: &str) -> 
     let mut event =
         operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
     event.details.location = location.into();
-    operations::enqueue(
+    operations::submit(
         operations::Job::Location {
             calendar: calendar_id.into(),
             id: event_id.into(),
@@ -2506,7 +2510,7 @@ pub fn set_event_time(
         operations::cached_event(calendar_id, event_id)?.ok_or("Event is not cached")?;
     event.start = start;
     event.end = end;
-    operations::enqueue(
+    operations::submit(
         operations::Job::Time {
             calendar: calendar_id.into(),
             id: event_id.into(),
@@ -2554,7 +2558,7 @@ pub fn create_event(
             ..Default::default()
         },
     };
-    operations::enqueue(
+    operations::submit(
         operations::Job::Create {
             id: id.clone(),
             calendar: calendar_id.into(),
@@ -2675,7 +2679,7 @@ pub fn save_event_scope(
     if draft.recurrence_changed {
         event.details.recurrence = draft.recurrence_lines()?;
     }
-    operations::enqueue(
+    operations::submit(
         operations::Job::Edit {
             original: Box::new(original.clone()),
             draft: draft.clone(),
@@ -2745,7 +2749,7 @@ pub fn reply_to_event(
     let mut event =
         operations::cached_event(calendar_id, event_id)?.ok_or("Invitation is not cached")?;
     event.details.attendance.set_own_response(response);
-    operations::enqueue(
+    operations::submit(
         operations::Job::Reply {
             event: event.clone(),
             email: email.into(),
@@ -2771,7 +2775,7 @@ pub fn delete_event_scope(
     scope: SaveScope,
     notify: bool,
 ) -> Result<(), String> {
-    operations::enqueue(
+    operations::submit(
         operations::Job::Delete {
             calendar: calendar_id.into(),
             id: event_id.into(),
@@ -2785,7 +2789,7 @@ pub fn delete_event_scope(
 }
 
 /// Turns a read-only-token rejection into something a user can act on,
-/// keeping the error's kind so the queue still knows whether to retry.
+/// keeping the error's kind.
 fn describe_task_write_error(error: GoogleError) -> GoogleError {
     match error.kind {
         google::Kind::MissingScope => GoogleError {
@@ -2809,8 +2813,9 @@ fn describe_event_write_error(error: GoogleError) -> GoogleError {
     }
 }
 
-/// Sending queued writes to Google. Only the queue calls these, with the
-/// thread marked as replaying so the layers below write rather than enqueue.
+/// Sending writes to Google. Only `operations` calls these, with the thread
+/// marked as replaying so the layers below talk to Google rather than record
+/// another write.
 pub(crate) mod send {
     use super::*;
 
@@ -2871,8 +2876,7 @@ pub(crate) mod send {
                 .save(&updated, updated.details.task_data.as_ref().unwrap())
                 .map_err(GoogleError::from)
         }) {
-            // The message changes, but the failure is still the original one,
-            // so its kind decides whether the queue retries.
+            // The message changes, but the failure keeps the original kind.
             let detail = match write(&previous) {
                 Ok(()) => format!("Task status could not be saved; the task was restored: {error}"),
                 Err(rollback) => format!(
@@ -3789,7 +3793,7 @@ mod tests {
             "Request had insufficient authentication scopes.",
         ));
         assert!(scope.to_string().contains("Reconnect"));
-        // The friendlier message keeps the kind the queue retries on.
+        // The friendlier message keeps the original kind.
         assert_eq!(scope.kind, google::Kind::MissingScope);
         assert_eq!(
             describe_task_write_error(google::GoogleError::transport("", "Network down"))

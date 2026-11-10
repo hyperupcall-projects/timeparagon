@@ -268,13 +268,6 @@ pub fn fetch_range(
         );
     }
     super::operations::cache_tasks(&events, tasks_loaded)?;
-    for event in &events {
-        if event.is_task() {
-            if let Err(error) = super::deadline::check(&event.details.description) {
-                append_notice(&mut notice, &format!("{}: {error}", event.title));
-            }
-        }
-    }
     calendars.extend(task_calendars);
     events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
 
@@ -299,7 +292,7 @@ fn reconcile_task_metadata_and_overlay(
     let mut database = crate::task_db::Database::open(path)?;
     for event in events.iter().filter(|event| event.is_task()) {
         // A concurrent Calendar response must not publish its older membership
-        // over an edit still waiting in the durable queue.
+        // over an edit still on its way to Google.
         if database.pending_task_data(event)?.is_some() {
             continue;
         }
@@ -983,7 +976,7 @@ fn fetch_task_items(
                 super::task_metadata::save(access_token, &event, data)
             })?;
             event.details.description =
-                crate::timeblocking::description(&event.details.description);
+                super::task_metadata::prose(&event.details.description).to_owned();
             if let Some(inherited) = data.metadata.inherited.as_deref().cloned() {
                 crate::timeblocking::apply_inherited(&mut event, &mut data, inherited);
             }
@@ -2330,6 +2323,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
         task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
         task_data: None,
+        sending: false,
         location: entry.location.trim().to_owned(),
         description: plain_text(&entry.description),
         status: match entry.status.as_deref() {
@@ -2698,7 +2692,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_cannot_publish_stale_metadata_while_an_edit_is_queued() {
+    fn refresh_cannot_publish_stale_metadata_while_an_edit_is_sending() {
         let (_dir, path, mut remote) = mapped_task();
         let mut pending = remote.clone();
         pending.id = "task:local-id".into();
@@ -2713,7 +2707,15 @@ mod tests {
                 ],
             )
             .unwrap();
-        db.connection().execute("INSERT INTO google_operations(kind,payload,entity,created_at) VALUES('Edit task','{}',?1,?2)", rusqlite::params!["tasks:google-list\ntask:local-id", crate::clock::now().to_rfc3339()]).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE google_entities SET sending_since=?2 WHERE id=?1",
+                rusqlite::params![
+                    "tasks:google-list\ntask:local-id",
+                    crate::clock::utc_now().to_rfc3339()
+                ],
+            )
+            .unwrap();
         remote.details.task_data.as_mut().unwrap().metadata.minutes = 45;
         let mut events = vec![remote];
         super::reconcile_task_metadata_and_overlay(

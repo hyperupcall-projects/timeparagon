@@ -1,10 +1,10 @@
 //! Picking up what other processes changed in the local database.
 //!
-//! The Turso worker, the Google queue, the dock and the phone's synced edits
+//! The Turso worker, writes to Google, the dock and the phone's synced edits
 //! all write to the database behind the panel's back, so the panel looks every
 //! couple of seconds. That look used to happen on the UI thread and reread
-//! everything each time: the queued edits for every cached day, the whole
-//! habits and notes, and the queue. Now a worker thread reads the change
+//! everything each time: the local edits for every cached day, and the whole
+//! habits and notes. Now a worker thread reads the change
 //! counters (see [`timeslay_core::local_changes`]) and a fingerprint of the
 //! notes directory, rereads only what moved, and the UI thread only applies
 //! the result.
@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use iced::Task;
-use timeslay_core::calendar::operations::{self, Operation, Overlay};
+use timeslay_core::calendar::operations::{self, Overlay};
 use timeslay_core::local_changes::Counters;
 
 use crate::app::{Message, State, SystemMessage};
@@ -30,12 +30,11 @@ pub struct Poll {
     /// The counters each part was last read at. `None` until the first read,
     /// so everything is read once at start.
     overlay: Option<i64>,
-    queue: Option<i64>,
     habits: Option<i64>,
     alarms: Option<i64>,
     /// The notes directory's [`timeslay_core::notes::fingerprint`].
     notes: Option<u64>,
-    /// Read the queued edits again even though their counter has not moved,
+    /// Read the local edits again even though their counter has not moved,
     /// because this process just wrote some and wants them shown at once.
     force_overlay: bool,
 }
@@ -47,7 +46,6 @@ pub struct Polled {
     alarms: Option<Result<timeslay_core::alarms::Snapshot, String>>,
     alarms_before: Vec<crate::alarms::Alarm>,
     overlay: Option<Result<Overlay, String>>,
-    operations: Option<Result<Vec<Operation>, String>>,
     habits: Option<Result<Option<timeslay_core::habits::Library>, String>>,
     /// The habits' and notes' local revisions when the read started.
     habits_revision: u64,
@@ -73,12 +71,7 @@ pub fn start(state: &mut State) -> Task<Message> {
         .directory()
         .filter(|_| state.notes.accepts_shared())
         .map(PathBuf::from);
-    let previous = (
-        state.poll.overlay,
-        state.poll.queue,
-        state.poll.habits,
-        state.poll.notes,
-    );
+    let previous = (state.poll.overlay, state.poll.habits, state.poll.notes);
     let previous_alarms = state.poll.alarms;
     let alarms_before = state.alarms.items().to_vec();
     let force_overlay = std::mem::take(&mut state.poll.force_overlay);
@@ -94,7 +87,7 @@ pub fn start(state: &mut State) -> Task<Message> {
                 return None;
             }
         };
-        let (overlay, queue, habits, notes) = previous;
+        let (overlay, habits, notes) = previous;
         let moved = |seen: Option<i64>, now: i64| seen != Some(now);
         let notes_fingerprint = notes_path
             .as_deref()
@@ -107,7 +100,6 @@ pub fn start(state: &mut State) -> Task<Message> {
             overlay: overlay_path
                 .filter(|_| force_overlay || moved(overlay, counters.overlay))
                 .map(|path| operations::load_overlay(&path)),
-            operations: moved(queue, counters.queue).then(|| operations::list_in(&database)),
             habits: habits_path
                 .filter(|_| moved(habits, counters.habits))
                 .map(|path| {
@@ -142,7 +134,6 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
         alarms,
         alarms_before,
         overlay,
-        operations,
         habits,
         habits_revision,
         notes_revision,
@@ -152,6 +143,15 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
     } = *polled;
     state.database_unsent = database_unsent;
     state.activity.pull_database_log();
+    // A write Google refused has had its local copy dropped; fetch what
+    // Google has so the item shows that again.
+    let refused = if state.activity.pull_google_log() {
+        Task::done(Message::Calendar(
+            crate::app::CalendarMessage::CalendarSyncRequested,
+        ))
+    } else {
+        Task::none()
+    };
 
     match overlay {
         Some(Ok(overlay)) => {
@@ -160,19 +160,6 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
         }
         Some(Err(error)) => log::warn!("Could not load committed edits: {error}"),
         None => {}
-    }
-
-    if let Some(operations) = operations {
-        match &operations {
-            Ok(rows) => {
-                state.poll.queue = Some(counters.queue);
-                state.activity.observe_operations(rows);
-            }
-            Err(error) => state
-                .activity
-                .record(format!("Cannot read the Google queue: {error}"), true),
-        }
-        state.operations = operations;
     }
 
     if state.alarms.accepts_shared() && state.alarms.items() == alarms_before {
@@ -214,12 +201,12 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
     }
     // A write asked for its edits while this read was already under way.
     if state.poll.force_overlay {
-        return start(state);
+        return Task::batch([refused, start(state)]);
     }
-    Task::none()
+    refused
 }
 
-/// Shows this process's own queued edits straight away, rather than at the
+/// Shows this process's own local edits straight away, rather than at the
 /// next tick.
 pub fn refresh_overlay(state: &mut State) -> Task<Message> {
     state.poll.force_overlay = true;
@@ -239,7 +226,6 @@ mod tests {
             alarms: None,
             alarms_before: state.alarms.items().to_vec(),
             overlay: None,
-            operations: None,
             habits: Some(Ok(Some(habits))),
             habits_revision: revision,
             notes_revision: state.notes.revision(),

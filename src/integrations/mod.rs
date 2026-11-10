@@ -152,8 +152,8 @@ mod tests {
 
     #[test]
     fn notes_keep_their_source_among_other_lines() {
-        let notes = format!("DUE: 2026-11-02\nRead this first\n<{THREAD}>\nthanks");
+        let notes = format!("Read this first\n<{THREAD}>\nthanks");
         assert_eq!(source_in(&notes).unwrap().url, THREAD);
-        assert_eq!(source_in("DUE: 2026-11-02\nNothing here"), None);
+        assert_eq!(source_in("Nothing here"), None);
     }
 }

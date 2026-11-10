@@ -202,7 +202,8 @@ lists beneath the navigation. The lists take the same tasks as the desktop's and
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside
 its list. **Note** opens the notepad, and **More** holds Alarms, Habits, Notes, Brain
-dump, Projects, and Operations. Life stays on the desktop.
+dump, Projects, and Log (each change sent to Google, and whether it was
+saved). Life stays on the desktop.
 
 ## What the day view shows
 
