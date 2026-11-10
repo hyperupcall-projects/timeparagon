@@ -994,6 +994,12 @@ pub struct Details {
     /// The recurring event master, for an expanded habit or other recurrence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurring_event_id: Option<String>,
+    /// When an occurrence of a series was first scheduled, before any edit to
+    /// that one occurrence moved it: Google's `originalStartTime`. It keeps
+    /// the occurrence's place in its series, so a moved occurrence keeps the
+    /// tasks it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_start: Option<DateTime<Local>>,
     /// The raw RFC 5545 recurrence lines from Google (`RRULE:`, `RDATE:`,
     /// `EXDATE:`). Empty for a one-off event.
     pub recurrence: Vec<String>,

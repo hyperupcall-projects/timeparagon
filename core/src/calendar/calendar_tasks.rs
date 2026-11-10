@@ -68,7 +68,13 @@ pub fn apply(
         .task_data
         .take()
         .ok_or("Missing task metadata")?;
-    reset_repeat_source(&mut data.metadata, change);
+    // An occurrence repeating with a block only ever leaves it as a task of
+    // its own (see `operations::edit_task`), so it keeps its series here.
+    let follower =
+        task.details.recurring_event_id.is_some() && data.metadata.block_series.is_some();
+    if !follower {
+        reset_repeat_source(&mut data.metadata, change);
+    }
     match change {
         Change::Title(v) => task.title = v.clone(),
         Change::Description(v) => task.details.description = v.clone(),

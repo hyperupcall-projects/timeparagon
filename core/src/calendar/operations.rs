@@ -255,19 +255,29 @@ pub fn submit(job: Job, event: Option<&Event>, calendar: &str, id: &str) -> Resu
         if crate::config::isolated() {
             send_in(&path, write, |_| Ok(None))?;
         } else {
-            worker(&path).send(write);
+            worker(&path).send(Work::Write(write));
         }
     }
     Ok(())
 }
 
+/// What the worker thread is asked to do.
+enum Work {
+    Write(Write),
+    /// Bring time blocks back in step with Google once the writes are sent.
+    Reconcile,
+}
+
 /// The thread that sends this process's writes, one at a time and in the
 /// order they were made, so an edit cannot overtake its item's creation.
-struct Worker(Mutex<mpsc::Sender<Write>>);
+/// Once it has sent everything it was given, and a write touched the app's
+/// calendar or a sync asked for it, it brings time blocks back in step (see
+/// [`crate::timeblocking::reconcile`]).
+struct Worker(Mutex<mpsc::Sender<Work>>);
 
 impl Worker {
-    fn send(&self, write: Write) {
-        let sent = self.0.lock().is_ok_and(|sender| sender.send(write).is_ok());
+    fn send(&self, work: Work) {
+        let sent = self.0.lock().is_ok_and(|sender| sender.send(work).is_ok());
         if !sent {
             log_write("Could not hand a write to the Google worker".into(), true);
         }
@@ -277,26 +287,139 @@ impl Worker {
 fn worker(path: &Path) -> &'static Worker {
     static WORKER: OnceLock<Worker> = OnceLock::new();
     WORKER.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<Write>();
+        let (sender, receiver) = mpsc::channel::<Work>();
         let path = path.to_owned();
         std::thread::spawn(move || {
-            for write in receiver {
-                let entity = write.entity.clone();
-                super::series::take_noted();
-                let result = send_in(&path, write, |job| {
-                    let settings = crate::config::Config::load().calendar;
-                    execute(&GoogleClient::from_settings(&settings), &settings, job)
-                });
-                if let Err(error) = result {
-                    log_write(format!("Could not record a Google answer: {error}"), true);
+            let mut stale = false;
+            while let Ok(mut work) = receiver.recv() {
+                loop {
+                    match work {
+                        Work::Write(write) => {
+                            stale |= touches_blocks(&write.job);
+                            let entity = write.entity.clone();
+                            super::series::take_noted();
+                            let result = send_in(&path, write, |job| {
+                                let settings = crate::config::Config::load().calendar;
+                                execute(&GoogleClient::from_settings(&settings), &settings, job)
+                            });
+                            if let Err(error) = result {
+                                log_write(
+                                    format!("Could not record a Google answer: {error}"),
+                                    true,
+                                );
+                            }
+                            // A write that changed a whole series has been
+                            // acknowledged by now, so a fetch from here on
+                            // shows it on every day.
+                            super::series::refresh(&path, &entity, super::series::take_noted());
+                        }
+                        Work::Reconcile => stale = true,
+                    }
+                    match receiver.try_recv() {
+                        Ok(next) => work = next,
+                        Err(_) => break,
+                    }
                 }
-                // A write that changed a whole series has been acknowledged by
-                // now, so a fetch from here on shows it on every day.
-                super::series::refresh(&path, &entity, super::series::take_noted());
+                if std::mem::take(&mut stale) {
+                    reconcile_blocks(&path);
+                }
             }
         });
         Worker(Mutex::new(sender))
     })
+}
+
+/// Whether a write can leave time blocks out of step: anything on a
+/// calendar rather than a task list, and any task edit.
+fn touches_blocks(job: &Job) -> bool {
+    match job {
+        Job::Edit { original, .. } => !original.calendar_id.starts_with(ids::TASK_LIST),
+        Job::Time { calendar, .. }
+        | Job::Delete { calendar, .. }
+        | Job::Create { calendar, .. } => !calendar.starts_with(ids::TASK_LIST),
+        Job::TaskEdit { .. } | Job::CreateCalendarTask { .. } | Job::DeleteTask { .. } => true,
+        Job::Location { .. }
+        | Job::Status { .. }
+        | Job::Sleep { .. }
+        | Job::HabitCompleted { .. }
+        | Job::Reply { .. }
+        | Job::CreateHabit { .. }
+        | Job::CreateTask { .. } => false,
+    }
+}
+
+/// How far ahead time blocks are kept in step. Further days are put right
+/// once they come this close.
+const RECONCILE_DAYS: i64 = 56;
+
+/// When a sync last asked for time blocks to be brought in step, so a fast
+/// sync interval does not reconcile every time.
+static LAST_REQUEST: Mutex<Option<DateTime<Local>>> = Mutex::new(None);
+
+/// Asks the worker to bring time blocks back in step with Google, as after a
+/// sync, which may have brought changes made elsewhere. At most every few
+/// minutes; writes from this app always do it.
+pub fn request_reconcile() {
+    if crate::config::isolated() {
+        return;
+    }
+    let now = crate::clock::now();
+    {
+        let Ok(mut last) = LAST_REQUEST.lock() else {
+            return;
+        };
+        if last.is_some_and(|last| now - last < chrono::Duration::minutes(5)) {
+            return;
+        }
+        *last = Some(now);
+    }
+    if let Some(path) = task_db::path() {
+        worker(&path).send(Work::Reconcile);
+    }
+}
+
+/// Brings the app calendar's time blocks back in step with Google from
+/// today on, then fetches the series it changed again for the caches.
+/// Failure only means waiting for the next try, so it is logged.
+fn reconcile_blocks(path: &Path) {
+    let settings = crate::config::Config::load().calendar;
+    let Some(calendar) = settings.app_calendar.clone() else {
+        return;
+    };
+    let hour = settings.day_start_hour();
+    let today = day_at(crate::clock::now(), hour);
+    let first = at_clock(today, hour, 0);
+    let last = first + chrono::Duration::days(RECONCILE_DAYS);
+    let token = match GoogleClient::from_settings(&settings).access_token() {
+        Ok(token) => token,
+        Err(error) => {
+            log::warn!("time blocks not reconciled: {error}");
+            return;
+        }
+    };
+    let mut remote = api::block_sync::GoogleRemote::new(token, &settings, &calendar);
+    REPLAY.with(|r| r.set(true));
+    let result =
+        crate::timeblocking::reconcile::reconcile(&mut remote, &calendar, first, last, hour, today);
+    REPLAY.with(|r| r.set(false));
+    match result {
+        Ok(fixes) if fixes.is_empty() => {}
+        Ok(fixes) => log_write(
+            format!("Kept {} time block change(s) in step", fixes.len()),
+            false,
+        ),
+        Err(error) => log_write(format!("Could not keep time blocks in step: {error}"), true),
+    }
+    let changed: Vec<super::series::SeriesRef> = remote
+        .changed
+        .iter()
+        .map(|id| super::series::SeriesRef {
+            calendar: calendar.clone(),
+            id: id.clone(),
+            calendars: vec![calendar.clone()],
+        })
+        .collect();
+    super::series::refresh(path, "", changed);
 }
 
 /// Records the wanted state locally, marked as sending, in one transaction,
@@ -1060,6 +1183,14 @@ pub fn edit_task(
     change: task_edit::Change,
     order: i64,
 ) -> Result<Event, String> {
+    if leaves_series(&task, &change) {
+        return detach(task, settings, change, order);
+    }
+    if matches!(change, task_edit::Change::JoinBlockSeries { .. })
+        && task.details.recurring_event_id.is_some()
+    {
+        return Err("A task that already repeats cannot also repeat with a time block".into());
+    }
     let mut db = task_db::open()?;
     if task.details.task_data.is_none() {
         task.details.task_data = Some(db.import(&task)?);
@@ -1078,6 +1209,76 @@ pub fn edit_task(
     )?;
     Ok(task)
 }
+/// Whether `change` takes one occurrence of a repeating task out of its
+/// series. An item in a time block either repeats with the block or is a
+/// one-off, so:
+///
+/// - an occurrence of a task repeating with a block that leaves the block
+///   (for another block, another day, a time of its own, or the task lists)
+///   leaves its series too, and
+/// - an occurrence of a task with a repeat of its own goes into a block only
+///   as a one-off.
+fn leaves_series(task: &Event, change: &task_edit::Change) -> bool {
+    use task_edit::Change;
+    if !task.is_task() || task.details.recurring_event_id.is_none() {
+        return false;
+    }
+    let block = matches!(change, Change::Block(..));
+    if crate::timeblocking::is_follower(task) {
+        block
+            || matches!(
+                change,
+                Change::Unassign
+                    | Change::Day(_)
+                    | Change::Time(..)
+                    | Change::ClearSchedule
+                    | Change::Backlog(_)
+                    | Change::Inbox
+                    | Change::Triaged
+            )
+    } else {
+        block
+    }
+}
+
+/// Takes one occurrence out of its series: a task standing on its own takes
+/// its place, with `change` made, and the occurrence is deleted.
+fn detach(
+    task: Event,
+    settings: &CalendarSettings,
+    change: task_edit::Change,
+    order: i64,
+) -> Result<Event, String> {
+    let mut metadata = crate::timeblocking::metadata(&task);
+    metadata.block = None;
+    metadata.block_series = None;
+    metadata.repeat_source = None;
+    metadata.created_at = None;
+    let notes = super::task_metadata::prose(&task.details.description).to_owned();
+    let created = create_task(
+        settings,
+        &task.title,
+        &notes,
+        Some(task.start.date_naive()),
+        Some(metadata),
+    )?;
+    submit(
+        Job::Delete {
+            calendar: task.calendar_id.clone(),
+            id: task.id.clone(),
+            scope: SaveScope::Current,
+            notify: false,
+        },
+        None,
+        &task.calendar_id,
+        &task.id,
+    )?;
+    if matches!(change, task_edit::Change::Unassign) {
+        return Ok(created);
+    }
+    edit_task(created, settings, change, order)
+}
+
 pub fn create_task(
     settings: &CalendarSettings,
     title: &str,
