@@ -23,7 +23,6 @@ pub(super) fn day_grid<'a>(
             .on_scroll(grid_scrolled)
             .height(Fill)
             .width(Fill),
-        edge(),
     ])
     .height(Fill)
     .width(Fill)
