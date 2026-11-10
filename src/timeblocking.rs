@@ -96,8 +96,26 @@ impl Busy {
     }
 }
 use timeslay_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
+/// What a recurring item being added to a time block is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecurringItem {
+    /// An occurrence of a recurring task, by event id.
+    Task(String),
+    /// A habit from the library, by id, with a repeating habit event.
+    Habit(String),
+}
+
+/// A recurring task or habit waiting on whether its future occurrences stay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRecurring {
+    pub item: RecurringItem,
+    pub block: String,
+}
+
 #[derive(Default)]
 pub struct Workspace {
+    /// The recurring item whose move into a block is being confirmed.
+    pub pending_recurring: Option<PendingRecurring>,
     pub block: Option<String>,
     pub focus: Option<String>,
     pub work_now: Option<chrono::DateTime<chrono::Utc>>,
@@ -178,6 +196,10 @@ pub struct WeekListPlacement {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
+    /// Move the recurring item being confirmed into its block. `true` also
+    /// deletes the item's future occurrences.
+    MoveRecurring(bool),
+    CancelRecurring,
     View(String),
     Plan(String),
     CloseView,
@@ -532,6 +554,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         return Task::none();
     }
     state.inbox.error = None;
+    // Set when the change puts a task in a recurring block, to repeat with it.
+    let mut join = None;
     let (id, change) = match action {
         Action::View(id) => {
             if !event(state, &id).is_some_and(|e| is_block(e, &state.config.calendar)) {
@@ -1269,8 +1293,27 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             else {
                 return Task::none();
             };
-            (id, Change::Block(block_key(event), event.start, event.end))
+            let key = block_key(event);
+            if self::event(state, &id).is_some_and(|task| {
+                task.is_task() && task.is_recurring() && metadata(task).block.as_ref() != Some(&key)
+            }) {
+                if !state.timeblocking.busy.is_empty() {
+                    return Task::none();
+                }
+                state.timeblocking.pending_recurring = Some(PendingRecurring {
+                    item: RecurringItem::Task(id),
+                    block,
+                });
+                return Task::none();
+            }
+            join = Change::join_block_series(event);
+            (id, Change::Block(key, event.start, event.end))
         }
+        Action::CancelRecurring => {
+            state.timeblocking.pending_recurring = None;
+            return Task::none();
+        }
+        Action::MoveRecurring(future) => return move_recurring(state, future),
         Action::Title(value) => {
             state.timeblocking.title = value;
             state.timeblocking.title_error = None;
@@ -1432,6 +1475,19 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             {
                 return Task::none();
             }
+            if state.calendar.events.iter().any(|event| {
+                event.details.habit
+                    && event.details.recurring_event_id.is_some()
+                    && event.details.habit_id.as_deref() == Some(&habit_id)
+            }) {
+                if state.timeblocking.busy.is_empty() {
+                    state.timeblocking.pending_recurring = Some(PendingRecurring {
+                        item: RecurringItem::Habit(habit_id),
+                        block: block_id,
+                    });
+                }
+                return Task::none();
+            }
             return add_block_item(
                 state,
                 &block_id,
@@ -1442,6 +1498,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     minutes: 30,
                     ..Default::default()
                 }),
+                Vec::new(),
             );
         }
         Action::AvailableHabitQuery(query) => {
@@ -1552,8 +1609,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         .filter(|e| e.is_task())
         .cloned()
         .collect();
-    blocking::run(move || save_and_reflow(task, settings, change, order, blocks, related))
-        .map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone().into(), result)))
+    blocking::run(move || {
+        let changed = save_and_reflow(task, settings.clone(), change, order, blocks, related)?;
+        join_series(changed, &settings, join)
+    })
+    .map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone().into(), result)))
 }
 
 /// Timed tasks and calendar events, with locally saved board placement applied.
@@ -1677,15 +1737,21 @@ fn add_todo(state: &mut State, block_id: &str) -> Task<Message> {
             Some(format!("A todo can be at most {MAX_TODO_CHARS} characters"));
         return Task::none();
     }
-    add_block_item(state, block_id, title, String::new(), None)
+    add_block_item(state, block_id, title, String::new(), None, Vec::new())
 }
 
+/// An occurrence to delete, and whether the ones after it go too.
+type Deletion = (String, String, calendar::SaveScope);
+
+/// Creates a task in the block, repeating with it when the block repeats,
+/// then deletes `deletions`: the recurring occurrences it replaces.
 fn add_block_item(
     state: &mut State,
     block_id: &str,
     title: String,
     notes: String,
     initial_metadata: Option<Metadata>,
+    deletions: Vec<Deletion>,
 ) -> Task<Message> {
     let busy_key = if initial_metadata
         .as_ref()
@@ -1707,6 +1773,7 @@ fn add_block_item(
     let key = block_key(&block);
     let start = block.start;
     let end = block.end;
+    let join = Change::join_block_series(&block);
     let settings = state.config.calendar.clone();
     let order = state
         .calendar
@@ -1734,19 +1801,27 @@ fn add_block_item(
     state.timeblocking.todo_error = None;
     state.timeblocking.revision += 1;
     state.timeblocking.busy.insert(busy_key.clone());
+    for (calendar_id, id, scope) in &deletions {
+        forget_occurrences(state, calendar_id, id, *scope);
+    }
     blocking::run(move || {
-        create_and_assign(
+        let changed = create_and_assign(
             title,
             notes,
             initial_metadata,
-            settings,
+            settings.clone(),
             key,
             start,
             end,
             order,
             blocks,
             related,
-        )
+        )?;
+        let changed = join_series(changed, &settings, join)?;
+        for (calendar_id, id, scope) in deletions {
+            calendar::delete_event_scope(&calendar_id, &id, scope, false)?;
+        }
+        Ok(changed)
     })
     .map(move |result| Message::TimeBlocking(Action::SavedMany(busy_key.clone(), result)))
 }
@@ -1867,6 +1942,157 @@ fn save_and_reflow(
     related: Vec<Event>,
 ) -> Result<Vec<Event>, String> {
     task_edit::save_and_reflow(task, settings, change, order, blocks, related, access)
+}
+
+/// Has the task saved first in `changed` repeat with its block's series.
+fn join_series(
+    mut changed: Vec<Event>,
+    settings: &CalendarSettings,
+    join: Option<Change>,
+) -> Result<Vec<Event>, String> {
+    if let Some(join) = join
+        && let Some(task) = changed.first_mut()
+    {
+        let order = metadata(task).order;
+        *task = save(task.clone(), settings, join, order)?;
+    }
+    Ok(changed)
+}
+
+/// Moves the recurring task or habit awaiting confirmation into its block.
+/// Either way the block gets a new task, repeating with the block when it
+/// repeats; the occurrence it replaces is deleted, and with `future` so are
+/// the ones after it.
+fn move_recurring(state: &mut State, future: bool) -> Task<Message> {
+    if !state.timeblocking.busy.is_empty() {
+        return Task::none();
+    }
+    let Some(PendingRecurring { item, block }) = state.timeblocking.pending_recurring.take() else {
+        return Task::none();
+    };
+    let Some(day) = event(state, &block)
+        .filter(|event| is_block(event, &state.config.calendar))
+        .map(|event| event.start.date_naive())
+    else {
+        return Task::none();
+    };
+    let scope = if future {
+        calendar::SaveScope::CurrentAndFuture
+    } else {
+        calendar::SaveScope::Current
+    };
+    match item {
+        RecurringItem::Task(id) => {
+            let Some(task) = event(state, &id).filter(|task| task.is_task()).cloned() else {
+                return Task::none();
+            };
+            let mut copy = metadata(&task);
+            copy.block = None;
+            copy.block_series = None;
+            copy.repeat_source = None;
+            copy.created_at = None;
+            add_block_item(
+                state,
+                &block,
+                task.title.clone(),
+                calendar::task_metadata::prose(&task.details.description).to_owned(),
+                Some(copy),
+                vec![(task.calendar_id, task.id, scope)],
+            )
+        }
+        RecurringItem::Habit(habit_id) => {
+            let Some(habit) = state.habits.library.habit(&habit_id).cloned() else {
+                return Task::none();
+            };
+            let deletions = habit_occurrences(state, &habit_id, day, future)
+                .into_iter()
+                .map(|event| (event.calendar_id.clone(), event.id.clone(), scope))
+                .collect();
+            add_block_item(
+                state,
+                &block,
+                habit.name,
+                habit.notes,
+                Some(Metadata {
+                    habit_id: Some(habit_id),
+                    minutes: 30,
+                    ..Default::default()
+                }),
+                deletions,
+            )
+        }
+    }
+}
+
+/// Per repeating event of the habit, the occurrence a block on `day` takes
+/// the place of: the one that day, or with `future` the first from then on.
+fn habit_occurrences<'a>(
+    state: &'a State,
+    habit_id: &str,
+    day: NaiveDate,
+    future: bool,
+) -> Vec<&'a Event> {
+    let mut chosen: Vec<&Event> = Vec::new();
+    let mut occurrences: Vec<_> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| {
+            event.details.habit
+                && event.details.recurring_event_id.is_some()
+                && event.details.habit_id.as_deref() == Some(habit_id)
+                && if future {
+                    event.start.date_naive() >= day
+                } else {
+                    event.start.date_naive() == day
+                }
+        })
+        .collect();
+    occurrences.sort_by_key(|event| event.start);
+    for event in occurrences {
+        if !chosen.iter().any(|other| {
+            other.calendar_id == event.calendar_id
+                && other.details.recurring_event_id == event.details.recurring_event_id
+        }) {
+            chosen.push(event);
+        }
+    }
+    chosen
+}
+
+/// Drops a deleted occurrence, and with "this and following" the later ones
+/// of its series, from view. The next sync reconciles the cache.
+fn forget_occurrences(state: &mut State, calendar_id: &str, id: &str, scope: calendar::SaveScope) {
+    let Some(occurrence) = state
+        .calendar
+        .events
+        .iter()
+        .find(|event| event.id == id && event.calendar_id == calendar_id)
+        .cloned()
+    else {
+        return;
+    };
+    let gone: Vec<String> = state
+        .calendar
+        .events
+        .iter()
+        .filter(|event| {
+            event.id == id
+                || (scope == calendar::SaveScope::CurrentAndFuture
+                    && event.calendar_id == calendar_id
+                    && event.details.recurring_event_id.is_some()
+                    && event.details.recurring_event_id == occurrence.details.recurring_event_id
+                    && event.start >= occurrence.start)
+        })
+        .map(|event| event.id.clone())
+        .collect();
+    for id in gone {
+        if state.range_view_active() {
+            state.calendar.forget_event_everywhere(&id);
+        } else {
+            state.calendar.events.retain(|event| event.id != id);
+        }
+    }
 }
 
 fn reflow(
@@ -2113,6 +2339,149 @@ mod tests {
         });
         state.timeblocking.focus = Some("standup".into());
         state
+    }
+
+    /// "standup" as a time block, with "deep" as today's occurrence of a
+    /// recurring calendar task and "deep_next" as tomorrow's.
+    fn recurring_state() -> State {
+        let mut state = estimate_state();
+        let block = state.calendar.event("standup").unwrap().clone();
+        state.config.calendar.app_calendar = Some(block.calendar_id.clone());
+        let task = state.calendar.event_mut("task:deep").unwrap();
+        task.id = "deep".into();
+        task.calendar_id = block.calendar_id.clone();
+        task.details.recurring_event_id = Some("deep-series".into());
+        let mut next = task.clone();
+        next.id = "deep_next".into();
+        next.start += chrono::Duration::days(1);
+        next.end += chrono::Duration::days(1);
+        state.calendar.events.push(next);
+        state
+    }
+
+    fn habit_occurrence(state: &State, id: &str, days: i64) -> Event {
+        let mut habit = state.calendar.event("standup").unwrap().clone();
+        habit.id = id.into();
+        habit.start += chrono::Duration::days(days);
+        habit.end += chrono::Duration::days(days);
+        habit.details.habit = true;
+        habit.details.habit_id = Some("read".into());
+        habit.details.recurring_event_id = Some("read-series".into());
+        habit
+    }
+
+    #[test]
+    fn a_recurring_task_asks_before_moving_into_a_block_and_cancel_keeps_it() {
+        let mut state = recurring_state();
+        let _ = update(&mut state, Action::Assign("deep".into(), "standup".into()));
+        assert_eq!(
+            state.timeblocking.pending_recurring,
+            Some(PendingRecurring {
+                item: RecurringItem::Task("deep".into()),
+                block: "standup".into(),
+            })
+        );
+        assert!(state.timeblocking.busy.is_empty());
+        let _ = update(&mut state, Action::CancelRecurring);
+        assert!(state.timeblocking.pending_recurring.is_none());
+        assert!(state.calendar.event("deep").is_some());
+        assert!(state.calendar.event("deep_next").is_some());
+        assert!(
+            metadata(state.calendar.event("deep").unwrap())
+                .block
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_task_that_does_not_repeat_moves_without_asking() {
+        let mut state = recurring_state();
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.details.recurring_event_id = None;
+        let _ = update(&mut state, Action::Assign("deep".into(), "standup".into()));
+        assert!(state.timeblocking.pending_recurring.is_none());
+        assert!(state.timeblocking.busy.contains_task("deep"));
+    }
+
+    #[test]
+    fn moving_a_recurring_task_only_drops_just_that_occurrence() {
+        let mut state = recurring_state();
+        let _ = update(&mut state, Action::Assign("deep".into(), "standup".into()));
+        let _ = update(&mut state, Action::MoveRecurring(false));
+        assert!(state.timeblocking.pending_recurring.is_none());
+        assert!(state.calendar.event("deep").is_none());
+        assert!(state.calendar.event("deep_next").is_some());
+        assert!(!state.timeblocking.busy.is_empty());
+    }
+
+    #[test]
+    fn moving_a_recurring_task_and_deleting_future_drops_the_later_occurrences() {
+        let mut state = recurring_state();
+        let _ = update(&mut state, Action::Assign("deep".into(), "standup".into()));
+        let _ = update(&mut state, Action::MoveRecurring(true));
+        assert!(state.calendar.event("deep").is_none());
+        assert!(state.calendar.event("deep_next").is_none());
+    }
+
+    /// `recurring_state` with a "read" habit whose repeating event has
+    /// occurrences yesterday, on the block's day, and in two days.
+    fn habit_state() -> State {
+        let mut state = recurring_state();
+        state
+            .habits
+            .library
+            .habits
+            .push(crate::habits::Habit::new("read", "Read a book"));
+        let earlier = habit_occurrence(&state, "read_earlier", -1);
+        let today = habit_occurrence(&state, "read_today", 0);
+        let later = habit_occurrence(&state, "read_later", 2);
+        state.calendar.events.extend([earlier, today, later]);
+        state
+    }
+
+    #[test]
+    fn a_habit_with_a_repeating_event_asks_and_replaces_its_occurrences() {
+        let mut only = habit_state();
+        let _ = update(&mut only, Action::AddHabit("read".into(), "standup".into()));
+        assert_eq!(
+            only.timeblocking.pending_recurring,
+            Some(PendingRecurring {
+                item: RecurringItem::Habit("read".into()),
+                block: "standup".into(),
+            })
+        );
+        assert!(only.timeblocking.busy.is_empty());
+        let _ = update(&mut only, Action::MoveRecurring(false));
+        assert!(only.calendar.event("read_today").is_none());
+        assert!(only.calendar.event("read_earlier").is_some());
+        assert!(only.calendar.event("read_later").is_some());
+        assert!(only.timeblocking.busy.adding_habit);
+
+        let mut future = habit_state();
+        let _ = update(
+            &mut future,
+            Action::AddHabit("read".into(), "standup".into()),
+        );
+        let _ = update(&mut future, Action::MoveRecurring(true));
+        assert!(future.calendar.event("read_today").is_none());
+        assert!(future.calendar.event("read_later").is_none());
+        assert!(future.calendar.event("read_earlier").is_some());
+    }
+
+    #[test]
+    fn a_habit_without_a_repeating_event_is_added_without_asking() {
+        let mut state = recurring_state();
+        state
+            .habits
+            .library
+            .habits
+            .push(crate::habits::Habit::new("read", "Read a book"));
+        let _ = update(
+            &mut state,
+            Action::AddHabit("read".into(), "standup".into()),
+        );
+        assert!(state.timeblocking.pending_recurring.is_none());
+        assert!(state.timeblocking.busy.adding_habit);
     }
 
     #[test]

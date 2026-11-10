@@ -448,11 +448,15 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         super::calendar::titled(state, task, title, metrics),
         super::calendar::form_section(
             "Scheduling",
-            column![
-                date_field(state, task, metrics, false),
-                date_field(state, task, metrics, true),
-            ]
-            .spacing(12),
+            scheduled_by_block(
+                task,
+                column![
+                    date_field(state, task, metrics, false),
+                    date_field(state, task, metrics, true),
+                ]
+                .spacing(12),
+                metrics,
+            ),
             metrics
         ),
         super::calendar::form_section("Information", information, metrics),
@@ -465,6 +469,24 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     .spacing(metrics.spacing)
     .width(Fill)
     .into()
+}
+
+/// A task in a time block takes its schedule from the block, so its own
+/// scheduling fields are shown grayed out.
+pub fn scheduled_by_block<'a>(
+    task: &Event,
+    content: impl Into<Element<'a, Message>>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    if task.is_task() && tb::metadata(task).block.is_some() {
+        super::controls::owned_elsewhere(
+            "Scheduled by its time block. Change it from the time block.",
+            content,
+            metrics.label(),
+        )
+    } else {
+        content.into()
+    }
 }
 
 fn organization_fields<'a>(
@@ -1480,6 +1502,92 @@ pub fn estimate_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, 
     stack![backdrop, foreground].into()
 }
 
+/// Asks whether a recurring task or habit moves into the block alone, or
+/// with its future occurrences deleted.
+pub fn recurring_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    use iced::widget::{Space, stack};
+    let Some(pending) = state.timeblocking.pending_recurring.as_ref() else {
+        return column![].into();
+    };
+    let (kind, name) = match &pending.item {
+        tb::RecurringItem::Task(id) => (
+            "task",
+            state
+                .calendar
+                .event(id)
+                .map(|task| task.title.clone())
+                .unwrap_or_default(),
+        ),
+        tb::RecurringItem::Habit(id) => (
+            "habit",
+            state
+                .habits
+                .library
+                .habit(id)
+                .map(|habit| habit.name.clone())
+                .unwrap_or_default(),
+        ),
+    };
+    let block_repeats = state
+        .calendar
+        .event(&pending.block)
+        .is_some_and(|block| block.is_recurring());
+    let mut detail = format!(
+        "“{name}” repeats. Move only this occurrence into the time block and keep the future ones separate, or move it and delete its future occurrences."
+    );
+    if block_repeats {
+        detail.push_str(&format!(
+            " The time block repeats, so the {kind} will repeat with it."
+        ));
+    }
+    let busy = !state.timeblocking.busy.is_empty();
+    let size = metrics.label();
+    let choice = |label: String, future: bool| {
+        button(text(label).size(size).center().width(Fill))
+            .width(Fill)
+            .style(super::controls::secondary)
+            .on_press_maybe((!busy).then_some(msg(Action::MoveRecurring(future))))
+    };
+    let body = column![
+        text(format!("Move recurring {kind}?")).size(20),
+        text(detail).size(size),
+        choice(format!("Move this {kind} only"), false),
+        choice(
+            format!("Move this {kind} and delete future instances"),
+            true
+        ),
+        button(text("Cancel").size(size).center().width(Fill))
+            .width(Fill)
+            .style(super::controls::ghost)
+            .on_press(msg(Action::CancelRecurring)),
+    ]
+    .spacing(12);
+    let backdrop =
+        mouse_area(
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|_| container::Style {
+                    background: Some(super::controls::SCRIM.into()),
+                    ..Default::default()
+                }),
+        )
+        .on_press(msg(Action::CancelRecurring));
+    let card = container(
+        mouse_area(
+            container(body)
+                .padding(20)
+                .max_width(460)
+                .style(super::controls::surface),
+        )
+        .on_press(Message::Ignored),
+    )
+    .padding(16)
+    .center_x(Fill)
+    .center_y(Fill);
+    stack![backdrop, card].into()
+}
+
 /// Whether a block's "Available tasks" list offers `event`.
 ///
 /// With "All tasks" on, every open task is offered: any task list, dated or
@@ -1518,6 +1626,90 @@ mod tests {
     use super::*;
     use crate::calendar;
     use iced::{Point, Size, mouse};
+
+    #[test]
+    fn the_recurring_prompt_offers_both_moves_and_cancel() {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        state
+            .habits
+            .library
+            .habits
+            .push(crate::habits::Habit::new("read", "Read a book"));
+        state.timeblocking.pending_recurring = Some(tb::PendingRecurring {
+            item: tb::RecurringItem::Habit("read".into()),
+            block: "standup".into(),
+        });
+        for (label, expected) in [
+            ("Move this habit only", Some(false)),
+            ("Move this habit and delete future instances", Some(true)),
+            ("Cancel", None),
+        ] {
+            let size = Size::new(360.0, 900.0);
+            let metrics = Metrics::of(size);
+            let mut ui = iced_test::Simulator::with_size(
+                iced_test::core::Settings::default(),
+                size,
+                recurring_confirmation(&state, &metrics),
+            );
+            assert!(ui.find("Move recurring habit?").is_ok());
+            let _ = ui.click(label).unwrap();
+            let message = ui.into_messages().next();
+            match expected {
+                Some(future) => assert!(matches!(
+                    message,
+                    Some(Message::TimeBlocking(Action::MoveRecurring(f))) if f == future
+                )),
+                None => assert!(matches!(
+                    message,
+                    Some(Message::TimeBlocking(Action::CancelRecurring))
+                )),
+            }
+        }
+    }
+
+    #[test]
+    fn a_task_in_a_block_shows_its_scheduling_grayed_out() {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            metadata: tb::Metadata {
+                minutes: 30,
+                ..Default::default()
+            },
+        });
+        let reason = "Scheduled by its time block. Change it from the time block.";
+        let size = Size::new(450.0, 1400.0);
+        let metrics = Metrics::of(size);
+        let task = state.calendar.event("task:deep").unwrap();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            fields(&state, task, &metrics),
+        );
+        assert!(ui.find(reason).is_err());
+        let _ = ui.click("Schedule Day").unwrap();
+        assert!(ui.into_messages().next().is_some());
+
+        let task = state.calendar.event_mut("task:deep").unwrap();
+        task.details.task_data.as_mut().unwrap().metadata.block = Some("work/standup".into());
+        let task = state.calendar.event("task:deep").unwrap();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            fields(&state, task, &metrics),
+        );
+        assert!(ui.find(reason).is_ok());
+        let _ = ui.click("Schedule Day");
+        assert!(
+            ui.into_messages()
+                .all(|message| matches!(message, Message::Ignored))
+        );
+    }
 
     #[test]
     fn available_habits_browses_library_and_adds_selected_habit() {

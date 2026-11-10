@@ -12,6 +12,39 @@ use std::sync::Arc;
 use timeslay_core::theme as look;
 
 /// Consistent section captions for metadata editors.
+/// Shows fields that are owned elsewhere grayed out, with `reason` above
+/// them. Nothing in them can be pressed or typed into.
+pub fn owned_elsewhere<'a>(
+    reason: &'a str,
+    content: impl Into<Element<'a, Message>>,
+    size: f32,
+) -> Element<'a, Message> {
+    let content: Element<'a, Message> = content.into().map(|_| Message::Ignored);
+    let veil = mouse_area(container(Space::new()).width(Fill).height(Fill).style(
+        |theme: &Theme| {
+            container::Style {
+                background: Some(
+                    Color {
+                        a: 0.6,
+                        ..theme.palette().background
+                    }
+                    .into(),
+                ),
+                ..Default::default()
+            }
+        },
+    ))
+    .on_press(Message::Ignored)
+    .interaction(mouse::Interaction::NotAllowed);
+    column![
+        text(reason).size(size).style(text::secondary),
+        stack![content, veil],
+    ]
+    .spacing(8)
+    .width(Fill)
+    .into()
+}
+
 pub fn field_label<'a>(label: &'a str, size: f32) -> iced::widget::Text<'a> {
     text(label)
         .size(size)

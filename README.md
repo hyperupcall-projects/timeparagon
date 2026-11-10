@@ -54,9 +54,12 @@ Of course, there's also week, 2-week, and month views:
 			- Automatic pomodoro timer.
 			- Record distractions (integratead with habits) (TODO).
 	- **Sleep:**
-		- Set sleep targets.
-		- Sleep quality tracking (TODO).
-		- Automatic shutdown (TODO).
+		- Set sleep targets and plan bedtime/wakeup times per-day.
+		- Track expected sleep with actual sleep (TODO).
+			- Automatically test if it is currently sleeping (TODO).
+			- Sleep quality tracking (TODO).
+			- Automatic shutdown (TODO).
+			- Automatically change phone mode like Sleep/DnD etc. (TODO).
 - **Capture and manage tasks**:
 	- Manage the same task metadata as Google Tasks, plus projects, tags, priorities, projects, and estimated duration.
 	- Create tasks:
