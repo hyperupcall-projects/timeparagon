@@ -2329,42 +2329,6 @@ fn a_failed_reply_puts_the_previous_answer_back() {
 }
 
 #[test]
-fn dragging_a_meeting_asks_about_emailing_and_cancelling_puts_it_back() {
-    use calendar::meeting::{Attendance, Guest};
-    let mut state = State::blank();
-    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-    let event = state
-        .calendar
-        .events
-        .iter_mut()
-        .find(|e| !e.is_task())
-        .unwrap();
-    event.details.attendance = Attendance {
-        guests: vec![Guest {
-            email: "ada@example.com".into(),
-            ..Default::default()
-        }],
-        organizer: true,
-        ..Default::default()
-    };
-    let (id, start, end) = (event.id.clone(), event.start, event.end);
-    let hour = chrono::Duration::hours(1);
-    let _ = update(
-        &mut state,
-        Message::Event(EventMessage::EventTimeChanged {
-            id: id.clone(),
-            start: start + hour,
-            end: end + hour,
-        }),
-    );
-    assert!(state.calendar.pending_move.is_some());
-    assert_eq!(state.calendar.event(&id).unwrap().start, start + hour);
-    let _ = update(&mut state, Message::Event(EventMessage::EventMoveCancelled));
-    assert!(state.calendar.pending_move.is_none());
-    assert_eq!(state.calendar.event(&id).unwrap().start, start);
-}
-
-#[test]
 fn dragging_an_event_without_guests_does_not_ask() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());

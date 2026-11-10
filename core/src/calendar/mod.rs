@@ -997,6 +997,11 @@ pub struct Details {
     /// The raw RFC 5545 recurrence lines from Google (`RRULE:`, `RDATE:`,
     /// `EXDATE:`). Empty for a one-off event.
     pub recurrence: Vec<String>,
+    /// The earlier series this one continues, as `calendar/series`, oldest
+    /// first: editing "this and following" ends a series and starts a new
+    /// one, and tasks repeating with the old series carry on with this one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub split_from: Vec<String>,
     /// Google's event `colorId`, or `None` when the event uses its calendar's
     /// color.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1908,6 +1913,30 @@ impl Store {
             .values_mut()
             .flatten()
             .find(|event| event.id == id)
+    }
+
+    /// Moves every loaded occurrence of a series by `delta`, as Google will
+    /// once the series itself is moved.
+    pub fn shift_series(&mut self, calendar_id: &str, series: &str, delta: chrono::Duration) {
+        let mut shifted = false;
+        for event in self
+            .events
+            .iter_mut()
+            .chain(self.cache.values_mut().flatten())
+            .chain(self.detail_event.as_mut())
+            .filter(|event| {
+                event.calendar_id == calendar_id
+                    && event.details.recurring_event_id.as_deref() == Some(series)
+            })
+        {
+            event.start += delta;
+            event.end += delta;
+            shifted = true;
+        }
+        if shifted {
+            self.events
+                .sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
+        }
     }
 
     /// Applies a dragged time to the event and remembers it as unconfirmed.

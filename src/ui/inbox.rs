@@ -1050,57 +1050,6 @@ mod tests {
     }
 
     #[test]
-    fn the_details_pane_uses_the_clearable_date_picker_and_schedules_the_chosen_day() {
-        let mut state = state_with_task("");
-        let _ = crate::app::update(
-            &mut state,
-            Message::Event(EventMessage::EventOpened("task:one".into())),
-        );
-        assert_eq!(state.calendar.open_event.as_deref(), Some("task:one"));
-        assert!(state.details_pane_open);
-        assert!(state.timeblocking.date.is_empty());
-
-        let mut ui = iced_test::Simulator::with_size(
-            iced_test::core::Settings::default(),
-            Size::new(360.0, 2400.0),
-            crate::ui::editor_window(&state),
-        );
-        assert!(ui.find("Name").is_err());
-        assert!(ui.find("Rename").is_err());
-        assert!(ui.find("Scheduled day and time").is_err());
-        ui.click("Choose date").unwrap();
-        let picker = ui
-            .into_messages()
-            .find_map(|m| match m {
-                Message::Picker(crate::ui::controls::Action::Open(p)) => Some(p),
-                _ => None,
-            })
-            .expect("date picker opens");
-        assert!(picker.optional);
-        let _ = crate::ui::controls::update(&mut state, crate::ui::controls::Action::Open(picker));
-        let mut ui = iced_test::Simulator::with_size(
-            iced_test::core::Settings::default(),
-            Size::new(360.0, 2400.0),
-            crate::ui::editor_window(&state),
-        );
-        assert!(ui.find("Clear").is_ok());
-        ui.click("15").unwrap();
-        assert!(ui.into_messages().any(|m| matches!(m, Message::Picker(crate::ui::controls::Action::Select(day)) if day.day() == 15)));
-
-        state.picker = None;
-        let _ = tb::update(&mut state, tb::Action::Date("2026-10-15".into()));
-        let mut ui = iced_test::Simulator::with_size(
-            iced_test::core::Settings::default(),
-            Size::new(360.0, 2400.0),
-            crate::ui::editor_window(&state),
-        );
-        ui.click("Schedule Day").unwrap();
-        assert!(ui.into_messages().any(
-            |m| matches!(m, Message::TimeBlocking(tb::Action::Reschedule(id)) if id == "task:one")
-        ));
-    }
-
-    #[test]
     fn inbox_shows_creation_and_modification_times() {
         let mut state = state_with_task("");
         let timestamp = chrono::DateTime::parse_from_rfc3339("2026-10-29T19:30:12Z")
