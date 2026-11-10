@@ -1539,7 +1539,7 @@ fn SleepEditor(
             }
             p { class: "hint",
                 if record.automatic {
-                    "Calculated from the first timed event. Saving records your times and preserves them when your schedule changes."
+                    "Planned from your weekly sleep schedule. Saving records your times and preserves them when your schedule changes."
                 } else {
                     "Recorded sleep. These times are preserved when your schedule changes."
                 }

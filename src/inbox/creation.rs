@@ -64,11 +64,7 @@ pub(crate) fn select(state: &mut State, kind: DraftKind) -> Task<Message> {
             .filter(|event| !event.all_day)
             .map(|event| event.start)
             .unwrap_or_else(|| calendar::at_clock(state.calendar.day, now.hour(), 0));
-        let hours = if kind == DraftKind::Sleep {
-            i64::from(state.config.calendar.sleep_goal_hours())
-        } else {
-            1
-        };
+        let hours = if kind == DraftKind::Sleep { 8 } else { 1 };
         let calendar_id = if kind == DraftKind::Event {
             state
                 .calendar

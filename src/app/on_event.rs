@@ -1,6 +1,7 @@
 //! An event that already exists: opening, moving and deleting it.
 
 use super::*;
+use chrono::Datelike;
 
 pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> {
     match message {
@@ -306,7 +307,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             let Some(event) = state.calendar.event(&id).cloned() else {
                 return Task::none();
             };
-            if event.start == start && event.end == end {
+            if end <= start || (event.start == start && event.end == end) {
                 return Task::none();
             }
             if event.task_ref().is_some() {
@@ -320,7 +321,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             if !state.calendar.begin_time_change(&id, start, end) {
                 return Task::none();
             }
-            let recurring = event.is_recurring();
+            let recurring = event.is_recurring() || event.details.sleep.is_some();
             if ask || recurring {
                 state.calendar.pending_move = Some(calendar::PendingMove {
                     original: event,
@@ -344,6 +345,9 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             let Some(pending) = state.calendar.pending_move.as_mut() else {
                 return Task::none();
             };
+            if pending.original.details.sleep.is_some() && scope == calendar::SaveScope::All {
+                return Task::none();
+            }
             pending.scope = Some(scope);
             let attendance = &pending.original.details.attendance;
             if attendance.can_manage() && !attendance.guests.is_empty() {
@@ -375,6 +379,52 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 state.calendar.fail_time_change(&pending.id);
             }
             Task::none()
+        }
+        EventMessage::SleepTimeSaved(id, scope, result) => {
+            let event = match result {
+                Ok(event) => event,
+                Err(error) => {
+                    state.calendar.fail_time_change(&id);
+                    state.calendar.error = Some(error);
+                    return Task::none();
+                }
+            };
+            state.calendar.confirm_time_change(&id);
+            let mut tasks = Vec::new();
+            if scope == calendar::SaveScope::CurrentAndFuture {
+                let record = event.details.sleep.as_ref().unwrap();
+                let today = crate::clock::now().date_naive();
+                let from = if record.wake_date < today {
+                    today
+                        + chrono::Duration::days(i64::from(
+                            record.wake_date.weekday().days_since(today.weekday()),
+                        ))
+                } else {
+                    record.wake_date
+                };
+                calendar::sleep::set_weekday_times(
+                    &mut state.config.calendar,
+                    from,
+                    calendar::sleep::Times {
+                        bedtime: event.start.time(),
+                        wakeup: event.end.time(),
+                    },
+                );
+                state.calendar.invalidate_other_days();
+                tasks.push(queue_save(state));
+            }
+            state.calendar.forget_event_everywhere(&id);
+            if state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .is_some_and(|draft| draft.id == id)
+            {
+                state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
+            }
+            state.calendar.add_event(event);
+            tasks.push(refresh_week_after_write(state));
+            Task::batch(tasks)
         }
         EventMessage::EventTimeSaved(id, Ok(())) => {
             state.calendar.confirm_time_change(&id);
@@ -513,6 +563,29 @@ fn write_event_time(
 ) -> Task<Message> {
     let id = original.id.clone();
     state.calendar.error = None;
+    if original.details.sleep.is_some() {
+        let mut event = original;
+        event.start = start;
+        event.end = end;
+        if let Some(draft) = state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .filter(|draft| draft.id == id)
+        {
+            if let Some(record) = &draft.sleep {
+                event.details.sleep = Some(record.clone());
+            }
+        }
+        event.details.sleep.as_mut().unwrap().automatic =
+            scope == calendar::SaveScope::CurrentAndFuture;
+        // Only a single-night edit becomes an exception to the shared schedule.
+        let settings = state.config.calendar.clone();
+        state.timeblocking.revision += 1;
+        return blocking::run(move || calendar::sleep::save(&settings, event, false)).map(
+            move |result| Message::Event(EventMessage::SleepTimeSaved(id.clone(), scope, result)),
+        );
+    }
     blocking::run(move || {
         if !original.is_recurring() {
             return calendar::set_event_time(

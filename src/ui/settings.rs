@@ -800,43 +800,41 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let settings = &state.config.calendar;
     let time_format = state.config.appearance.time_format;
 
-    column![
-        field(
-            "Sleep goal",
-            number_dropdown(
-                6..=12,
-                settings.sleep_goal_hours(),
-                |hours| format!("{hours} hours"),
-                |v0| Message::Settings(SettingsMessage::SleepGoalChanged(v0)),
-                metrics,
-            ),
-            metrics,
-        ),
-        field(
-            "Sleep day starts at",
-            number_dropdown(
-                0..=6,
-                settings.sleep_day_start_hour(),
-                |hour| calendar::time_format::hour(hour, time_format),
-                |v0| Message::Settings(SettingsMessage::SleepDayStartChanged(v0)),
-                metrics,
-            ),
-            metrics,
-        ),
-        field(
-            "Latest wake-up",
-            number_dropdown(
-                4..=14,
-                settings.latest_wakeup_hour(),
-                |hour| calendar::time_format::hour(hour, time_format),
-                |v0| Message::Settings(SettingsMessage::LatestWakeupChanged(v0)),
-                metrics,
-            ),
-            metrics,
-        ),
-    ]
-    .spacing(metrics.spacing)
-    .into()
+    let mut section = column![
+        text("Each row is the night ending on that weekday. Bedtimes later than wake-up are on the preceding evening. Changes apply from today through four weeks ahead.")
+            .size(metrics.label() - 1.0).style(text::secondary),
+    ].spacing(metrics.spacing);
+    for day in settings.first_day_of_week.weekdays() {
+        let times = settings.sleep_schedule[day.num_days_from_monday() as usize];
+        let time_field = |label: &'static str, bedtime: bool, value: chrono::NaiveTime| {
+            column![
+                crate::ui::controls::field_label(label, metrics.label()),
+                crate::ui::controls::time(
+                    time_format,
+                    &value.format("%H:%M").to_string(),
+                    true,
+                    metrics.label(),
+                    move |value| Message::Settings(SettingsMessage::SleepTimeChanged(
+                        day, bedtime, value
+                    )),
+                ),
+            ]
+            .spacing(4)
+            .width(Fill)
+        };
+        section = section.push(
+            column![
+                text(day.to_string()).size(metrics.label()),
+                row![
+                    time_field("Bedtime", true, times.bedtime),
+                    time_field("Wake-up", false, times.wakeup)
+                ]
+                .spacing(metrics.spacing),
+            ]
+            .spacing(4),
+        );
+    }
+    section.into()
 }
 
 fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -1314,13 +1312,31 @@ mod tests {
         let state = State::blank();
         let size = iced::Size::new(420.0, 1200.0);
         let metrics = Metrics::of(size);
-        for label in ["Sleep goal", "Sleep day starts at", "Latest wake-up"] {
+        for label in ["Bedtime", "Wake-up", "Sun", "Mon", "Sat"] {
             let mut ui = Simulator::with_size(Settings::default(), size, sleep(&state, &metrics));
             assert!(ui.find(label).is_ok(), "missing {label}");
         }
 
         let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
-        assert!(ui.find("Sleep goal").is_err());
+        assert!(ui.find("Bedtime").is_err());
+    }
+
+    #[test]
+    fn sleep_weekdays_follow_the_preferred_week_start() {
+        use iced_test::{Simulator, core::Settings};
+        let mut state = State::blank();
+        let size = iced::Size::new(420.0, 1400.0);
+        let metrics = Metrics::of(size);
+        for first in FirstDayOfWeek::ALL {
+            state.config.calendar.first_day_of_week = first;
+            let mut ui = Simulator::with_size(Settings::default(), size, sleep(&state, &metrics));
+            let positions: Vec<_> = first
+                .short_labels()
+                .into_iter()
+                .map(|label| ui.find(label).unwrap().bounds().y)
+                .collect();
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        }
     }
 
     #[test]
