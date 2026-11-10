@@ -119,9 +119,9 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         container(heading_with_alarm_hint(state, metrics, false)).padding([0.0, metrics.padding]);
     let mut content = column![heading, body]
         .spacing(metrics.spacing)
+        // No bottom padding: the panel footer sits flush beneath the grid.
         .padding(iced::Padding {
             top: metrics.padding,
-            bottom: metrics.padding,
             ..iced::Padding::ZERO
         })
         .width(Fill)
