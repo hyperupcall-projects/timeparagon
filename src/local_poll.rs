@@ -162,6 +162,20 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
         None => {}
     }
 
+    // A whole series was saved or deleted and Google has confirmed it. Its
+    // occurrences on other cached days are swapped in, and the days in view
+    // are fetched again: the sync asked for when saving may have reached
+    // Google before the write did.
+    let series = timeslay_core::calendar::series::take_refreshed();
+    let refused = if series.is_empty() {
+        refused
+    } else {
+        for refresh in &series {
+            state.calendar.apply_series_refresh(refresh);
+        }
+        Task::batch([refused, crate::app::refresh_week_after_write(state)])
+    };
+
     if state.alarms.accepts_shared() && state.alarms.items() == alarms_before {
         match alarms {
             Some(Ok(snapshot)) => {

@@ -523,10 +523,9 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             if state.screen == Screen::Habits {
                 state.habits.series.retain(|series| series.id != id);
             }
-            Task::batch([
-                close,
-                Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested)),
-            ])
+            // Through the write refresh, so a sync already under way, which
+            // may predate the delete, is fetched again rather than applied.
+            Task::batch([close, refresh_week_after_write(state)])
         }
         EventMessage::EventDeleted(_id, Err(error)) => {
             state.calendar.pending_delete = None;

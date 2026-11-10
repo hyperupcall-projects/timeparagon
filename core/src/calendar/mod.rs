@@ -19,6 +19,7 @@ pub mod recurring_tasks;
 pub mod schedule;
 pub mod scheduled;
 pub mod search;
+pub mod series;
 pub mod sleep;
 pub mod sources;
 pub mod task_metadata;
@@ -1546,6 +1547,33 @@ impl Store {
         // The day in view has fresh events now, so the run after this one
         // opens on them rather than on an empty grid.
         self.write_day(self.day, &self.events);
+    }
+
+    /// Puts a series' occurrences, fetched after a write changed many of them,
+    /// into the days held in memory. The worker has already updated the disk.
+    pub fn apply_series_refresh(&mut self, refresh: &series::Refresh) {
+        let mut fresh = refresh.events.clone();
+        for event in &mut fresh {
+            if let Some(settings) = &self.color_settings {
+                recolor_event(event, settings);
+            }
+            if let Some(pending) = self.pending.get(&event.id) {
+                event.start = pending.start;
+                event.end = pending.end;
+            }
+        }
+        let day_end_hour = self.day_end_hour;
+        refresh.apply_to_day(self.day, &mut self.events, &fresh, day_end_hour);
+        for (&day, events) in &mut self.cache {
+            refresh.apply_to_day(day, events, &fresh, day_end_hour);
+        }
+        if self
+            .open_event
+            .as_ref()
+            .is_some_and(|id| self.event(id).is_none())
+        {
+            self.open_event = None;
+        }
     }
 
     /// Install a range fetch as ordinary per-day snapshots, retaining all tasks

@@ -165,14 +165,24 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
                 },
             )
         }
-        TaskMessage::TaskCompletionSaved(id, _, Ok(task)) => {
+        TaskMessage::TaskCompletionSaved(id, previous, Ok(task)) => {
             if let Some(event) = state.calendar.event_mut(&id) {
                 *event = task.clone();
             }
             state.timeblocking.busy.remove_task(&id);
             state.timeblocking.revision += 1;
             state.calendar.replace_cached_task(&id, &task);
-            Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
+            let record = if (previous == timeblocking::TaskStatus::Completed)
+                != (timeblocking::task_status(&task) == timeblocking::TaskStatus::Completed)
+            {
+                crate::habits::record_occurrence(state, &task)
+            } else {
+                Task::none()
+            };
+            Task::batch([
+                record,
+                Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested)),
+            ])
         }
         TaskMessage::TaskCompletionSaved(id, previous, Err(error)) => {
             state.timeblocking.busy.remove_task(&id);

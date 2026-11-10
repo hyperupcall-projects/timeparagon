@@ -468,6 +468,16 @@ impl Store {
     /// the final say, because a completed occurrence keeps its own copy of the
     /// properties from when it was completed.
     pub fn habit_of<'a>(&'a self, event: &'a calendar::Event) -> Option<&'a str> {
+        if event.is_task() {
+            return event
+                .details
+                .task_data
+                .as_ref()?
+                .metadata
+                .habit_id
+                .as_deref()
+                .filter(|id| self.library.habit(id).is_some());
+        }
         let series_id = event
             .details
             .recurring_event_id
@@ -1194,7 +1204,7 @@ fn write_occurrence(
 }
 
 /// Completing an occurrence on the calendar counts as doing the habit that day.
-fn record_occurrence(state: &mut State, event: &calendar::Event) -> Task<Message> {
+pub(crate) fn record_occurrence(state: &mut State, event: &calendar::Event) -> Task<Message> {
     let Some(id) = state.habits.habit_of(event).map(str::to_owned) else {
         return Task::none();
     };
@@ -1205,7 +1215,12 @@ fn record_occurrence(state: &mut State, event: &calendar::Event) -> Task<Message
     if habit.kind != Kind::Yes {
         return Task::none();
     }
-    if event.completed {
+    let completed = if event.is_task() {
+        crate::timeblocking::task_status(event) == crate::timeblocking::TaskStatus::Completed
+    } else {
+        event.completed
+    };
+    if completed {
         habit.add_rep(day);
     } else {
         habit.remove_rep(day);
@@ -1545,6 +1560,54 @@ mod tests {
         let mut draft = Draft::new(date("2026-10-28"), Some("3".to_owned()));
         draft.title = "Stretch".to_owned();
         draft
+    }
+
+    #[test]
+    fn planned_habit_completion_counts_once_and_ignoring_removes_it() {
+        let mut state = State::blank();
+        state.habits.library.habits.push(Habit::new("read", "Read"));
+        let mut task = calendar::sample_snapshot().events.remove(0);
+        task.id = "task:read".into();
+        task.calendar_id = "tasks:list".into();
+        task.details.task_data = Some(timeslay_core::task_db::TaskData {
+            id: 1,
+            metadata: crate::timeblocking::Metadata {
+                habit_id: Some("read".into()),
+                ..Default::default()
+            },
+        });
+        let day = task.start.date_naive();
+        state.calendar.add_event(task.clone());
+        crate::timeblocking::apply_status(&mut task, crate::timeblocking::TaskStatus::Completed);
+        let _ = crate::app::update(
+            &mut state,
+            Message::Task(crate::app::TaskMessage::TaskCompletionSaved(
+                task.id.clone(),
+                crate::timeblocking::TaskStatus::Active,
+                Ok(task.clone()),
+            )),
+        );
+        assert_eq!(state.habits.library.habit("read").unwrap().times_on(day), 1);
+        // A save that did not transition completion cannot double count.
+        let _ = crate::app::update(
+            &mut state,
+            Message::Task(crate::app::TaskMessage::TaskCompletionSaved(
+                task.id.clone(),
+                crate::timeblocking::TaskStatus::Completed,
+                Ok(task.clone()),
+            )),
+        );
+        assert_eq!(state.habits.library.habit("read").unwrap().times_on(day), 1);
+        crate::timeblocking::apply_status(&mut task, crate::timeblocking::TaskStatus::Ignored);
+        let _ = crate::app::update(
+            &mut state,
+            Message::Task(crate::app::TaskMessage::TaskCompletionSaved(
+                task.id.clone(),
+                crate::timeblocking::TaskStatus::Completed,
+                Ok(task),
+            )),
+        );
+        assert_eq!(state.habits.library.habit("read").unwrap().times_on(day), 0);
     }
 
     #[test]

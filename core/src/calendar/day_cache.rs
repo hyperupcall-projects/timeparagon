@@ -318,6 +318,67 @@ pub fn update_events(database: &Path, mut update: impl FnMut(&mut Vec<Event>)) {
     }
 }
 
+/// Puts a series' freshly fetched occurrences into every cached month the
+/// refresh covers, by [`Refresh::apply_to_month`](super::series::Refresh). A
+/// month neither naming the series nor gaining an occurrence is not parsed.
+pub(super) fn replace_series(database: &Path, refresh: &super::series::Refresh, day_end_hour: u32) {
+    let mut database_handle = match open(database) {
+        Ok(database) => database,
+        Err(error) => {
+            log::warn!("could not update the cached series: {error}");
+            return;
+        }
+    };
+    for month_start in days(database) {
+        let month_end = month_start
+            .iter_days()
+            .take_while(|day| day.month() == month_start.month())
+            .last()
+            .unwrap_or(month_start);
+        if month_end < refresh.first || month_start > refresh.last {
+            continue;
+        }
+        let month = month_key(month_start);
+        let mut write = || -> io::Result<()> {
+            let tx = database_handle
+                .connection()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(io::Error::other)?;
+            let Some(text) = month_text(&tx, &month).map_err(io::Error::other)? else {
+                return Ok(());
+            };
+            let gains = refresh.events.iter().any(|event| {
+                (month_start..=month_end).contains(&day_at(event.start, day_end_hour))
+            });
+            if !gains
+                && !refresh
+                    .series
+                    .iter()
+                    .any(|series| text.contains(&series.id))
+            {
+                return Ok(());
+            }
+            let Ok(saved) = serde_json::from_str::<SavedMonth>(&text) else {
+                return Ok(());
+            };
+            let mut events: Vec<Event> = saved.events.into_iter().map(Event::from).collect();
+            let before = events.clone();
+            refresh.apply_to_month(month_start, &mut events, day_end_hour);
+            if events == before {
+                return Ok(());
+            }
+            let updated = SavedMonth {
+                events: events.iter().map(SavedEvent::from).collect(),
+            };
+            write_month(&tx, &month, &updated)?;
+            tx.commit().map_err(io::Error::other)
+        };
+        if let Err(error) = write() {
+            log::warn!("could not update the cached series in {month}: {error}");
+        }
+    }
+}
+
 /// Every cached month, as the first day of each month. A row not named like a
 /// month is left out rather than guessed at.
 pub fn days(database: &Path) -> Vec<NaiveDate> {

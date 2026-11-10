@@ -21,6 +21,7 @@ pub enum BusyKey {
     Task(String),
     /// A todo that does not have a task id until Google creates it.
     AddingTodo,
+    AddingHabit,
 }
 
 impl BusyKey {
@@ -28,7 +29,7 @@ impl BusyKey {
     fn task_id(&self) -> &str {
         match self {
             Self::Task(id) => id,
-            Self::AddingTodo => "",
+            Self::AddingTodo | Self::AddingHabit => "",
         }
     }
 }
@@ -50,6 +51,7 @@ impl From<&str> for BusyKey {
 pub struct Busy {
     tasks: std::collections::HashSet<String>,
     adding_todo: bool,
+    adding_habit: bool,
 }
 
 impl Busy {
@@ -59,6 +61,7 @@ impl Busy {
                 self.tasks.insert(id);
             }
             BusyKey::AddingTodo => self.adding_todo = true,
+            BusyKey::AddingHabit => self.adding_habit = true,
         }
     }
 
@@ -68,6 +71,7 @@ impl Busy {
                 self.tasks.remove(id);
             }
             BusyKey::AddingTodo => self.adding_todo = false,
+            BusyKey::AddingHabit => self.adding_habit = false,
         }
     }
 
@@ -84,11 +88,11 @@ impl Busy {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tasks.is_empty() && !self.adding_todo
+        self.tasks.is_empty() && !self.adding_todo && !self.adding_habit
     }
 
     pub fn len(&self) -> usize {
-        self.tasks.len() + usize::from(self.adding_todo)
+        self.tasks.len() + usize::from(self.adding_todo) + usize::from(self.adding_habit)
     }
 }
 use timeslay_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
@@ -133,6 +137,7 @@ pub struct Workspace {
     pub todo_open: bool,
     /// Text that narrows the available tasks under the open time block.
     pub available_query: String,
+    pub available_habit_query: String,
     /// Include tasks from all dates instead of only the current day.
     pub available_all: bool,
     /// Include tasks that already have a due time or calendar schedule.
@@ -286,6 +291,8 @@ pub enum Action {
     AddTodo(String),
     /// The available-tasks search box changed.
     AvailableQuery(String),
+    AvailableHabitQuery(String),
+    AddHabit(String, String),
     /// Include available tasks from all dates, or only tasks dated today.
     AvailableAll(bool),
     /// Include planned tasks in the available-tasks list.
@@ -408,6 +415,7 @@ pub fn close(state: &mut State) -> Task<Message> {
     state.timeblocking.dragging = None;
     state.timeblocking.drag_pointer = None;
     state.timeblocking.available_query.clear();
+    state.timeblocking.available_habit_query.clear();
     state.timeblocking.available_all = false;
     state.timeblocking.available_planned = false;
     // A save still in flight keeps the draft so its result can land on the same field.
@@ -426,6 +434,7 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
         state.timeblocking.todo_draft.clear();
         state.timeblocking.todo_error = None;
         state.timeblocking.available_query.clear();
+        state.timeblocking.available_habit_query.clear();
         state.timeblocking.available_all = false;
         state.timeblocking.available_planned = false;
     }
@@ -1464,6 +1473,35 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::AddTodo(block_id) => return add_todo(state, &block_id),
+        Action::AddHabit(habit_id, block_id) => {
+            let Some(habit) = state.habits.library.habit(&habit_id).cloned() else {
+                return Task::none();
+            };
+            let Some(block) = event(state, &block_id) else {
+                return Task::none();
+            };
+            if assigned_all(state, block)
+                .iter()
+                .any(|task| metadata(task).habit_id.as_deref() == Some(&habit_id))
+            {
+                return Task::none();
+            }
+            return add_block_item(
+                state,
+                &block_id,
+                habit.name,
+                habit.notes,
+                Some(Metadata {
+                    habit_id: Some(habit_id),
+                    minutes: 30,
+                    ..Default::default()
+                }),
+            );
+        }
+        Action::AvailableHabitQuery(query) => {
+            state.timeblocking.available_habit_query = query;
+            return Task::none();
+        }
         Action::AvailableQuery(query) => {
             state.timeblocking.available_query = query;
             return Task::none();
@@ -1716,6 +1754,24 @@ fn add_todo(state: &mut State, block_id: &str) -> Task<Message> {
             Some(format!("A todo can be at most {MAX_TODO_CHARS} characters"));
         return Task::none();
     }
+    add_block_item(state, block_id, title, String::new(), None)
+}
+
+fn add_block_item(
+    state: &mut State,
+    block_id: &str,
+    title: String,
+    notes: String,
+    initial_metadata: Option<Metadata>,
+) -> Task<Message> {
+    let busy_key = if initial_metadata
+        .as_ref()
+        .is_some_and(|meta| meta.habit_id.is_some())
+    {
+        BusyKey::AddingHabit
+    } else {
+        BusyKey::AddingTodo
+    };
     if !state.timeblocking.busy.is_empty() {
         return Task::none();
     }
@@ -1754,16 +1810,29 @@ fn add_todo(state: &mut State, block_id: &str) -> Task<Message> {
         .collect();
     state.timeblocking.todo_error = None;
     state.timeblocking.revision += 1;
-    state.timeblocking.busy.insert(BusyKey::AddingTodo);
+    state.timeblocking.busy.insert(busy_key.clone());
     blocking::run(move || {
-        create_and_assign(title, settings, key, start, end, order, blocks, related)
+        create_and_assign(
+            title,
+            notes,
+            initial_metadata,
+            settings,
+            key,
+            start,
+            end,
+            order,
+            blocks,
+            related,
+        )
     })
-    .map(|result| Message::TimeBlocking(Action::SavedMany(BusyKey::AddingTodo, result)))
+    .map(move |result| Message::TimeBlocking(Action::SavedMany(busy_key.clone(), result)))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn create_and_assign(
     title: String,
+    notes: String,
+    metadata: Option<Metadata>,
     settings: CalendarSettings,
     key: String,
     start: DateTime<Local>,
@@ -1776,9 +1845,9 @@ fn create_and_assign(
         &settings,
         "",
         &title,
-        "",
+        &notes,
         Some(start.date_naive()),
-        None,
+        metadata,
     )?;
     save_and_reflow(
         task,

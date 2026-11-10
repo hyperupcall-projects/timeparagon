@@ -11,6 +11,9 @@ pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
+    /// Habit library entry represented by this planned task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub habit_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<calendar::deadline::Deadline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,10 +192,15 @@ pub fn apply_status(task: &mut Event, status: TaskStatus) {
 }
 
 pub fn task_label(task: &Event) -> String {
+    let title = if metadata(task).habit_id.is_some() {
+        format!("{} · Habit", task.title)
+    } else {
+        task.title.clone()
+    };
     match task_status(task) {
-        TaskStatus::Active => task.title.clone(),
-        TaskStatus::Completed => format!("{} · Completed ✓", task.title),
-        TaskStatus::Ignored => format!("{} · Ignored", task.title),
+        TaskStatus::Active => title,
+        TaskStatus::Completed => format!("{title} · Completed ✓"),
+        TaskStatus::Ignored => format!("{title} · Ignored"),
     }
 }
 
