@@ -3,6 +3,79 @@
 use super::*;
 use iced::widget::column;
 
+fn high_contrast(theme: &Theme) -> bool {
+    use timeslay_core::theme::Scheme;
+    [
+        Scheme::LightHighContrast.palette(),
+        Scheme::DarkHighContrast.palette(),
+    ]
+    .contains(&theme.palette())
+}
+
+/// A quiet inset card keeps related fields together on light and dark themes.
+pub(crate) fn form_section<'a>(
+    title: &'static str,
+    fields: impl Into<Element<'a, Message>>,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    container(
+        column![
+            crate::ui::controls::field_label(title, metrics.label()).style(|theme: &Theme| {
+                if high_contrast(theme) {
+                    text::default(theme)
+                } else {
+                    text::secondary(theme)
+                }
+            }),
+            iced::widget::rule::horizontal(1).style(|theme: &Theme| {
+                let mut style = iced::widget::rule::default(theme);
+                if high_contrast(theme) {
+                    style.color = theme.extended_palette().background.stronger.color;
+                }
+                style
+            }),
+            fields.into(),
+        ]
+        .spacing(10)
+        .width(Fill),
+    )
+    .padding(12)
+    .width(Fill)
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        if high_contrast(theme) {
+            return container::Style {
+                background: Some(palette.background.weaker.color.into()),
+                border: iced::Border {
+                    color: palette.background.stronger.color,
+                    width: 2.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            };
+        }
+        container::Style {
+            background: Some(
+                Color {
+                    a: 0.025,
+                    ..palette.background.base.text
+                }
+                .into(),
+            ),
+            border: iced::Border {
+                color: Color {
+                    a: 0.10,
+                    ..palette.background.base.text
+                },
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
 /// The in-place editor for a calendar event or time block.
 ///
 /// It is the same set of fields the new-event dialog collects, bound to the
@@ -135,9 +208,7 @@ pub fn event_editor<'a>(
             Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled),
         ))
     };
-    let mut body = column![titled(state, event, title, metrics), start]
-        .spacing(metrics.spacing)
-        .width(Fill);
+    let mut scheduling = column![start].spacing(metrics.spacing).width(Fill);
     if !event.details.habit {
         // An all-day end date is the last day covered, not Google's
         // exclusive end.
@@ -168,9 +239,9 @@ pub fn event_editor<'a>(
                 |v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0)),
             ));
         }
-        body = body.push(end);
+        scheduling = scheduling.push(end);
     }
-    body = body.push(super::super::recurrence::editor(
+    scheduling = scheduling.push(super::super::recurrence::editor(
         &draft.rule,
         draft.start.date_naive(),
         state.config.calendar.first_day_of_week,
@@ -179,7 +250,7 @@ pub fn event_editor<'a>(
         |v| Message::EventEdit(EventEditMessage::EventEditRecurrence(v)),
     ));
     if event.is_calendar_task() {
-        body = body.push(
+        scheduling = scheduling.push(
             column![
                 label("Deadline"),
                 super::super::controls::date(
@@ -196,22 +267,43 @@ pub fn event_editor<'a>(
             .width(Fill),
         );
     }
-    if let Some(source) = source {
-        body = body.push(source);
-    }
-    body = body.push(super::super::description::preview(
+    scheduling = scheduling.push(event_notifications(&draft.options, metrics, |v| {
+        Message::EventEdit(EventEditMessage::EventEditOptions(v))
+    }));
+    let mut information = column![super::super::description::preview(
         &event.id,
         &draft.description,
         metrics,
-    ));
-    for meeting in super::super::meetings::links(event) {
-        body = body.push(super::super::meetings::join_button(meeting, metrics));
+    )]
+    .spacing(metrics.spacing);
+    let new_habit = event.id == crate::habits::NEW_HABIT_ID;
+    if !new_habit {
+        if let Some(target) = crate::notes::target_of(state, event) {
+            information = information.push(super::super::notes::section(state, target, metrics));
+        } else {
+            information = information.push(
+                text("Choose a habit above to keep notes on it.")
+                    .size(metrics.label())
+                    .style(text::secondary),
+            );
+        }
     }
-    body = body.push(event_projects(state, &draft.projects, metrics, |v| {
+    let mut body = column![
+        titled(state, event, title, metrics),
+        form_section("Scheduling", scheduling, metrics),
+        form_section("Information", information, metrics),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill);
+    let mut organization = column![].spacing(metrics.spacing).width(Fill);
+    if let Some(source) = source {
+        organization = organization.push(source);
+    }
+    organization = organization.push(event_projects(state, &draft.projects, metrics, |v| {
         Message::EventEdit(EventEditMessage::EventEditProjects(v))
     }));
     if event.details.habit {
-        body = body.push(event_habit_picker(state, event, metrics));
+        organization = organization.push(event_habit_picker(state, event, metrics));
     } else {
         let mut labels = column![label("Labels")].spacing(6).width(Fill);
         for value in &draft.labels {
@@ -238,36 +330,99 @@ pub fn event_editor<'a>(
             ]
             .spacing(8),
         );
-        body = body.push(labels);
+        organization = organization.push(labels);
     }
 
+    if !new_habit {
+        let place = crate::travel::place_of(&state.config.travel, event)
+            .and_then(|id| state.config.travel.place(id));
+        if place.is_none() && !event.details.location.is_empty() {
+            organization = organization.push(detail_line(
+                "Location",
+                event.details.location.clone(),
+                metrics,
+            ));
+        }
+        organization =
+            organization
+                .push(label("Location"))
+                .push(super::super::travel::location_control(
+                    state,
+                    crate::travel::PickTarget::Event(event.id.clone()),
+                    place,
+                    "Add location",
+                    metrics,
+                ));
+    }
     if crate::timeblocking::is_block(event, &state.config.calendar) {
-        body = body.push(super::super::timeblocking::propagation_controls(
+        organization = organization.push(super::super::timeblocking::propagation_controls(
             state, event, metrics,
         ));
+    }
+    body = body.push(form_section("Organization", organization, metrics));
+    if !event.is_task() && !event.details.habit && !new_habit {
+        let mut meeting = column![].spacing(metrics.spacing).width(Fill);
+        for link in super::super::meetings::links(event) {
+            meeting = meeting.push(super::super::meetings::join_button(link, metrics));
+        }
+        if !crate::timeblocking::is_block(event, &state.config.calendar) {
+            meeting = meeting.push(meeting_section(
+                state,
+                &draft.meeting,
+                Some(event),
+                metrics,
+                |v| Message::EventEdit(EventEditMessage::EventEditMeeting(v)),
+            ));
+        }
+        if !event.details.organizer.is_empty() {
+            meeting = meeting.push(detail_line(
+                "Organizer",
+                event.details.organizer.clone(),
+                metrics,
+            ));
+        }
+        if !event.details.attendees.is_empty() && event.details.attendance.guests.is_empty() {
+            meeting = meeting.push(detail_line(
+                "Guests",
+                event.details.attendees.join("\n"),
+                metrics,
+            ));
+        }
+        meeting = meeting.push(event_presence(&draft.options, metrics, |v| {
+            Message::EventEdit(EventEditMessage::EventEditOptions(v))
+        }));
+        body = body.push(form_section("Meeting", meeting, metrics));
     }
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
     }
 
     if state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
-        if let Some(draft) = &state.calendar.edit_draft {
-            body = body.push(event_options(&draft.options, metrics, |v0| {
-                Message::EventEdit(EventEditMessage::EventEditOptions(v0))
-            }));
-        }
         body = body.push(event_save_control(state, event, metrics));
     }
     body.into()
 }
 
-/// Google-style notification rows followed by availability and visibility.
+/// Combined options for callers that do not lay out separate sections.
 pub(super) fn event_options<'a>(
     options: &'a calendar::event_options::EventOptions,
     metrics: &Metrics,
     message: fn(calendar::event_options::Action) -> Message,
 ) -> Element<'a, Message> {
-    use calendar::event_options::{Action, Availability, Method, Unit, Visibility};
+    column![
+        event_notifications(options, metrics, message),
+        event_presence(options, metrics, message)
+    ]
+    .spacing(10)
+    .into()
+}
+
+pub(super) fn event_notifications<'a>(
+    options: &'a calendar::event_options::EventOptions,
+    metrics: &Metrics,
+    message: fn(calendar::event_options::Action) -> Message,
+) -> Element<'a, Message> {
+    use calendar::event_options::{Action, Method, Unit};
     let size = metrics.label();
     let mut notifications = column![
         crate::ui::controls::field_label("Notifications", size),
@@ -342,8 +497,17 @@ pub(super) fn event_options<'a>(
             .on_press_maybe((options.reminders.overrides.len() < 5).then_some(message(Action::Add)))
             .style(crate::ui::controls::ghost),
     );
+    notifications.into()
+}
+
+pub(super) fn event_presence<'a>(
+    options: &'a calendar::event_options::EventOptions,
+    metrics: &Metrics,
+    message: fn(calendar::event_options::Action) -> Message,
+) -> Element<'a, Message> {
+    use calendar::event_options::{Action, Availability, Visibility};
+    let size = metrics.label();
     column![
-        notifications,
         crate::ui::controls::field_label("Availability", size),
         crate::ui::controls::pick_list(
             [Availability::Busy, Availability::Free],

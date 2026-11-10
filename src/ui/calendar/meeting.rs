@@ -15,9 +15,7 @@ pub(super) fn meeting_section<'a>(
     let size = metrics.label();
     let caption = |name: &'static str| crate::ui::controls::field_label(name, size);
     let hint = |words: &'static str| text(words).size(size - 1.0).style(text::secondary);
-    let mut section = column![crate::ui::controls::field_label("Meeting", size + 1.0)]
-        .spacing(metrics.spacing)
-        .width(Fill);
+    let mut section = column![].spacing(metrics.spacing).width(Fill);
 
     if let Some(event) = event.filter(|event| event.details.attendance.can_reply()) {
         section = section.push(reply_row(form, event, metrics, message));

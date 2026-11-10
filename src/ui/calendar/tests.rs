@@ -177,7 +177,12 @@ fn event_footer_and_delete_menu_keep_their_layout() {
         let description = ui.find("View / edit description").unwrap().bounds();
         let zoom = ui.find("Open in Zoom").unwrap().bounds();
         let projects = ui.find("Projects").unwrap().bounds();
-        assert!(description.y < zoom.y && zoom.y < projects.y);
+        assert!(description.y < projects.y && projects.y < zoom.y);
+        let sections: Vec<_> = ["Scheduling", "Information", "Organization", "Meeting"]
+            .into_iter()
+            .map(|label| ui.find(label).unwrap().bounds())
+            .collect();
+        assert!(sections.windows(2).all(|pair| pair[0].y < pair[1].y));
         let labels = [
             "Save current event",
             "Delete",

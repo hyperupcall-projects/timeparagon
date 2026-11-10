@@ -188,39 +188,29 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     };
     let fields = if sidebar && draft.kind == calendar::DraftKind::Sleep {
         column![text("Bedtime and wake-up").size(metrics.label()), when]
-    } else {
-        column![
+    } else if draft.kind == calendar::DraftKind::Sleep {
+        let mut fields = column![
             title,
             when,
             calendar,
-            event_projects(state, &draft.projects, metrics, |v0| Message::EventDraft(
-                EventDraftMessage::EventDraftProjects(v0)
+            event_projects(state, &draft.projects, metrics, |v| Message::EventDraft(
+                EventDraftMessage::EventDraftProjects(v)
             )),
             description,
         ]
-    }
-    .spacing(metrics.spacing)
-    .width(Fill);
-    // A time block is the user's own time, with nobody to invite.
-    let fields = if (sidebar && draft.kind != calendar::DraftKind::Event)
-        || draft.kind == calendar::DraftKind::TimeBlock
-        || state.config.calendar.app_calendar.as_deref() == Some(draft.calendar_id.as_str())
-    {
-        fields
-    } else {
-        fields.push(meeting_section(
-            state,
-            &draft.meeting,
-            None,
-            metrics,
-            |v0| Message::EventDraft(EventDraftMessage::EventDraftMeeting(v0)),
-        ))
-    };
-    let fields = if !sidebar
-        || matches!(
-            draft.kind,
-            calendar::DraftKind::Event | calendar::DraftKind::Habit
-        ) {
+        .spacing(metrics.spacing)
+        .width(Fill);
+        if state.config.calendar.app_calendar.as_deref() != Some(draft.calendar_id.as_str()) {
+            fields = fields.push(
+                column![
+                    crate::ui::controls::field_label("Meeting", metrics.label() + 1.0),
+                    meeting_section(state, &draft.meeting, None, metrics, |v| {
+                        Message::EventDraft(EventDraftMessage::EventDraftMeeting(v))
+                    }),
+                ]
+                .spacing(metrics.spacing),
+            );
+        }
         fields.push(
             column![
                 super::super::recurrence::editor(
@@ -229,18 +219,77 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
                     state.config.calendar.first_day_of_week,
                     metrics,
                     false,
-                    |v0| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v0)),
+                    |v| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v)),
                 ),
-                event_options(&draft.options, metrics, |v0| Message::EventDraft(
-                    EventDraftMessage::EventDraftOptions(v0)
+                event_options(&draft.options, metrics, |v| Message::EventDraft(
+                    EventDraftMessage::EventDraftOptions(v)
                 )),
             ]
             .spacing(metrics.spacing)
             .width(Fill),
         )
     } else {
+        let mut scheduling = column![when].spacing(metrics.spacing).width(Fill);
+        let has_options = !sidebar
+            || matches!(
+                draft.kind,
+                calendar::DraftKind::Event | calendar::DraftKind::Habit
+            );
+        if has_options {
+            scheduling = scheduling
+                .push(super::super::recurrence::editor(
+                    &draft.rule,
+                    draft.start.date_naive(),
+                    state.config.calendar.first_day_of_week,
+                    metrics,
+                    false,
+                    |v| Message::EventDraft(EventDraftMessage::EventDraftRecurrence(v)),
+                ))
+                .push(event_notifications(&draft.options, metrics, |v| {
+                    Message::EventDraft(EventDraftMessage::EventDraftOptions(v))
+                }));
+        }
+        let organization = column![
+            calendar,
+            event_projects(state, &draft.projects, metrics, |v| Message::EventDraft(
+                EventDraftMessage::EventDraftProjects(v)
+            )),
+        ]
+        .spacing(metrics.spacing)
+        .width(Fill);
+        let mut fields = column![
+            title,
+            form_section("Scheduling", scheduling, metrics),
+            form_section("Information", description, metrics),
+            form_section("Organization", organization, metrics),
+        ]
+        .spacing(metrics.spacing)
+        .width(Fill);
+        if draft.kind != calendar::DraftKind::Habit {
+            let mut meeting = column![].spacing(metrics.spacing).width(Fill);
+            let has_guests = !(sidebar && draft.kind != calendar::DraftKind::Event)
+                && draft.kind != calendar::DraftKind::TimeBlock
+                && state.config.calendar.app_calendar.as_deref()
+                    != Some(draft.calendar_id.as_str());
+            if has_guests {
+                meeting =
+                    meeting.push(meeting_section(state, &draft.meeting, None, metrics, |v| {
+                        Message::EventDraft(EventDraftMessage::EventDraftMeeting(v))
+                    }));
+            }
+            if has_options {
+                meeting = meeting.push(event_presence(&draft.options, metrics, |v| {
+                    Message::EventDraft(EventDraftMessage::EventDraftOptions(v))
+                }));
+            }
+            if has_guests || has_options {
+                fields = fields.push(form_section("Meeting", meeting, metrics));
+            }
+        }
         fields
-    };
+    }
+    .spacing(metrics.spacing)
+    .width(Fill);
     let mut fields = fields;
     if let Some(error) = &state.calendar.error {
         fields = fields.push(text(error).style(text::danger));
