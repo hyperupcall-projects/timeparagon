@@ -26,16 +26,6 @@ pub fn agent() -> &'static ureq::Agent {
     })
 }
 
-fn append_notice(notice: &mut Option<String>, message: &str) {
-    match notice {
-        Some(existing) => {
-            existing.push('\n');
-            existing.push_str(message);
-        }
-        None => *notice = Some(message.to_owned()),
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct CalendarList {
     #[serde(default)]
@@ -209,7 +199,7 @@ pub fn fetch_range(
         Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
     })?;
     let tasks_loaded = task_result.is_ok();
-    let (task_calendars, task_events, mut notice) = match task_result {
+    let (task_calendars, task_events, notice) = match task_result {
         Ok(tasks) => tasks,
         Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
     };
@@ -260,12 +250,6 @@ pub fn fetch_range(
             super::task_metadata::save(access_token, event, data)
         })?;
         super::operations::observe_range(&path, &events, first, last, fetch_started)?;
-    }
-    if let Err(error) = super::recurring_tasks::synchronize(&mut events) {
-        append_notice(
-            &mut notice,
-            &format!("Could not repeat time block tasks: {error}"),
-        );
     }
     super::operations::cache_tasks(&events, tasks_loaded)?;
     calendars.extend(task_calendars);
@@ -1023,14 +1007,11 @@ fn fetch_task_items(
             .and_then(task_due_date)
             .unwrap_or(crate::timeblocking::UNDATED);
         if let Some(mut event) = parse_task(task, calendar_id, color, due) {
-            let mut data = super::task_metadata::load(&mut database, &event, |data| {
+            let data = super::task_metadata::load(&mut database, &event, |data| {
                 super::task_metadata::save(access_token, &event, data)
             })?;
             event.details.description =
                 super::task_metadata::prose(&event.details.description).to_owned();
-            if let Some(inherited) = data.metadata.inherited.as_deref().cloned() {
-                crate::timeblocking::apply_inherited(&mut event, &mut data, inherited);
-            }
             event.details.task_data = Some(data);
             if due != crate::timeblocking::UNDATED {
                 event = crate::task_edit::save(
@@ -2402,14 +2383,7 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
 
     crate::calendar::Details {
         sleep: super::sleep::Record::from_properties(&entry.extended_properties),
-        options: {
-            let mut options = entry.options.clone();
-            options.child_metadata = entry.extended_properties["private"]["ttChildMetadata"]
-                .as_str()
-                .and_then(|v| serde_json::from_str(v).ok())
-                .unwrap_or_default();
-            options
-        },
+        options: entry.options.clone(),
         task_updated_at: None,
         projects: super::projects::read(&entry.extended_properties),
         task_data: None,
@@ -3058,19 +3032,13 @@ mod tests {
                 {"method": "popup", "minutes": 10},
                 {"method": "email", "minutes": 1440}
             ]},
-            "transparency": "transparent", "visibility": "private",
-            "extendedProperties": {"private": {"ttChildMetadata": "{\"force\":true,\"priority\":\"P1\"}"}}
+            "transparency": "transparent", "visibility": "private"
         }))
         .unwrap();
         let cached = serde_json::to_string(&details_of(&entry)).unwrap();
         let mut event = super::super::sample_snapshot().events.remove(0);
         event.details = serde_json::from_str(&cached).unwrap();
         let mut draft = super::super::EditDraft::from_event(&event);
-        assert!(draft.options.child_metadata.force);
-        assert_eq!(
-            draft.options.child_metadata.priority,
-            Some(crate::timeblocking::Priority::P1)
-        );
         assert_eq!(draft.options.transparency, Availability::Free);
         assert_eq!(draft.options.visibility, Visibility::Private);
         assert_eq!(draft.options.reminders.overrides.len(), 2);
@@ -3089,13 +3057,6 @@ mod tests {
         .unwrap();
         assert_eq!(body["reminders"]["overrides"][1]["minutes"], 1440);
         assert_eq!(body["reminders"]["overrides"][1]["method"], "email");
-        let policy: crate::timeblocking::ChildMetadata = serde_json::from_str(
-            body["extendedProperties"]["private"]["ttChildMetadata"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(policy.force);
         assert_eq!(body["transparency"], "transparent");
         assert_eq!(body["visibility"], "private");
         draft.options.update(Action::Remove(1));

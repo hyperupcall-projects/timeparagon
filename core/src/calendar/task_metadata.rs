@@ -45,10 +45,11 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
         return Err("Unsupported TimeSlay metadata version".into());
     }
     let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
+    // Written by the removed time block metadata propagation; ignored now.
+    fields.remove("inherited");
     let allowed = [
         "deadline",
         "repeat_source",
-        "inherited",
         "backlog_section",
         "block",
         "minutes",

@@ -79,7 +79,6 @@ impl Default for Reminders {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EventOptions {
-    pub child_metadata: crate::timeblocking::ChildMetadata,
     /// Calendar defaults returned by events.list, retained for display and caching.
     pub default_reminders: Vec<Reminder>,
     pub reminders: Reminders,
@@ -89,7 +88,6 @@ pub struct EventOptions {
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    ChildMetadata(crate::timeblocking::ChildMetadata),
     Defaults(bool),
     Add,
     Remove(usize),
@@ -102,7 +100,6 @@ pub enum Action {
 impl EventOptions {
     pub fn update(&mut self, action: Action) {
         match action {
-            Action::ChildMetadata(value) => self.child_metadata = value,
             Action::Defaults(value) => {
                 self.reminders.use_default = value;
                 self.reminders.overrides = if value {
@@ -179,10 +176,6 @@ impl EventOptions {
                     .into(),
             );
         }
-        body["extendedProperties"]["private"]["ttChildMetadata"] =
-            serde_json::to_string(&self.child_metadata)
-                .map_err(|e| e.to_string())?
-                .into();
         body["reminders"] = if self.reminders.use_default {
             serde_json::json!({"useDefault": true})
         } else {

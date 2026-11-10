@@ -354,11 +354,6 @@ pub fn event_editor<'a>(
                     metrics,
                 ));
     }
-    if crate::timeblocking::is_block(event, &state.config.calendar) {
-        organization = organization.push(super::super::timeblocking::propagation_controls(
-            state, event, metrics,
-        ));
-    }
     body = body.push(form_section("Organization", organization, metrics));
     if !event.is_task() && !event.details.habit && !new_habit {
         let mut meeting = column![].spacing(metrics.spacing).width(Fill);

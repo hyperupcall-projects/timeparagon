@@ -42,8 +42,6 @@ pub enum PickTarget {
     Task(String),
     /// Where this calendar event, by id, happens.
     Event(String),
-    /// The location inherited by children of this time block, by id.
-    BlockChildren(String),
     /// Home, where the day's travel starts and ends.
     Home,
 }
@@ -464,16 +462,6 @@ fn assign(state: &mut State, target: &PickTarget, place: Option<u64>) -> Task<Me
             crate::timeblocking::update(state, tb::Action::Location(id.clone(), place))
         }
         PickTarget::Event(id) => set_event_place(state, id, place),
-        PickTarget::BlockChildren(id) => {
-            if let Some(draft) = state.calendar.edit_draft.as_mut()
-                && draft.id == *id
-                && !draft.loading
-                && !draft.saving
-            {
-                draft.options.child_metadata.location = place;
-            }
-            Task::none()
-        }
     }
 }
 
