@@ -508,10 +508,111 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             }
             Task::none()
         }
+        SettingsMessage::SleepActualStartChanged(text) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.set_actual_start_text(text);
+            }
+            Task::none()
+        }
+        SettingsMessage::SleepActualEndChanged(text) => {
+            if let Some(draft) = state.calendar.edit_draft.as_mut() {
+                draft.set_actual_end_text(text);
+            }
+            Task::none()
+        }
+        SettingsMessage::SleepTimerPressed(id) => {
+            // The strip's Finish button works whichever day is in view.
+            let Some(mut event) = state
+                .calendar
+                .event(&id)
+                .or_else(|| state.calendar.active_sleep().filter(|e| e.id == id))
+                .cloned()
+            else {
+                return Task::none();
+            };
+            let now = crate::clock::now();
+            let Some(timer) = calendar::sleep::timer(&event, now) else {
+                return Task::none();
+            };
+            if state.calendar.pending_time(&id).is_some() || event.details.sending {
+                return Task::none();
+            }
+            // An open editor's unsaved confidence flags travel with the timer.
+            if let Some(record) = state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .filter(|draft| draft.id == id)
+                .and_then(|draft| draft.sleep.as_ref())
+                && let Some(current) = event.details.sleep.as_mut()
+            {
+                current.estimated_start = record.estimated_start;
+                current.estimated_end = record.estimated_end;
+            }
+            if let Err(error) = calendar::sleep::apply_timer(&mut event, timer, now) {
+                state.calendar.error = Some(error);
+                return Task::none();
+            }
+            if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
+                draft.saving = true;
+            }
+            state.timeblocking.revision += 1;
+            state.calendar.error = None;
+            let settings = state.config.calendar.clone();
+            blocking::run(move || calendar::sleep::save(&settings, event, false)).map(
+                move |result| {
+                    Message::Settings(SettingsMessage::SleepTimerSaved(timer, id.clone(), result))
+                },
+            )
+        }
+        SettingsMessage::SleepTimerSaved(timer, id, result) => {
+            let event = match result {
+                Ok(event) => event,
+                Err(error) => {
+                    if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
+                        draft.saving = false;
+                    }
+                    state.calendar.error = Some(error);
+                    return Task::none();
+                }
+            };
+            state.calendar.forget_event_everywhere(&id);
+            if state
+                .calendar
+                .detail_event
+                .as_ref()
+                .is_some_and(|e| e.id == id)
+            {
+                state.calendar.detail_event = None;
+            }
+            if state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .is_some_and(|d| d.id == id)
+            {
+                state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
+            }
+            let notification = sleep_notification(state, &event, timer);
+            state.calendar.add_event(event);
+            Task::batch([notification, refresh_week_after_write(state)])
+        }
+        SettingsMessage::SleepNotificationShown(result) => {
+            match result {
+                Ok(id) => state.sleep_notification = Some(id),
+                Err(error) => log::warn!("could not post the sleep notification: {error}"),
+            }
+            Task::none()
+        }
         SettingsMessage::SleepSaveRequested => {
             let Some(draft) = state.calendar.edit_draft.as_ref() else {
                 return Task::none();
             };
+            if !draft.actual_sleep_valid() {
+                state.calendar.error =
+                    Some("Enter actual sleep times as HH:MM, or leave them empty".into());
+                return Task::none();
+            }
             let Some(mut record) = draft.sleep.clone() else {
                 return Task::none();
             };
@@ -598,4 +699,47 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             queue_save(state)
         }
     }
+}
+
+/// Posts the running-sleep notification when the timer starts, and replaces it
+/// with how long was slept when it finishes.
+fn sleep_notification(
+    state: &mut State,
+    event: &calendar::Event,
+    timer: calendar::sleep::Timer,
+) -> Task<Message> {
+    let format = state.config.appearance.time_format;
+    let record = event.details.sleep.as_ref();
+    let (summary, body, ongoing, replaces) = match timer {
+        calendar::sleep::Timer::Start => {
+            let since = record
+                .and_then(|r| r.actual_start)
+                .map(|at| calendar::time_format::clock(at, format))
+                .unwrap_or_default();
+            (
+                format!("Sleeping since {since}"),
+                format!(
+                    "Wake up for {}",
+                    calendar::sleep::predictions_line(event, format)
+                ),
+                true,
+                state.sleep_notification,
+            )
+        }
+        calendar::sleep::Timer::Finish => {
+            let replaces = state.sleep_notification.take();
+            let slept = record
+                .and_then(calendar::sleep::Record::actual_minutes)
+                .map(calendar::sleep::minutes_label)
+                .unwrap_or_default();
+            (
+                format!("Slept {slept}"),
+                format!("Planned {}", calendar::sleep::duration(event)),
+                false,
+                replaces,
+            )
+        }
+    };
+    blocking::run(move || crate::notify::show_sleep(&summary, &body, ongoing, replaces))
+        .map(|result| Message::Settings(SettingsMessage::SleepNotificationShown(result)))
 }

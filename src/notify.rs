@@ -77,3 +77,39 @@ pub fn show_reminder(reminder: &Reminder) -> Result<(), String> {
         .map(|_handle| ())
         .map_err(|error| error.to_string())
 }
+
+/// Shows the running-sleep notification, or replaces the one with `replaces`.
+/// `ongoing` keeps it up until it is replaced; the summary expires normally.
+/// Returns the notification's id so it can be replaced later.
+pub fn show_sleep(
+    summary: &str,
+    body: &str,
+    ongoing: bool,
+    replaces: Option<u32>,
+) -> Result<u32, String> {
+    use notify_rust::Hint;
+
+    let mut notification = Notification::new();
+    notification
+        .appname("TimeSlay")
+        .summary(summary)
+        .body(body)
+        .icon(ICON)
+        .urgency(Urgency::Low)
+        .hint(Hint::SuppressSound(true))
+        .timeout(if ongoing {
+            Timeout::Never
+        } else {
+            Timeout::Default
+        });
+    if ongoing {
+        notification.hint(Hint::Resident(true));
+    }
+    if let Some(id) = replaces {
+        notification.id(id);
+    }
+    notification
+        .show()
+        .map(|handle| handle.id())
+        .map_err(|error| error.to_string())
+}

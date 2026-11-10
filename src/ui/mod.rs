@@ -333,6 +333,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .width(Fill)
         .height(Fill);
+        if let Some(strip) = sleep_strip(state) {
+            base = base.push(strip);
+        }
         if state.sidebar.is_some() {
             // The add-task bar belongs to the main panel; floating editors
             // never participate in its layout.
@@ -1031,6 +1034,46 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 /// The foot of the panel's left side: what is happening in the background,
 /// or "Logs" when nothing is. It opens the log either way.
+/// While sleep is being timed, a strip above the footer with how long it has
+/// run, the wake-up times for 6 to 9 hours and the target, and Finish sleep.
+fn sleep_strip<'a>(state: &State) -> Option<Element<'a, Message>> {
+    let event = state.calendar.active_sleep()?;
+    let record = event.details.sleep.as_ref()?;
+    let start = record.actual_start?;
+    let format = state.config.appearance.time_format;
+    let elapsed = (crate::clock::now() - start).num_minutes();
+    let finish = button(text("Finish sleep").size(12))
+        .padding([4, 8])
+        .style(crate::ui::controls::secondary)
+        .on_press(Message::Settings(
+            crate::app::SettingsMessage::SleepTimerPressed(event.id.clone()),
+        ));
+    let details = column![
+        text(format!(
+            "Sleeping since {} · {}",
+            crate::calendar::time_format::clock(start, format),
+            crate::calendar::sleep::minutes_label(elapsed)
+        ))
+        .size(12),
+        text(format!(
+            "Wake up: {}",
+            crate::calendar::sleep::predictions_line(event, format)
+        ))
+        .size(11)
+        .style(text::secondary),
+    ]
+    .spacing(2)
+    .width(Fill);
+    Some(
+        container(row![details, finish].spacing(8).align_y(Alignment::Center))
+            .id("sleep-status")
+            .width(Fill)
+            .padding([4, 8])
+            .style(crate::ui::controls::surface)
+            .into(),
+    )
+}
+
 fn activity_button<'a>(state: &State) -> Element<'a, Message> {
     let label = text(state.activity.label().to_owned())
         .size(12)
