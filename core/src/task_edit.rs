@@ -94,8 +94,6 @@ pub fn clean_label(input: &str) -> Result<String, &'static str> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Change {
-    Inherit(crate::timeblocking::InheritedMetadata),
-    ReleaseInheritance,
     Description(String),
     Title(String),
     Estimate(u32),
@@ -138,32 +136,6 @@ pub(crate) fn reset_repeat_source(metadata: &mut crate::timeblocking::Metadata, 
     }
 }
 
-pub fn validate_child_edit(task: &Event, change: &Change) -> Result<(), String> {
-    if metadata(task)
-        .inherited
-        .as_ref()
-        .is_some_and(|v| v.fields.force)
-        && matches!(
-            change,
-            Change::Projects(_)
-                | Change::Labels(_)
-                | Change::Priority(_)
-                | Change::Location(_)
-                | Change::Deadline(_)
-                | Change::Day(_)
-                | Change::ClearSchedule
-                | Change::Time(_, _)
-                | Change::BacklogSection(_)
-        )
-    {
-        return Err(
-            "Metadata is inherited from the time block. Click the time block to edit its metadata."
-                .into(),
-        );
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn save_and_reflow(
     task: Event,
@@ -177,28 +149,6 @@ pub fn save_and_reflow(
     let original_id = task.id.clone();
     let old_block = metadata(&task).block;
     let saved = save(task, &settings, change, order, access)?;
-    let mut saved = saved;
-    if let Some(block) = blocks
-        .iter()
-        .find(|b| metadata(&saved).block.as_deref() == Some(&block_key(b)))
-        && block.details.options.child_metadata.force
-    {
-        saved = save(
-            saved,
-            &settings,
-            Change::Inherit(crate::timeblocking::inherited_metadata(block)),
-            order,
-            access,
-        )?;
-    }
-    if metadata(&saved).inherited.is_some()
-        && !blocks.iter().any(|b| {
-            metadata(&saved).block.as_deref() == Some(&block_key(b))
-                && b.details.options.child_metadata.force
-        })
-    {
-        saved = save(saved, &settings, Change::ReleaseInheritance, order, access)?;
-    }
     let new_block = metadata(&saved).block;
     related.retain(|e| e.id != original_id);
     related.push(saved.clone());
@@ -235,12 +185,7 @@ pub fn reflow(
     let mut start = block.start;
     let mut changed = Vec::new();
     let mut token = None;
-    for mut task in tasks {
-        let inherited = crate::timeblocking::inherited_metadata(block);
-        if inherited.fields.force && metadata(&task).inherited.as_deref() != Some(&inherited) {
-            task = save(task, settings, Change::Inherit(inherited), 0, access)?;
-            changed.push(task.clone());
-        }
+    for task in tasks {
         let minutes = metadata(&task).minutes;
         let end =
             start + chrono::Duration::minutes(i64::from(if minutes == 0 { 30 } else { minutes }));
@@ -276,7 +221,6 @@ pub fn save(
     order: i64,
     access: Access,
 ) -> Result<Event, GoogleError> {
-    validate_child_edit(&task, &change)?;
     if !calendar::operations::replaying() {
         return Ok(calendar::operations::edit_task(
             task, settings, change, order,

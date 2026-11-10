@@ -202,9 +202,6 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
     {
         layers.push(timeblocking::focus_overlay(state, metrics));
     }
-    if state.timeblocking.confirm_propagation.is_some() {
-        layers.push(timeblocking::propagation_confirmation(state, metrics));
-    }
     if state.timeblocking.session_edit.is_some() {
         layers.push(timeblocking::session_editor(state, metrics));
     }

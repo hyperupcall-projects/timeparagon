@@ -18,8 +18,6 @@ pub struct Metadata {
     pub deadline: Option<calendar::deadline::Deadline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat_source: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inherited: Option<Box<InheritedMetadata>>,
     /// Creation instant recorded by TimeSlay; absent for tasks created elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -43,72 +41,6 @@ pub struct Metadata {
     /// Where the task happens, by `config::Place::id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<u64>,
-}
-
-/// Metadata owned by a time block and inherited by its assigned tasks.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ChildMetadata {
-    pub force: bool,
-    pub due: Option<calendar::deadline::Deadline>,
-    pub deadline: Option<calendar::deadline::Deadline>,
-    pub priority: Option<Priority>,
-    pub location: Option<u64>,
-}
-
-/// The complete inherited snapshot also records repeat rules and event settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InheritedMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub series: Option<String>,
-    pub fields: ChildMetadata,
-    pub projects: Vec<u64>,
-    pub labels: Vec<String>,
-    pub recurrence: Vec<String>,
-    pub options: calendar::event_options::EventOptions,
-}
-
-pub fn inherited_metadata(block: &Event) -> InheritedMetadata {
-    let mut options = block.details.options.clone();
-    options.child_metadata = ChildMetadata::default();
-    InheritedMetadata {
-        series: if !block.details.recurrence.is_empty()
-            || block.details.recurring_event_id.is_some()
-        {
-            Some(format!(
-                "{}/{}",
-                block.calendar_id,
-                block
-                    .details
-                    .recurring_event_id
-                    .as_deref()
-                    .unwrap_or(&block.id)
-            ))
-        } else {
-            None
-        },
-        fields: block.details.options.child_metadata.clone(),
-        projects: block.details.projects.clone(),
-        labels: block.details.labels.clone(),
-        recurrence: block.details.recurrence.clone(),
-        options,
-    }
-}
-
-/// Identity, membership, estimate, work history and completion belong to the child.
-pub fn apply_inherited(
-    task: &mut Event,
-    data: &mut crate::task_db::TaskData,
-    inherited: InheritedMetadata,
-) {
-    data.metadata.projects = inherited.projects.clone();
-    data.metadata.labels = inherited.labels.clone();
-    data.metadata.priority = inherited.fields.priority;
-    data.metadata.location = inherited.fields.location;
-    data.metadata.deadline = inherited.fields.deadline;
-    task.details.recurrence = inherited.recurrence.clone();
-    task.details.options = inherited.options.clone();
-    data.metadata.inherited = Some(Box::new(inherited));
 }
 
 /// Ordered planning horizons for parked tasks. These do not change due dates.
@@ -329,92 +261,6 @@ mod tests {
         assert!(past_due(&task, now));
         task.completed = true;
         assert!(!past_due(&task, now));
-    }
-
-    #[test]
-    fn forced_metadata_replaces_old_values_and_keeps_child_identity() {
-        let start = calendar::at_clock(NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(), 10, 0);
-        let mut parent = Event {
-            id: "parent".into(),
-            calendar_id: "app".into(),
-            title: "Block".into(),
-            start,
-            end: start + chrono::Duration::hours(1),
-            all_day: false,
-            color: calendar::colors::TASK,
-            completed: false,
-            details: Default::default(),
-        };
-        parent.details.projects = vec![7];
-        parent.details.labels = vec!["work".into()];
-        parent.details.recurrence = vec!["RRULE:FREQ=WEEKLY".into()];
-        parent.details.options.child_metadata = ChildMetadata {
-            force: true,
-            priority: Some(Priority::P1),
-            location: Some(3),
-            due: Some(calendar::deadline::parse_input("2026-11-10").unwrap()),
-            deadline: Some(calendar::deadline::parse_input("2026-11-12 17:00").unwrap()),
-        };
-        let mut child = parent.clone();
-        child.id = "task:child".into();
-        child.title = "Child".into();
-        child.completed = true;
-        let mut data = crate::task_db::TaskData {
-            id: 123,
-            metadata: Metadata {
-                block: Some(block_key(&parent)),
-                minutes: 25,
-                order: 99,
-                projects: vec![1],
-                labels: vec!["old".into()],
-                priority: Some(Priority::P2),
-                ..Default::default()
-            },
-        };
-        child.details.description = "Child notes".into();
-        let inherited = inherited_metadata(&parent);
-        apply_inherited(&mut child, &mut data, inherited.clone());
-        child.details.task_data = Some(data.clone());
-        assert_eq!(child.id, "task:child");
-        assert_eq!(child.title, "Child");
-        assert!(child.completed);
-        assert_eq!(child.start, start);
-        assert_eq!(data.id, 123);
-        assert_eq!(data.metadata.minutes, 25);
-        assert_eq!(data.metadata.order, 99);
-
-        assert_eq!(data.metadata.projects, [7]);
-        assert_eq!(data.metadata.labels, ["work"]);
-        assert_eq!(data.metadata.priority, Some(Priority::P1));
-        assert_eq!(data.metadata.location, Some(3));
-        let notes = calendar::task_metadata::write(&child.details.description, &data).unwrap();
-        let read = calendar::task_metadata::read(&notes).unwrap().unwrap();
-        assert_eq!(read.metadata.inherited.as_deref(), Some(&inherited));
-        assert_eq!(read.metadata.deadline, inherited.fields.deadline);
-        assert_eq!(calendar::task_metadata::prose(&notes), "Child notes");
-        assert!(
-            crate::task_edit::validate_child_edit(
-                &child,
-                &crate::task_edit::Change::Priority(None)
-            )
-            .is_err()
-        );
-        assert!(
-            crate::task_edit::validate_child_edit(&child, &crate::task_edit::Change::Estimate(10))
-                .is_ok()
-        );
-        // Clearing a parent value clears it on the child too.
-        parent.details.projects.clear();
-        parent.details.labels.clear();
-        parent.details.recurrence.clear();
-        parent.details.options.child_metadata.priority = None;
-        parent.details.options.child_metadata.deadline = None;
-        apply_inherited(&mut child, &mut data, inherited_metadata(&parent));
-        assert!(data.metadata.projects.is_empty());
-        assert!(data.metadata.labels.is_empty());
-        assert!(data.metadata.priority.is_none());
-        assert!(child.details.recurrence.is_empty());
-        assert_eq!(data.metadata.deadline, None);
     }
 
     #[test]

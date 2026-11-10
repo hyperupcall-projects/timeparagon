@@ -67,8 +67,6 @@ pub fn apply(
         .ok_or("Missing task metadata")?;
     reset_repeat_source(&mut data.metadata, change);
     match change {
-        Change::ReleaseInheritance => data.metadata.inherited = None,
-        Change::Inherit(value) => tb::apply_inherited(&mut task, &mut data, value.clone()),
         Change::Title(v) => task.title = v.clone(),
         Change::Description(v) => task.details.description = v.clone(),
         Change::Estimate(v) => {
@@ -132,7 +130,6 @@ pub fn apply(
             task.end = task.start + Duration::days(1);
             task.all_day = true;
             data.metadata.block = None;
-            data.metadata.inherited = None;
             if let Change::Backlog(Some(section)) = change {
                 data.metadata.backlog_section = *section;
             }

@@ -98,7 +98,6 @@ impl Busy {
 use timeslay_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
 #[derive(Default)]
 pub struct Workspace {
-    pub confirm_propagation: Option<String>,
     pub block: Option<String>,
     pub focus: Option<String>,
     pub work_now: Option<chrono::DateTime<chrono::Utc>>,
@@ -179,10 +178,6 @@ pub struct WeekListPlacement {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
-    ChildDate(bool, String),
-    ForcePropagation(String, bool),
-    ConfirmPropagation,
-    CancelPropagation,
     View(String),
     Plan(String),
     CloseView,
@@ -373,9 +368,6 @@ pub fn is_backlog_list(state: &State, calendar_id: &str) -> bool {
 /// When a task is due: its metadata deadline if it has one, otherwise the
 /// Google Tasks due day. `None` for a task with neither.
 pub fn due(event: &Event) -> Option<calendar::deadline::Deadline> {
-    if let Some(inherited) = metadata(event).inherited {
-        return inherited.fields.due;
-    }
     if let Some(deadline) = calendar::deadline::get(event) {
         return Some(deadline);
     }
@@ -541,52 +533,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     }
     state.inbox.error = None;
     let (id, change) = match action {
-        Action::ChildDate(deadline, value) => {
-            let parsed = if value.trim().is_empty() {
-                Ok(None)
-            } else {
-                calendar::deadline::parse_input(&value).map(Some)
-            };
-            if let Ok(parsed) = parsed
-                && let Some(draft) = state.calendar.edit_draft.as_mut()
-                && !draft.loading
-                && !draft.saving
-            {
-                if deadline {
-                    draft.options.child_metadata.deadline = parsed;
-                } else {
-                    draft.options.child_metadata.due = parsed;
-                }
-            }
-            return Task::none();
-        }
-        Action::ForcePropagation(id, enabled) => {
-            if enabled {
-                state.timeblocking.confirm_propagation = Some(id);
-            } else if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
-                draft.options.child_metadata.force = false;
-            }
-            return Task::none();
-        }
-        Action::CancelPropagation => {
-            state.timeblocking.confirm_propagation = None;
-            return Task::none();
-        }
-        Action::ConfirmPropagation => {
-            if let Some(id) = state.timeblocking.confirm_propagation.take()
-                && let Some(draft) = state
-                    .calendar
-                    .edit_draft
-                    .as_mut()
-                    .filter(|d| d.id == id && !d.saving)
-            {
-                draft.options.child_metadata.force = true;
-                return Task::done(Message::EventEdit(
-                    crate::app::EventEditMessage::EventEditSaveRequested,
-                ));
-            }
-            return Task::none();
-        }
         Action::View(id) => {
             if !event(state, &id).is_some_and(|e| is_block(e, &state.config.calendar)) {
                 return Task::none();
@@ -1561,29 +1507,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
     let Some(task) = event(state, &id).filter(|e| e.is_task()).cloned() else {
         return Task::none();
     };
-    if metadata(&task)
-        .inherited
-        .as_ref()
-        .is_some_and(|v| v.fields.force)
-        && matches!(
-            change,
-            Change::Projects(_)
-                | Change::Labels(_)
-                | Change::Priority(_)
-                | Change::Location(_)
-                | Change::Deadline(_)
-                | Change::Day(_)
-                | Change::Time(_, _)
-                | Change::ClearSchedule
-                | Change::BacklogSection(_)
-        )
-    {
-        state.calendar.error = Some(
-            "Metadata is inherited from the time block. Click the time block to edit its metadata."
-                .into(),
-        );
-        return Task::none();
-    }
     if matches!(change, Change::Title(_)) {
         state.timeblocking.renaming = Some(id.clone());
     }
@@ -2190,52 +2113,6 @@ mod tests {
         });
         state.timeblocking.focus = Some("standup".into());
         state
-    }
-
-    #[test]
-    fn propagation_requires_confirmation_and_cancel_keeps_it_disabled() {
-        let mut state = estimate_state();
-        let block = state.calendar.event("standup").unwrap().clone();
-        state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&block));
-        let _ = update(&mut state, Action::ForcePropagation(block.id.clone(), true));
-        assert_eq!(
-            state.timeblocking.confirm_propagation.as_deref(),
-            Some(block.id.as_str())
-        );
-        assert!(
-            !state
-                .calendar
-                .edit_draft
-                .as_ref()
-                .unwrap()
-                .options
-                .child_metadata
-                .force
-        );
-        let _ = update(&mut state, Action::CancelPropagation);
-        assert!(state.timeblocking.confirm_propagation.is_none());
-        assert!(
-            !state
-                .calendar
-                .edit_draft
-                .as_ref()
-                .unwrap()
-                .options
-                .child_metadata
-                .force
-        );
-        let _ = update(&mut state, Action::ForcePropagation(block.id, true));
-        let _ = update(&mut state, Action::ConfirmPropagation);
-        assert!(
-            state
-                .calendar
-                .edit_draft
-                .as_ref()
-                .unwrap()
-                .options
-                .child_metadata
-                .force
-        );
     }
 
     #[test]

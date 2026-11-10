@@ -341,7 +341,6 @@ fn record_in(
                 .as_mut()
                 .ok_or("Assigned task has no metadata")?;
             data.metadata.block = None;
-            data.metadata.inherited = None;
             data.metadata.repeat_source = None;
             released.all_day = true;
             released.start = at_clock(original.start.date_naive(), 0, 0);
@@ -1061,7 +1060,6 @@ pub fn edit_task(
     change: task_edit::Change,
     order: i64,
 ) -> Result<Event, String> {
-    task_edit::validate_child_edit(&task, &change)?;
     let mut db = task_db::open()?;
     if task.details.task_data.is_none() {
         task.details.task_data = Some(db.import(&task)?);
