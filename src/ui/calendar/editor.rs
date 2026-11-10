@@ -865,6 +865,7 @@ pub(super) fn sleep_editor<'a>(
             )),
         crate::ui::controls::checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
     ].spacing(metrics.spacing).width(Fill);
+    body = body.push(actual_sleep(state, draft, record, &preview, metrics));
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).style(text::danger));
     }
@@ -881,6 +882,19 @@ pub(super) fn sleep_editor<'a>(
     if !draft.saving {
         save = save.on_press(Message::Settings(SettingsMessage::SleepSaveRequested));
     }
+    // The timer works from the saved night, so it is offered from what is on
+    // Google rather than from unsaved edits.
+    let timer = calendar::sleep::timer(event, crate::clock::now()).map(|timer| {
+        let mut button =
+            crate::ui::controls::action_button(text(timer.label()).center().width(Fill))
+                .width(Fill);
+        if !draft.saving {
+            button = button.on_press(Message::Settings(SettingsMessage::SleepTimerPressed(
+                event.id.clone(),
+            )));
+        }
+        Element::from(button)
+    });
     container(
         column![
             crate::ui::controls::scrollable(container(body).padding(iced::Padding {
@@ -888,12 +902,18 @@ pub(super) fn sleep_editor<'a>(
                 ..iced::Padding::ZERO
             }))
             .height(Fill),
-            save,
-            button(text("Close").center().width(Fill))
-                .width(Fill)
-                .on_press(Message::Event(EventMessage::EventClosed))
-                .style(crate::ui::controls::secondary),
         ]
+        .push(timer)
+        .push(
+            column![
+                save,
+                button(text("Close").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::Event(EventMessage::EventClosed))
+                    .style(crate::ui::controls::secondary),
+            ]
+            .spacing(metrics.spacing),
+        )
         .spacing(metrics.spacing)
         .height(Fill),
     )
@@ -901,6 +921,98 @@ pub(super) fn sleep_editor<'a>(
     .width(Fill)
     .height(Fill)
     .style(crate::ui::controls::surface)
+    .into()
+}
+
+/// The night's actual sleep, editable, and the wake-up times that would give
+/// 6 to 9 hours and the planned amount.
+fn actual_sleep<'a>(
+    state: &'a State,
+    draft: &'a calendar::EditDraft,
+    record: &calendar::sleep::Record,
+    planned: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let format = state.config.appearance.time_format;
+    let bold = Font {
+        weight: Weight::Bold,
+        ..Font::DEFAULT
+    };
+    let summary = match (record.actual_start, record.actual_end) {
+        (Some(start), Some(end)) => format!(
+            "Slept {} (planned {})",
+            calendar::sleep::minutes_label((end - start).num_minutes()),
+            calendar::sleep::duration(planned)
+        ),
+        (Some(start), None) => format!(
+            "Sleeping since {} · {} so far",
+            calendar::time_format::clock(start, format),
+            calendar::sleep::minutes_label((crate::clock::now() - start).num_minutes())
+        ),
+        _ => "Not recorded yet. Use Start sleep at bedtime, or enter the times.".to_owned(),
+    };
+    let field = |label: &'static str, value: &'a str, change: fn(String) -> SettingsMessage| {
+        let mut controls = row![crate::ui::controls::time(
+            format,
+            value,
+            !draft.saving,
+            metrics.label(),
+            move |v0| Message::Settings(change(v0)),
+        )]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        if !value.is_empty() && !draft.saving {
+            controls = controls.push(
+                button(text("Clear").size(metrics.label() - 1.0))
+                    .on_press(Message::Settings(change(String::new())))
+                    .style(crate::ui::controls::ghost),
+            );
+        }
+        column![
+            crate::ui::controls::field_label(label, metrics.label()),
+            controls
+        ]
+        .spacing(4)
+        .width(Fill)
+    };
+    let mut preview = planned.clone();
+    preview.details.sleep = Some(record.clone());
+    let mut predictions = column![].spacing(2);
+    for (label, at) in calendar::sleep::wake_predictions(&preview) {
+        predictions = predictions.push(
+            row![
+                text(label).size(metrics.label()).width(Fill),
+                text(calendar::time_format::clock(at, format)).size(metrics.label()),
+            ]
+            .spacing(6),
+        );
+    }
+    let basis = if record.actual_start.is_some() {
+        "Counted from when sleep actually started."
+    } else {
+        "Counted from the planned bedtime."
+    };
+    column![
+        text("Actual sleep").size(metrics.label() + 2.0).font(bold),
+        text(summary).size(metrics.label()).style(text::secondary),
+        field(
+            "Actual sleep start",
+            &draft.actual_start_text,
+            SettingsMessage::SleepActualStartChanged
+        ),
+        field(
+            "Actual wake-up",
+            &draft.actual_end_text,
+            SettingsMessage::SleepActualEndChanged
+        ),
+        text("Wake up at").size(metrics.label() + 2.0).font(bold),
+        predictions,
+        text(basis)
+            .size(metrics.label() - 1.0)
+            .style(text::secondary),
+    ]
+    .spacing(metrics.spacing)
+    .width(Fill)
     .into()
 }
 
