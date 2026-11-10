@@ -140,8 +140,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
                 return Task::none();
             };
             let start = draft.start;
-            let end = start
-                + chrono::Duration::hours(i64::from(state.config.calendar.sleep_goal_hours()));
+            let end = start + chrono::Duration::hours(8);
             let event = calendar::Event {
                 id: calendar::sleep::NEW_ID.into(),
                 calendar_id: state

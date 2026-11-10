@@ -255,7 +255,7 @@ pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elem
             .height(Fill),
     )
     .on_press(Message::Event(EventMessage::EventMoveCancelled));
-    let choice = |label: &'static str, message: EventMessage| {
+    let choice = |label: String, message: EventMessage| {
         button(text(label).size(metrics.label()).center().width(Fill))
             .width(Fill)
             .on_press(Message::Event(message))
@@ -278,31 +278,43 @@ pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elem
     ]
     .spacing(metrics.spacing);
     if scope_needed {
-        for (label, scope) in [
-            ("This event", calendar::SaveScope::Current),
-            (
-                "This and following events",
-                calendar::SaveScope::CurrentAndFuture,
-            ),
-            ("All events", calendar::SaveScope::All),
-        ] {
+        let choices = if let Some(record) = event.details.sleep.as_ref() {
+            let day = calendar::sleep::weekday_label(record.wake_date);
+            vec![
+                (format!("This {day}"), calendar::SaveScope::Current),
+                (
+                    format!("This and future {day}s"),
+                    calendar::SaveScope::CurrentAndFuture,
+                ),
+            ]
+        } else {
+            vec![
+                ("This event".into(), calendar::SaveScope::Current),
+                (
+                    "This and following events".into(),
+                    calendar::SaveScope::CurrentAndFuture,
+                ),
+                ("All events".into(), calendar::SaveScope::All),
+            ]
+        };
+        for (label, scope) in choices {
             body = body.push(
                 choice(label, EventMessage::EventMoveScoped(scope))
                     .style(crate::ui::controls::secondary),
             );
         }
         body = body.push(
-            choice("Cancel", EventMessage::EventMoveCancelled)
+            choice("Cancel".into(), EventMessage::EventMoveCancelled)
                 .style(crate::ui::controls::secondary),
         );
     } else {
         body = body.push(
             row![
-                choice("Cancel", EventMessage::EventMoveCancelled)
+                choice("Cancel".into(), EventMessage::EventMoveCancelled)
                     .style(crate::ui::controls::secondary),
-                choice("Don't send", EventMessage::EventMoveConfirmed(false))
+                choice("Don't send".into(), EventMessage::EventMoveConfirmed(false))
                     .style(crate::ui::controls::secondary),
-                choice("Send", EventMessage::EventMoveConfirmed(true))
+                choice("Send".into(), EventMessage::EventMoveConfirmed(true))
                     .style(crate::ui::controls::primary),
             ]
             .spacing(6)

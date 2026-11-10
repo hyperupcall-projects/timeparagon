@@ -1,6 +1,7 @@
 //! Changes made on the Settings page.
 
 use super::*;
+use chrono::Datelike;
 
 pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Message> {
     match message {
@@ -468,16 +469,21 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             );
             queue_save(state)
         }
-        SettingsMessage::SleepGoalChanged(hours) => {
-            state.config.calendar.sleep_goal_hours = hours.clamp(6, 12);
-            Task::batch([queue_save(state), refresh_week_after_write(state)])
-        }
-        SettingsMessage::SleepDayStartChanged(hour) => {
-            state.config.calendar.sleep_day_start_hour = hour.min(6);
-            Task::batch([queue_save(state), refresh_week_after_write(state)])
-        }
-        SettingsMessage::LatestWakeupChanged(hour) => {
-            state.config.calendar.latest_wakeup_hour = hour.clamp(4, 14);
+        SettingsMessage::SleepTimeChanged(day, bedtime, value) => {
+            let Ok(time) = chrono::NaiveTime::parse_from_str(&value, "%H:%M") else {
+                return Task::none();
+            };
+            let today = crate::clock::now().date_naive();
+            let from = today + chrono::Duration::days(i64::from(day.days_since(today.weekday())));
+            let mut times =
+                state.config.calendar.sleep_schedule[day.num_days_from_monday() as usize];
+            if bedtime {
+                times.bedtime = time;
+            } else {
+                times.wakeup = time;
+            }
+            calendar::sleep::set_weekday_times(&mut state.config.calendar, from, times);
+            state.calendar.invalidate_other_days();
             Task::batch([queue_save(state), refresh_week_after_write(state)])
         }
         SettingsMessage::SleepEstimatedStart(value) => {
@@ -525,6 +531,18 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             let Some(mut event) = state.calendar.event(&draft.id).cloned() else {
                 return Task::none();
             };
+            if event.id != calendar::sleep::NEW_ID
+                && (event.start != draft.start || event.end != draft.end)
+            {
+                return super::update(
+                    state,
+                    Message::Event(EventMessage::EventTimeChanged {
+                        id: event.id.clone(),
+                        start: draft.start,
+                        end: draft.end,
+                    }),
+                );
+            }
             let new = event.id == calendar::sleep::NEW_ID;
             record.automatic = false;
             if new {
