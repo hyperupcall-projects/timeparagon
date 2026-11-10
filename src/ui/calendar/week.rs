@@ -97,18 +97,21 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
             })
             .collect();
         let time_grid = crate::ui::controls::scrollable(row(grids))
+            .direction(scrollable::Direction::Vertical(grid_scrollbar()))
             .id(iced::widget::Id::new(WEEK_DAY_SCROLL))
             .on_scroll(grid_scrolled)
             .width(Fill)
             .height(Fill);
         crate::ui::controls::scrollable(
             column![row(headings), time_grid]
-                .width(Length::Fixed(width * days.len() as f32))
+                // The day columns keep their fixed widths; reserve additional
+                // room for the vertical scrollbar beside the final column.
+                .width(Length::Fixed(
+                    width * days.len() as f32 + GRID_SCROLLBAR_SPACE,
+                ))
                 .height(Fill),
         )
-        .direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::new(),
-        ))
+        .direction(scrollable::Direction::Horizontal(grid_scrollbar()))
         .id(iced::widget::Id::new(WEEK_SCROLL))
         .on_scroll(|viewport| {
             Message::Calendar(CalendarMessage::WeekScrolled(viewport.absolute_offset().x))
