@@ -24,8 +24,8 @@ pub(super) struct Block {
     /// The habit this event counts towards and the day it would be recorded
     /// on, for its Record button.
     pub(super) habit: Option<(String, NaiveDate)>,
-    /// Completion of a visible habit occurrence, including unlinked habits.
-    pub(super) habit_completed: Option<bool>,
+    /// Completion of a visible task or habit occurrence.
+    pub(super) completion: Option<Completion>,
 }
 
 /// An alarm's needle on the day in view.
@@ -415,13 +415,8 @@ impl canvas::Program<Message> for DayCanvas {
                     }
                 }
 
-                if let Some(id) = self.completion_at(point, bounds.width) {
-                    return Some(
-                        canvas::Action::publish(Message::Habits(
-                            crate::habits::Action::ToggleCompleted(id.to_owned()),
-                        ))
-                        .and_capture(),
-                    );
+                if let Some((id, completion)) = self.completion_at(point, bounds.width) {
+                    return Some(canvas::Action::publish(completion.toggle(id)).and_capture());
                 }
 
                 if let Some((id, day)) = self.record_at(point, bounds.width) {
@@ -846,10 +841,10 @@ impl DayCanvas {
             } else if block.habit.is_some() {
                 label_bounds = habit_actions(block_bounds).0;
             }
-            if let Some(completed) = block.habit_completed {
-                let (label, checkbox) = habit_completion_bounds(label_bounds);
+            if let Some(completion) = block.completion {
+                let (label, checkbox) = completion_bounds(label_bounds);
                 label_bounds = label;
-                draw_habit_checkbox(frame, checkbox, completed, ink);
+                draw_completion_checkbox(frame, checkbox, completion.completed(), ink);
             }
             if label_bounds.height >= 14.0 {
                 draw_block_label(
@@ -1220,19 +1215,19 @@ impl DayCanvas {
         Some((index, mode))
     }
 
-    pub(super) fn completion_at(&self, point: Point, width: f32) -> Option<&str> {
+    pub(super) fn completion_at(&self, point: Point, width: f32) -> Option<(&str, Completion)> {
         let block = self.blocks.get(self.hit(Some(point), width)?)?;
-        block.habit_completed?;
+        let completion = block.completion?;
         let bounds = self.block_rect(block, width);
         let label = if block.habit.is_some() {
             habit_actions(bounds).0
         } else {
             bounds
         };
-        habit_completion_bounds(label)
+        completion_bounds(label)
             .1
             .contains(point)
-            .then_some(block.id.as_str())
+            .then_some((block.id.as_str(), completion))
     }
 
     /// The habit and day of the Record button under a grid point, if any.
@@ -1592,7 +1587,7 @@ pub(super) fn lighten(color: Color) -> Color {
 }
 
 /// Reserve a compact lane next to the title, before the optional Record action.
-pub(super) fn habit_completion_bounds(bounds: Rectangle) -> (Rectangle, Rectangle) {
+pub(super) fn completion_bounds(bounds: Rectangle) -> (Rectangle, Rectangle) {
     let width = 24.0_f32.min(bounds.width * 0.4);
     let label = Rectangle {
         width: bounds.width - width,
@@ -1606,7 +1601,7 @@ pub(super) fn habit_completion_bounds(bounds: Rectangle) -> (Rectangle, Rectangl
     (label, checkbox)
 }
 
-fn draw_habit_checkbox(frame: &mut Frame, bounds: Rectangle, completed: bool, ink: Color) {
+fn draw_completion_checkbox(frame: &mut Frame, bounds: Rectangle, completed: bool, ink: Color) {
     let size = 14.0_f32
         .min((bounds.width - 4.0).max(0.0))
         .min((bounds.height - 4.0).max(0.0));

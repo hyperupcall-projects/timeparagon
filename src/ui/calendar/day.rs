@@ -134,13 +134,15 @@ pub(super) fn day_canvas<'a>(
                     && (!event.is_task() || event.is_calendar_task()),
                 pending: event.details.sending
                     || state.calendar.pending_time(&event.id).is_some()
-                    || state.timeblocking.busy.contains_task(&event.id),
+                    || state.timeblocking.busy.contains_task(&event.id)
+                    || (event.is_task() && !state.timeblocking.busy.is_empty())
+                    || state.habits.completing.contains(&event.id),
                 time_block,
                 habit: (event.details.habit && !hidden)
                     .then(|| state.habits.habit_of(event))
                     .flatten()
                     .map(|id| (id.to_owned(), event.start.date_naive())),
-                habit_completed: (event.details.habit && !hidden).then_some(event.completed),
+                completion: event_completion(state, event),
                 // A block owns its task rows independently of standalone task visibility.
                 tasks: if time_block {
                     let key = crate::timeblocking::block_key(event);
