@@ -1921,30 +1921,6 @@ impl Store {
             .find(|event| event.id == id)
     }
 
-    /// Moves every loaded occurrence of a series by `delta`, as Google will
-    /// once the series itself is moved.
-    pub fn shift_series(&mut self, calendar_id: &str, series: &str, delta: chrono::Duration) {
-        let mut shifted = false;
-        for event in self
-            .events
-            .iter_mut()
-            .chain(self.cache.values_mut().flatten())
-            .chain(self.detail_event.as_mut())
-            .filter(|event| {
-                event.calendar_id == calendar_id
-                    && event.details.recurring_event_id.as_deref() == Some(series)
-            })
-        {
-            event.start += delta;
-            event.end += delta;
-            shifted = true;
-        }
-        if shifted {
-            self.events
-                .sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
-        }
-    }
-
     /// Applies a dragged time to the event and remembers it as unconfirmed.
     ///
     /// The chip moves at once; the lighter shade and the write to Google

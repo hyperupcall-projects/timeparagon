@@ -125,15 +125,7 @@ fn assigned_tasks<'a>(
     if !timeblocking::is_block(event, settings) {
         return Vec::new();
     }
-    let key = timeblocking::block_key(event);
-    let mut tasks: Vec<&Event> = all
-        .iter()
-        .filter(|task| {
-            task.is_task() && timeblocking::metadata(task).block.as_deref() == Some(&key)
-        })
-        .collect();
-    tasks.sort_by_key(|task| (timeblocking::metadata(task).order, task.id.clone()));
-    tasks
+    timeblocking::tasks_in(event, all, settings.day_start_hour())
 }
 
 /// Where "right now" sits in the day, in minutes, or `None` outside the day.

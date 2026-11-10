@@ -163,7 +163,7 @@ pub fn backlog_tasks<'a>(
         .filter(|event| {
             event.is_task()
                 && !event.completed
-                && tb::metadata(event).block.is_none()
+                && !tb::is_assigned(event)
                 && is_backlog_list(settings, calendars, &event.calendar_id)
         })
         .collect();

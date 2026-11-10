@@ -146,33 +146,27 @@ pub(super) fn day_canvas<'a>(
                     .flatten(),
                 // A block owns its task rows independently of standalone task visibility.
                 tasks: if time_block {
-                    let key = crate::timeblocking::block_key(event);
-                    let mut tasks: Vec<_> = state
-                        .calendar
-                        .events_on(day)
-                        .iter()
-                        .filter(|e| {
-                            e.is_task()
-                                && crate::timeblocking::metadata(e).block.as_deref()
-                                    == Some(key.as_str())
-                                && state.calendar.search_shows_in_block(e, event)
-                        })
-                        .collect();
-                    tasks.sort_by_key(|e| (crate::timeblocking::metadata(e).order, e.id.clone()));
-                    tasks
-                        .into_iter()
-                        .map(|e| {
-                            if state.calendar.search.hides_details(e) {
-                                (e.id.clone(), PRIVATE_TITLE.to_owned(), 0)
-                            } else {
-                                (
-                                    e.id.clone(),
-                                    crate::timeblocking::task_label(e),
-                                    crate::timeblocking::metadata(e).minutes,
-                                )
-                            }
-                        })
-                        .collect()
+                    crate::timeblocking::tasks_in(
+                        event,
+                        state.calendar.events_on(day),
+                        crate::timeblocking::day_start_hour(state),
+                    )
+                    .into_iter()
+                    .filter(|e| state.calendar.search_shows_in_block(e, event))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|e| {
+                        if state.calendar.search.hides_details(e) {
+                            (e.id.clone(), PRIVATE_TITLE.to_owned(), 0)
+                        } else {
+                            (
+                                e.id.clone(),
+                                crate::timeblocking::task_label(e),
+                                crate::timeblocking::metadata(e).minutes,
+                            )
+                        }
+                    })
+                    .collect()
                 } else {
                     Vec::new()
                 },
