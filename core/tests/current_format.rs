@@ -10,7 +10,7 @@ fn an_unsupported_database_is_rejected_without_rewriting_its_data() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("old.sqlite3");
     let connection = Connection::open(&path).unwrap();
-    connection.execute_batch("PRAGMA user_version=2; CREATE TABLE tasks(id INTEGER PRIMARY KEY,metadata TEXT NOT NULL,legacy_key TEXT); INSERT INTO tasks VALUES(100,'keep this data','history');").unwrap();
+    connection.execute_batch("PRAGMA user_version=1; CREATE TABLE tasks(id INTEGER PRIMARY KEY,metadata TEXT NOT NULL,legacy_key TEXT); INSERT INTO tasks VALUES(100,'keep this data','history');").unwrap();
     assert!(Database::open(&path).is_err());
     assert_eq!(
         connection
@@ -22,7 +22,7 @@ fn an_unsupported_database_is_rejected_without_rewriting_its_data() {
         connection
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        2
+        1
     );
 }
 

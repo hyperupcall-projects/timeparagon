@@ -37,7 +37,7 @@ pub struct TaskData {
 pub const SCHEMA_VERSION: i64 = 4;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 3..=3;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=3;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
     db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -82,6 +82,9 @@ impl Database {
                 .map_err(|e| e.to_string())?
         {
             return Err("Unversioned task databases are no longer supported".into());
+        }
+        if version == 2 {
+            Self::drop_legacy_key(&db).map_err(|e| e.to_string())?;
         }
         if memory || version != SCHEMA_VERSION {
             Self::set_up(&db, path, memory)?;
@@ -134,6 +137,42 @@ impl Database {
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Schema 3: `tasks` loses `legacy_key`. The column is `UNIQUE`, so SQLite
+    /// cannot drop it in place and the table is rebuilt, as SQLite documents,
+    /// with foreign keys off so `task_aliases` keeps pointing at its rows.
+    /// That pragma cannot change inside a transaction, so this runs on its own
+    /// before [`Database::set_up`]. Idempotent: a second process finds the
+    /// column already gone.
+    fn drop_legacy_key(db: &Connection) -> rusqlite::Result<()> {
+        db.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let result = (|| {
+            let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)?;
+            let has_column = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name='legacy_key')",
+                [],
+                |r| r.get::<_, bool>(0),
+            )?;
+            if has_column {
+                tx.execute_batch(
+                    "CREATE TABLE tasks_new (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL);
+                     INSERT INTO tasks_new(id,metadata) SELECT id,metadata FROM tasks;
+                     DROP TABLE tasks;
+                     ALTER TABLE tasks_new RENAME TO tasks;",
+                )?;
+                let broken = tx
+                    .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                    .optional()?
+                    .is_some();
+                if broken {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+            }
+            tx.commit()
+        })();
+        db.execute_batch("PRAGMA foreign_keys = ON;")?;
+        result
     }
 
     /// Schema 4: writes go to Google as they are made instead of through a
@@ -424,6 +463,53 @@ mod tests {
         );
         remove_document(&path, "a").unwrap();
         assert_eq!(read_document::<String>(&path, "a").unwrap(), None);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn schema_2_is_upgraded_keeping_its_tasks() {
+        let path = path("schema-2-upgrade");
+        Database::open(&path).unwrap();
+        {
+            // Put the file back as schema 2 left it: `tasks` with a unique
+            // `legacy_key`, an alias pointing at it, and the old write queue.
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+                "DROP TABLE task_aliases; DROP TABLE tasks;
+                 CREATE TABLE tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL, legacy_key TEXT UNIQUE);
+                 CREATE TABLE task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
+                 INSERT INTO tasks VALUES (100,'{}','old'),(101,'{}',NULL);
+                 INSERT INTO task_aliases VALUES ('a',100),('b',101);
+                 CREATE TABLE google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
+                 CREATE TABLE google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
+                 ALTER TABLE google_entities DROP COLUMN sending_since;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        }
+        let mut db = Database::open(&path).unwrap();
+        let connection = db.connection();
+        assert_eq!(schema_version(connection).unwrap(), SCHEMA_VERSION);
+        let columns: Vec<String> = connection
+            .prepare("SELECT name FROM pragma_table_info('tasks')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(columns, ["id", "metadata"]);
+        let aliases: Vec<(String, i64)> = connection
+            .prepare("SELECT a.source,t.id FROM task_aliases a JOIN tasks t ON t.id=a.task_id ORDER BY a.source")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(aliases, [("a".into(), 100), ("b".into(), 101)]);
+        let foreign_keys: bool = connection
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert!(foreign_keys);
+        drop(db);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
     #[test]
