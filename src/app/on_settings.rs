@@ -473,8 +473,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
             let Ok(time) = chrono::NaiveTime::parse_from_str(&value, "%H:%M") else {
                 return Task::none();
             };
-            let today = crate::clock::now().date_naive();
-            let from = today + chrono::Duration::days(i64::from(day.days_since(today.weekday())));
+            let from = calendar::sleep::next_night(crate::clock::now().date_naive(), day);
             let mut times =
                 state.config.calendar.sleep_schedule[day.num_days_from_monday() as usize];
             if bedtime {
@@ -709,36 +708,10 @@ fn sleep_notification(
     timer: calendar::sleep::Timer,
 ) -> Task<Message> {
     let format = state.config.appearance.time_format;
-    let record = event.details.sleep.as_ref();
-    let (summary, body, ongoing, replaces) = match timer {
-        calendar::sleep::Timer::Start => {
-            let since = record
-                .and_then(|r| r.actual_start)
-                .map(|at| calendar::time_format::clock(at, format))
-                .unwrap_or_default();
-            (
-                format!("Sleeping since {since}"),
-                format!(
-                    "Wake up for {}",
-                    calendar::sleep::predictions_line(event, format)
-                ),
-                true,
-                state.sleep_notification,
-            )
-        }
-        calendar::sleep::Timer::Finish => {
-            let replaces = state.sleep_notification.take();
-            let slept = record
-                .and_then(calendar::sleep::Record::actual_minutes)
-                .map(calendar::sleep::minutes_label)
-                .unwrap_or_default();
-            (
-                format!("Slept {slept}"),
-                format!("Planned {}", calendar::sleep::duration(event)),
-                false,
-                replaces,
-            )
-        }
+    let (summary, body) = calendar::sleep::notification(event, timer, format);
+    let (ongoing, replaces) = match timer {
+        calendar::sleep::Timer::Start => (true, state.sleep_notification),
+        calendar::sleep::Timer::Finish => (false, state.sleep_notification.take()),
     };
     blocking::run(move || crate::notify::show_sleep(&summary, &body, ongoing, replaces))
         .map(|result| Message::Settings(SettingsMessage::SleepNotificationShown(result)))

@@ -235,7 +235,7 @@ const PERMISSION_ACTIVITY: &str = "dev.timeslay.day.reminders.PermissionActivity
 /// activities. Only framework classes are looked up, because this runs on
 /// threads whose class loader cannot see the app's.
 #[cfg(target_os = "android")]
-fn send(action: Option<&str>, category: Option<&str>, activity_class: Option<&str>) {
+fn send(action: Option<&str>, extras: &[(&str, &str)], activity_class: Option<&str>) {
     use jni::objects::{JObject, JValue};
 
     let result = (|| -> jni::errors::Result<()> {
@@ -258,9 +258,9 @@ fn send(action: Option<&str>, category: Option<&str>, activity_class: Option<&st
                     &[JValue::Object(&action)],
                 )?;
             }
-            if let Some(category) = category {
-                let name = env.new_string("category")?;
-                let value = env.new_string(category)?;
+            for (name, value) in extras {
+                let name = env.new_string(name)?;
+                let value = env.new_string(value)?;
                 env.call_method(
                     &intent,
                     "putExtra",
@@ -314,7 +314,18 @@ fn send(action: Option<&str>, category: Option<&str>, activity_class: Option<&st
 
 #[cfg(target_os = "android")]
 fn broadcast(action: &str, category: Option<&str>) {
-    send(Some(action), category, None);
+    let extras: Vec<_> = category
+        .map(|category| ("category", category))
+        .into_iter()
+        .collect();
+    send(Some(action), &extras, None);
+}
+
+/// Sends an intent with string extras to the app's own reminder receiver,
+/// which also owns the sleep timer's notification.
+#[cfg(target_os = "android")]
+pub(crate) fn broadcast_extras(action: &str, extras: &[(&str, &str)]) {
+    send(Some(action), extras, None);
 }
 
 /// Posts a sample reminder for a category, with its sound.
@@ -335,7 +346,7 @@ fn request_device_info() {
 /// Shows Android's "allow notifications" prompt where the system has one.
 pub fn request_permission() {
     #[cfg(target_os = "android")]
-    send(None, None, Some(PERMISSION_ACTIVITY));
+    send(None, &[], Some(PERMISSION_ACTIVITY));
 }
 
 /// What the device told us about itself.
@@ -360,6 +371,11 @@ fn device_info() -> Option<DeviceInfo> {
     }
     #[cfg(not(target_os = "android"))]
     None
+}
+
+/// Whether Android has said notifications are switched off for the app.
+pub fn notifications_blocked() -> bool {
+    device_info().is_some_and(|info| info.notifications_enabled == Some(false))
 }
 
 /// Saves the reminder settings and returns the config as it now reads.

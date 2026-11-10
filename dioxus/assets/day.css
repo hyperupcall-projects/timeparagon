@@ -3200,3 +3200,130 @@ textarea {
   filter: grayscale(0.6);
   pointer-events: none;
 }
+
+/* ------------------------------------------------------------------ sleep */
+
+/* A night with a timer splits like a time block: the label opens it and the
+   button beside it starts or finishes the timer. */
+.grid-event.sleep {
+    padding: 0;
+    cursor: default;
+}
+
+.sleep-open,
+.sleep-timer {
+    appearance: none;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    margin: 0;
+    border: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.sleep-open {
+    left: 0;
+    width: calc(100% - min(40%, 72px));
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    padding: 0 var(--event-pad-right) 0 var(--event-pad-left);
+    overflow: hidden;
+    text-align: left;
+    font-size: 13px;
+    background: transparent;
+}
+
+.sleep-timer {
+    right: 0;
+    width: min(40%, 72px);
+    padding: 0 2px;
+    overflow: hidden;
+    font-size: 10px;
+    background: var(--block-action);
+    border-radius: var(--event-radius);
+}
+
+.sleep-timer:disabled {
+    opacity: 0.6;
+}
+
+/* While sleep is being timed, under the navigation on every page. */
+.sleep-strip {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--card);
+    color: var(--on-card);
+    border-bottom: 1px solid var(--hairline);
+}
+
+.sleep-strip-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sleep-strip-title {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.sleep-strip-detail {
+    font-size: 12px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.sleep-strip-error {
+    font-size: 12px;
+    color: var(--danger);
+}
+
+.sleep-predictions {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sleep-prediction {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sleep-schedule {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.sleep-day {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sleep-day-name {
+    font-weight: 700;
+}
+
+.sleep-day-times {
+    display: flex;
+    gap: 8px;
+}
+
+.sleep-time {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}

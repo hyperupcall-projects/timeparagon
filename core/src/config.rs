@@ -1035,6 +1035,23 @@ fn save_first_day_of_week_at(
     })
 }
 
+/// Saves the weekly sleep schedule and its dated changes, leaving the rest of
+/// the file alone.
+pub fn save_sleep_schedule(settings: &CalendarSettings) -> io::Result<()> {
+    let path = config_path().ok_or_else(no_config_directory)?;
+    save_sleep_schedule_at(&path, settings)
+}
+
+fn save_sleep_schedule_at(path: &std::path::Path, settings: &CalendarSettings) -> io::Result<()> {
+    let invalid = |error: toml::ser::Error| io::Error::new(io::ErrorKind::InvalidData, error);
+    let schedule = toml::Value::try_from(settings.sleep_schedule).map_err(invalid)?;
+    let changes = toml::Value::try_from(&settings.sleep_schedule_changes).map_err(invalid)?;
+    edit_calendar_table(path, |calendar| {
+        calendar.insert("sleep_schedule".into(), schedule);
+        calendar.insert("sleep_schedule_changes".into(), changes);
+    })
+}
+
 /// Saves whether travel is shown on the calendar.
 pub fn save_travel_show(show: bool) -> io::Result<()> {
     let path = config_path().ok_or_else(no_config_directory)?;
@@ -1431,6 +1448,35 @@ mod tests {
         let config: Config = toml::from_str(&text).unwrap();
         assert_eq!(config.calendar.sync_minutes, 30);
         assert_eq!(config.calendar.first_day_of_week, FirstDayOfWeek::Saturday);
+    }
+
+    #[test]
+    fn saving_the_sleep_schedule_reads_back_and_keeps_other_settings() {
+        use crate::calendar::sleep;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "[calendar]\nsync_minutes = 30\n").unwrap();
+        let mut settings = CalendarSettings::default();
+        let from = chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap();
+        sleep::set_weekday_times(
+            &mut settings,
+            from,
+            sleep::Times {
+                bedtime: chrono::NaiveTime::from_hms_opt(23, 15, 0).unwrap(),
+                wakeup: chrono::NaiveTime::from_hms_opt(7, 30, 0).unwrap(),
+            },
+        );
+
+        save_sleep_schedule_at(&path, &settings).unwrap();
+
+        let config: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config.calendar.sync_minutes, 30);
+        assert_eq!(config.calendar.sleep_schedule, settings.sleep_schedule);
+        assert_eq!(
+            config.calendar.sleep_schedule_changes,
+            settings.sleep_schedule_changes
+        );
     }
 
     #[test]
