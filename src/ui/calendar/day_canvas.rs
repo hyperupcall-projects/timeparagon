@@ -1195,11 +1195,7 @@ impl DayCanvas {
         let title_size = if self.compact { 11.0 } else { 12.0 };
 
         // The label shows the time the event will land on, not the one it had.
-        let when = format!(
-            "{} – {}",
-            self.clock_label(drag.preview_start),
-            self.clock_label(drag.preview_end)
-        );
+        let when = self.range_label(drag.preview_start, drag.preview_end);
         draw_block_label(frame, bounds, &block.title, &when, ink, title_size);
     }
 
@@ -1390,7 +1386,7 @@ impl DayCanvas {
         let ink = palette.background.base.text;
         let title_size = if self.compact { 11.0 } else { 12.0 };
         let text_width = (bounds.width - BLOCK_PADDING - BLOCK_PADDING_RIGHT).max(8.0);
-        let label = format!("{} – {}", self.clock_label(start), self.clock_label(end));
+        let label = self.range_label(start, end);
         fill_glyphs(
             frame,
             Text {
@@ -1417,11 +1413,17 @@ impl DayCanvas {
         calendar::local_time(naive)
     }
 
-    /// A previewed minute-of-day in the selected display format.
-    pub(super) fn clock_label(&self, minutes: i32) -> String {
+    /// The wall-clock time a previewed minute-of-day lands on.
+    fn naive_time(&self, minutes: i32) -> chrono::NaiveTime {
         let total = (self.day_start_hour as i32 * 60 + minutes).rem_euclid(DAY_MINUTES);
-        calendar::time_format::clock(
-            chrono::NaiveTime::from_hms_opt((total / 60) as u32, (total % 60) as u32, 0).unwrap(),
+        chrono::NaiveTime::from_hms_opt((total / 60) as u32, (total % 60) as u32, 0).unwrap()
+    }
+
+    /// A previewed range such as "8 – 10p", sharing the period when both ends do.
+    pub(super) fn range_label(&self, start: i32, end: i32) -> String {
+        calendar::time_format::range(
+            self.naive_time(start),
+            self.naive_time(end),
             self.time_format,
         )
     }

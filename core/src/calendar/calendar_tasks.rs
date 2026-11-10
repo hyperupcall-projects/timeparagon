@@ -34,12 +34,19 @@ pub fn body(task: &Event) -> Result<Value, String> {
     write_data(&mut body, data)?;
     super::projects::write(&mut body, &task.details.projects)?;
     task.details.options.write(&mut body)?;
+    // Writes are PATCHes, which merge into Google's `start`/`end` objects, so
+    // the other form is cleared explicitly: an all-day task moved into a time
+    // block would otherwise keep its `date` beside the new `dateTime`, which
+    // Google rejects as "Invalid start time".
     if task.all_day {
-        body["start"] = json!({"date":task.start.date_naive().to_string()});
-        body["end"] = json!({"date":task.end.date_naive().to_string()});
+        body["start"] =
+            json!({"date":task.start.date_naive().to_string(),"dateTime":null,"timeZone":null});
+        body["end"] =
+            json!({"date":task.end.date_naive().to_string(),"dateTime":null,"timeZone":null});
     } else {
-        body["start"] = json!({"dateTime":task.start.to_rfc3339(),"timeZone":iana_time_zone::get_timezone().map_err(|e|e.to_string())?});
-        body["end"] = json!({"dateTime":task.end.to_rfc3339(),"timeZone":iana_time_zone::get_timezone().map_err(|e|e.to_string())?});
+        let zone = iana_time_zone::get_timezone().map_err(|e| e.to_string())?;
+        body["start"] = json!({"dateTime":task.start.to_rfc3339(),"timeZone":zone,"date":null});
+        body["end"] = json!({"dateTime":task.end.to_rfc3339(),"timeZone":zone,"date":null});
     }
     if task.details.recurring_event_id.is_none() {
         body["recurrence"] = json!(task.details.recurrence);
@@ -329,6 +336,27 @@ mod tests {
         });
         task
     }
+    #[test]
+    fn a_patch_body_clears_the_other_time_form() {
+        // An all-day task put into a time block is PATCHed to a timed event;
+        // Google merges `start`, so a leftover `date` must be cleared.
+        let mut timed = task();
+        timed.start = super::super::at_clock(tb::UNDATED + Duration::days(1), 9, 0);
+        timed.end = timed.start + Duration::minutes(30);
+        timed.all_day = false;
+        let timed = body(&timed).unwrap();
+        for side in ["start", "end"] {
+            assert!(timed[side]["dateTime"].is_string());
+            assert!(timed[side].get("date").is_some_and(Value::is_null));
+        }
+        let all_day = body(&task()).unwrap();
+        for side in ["start", "end"] {
+            assert!(all_day[side]["date"].is_string());
+            assert!(all_day[side].get("dateTime").is_some_and(Value::is_null));
+            assert!(all_day[side].get("timeZone").is_some_and(Value::is_null));
+        }
+    }
+
     fn settings() -> CalendarSettings {
         CalendarSettings {
             app_calendar: Some("app".into()),

@@ -1470,7 +1470,12 @@ fn a_previewed_minute_becomes_a_real_time() {
     late.day_start_hour = 3;
     let three = late.time_at(0);
     assert_eq!(three.hour(), 3);
-    assert_eq!(late.clock_label(0), "03:00");
+    assert_eq!(late.range_label(0, 60), "03:00 – 04:00");
+
+    // A shared period is only shown once, as in "8 – 10p".
+    late.time_format = TimeFormat::Compact;
+    assert_eq!(late.range_label(17 * 60, 19 * 60), "8 – 10p");
+    assert_eq!(late.range_label(8 * 60, 10 * 60), "11a – 1p");
 }
 
 #[test]
