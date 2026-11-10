@@ -94,8 +94,6 @@ impl Busy {
 use timeslay_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
 #[derive(Default)]
 pub struct Workspace {
-    pub child_due: String,
-    pub child_deadline: String,
     pub confirm_propagation: Option<String>,
     pub block: Option<String>,
     pub focus: Option<String>,
@@ -177,7 +175,6 @@ pub struct WeekListPlacement {
 #[derive(Debug, Clone)]
 pub enum Action {
     ChildDate(bool, String),
-    SaveChildDate(bool),
     ForcePropagation(String, bool),
     ConfirmPropagation,
     CancelPropagation,
@@ -437,20 +434,6 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
     // The panel edits the block in place, so it always opens with a live
     // draft of the block's own fields.
     state.calendar.edit_draft = event(state, &id).map(crate::calendar::EditDraft::from_event);
-    if let Some(draft) = &state.calendar.edit_draft {
-        state.timeblocking.child_due = draft
-            .options
-            .child_metadata
-            .due
-            .map(|d| d.value())
-            .unwrap_or_default();
-        state.timeblocking.child_deadline = draft
-            .options
-            .child_metadata
-            .deadline
-            .map(|d| d.value())
-            .unwrap_or_default();
-    }
     state.timeblocking.block = Some(id);
     Task::none()
 }
@@ -557,30 +540,14 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             };
             if let Ok(parsed) = parsed
                 && let Some(draft) = state.calendar.edit_draft.as_mut()
+                && !draft.loading
+                && !draft.saving
             {
                 if deadline {
                     draft.options.child_metadata.deadline = parsed;
                 } else {
                     draft.options.child_metadata.due = parsed;
                 }
-            }
-            if deadline {
-                state.timeblocking.child_deadline = value;
-            } else {
-                state.timeblocking.child_due = value;
-            }
-            return Task::none();
-        }
-        Action::SaveChildDate(deadline) => {
-            let input = if deadline {
-                &state.timeblocking.child_deadline
-            } else {
-                &state.timeblocking.child_due
-            };
-            if !input.trim().is_empty()
-                && let Err(error) = calendar::deadline::parse_input(input)
-            {
-                state.calendar.error = Some(error);
             }
             return Task::none();
         }
@@ -620,20 +587,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             // draft as the panel opens rather than behind an Edit button.
             state.calendar.edit_draft =
                 event(state, &id).map(crate::calendar::EditDraft::from_event);
-            if let Some(draft) = &state.calendar.edit_draft {
-                state.timeblocking.child_due = draft
-                    .options
-                    .child_metadata
-                    .due
-                    .map(|d| d.value())
-                    .unwrap_or_default();
-                state.timeblocking.child_deadline = draft
-                    .options
-                    .child_metadata
-                    .deadline
-                    .map(|d| d.value())
-                    .unwrap_or_default();
-            }
             state.timeblocking.focus = Some(id);
             state.timeblocking.work_now = Some(crate::clock::utc_now());
             state.calendar.open_event = None;

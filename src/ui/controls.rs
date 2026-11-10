@@ -389,9 +389,9 @@ pub fn overlay<'a>(
         body = body.push(
             button(
                 text(if p.time.is_some() {
-                    "Remove deadline time"
+                    "Remove time"
                 } else {
-                    "+ Add deadline time"
+                    "+ Add time"
                 })
                 .size(size),
             )

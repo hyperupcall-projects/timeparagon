@@ -410,6 +410,191 @@ fn a_calendar_event_can_be_given_a_location() -> Result<(), Error> {
     Ok(())
 }
 
+/// The child metadata location uses the event picker, but edits only the
+/// time block draft until its metadata is saved.
+#[test]
+fn time_block_child_location_uses_the_shared_picker() -> Result<(), Error> {
+    for width in [260.0, 360.0, 620.0] {
+        let (mut state, _, office, _) = state();
+        let block = state.calendar.event("deep").unwrap().clone();
+        state.calendar.edit_draft = Some(timeslay::calendar::EditDraft::from_event(&block));
+        let metrics = timeslay::ui::layout::Metrics::of(Size::new(width, 1400.0));
+        let target = PickTarget::BlockChildren(block.id.clone());
+        let mut ui = at(
+            metrics.size,
+            timeslay::ui::timeblocking::propagation_controls(&state, &block, &metrics),
+        );
+        ui.click("Add location")?;
+        assert!(messages(ui).iter().any(|message| matches!(
+            message,
+            Message::Travel(Action::OpenPicker(actual)) if actual == &target
+        )));
+
+        let _ = app::update(
+            &mut state,
+            Message::Travel(Action::OpenPicker(target.clone())),
+        );
+        let mut ui = at(
+            metrics.size,
+            timeslay::ui::timeblocking::propagation_controls(&state, &block, &metrics),
+        );
+        assert!(
+            ui.find(iced::widget::Id::new(timeslay::travel::PICKER_INPUT))
+                .is_ok()
+        );
+        assert!(ui.find("Search recents").is_ok());
+        drop(ui);
+        let _ = app::update(&mut state, Message::Travel(Action::ChooseSaved(office)));
+        assert_eq!(
+            state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .unwrap()
+                .options
+                .child_metadata
+                .location,
+            Some(office)
+        );
+        assert_eq!(
+            state.calendar.event(&block.id).unwrap().details.location,
+            block.details.location
+        );
+        assert!(!state.config.travel.event_places.contains_key(&block.id));
+        let mut ui = at(
+            metrics.size,
+            timeslay::ui::timeblocking::propagation_controls(&state, &block, &metrics),
+        );
+        assert!(ui.find("Office").is_ok());
+        assert!(ui.find("Change").is_ok());
+        ui.click("Clear")?;
+        assert!(messages(ui).iter().any(|message| matches!(
+            message,
+            Message::Travel(Action::Clear(actual)) if actual == &target
+        )));
+        let _ = app::update(&mut state, Message::Travel(Action::Clear(target)));
+        assert_eq!(
+            state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .unwrap()
+                .options
+                .child_metadata
+                .location,
+            None
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn time_block_metadata_uses_date_time_pickers_and_priority_choices() -> Result<(), Error> {
+    use timeslay::timeblocking::Priority;
+    use timeslay::ui::controls;
+
+    for width in [260.0, 360.0, 620.0] {
+        let (mut state, ..) = state();
+        state.config.appearance.time_format =
+            timeslay::calendar::time_format::TimeFormat::TwentyFourHour;
+        let block = state.calendar.event("deep").unwrap().clone();
+        state.calendar.edit_draft = Some(timeslay::calendar::EditDraft::from_event(&block));
+        let metrics = timeslay::ui::layout::Metrics::of(Size::new(width, 1400.0));
+        for deadline in [false, true] {
+            let mut ui = at(
+                metrics.size,
+                timeslay::ui::timeblocking::propagation_controls(&state, &block, &metrics),
+            );
+            // Once Due date is chosen its caption changes, so the remaining
+            // Choose date button opens Deadline.
+            ui.click("Choose date")?;
+            let picker = messages(ui)
+                .into_iter()
+                .find_map(|message| match message {
+                    Message::Picker(controls::Action::Open(picker)) => Some(picker),
+                    _ => None,
+                })
+                .expect("date picker opens");
+            assert!(picker.optional && picker.with_time);
+            assert!(matches!((picker.change)(String::new()),
+                Message::TimeBlocking(timeslay::timeblocking::Action::ChildDate(actual, _)) if actual == deadline
+            ));
+            let value = if deadline {
+                "2026-11-11 17:43"
+            } else {
+                "2026-11-10"
+            };
+            let _ = app::update(&mut state, (picker.change)(value.into()));
+        }
+        for (label, priority) in [
+            ("P1", Some(Priority::P1)),
+            ("P2", Some(Priority::P2)),
+            ("None", None),
+        ] {
+            let mut ui = at(
+                metrics.size,
+                timeslay::ui::timeblocking::propagation_controls(&state, &block, &metrics),
+            );
+            assert!(ui.find("Selected priority: None").is_err());
+            let bounds = ui.click(label)?.bounds();
+            assert!(bounds.x >= 0.0 && bounds.x + bounds.width <= width);
+            for message in messages(ui) {
+                let _ = app::update(&mut state, message);
+            }
+            let metadata = &state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .unwrap()
+                .options
+                .child_metadata;
+            assert_eq!(metadata.priority, priority);
+            assert_eq!(metadata.due.unwrap().value(), "2026-11-10");
+            assert_eq!(metadata.deadline.unwrap().value(), "2026-11-11 17:43");
+        }
+        // Reopening retains the precise time, and Clear removes each value.
+        for (caption, deadline) in [("Nov 10, 2026", false), ("Nov 11, 2026 · 17:43", true)] {
+            let metadata = &state
+                .calendar
+                .edit_draft
+                .as_ref()
+                .unwrap()
+                .options
+                .child_metadata;
+            let selected = if deadline {
+                metadata.deadline
+            } else {
+                metadata.due
+            }
+            .unwrap();
+            let mut ui = at(
+                metrics.size,
+                timeslay::ui::timeblocking::propagation_controls(&state, &block, &metrics),
+            );
+            ui.click(caption)?;
+            let picker = messages(ui)
+                .into_iter()
+                .find_map(|message| match message {
+                    Message::Picker(controls::Action::Open(picker)) => Some(picker),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(picker.value, selected.value());
+            assert_eq!(picker.time, selected.time);
+            let _ = app::update(&mut state, (picker.change)(String::new()));
+        }
+        let metadata = &state
+            .calendar
+            .edit_draft
+            .as_ref()
+            .unwrap()
+            .options
+            .child_metadata;
+        assert!(metadata.due.is_none() && metadata.deadline.is_none());
+    }
+    Ok(())
+}
+
 #[test]
 fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> {
     for width in WIDTHS {
