@@ -1463,9 +1463,7 @@ fn SleepEditor(
             || calendar::deadline::parse_date(&values.end_date_text).is_err()
             || values.end <= values.start
         {
-            error.set(Some(
-                "Enter valid dates and times, with wake-up after sleep start".to_owned(),
-            ));
+            error.set(Some("Enter bedtime and wake-up time as HH:MM".to_owned()));
             return;
         }
         if original.id != calendar::sleep::NEW_ID
@@ -1482,12 +1480,7 @@ fn SleepEditor(
         if busy() {
             return;
         }
-        let mut night = saved_night();
-        // Unsaved confidence flags travel with the timer, as on the desktop.
-        if let (Some(edited), Some(current)) = (draft().sleep, night.details.sleep.as_mut()) {
-            current.estimated_start = edited.estimated_start;
-            current.estimated_end = edited.estimated_end;
-        }
+        let night = saved_night();
         if calendar::sleep::timer(&night, timeslay_core::clock::now())
             == Some(calendar::sleep::Timer::Start)
             && crate::reminders::notifications_blocked()
@@ -1616,49 +1609,18 @@ fn SleepEditor(
                 p { class: "editor-error", role: "alert", "{message}" }
             }
             p { class: "editor-value", "{summary}" }
-            Field { label: "Sleep start",
-                div { class: "editor-row",
-                    input {
-                        class: "client-input",
-                        r#type: "date",
-                        aria_label: "Sleep start date",
-                        disabled: is_busy,
-                        value: "{values.date_text}",
-                        oninput: move |event| draft.write().set_date_text(event.value()),
-                    }
+            FormSection { title: "Scheduling",
+                Field { label: "Bedtime",
                     input {
                         class: "client-input",
                         r#type: "time",
-                        aria_label: "Sleep start time",
+                        aria_label: "Bedtime",
                         disabled: is_busy,
                         value: "{values.start_text}",
                         oninput: move |event| draft.write().set_start_text(event.value()),
                     }
                 }
-                label { class: "editor-check",
-                    input {
-                        r#type: "checkbox",
-                        disabled: is_busy,
-                        checked: record.estimated_start,
-                        onchange: move |event| {
-                            if let Some(record) = draft.write().sleep.as_mut() {
-                                record.estimated_start = event.checked();
-                            }
-                        },
-                    }
-                    "Estimated Sleep Start"
-                }
-            }
-            Field { label: "Wake-up time",
-                div { class: "editor-row",
-                    input {
-                        class: "client-input",
-                        r#type: "date",
-                        aria_label: "Wake-up date",
-                        disabled: is_busy,
-                        value: "{values.end_date_text}",
-                        oninput: move |event| draft.write().set_end_date_text(event.value()),
-                    }
+                Field { label: "Wake-up time",
                     input {
                         class: "client-input",
                         r#type: "time",
@@ -1668,77 +1630,66 @@ fn SleepEditor(
                         oninput: move |event| draft.write().set_end_text(event.value()),
                     }
                 }
-                label { class: "editor-check",
-                    input {
-                        r#type: "checkbox",
-                        disabled: is_busy,
-                        checked: record.estimated_end,
-                        onchange: move |event| {
-                            if let Some(record) = draft.write().sleep.as_mut() {
-                                record.estimated_end = event.checked();
+                p { class: "hint",
+                    if record.automatic {
+                        "Planned from your weekly sleep schedule. Saving records your times and preserves them when your schedule changes."
+                    } else {
+                        "Recorded sleep. These times are preserved when your schedule changes."
+                    }
+                }
+            }
+            FormSection { title: "Actual sleep",
+                p { class: "hint", "{actual_summary}" }
+                Field { label: "Actual sleep start",
+                    div { class: "editor-row",
+                        input {
+                            class: "client-input",
+                            r#type: "time",
+                            aria_label: "Actual sleep start",
+                            disabled: is_busy,
+                            value: "{values.actual_start_text}",
+                            oninput: move |event| draft.write().set_actual_start_text(event.value()),
+                        }
+                        if !values.actual_start_text.is_empty() && !is_busy {
+                            button {
+                                class: "btn small",
+                                onclick: move |_| draft.write().set_actual_start_text(String::new()),
+                                "Clear"
                             }
-                        },
+                        }
                     }
-                    "Estimated Sleep End"
                 }
-            }
-            p { class: "hint",
-                if record.automatic {
-                    "Planned from your weekly sleep schedule. Saving records your times and preserves them when your schedule changes."
-                } else {
-                    "Recorded sleep. These times are preserved when your schedule changes."
-                }
-            }
-            h3 { class: "editor-section-title", "Actual sleep" }
-            p { class: "hint", "{actual_summary}" }
-            Field { label: "Actual sleep start",
-                div { class: "editor-row",
-                    input {
-                        class: "client-input",
-                        r#type: "time",
-                        aria_label: "Actual sleep start",
-                        disabled: is_busy,
-                        value: "{values.actual_start_text}",
-                        oninput: move |event| draft.write().set_actual_start_text(event.value()),
-                    }
-                    if !values.actual_start_text.is_empty() && !is_busy {
-                        button {
-                            class: "btn small",
-                            onclick: move |_| draft.write().set_actual_start_text(String::new()),
-                            "Clear"
+                Field { label: "Actual wake-up",
+                    div { class: "editor-row",
+                        input {
+                            class: "client-input",
+                            r#type: "time",
+                            aria_label: "Actual wake-up",
+                            disabled: is_busy,
+                            value: "{values.actual_end_text}",
+                            oninput: move |event| draft.write().set_actual_end_text(event.value()),
+                        }
+                        if !values.actual_end_text.is_empty() && !is_busy {
+                            button {
+                                class: "btn small",
+                                onclick: move |_| draft.write().set_actual_end_text(String::new()),
+                                "Clear"
+                            }
                         }
                     }
                 }
             }
-            Field { label: "Actual wake-up",
-                div { class: "editor-row",
-                    input {
-                        class: "client-input",
-                        r#type: "time",
-                        aria_label: "Actual wake-up",
-                        disabled: is_busy,
-                        value: "{values.actual_end_text}",
-                        oninput: move |event| draft.write().set_actual_end_text(event.value()),
-                    }
-                    if !values.actual_end_text.is_empty() && !is_busy {
-                        button {
-                            class: "btn small",
-                            onclick: move |_| draft.write().set_actual_end_text(String::new()),
-                            "Clear"
+            FormSection { title: "Wake up at",
+                div { class: "sleep-predictions",
+                    for (label, at) in predictions {
+                        div { key: "{label}", class: "sleep-prediction",
+                            span { "{label}" }
+                            span { "{at}" }
                         }
                     }
                 }
+                p { class: "hint", "{basis}" }
             }
-            h3 { class: "editor-section-title", "Wake up at" }
-            div { class: "sleep-predictions",
-                for (label, at) in predictions {
-                    div { key: "{label}", class: "sleep-prediction",
-                        span { "{label}" }
-                        span { "{at}" }
-                    }
-                }
-            }
-            p { class: "hint", "{basis}" }
         }
     }
 }
@@ -2889,10 +2840,11 @@ mod tests {
             &[
                 ">Sleep<",
                 "kind-chip",
-                "Sleep start",
+                "Scheduling",
+                "Bedtime",
                 "Wake-up time",
-                "Estimated Sleep Start",
-                "Estimated Sleep End",
+                "Actual sleep",
+                "Wake up at",
                 "Save sleep",
             ],
         );

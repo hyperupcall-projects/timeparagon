@@ -846,24 +846,30 @@ pub(super) fn sleep_editor<'a>(
         text(if record.automatic {
             "Planned from your weekly sleep schedule. Save changes for this night or for this and future matching weekdays."
         } else { "Recorded sleep. These times are preserved when your schedule changes." }).size(metrics.label() - 1.0).style(text::secondary),
-        field("Bedtime", draft.start.date_naive(),
-            crate::ui::controls::time(
-                state.config.appearance.time_format,
-                &draft.start_text,
-                !draft.saving,
-                metrics.label(),
-                |v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0)),
-            )),
-        crate::ui::controls::checkbox(record.estimated_start).label("Estimated Sleep Start").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedStart(v0))),
-        field("Wake-up time", draft.end.date_naive(),
-            crate::ui::controls::time(
-                state.config.appearance.time_format,
-                &draft.end_text,
-                !draft.saving,
-                metrics.label(),
-                |v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0)),
-            )),
-        crate::ui::controls::checkbox(record.estimated_end).label("Estimated Sleep End").on_toggle(|v0| Message::Settings(SettingsMessage::SleepEstimatedEnd(v0))),
+        form_section(
+            "Scheduling",
+            column![
+                field("Bedtime", draft.start.date_naive(),
+                    crate::ui::controls::time(
+                        state.config.appearance.time_format,
+                        &draft.start_text,
+                        !draft.saving,
+                        metrics.label(),
+                        |v0| Message::EventEdit(EventEditMessage::EventEditStartChanged(v0)),
+                    )),
+                field("Wake-up time", draft.end.date_naive(),
+                    crate::ui::controls::time(
+                        state.config.appearance.time_format,
+                        &draft.end_text,
+                        !draft.saving,
+                        metrics.label(),
+                        |v0| Message::EventEdit(EventEditMessage::EventEditEndChanged(v0)),
+                    )),
+            ]
+            .spacing(metrics.spacing)
+            .width(Fill),
+            metrics,
+        ),
     ].spacing(metrics.spacing).width(Fill);
     body = body.push(actual_sleep(state, draft, record, &preview, metrics));
     if let Some(error) = &state.calendar.error {
@@ -934,10 +940,6 @@ fn actual_sleep<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let format = state.config.appearance.time_format;
-    let bold = Font {
-        weight: Weight::Bold,
-        ..Font::DEFAULT
-    };
     let summary = match (record.actual_start, record.actual_end) {
         (Some(start), Some(end)) => format!(
             "Slept {} (planned {})",
@@ -993,23 +995,37 @@ fn actual_sleep<'a>(
         "Counted from the planned bedtime."
     };
     column![
-        text("Actual sleep").size(metrics.label() + 2.0).font(bold),
-        text(summary).size(metrics.label()).style(text::secondary),
-        field(
-            "Actual sleep start",
-            &draft.actual_start_text,
-            SettingsMessage::SleepActualStartChanged
+        form_section(
+            "Actual sleep",
+            column![
+                text(summary).size(metrics.label()).style(text::secondary),
+                field(
+                    "Actual sleep start",
+                    &draft.actual_start_text,
+                    SettingsMessage::SleepActualStartChanged
+                ),
+                field(
+                    "Actual wake-up",
+                    &draft.actual_end_text,
+                    SettingsMessage::SleepActualEndChanged
+                ),
+            ]
+            .spacing(metrics.spacing)
+            .width(Fill),
+            metrics,
         ),
-        field(
-            "Actual wake-up",
-            &draft.actual_end_text,
-            SettingsMessage::SleepActualEndChanged
+        form_section(
+            "Wake up at",
+            column![
+                predictions,
+                text(basis)
+                    .size(metrics.label() - 1.0)
+                    .style(text::secondary),
+            ]
+            .spacing(metrics.spacing)
+            .width(Fill),
+            metrics,
         ),
-        text("Wake up at").size(metrics.label() + 2.0).font(bold),
-        predictions,
-        text(basis)
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
     ]
     .spacing(metrics.spacing)
     .width(Fill)
