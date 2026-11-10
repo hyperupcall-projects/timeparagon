@@ -1935,7 +1935,7 @@ fn searching_available_tasks_also_finds_habits_to_record() -> Result<(), Error> 
 }
 
 #[test]
-fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<(), Error> {
+fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(), Error> {
     use timeslay::timeblocking::Action;
     let mut state = timeblocking_state();
     let mut task = state.calendar.event("task:backlog").unwrap().clone();
@@ -1978,9 +1978,10 @@ fn available_tasks_hide_timed_tasks_until_show_planned_is_enabled() -> Result<()
     let size = Size::new(400.0, 1500.0);
     let metrics = timeslay::ui::layout::Metrics::of(size);
     let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+    // "All tasks" means every open task, planned ones included.
     assert!(ui.find("Research outline").is_ok());
-    assert!(ui.find("Scheduled call").is_err());
-    assert!(ui.find("Undated call").is_err());
+    assert!(ui.find("Scheduled call").is_ok());
+    assert!(ui.find("Undated call").is_ok());
     let all = ui.find("All tasks")?.bounds();
     let planned = ui.find("Show planned tasks")?.bounds();
     assert!(planned.y > all.y);
