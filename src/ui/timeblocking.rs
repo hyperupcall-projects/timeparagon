@@ -1451,77 +1451,78 @@ pub fn propagation_controls<'a>(
             })
     ]
     .spacing(8);
-    for (name, deadline) in [
-        ("Due date (YYYY-MM-DD or YYYY-MM-DD HH:MM)", false),
-        ("Deadline (YYYY-MM-DD or YYYY-MM-DD HH:MM)", true),
+    let enabled = !draft.loading && !draft.saving;
+    for (name, deadline, value) in [
+        ("Due date", false, policy.due),
+        ("Deadline", true, policy.deadline),
     ] {
-        let value = if deadline {
-            policy.deadline
-        } else {
-            policy.due
-        }
-        .map(|d| d.value())
-        .unwrap_or_default();
-        // Keep free-form input in its own action so partially typed dates remain visible.
-        let input = if deadline {
-            &state.timeblocking.child_deadline
-        } else {
-            &state.timeblocking.child_due
-        };
-        body = body.push(text(name).size(metrics.label())).push(
-            crate::ui::controls::text_input(&value, input)
-                .on_input(move |v| msg(Action::ChildDate(deadline, v)))
-                .on_submit(msg(Action::SaveChildDate(deadline))),
+        body = body.push(
+            column![
+                text(name).size(metrics.label()).style(text::secondary),
+                super::controls::date(
+                    state.config.appearance.time_format,
+                    &value.map(|date| date.value()).unwrap_or_default(),
+                    true,
+                    true,
+                    enabled,
+                    metrics.label(),
+                    move |value| msg(Action::ChildDate(deadline, value)),
+                ),
+            ]
+            .spacing(4)
+            .width(Fill),
         );
     }
-    let mut priorities = row![text("Priority").size(metrics.label())].spacing(6);
-    for priority in [None, Some(tb::Priority::P1), Some(tb::Priority::P2)] {
+    let mut priorities = row![].spacing(6);
+    for (priority, label) in std::iter::once((None, "None")).chain(
+        tb::Priority::ALL
+            .into_iter()
+            .map(|priority| (Some(priority), priority.label())),
+    ) {
         let mut next = policy.clone();
         next.priority = priority;
         priorities = priorities.push(
-            button(text(priority.map(|p| p.label()).unwrap_or("None"))).on_press(
-                Message::EventEdit(crate::app::EventEditMessage::EventEditOptions(
-                    crate::calendar::event_options::Action::ChildMetadata(next),
-                )),
-            ),
+            button(text(label).size(metrics.label()).center().width(Fill))
+                .width(Fill)
+                .style(if priority == policy.priority {
+                    crate::ui::controls::primary
+                } else {
+                    crate::ui::controls::secondary
+                })
+                .on_press_maybe(enabled.then_some(Message::EventEdit(
+                    crate::app::EventEditMessage::EventEditOptions(
+                        crate::calendar::event_options::Action::ChildMetadata(next),
+                    ),
+                ))),
         );
     }
-    body = body.push(priorities).push(
-        text(format!(
-            "Selected priority: {}",
-            policy.priority.map(|p| p.label()).unwrap_or("None")
-        ))
-        .size(metrics.label()),
+    body = body.push(
+        column![
+            text("Priority")
+                .size(metrics.label())
+                .style(text::secondary),
+            priorities,
+        ]
+        .spacing(4)
+        .width(Fill),
     );
-    let mut locations = column![text("Location").size(metrics.label())].spacing(4);
-    for (id, name) in std::iter::once((None, "None")).chain(
-        state
-            .config
-            .travel
-            .places
-            .iter()
-            .map(|p| (Some(p.id), p.name.as_str())),
-    ) {
-        let mut next = policy.clone();
-        next.location = id;
-        locations = locations.push(button(text(name)).on_press(Message::EventEdit(
-            crate::app::EventEditMessage::EventEditOptions(
-                crate::calendar::event_options::Action::ChildMetadata(next),
-            ),
-        )));
-    }
+    let location = policy.location.and_then(|id| state.config.travel.place(id));
     body.push(
-        text(format!(
-            "Selected location: {}",
-            policy
-                .location
-                .and_then(|id| state.config.travel.place(id))
-                .map(|place| place.name.as_str())
-                .unwrap_or("None")
-        ))
-        .size(metrics.label()),
+        column![
+            text("Location")
+                .size(metrics.label())
+                .style(text::secondary),
+            super::travel::location_control(
+                state,
+                crate::travel::PickTarget::BlockChildren(block.id.clone()),
+                location,
+                "Add location",
+                metrics,
+            ),
+        ]
+        .spacing(4)
+        .width(Fill),
     )
-    .push(locations)
     .push(
         button("Save time block metadata").on_press(Message::EventEdit(
             crate::app::EventEditMessage::EventEditSaveRequested,
