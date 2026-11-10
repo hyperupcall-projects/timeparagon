@@ -818,7 +818,7 @@ pub(super) fn sleep_editor<'a>(
         }), metrics),
         text(calendar::sleep::duration(&preview)).size(metrics.label() + 10.0),
         text(if record.automatic {
-            "Calculated from the first timed event. Saving records your times and preserves them when your schedule changes."
+            "Planned from your weekly sleep schedule. Save changes for this night or for this and future matching weekdays."
         } else { "Recorded sleep. These times are preserved when your schedule changes." }).size(metrics.label() - 1.0).style(text::secondary),
         field("Bedtime", draft.start.date_naive(),
             crate::ui::controls::time(

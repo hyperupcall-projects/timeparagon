@@ -6,7 +6,7 @@ I would strongly recommend this app to anybody; it's personally an absolute game
 
 ## Tour
 
-Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and edit events/tasks from this view:
+Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and view information about events and tasks:
 
 ![Dock view](./assets/timeslay-dock.png)
 
@@ -54,7 +54,7 @@ Of course, there's also week, 2-week, and month views:
 			- Automatic pomodoro timer.
 			- Record distractions (integratead with habits) (TODO).
 	- **Sleep:**
-		- Like a regular event, but automatically create events for sleep based on sleep goal, next days' activities, and latest wakeup time.
+		- Set sleep targets.
 		- Sleep quality tracking (TODO).
 		- Automatic shutdown (TODO).
 - **Capture and manage tasks**:

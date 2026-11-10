@@ -1132,7 +1132,7 @@ fn escape_closes_the_event_details_pane() {
 }
 
 #[test]
-fn populated_day_navigation_retains_cached_events_while_filling_missing_sleep() {
+fn populated_day_navigation_retains_cached_events_until_scheduled_sync() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
     state.calendar.connection = Connection::SignedIn;
@@ -1143,7 +1143,7 @@ fn populated_day_navigation_retains_cached_events_while_filling_missing_sleep() 
         &mut state,
         Message::Calendar(CalendarMessage::CalendarDaySelected(day)),
     );
-    assert_eq!(state.calendar.sync, SyncState::Syncing);
+    assert_eq!(state.calendar.sync, SyncState::Idle);
     assert_eq!(state.calendar.events.len(), count);
     let _ = update(
         &mut state,

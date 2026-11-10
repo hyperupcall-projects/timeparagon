@@ -446,13 +446,19 @@ device writes the same event:
 | `automatic` | Planned by TimeSlay rather than entered by hand |
 | `estimated_start`, `estimated_end` | The time is still a plan, not a measurement |
 
-The planner wakes you at the first timed event between `sleep_day_start_hour`
-and `latest_wakeup_hour`, or at `latest_wakeup_hour` if there is none. Bedtime
-is `sleep_goal_hours` (clamped to 6–12) earlier, counted in real elapsed time
-so it stays correct across DST changes. All-day events and undated tasks do not
-affect the wake time. The title (`Sleep · 8h`) and description are generated
-again whenever the times change. Sleep is shown as its own source,
-`timeslay:sleep`.
+The planner uses `sleep_schedule`, seven bedtime/wake-up clock pairs indexed
+Monday through Sunday. A pair describes the night ending on that weekday;
+bedtimes at or after wake-up belong to the preceding date. Clock times stay
+fixed across DST changes. Settings display weekdays in the preferred week order.
+Reconciliation only creates or updates planned nights from today through today
+plus 28 days, regardless of the calendar date being viewed. Historical dates and
+manually recorded nights are preserved. Appointments never affect sleep times.
+Dragging a sleep event or either edge asks whether to change that night or that
+night and future matching weekdays. A single night becomes a recorded exception.
+Weekday changes update the Settings values and persist a dated change in
+`sleep_schedule_changes`, preserving the schedule before the selected night.
+The title (`Sleep · 8h`) and description are regenerated when times change.
+Sleep is shown as its own source, `timeslay:sleep`.
 
 ---
 
@@ -763,7 +769,7 @@ the four shared sections are replaced with the versions from the database.
 
 | Section | Scope | Contents |
 | --- | --- | --- |
-| `[calendar]` | device | OAuth client, sync interval, hidden calendars, source order, app calendar and task-list IDs, triage requirements, day-end hour, sleep goal and wake hours, first day of week, colors per calendar, list and kind |
+| `[calendar]` | device | OAuth client, sync interval, hidden calendars, source order, app calendar and task-list IDs, triage requirements, day-end hour, weekly bedtime and wake-up schedule, first day of week, colors per calendar, list and kind |
 | `[projects]` | **shared** via `shared.projects` | See [Life areas…](#life-areas-goals-objectives-and-projects) |
 | `[notepad]` | `text` **shared** via `shared.notepad`; `font_size` device | |
 | `[brain_dump]` | **shared** via `shared.brain_dump` | |
