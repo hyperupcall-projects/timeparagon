@@ -13,9 +13,9 @@ pub(super) fn meeting_section<'a>(
     message: fn(Action) -> Message,
 ) -> Element<'a, Message> {
     let size = metrics.label();
-    let caption = |name: &'static str| text(name).size(size).style(text::secondary);
+    let caption = |name: &'static str| crate::ui::controls::field_label(name, size);
     let hint = |words: &'static str| text(words).size(size - 1.0).style(text::secondary);
-    let mut section = column![text("Meeting").size(size + 1.0)]
+    let mut section = column![crate::ui::controls::field_label("Meeting", size + 1.0)]
         .spacing(metrics.spacing)
         .width(Fill);
 
@@ -163,7 +163,7 @@ fn reply_row<'a>(
 ) -> Element<'a, Message> {
     let size = metrics.label();
     let mut reply = column![
-        text("Going?").size(size).style(text::secondary),
+        crate::ui::controls::field_label("Going?", size),
         reply_buttons(event, metrics),
     ]
     .spacing(6)
@@ -188,7 +188,7 @@ fn guest_list<'a>(
 ) -> Element<'a, Message> {
     let size = metrics.label();
     let own = event.and_then(|event| event.details.attendance.own_email.as_deref());
-    let mut list = column![text("Guests").size(size).style(text::secondary)]
+    let mut list = column![crate::ui::controls::field_label("Guests", size)]
         .spacing(6)
         .width(Fill);
     if form.guests.is_empty() && !form.can_invite {

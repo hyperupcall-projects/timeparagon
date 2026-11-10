@@ -44,11 +44,10 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
         if place.is_none() && !details.location.is_empty() {
             body = body.push(detail_line("Location", details.location.clone(), metrics));
         }
-        body = body.push(
-            text("Location")
-                .size(metrics.label())
-                .style(text::secondary),
-        );
+        body = body.push(crate::ui::controls::field_label(
+            "Location",
+            metrics.label(),
+        ));
         body = body.push(super::super::travel::location_control(
             state,
             crate::travel::PickTarget::Event(event.id.clone()),
@@ -73,19 +72,6 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             Some(event),
             metrics,
             |v0| Message::EventEdit(EventEditMessage::EventEditMeeting(v0)),
-        ));
-    }
-    if event.task_ref().is_none()
-        && !event.details.habit
-        && let Some(draft) = &state.calendar.edit_draft
-    {
-        body = body.push(super::super::recurrence::editor(
-            &draft.rule,
-            draft.start.date_naive(),
-            state.config.calendar.first_day_of_week,
-            metrics,
-            false,
-            |v0| Message::EventEdit(EventEditMessage::EventEditRecurrence(v0)),
         ));
     }
     if event.task_ref().is_none()
@@ -413,9 +399,7 @@ pub(super) fn detail_line<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     column![
-        text(label)
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
+        crate::ui::controls::field_label(label, metrics.label() - 1.0),
         super::super::links::text(value, metrics.label()),
     ]
     .spacing(2.0)

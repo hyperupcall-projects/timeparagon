@@ -55,7 +55,7 @@ pub fn editor<'a, F>(
 where
     F: Fn(recurrence::Action) -> Message + Clone + Send + Sync + 'static,
 {
-    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
+    let label = |name: &'static str| crate::ui::controls::field_label(name, metrics.label());
     let send_map = map.clone();
     let send = move |action| send_map(action);
 

@@ -2695,3 +2695,54 @@ fn recurring_time_change_prompt_offers_each_scope_at_narrow_and_wide_widths() {
         }
     }
 }
+
+#[test]
+fn scheduled_task_deadline_follows_repeat_and_opens_the_original_task() {
+    let mut state = State::blank();
+    let mut snapshot = calendar::sample_snapshot();
+    let task = snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.id == "standup")
+        .unwrap();
+    let deadline_day = task.start.date_naive().succ_opt().unwrap();
+    task.details.task_data = Some(crate::task_db::TaskData {
+        id: 81,
+        metadata: crate::timeblocking::Metadata {
+            deadline: Some(
+                calendar::deadline::parse_input(&format!("{deadline_day} 17:00")).unwrap(),
+            ),
+            ..Default::default()
+        },
+    });
+    let original_times = (task.start, task.end);
+    state.calendar = calendar::Store::with_snapshot(snapshot);
+    let markers = state
+        .calendar
+        .deadline_markers_on(deadline_day, &state.config.calendar);
+    assert_eq!(markers.len(), 1);
+    assert!(
+        state
+            .calendar
+            .deadline_markers_on(deadline_day.succ_opt().unwrap(), &state.config.calendar)
+            .is_empty()
+    );
+    let _ = crate::app::update(
+        &mut state,
+        Message::Event(EventMessage::EventOpened(markers[0].id.clone())),
+    );
+    assert_eq!(state.calendar.open_event.as_deref(), Some("standup"));
+    let draft = state.calendar.edit_draft.as_ref().unwrap();
+    assert_eq!((draft.start, draft.end), original_times);
+    assert_eq!(draft.deadline_text, format!("{deadline_day} 17:00"));
+    let metrics = Metrics::of(Size::new(480.0, 2200.0));
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        details_pane(&state, &metrics),
+    );
+    let repeat = ui.find("Repeat").unwrap().bounds();
+    let deadline = ui.find("Deadline").unwrap().bounds();
+    let projects = ui.find("Projects").unwrap().bounds();
+    assert!(repeat.y < deadline.y && deadline.y < projects.y);
+}

@@ -1628,6 +1628,7 @@ pub fn save_event_scope(
             .task_data
             .clone()
             .ok_or("Missing calendar task metadata")?;
+        data.metadata.deadline = draft.deadline()?;
         data.metadata.projects = draft.projects.ids.clone();
         data.metadata.labels = draft.labels.clone();
         data.metadata.minutes = if draft.all_day {

@@ -56,6 +56,18 @@ pub fn Editor(
     on_saved: EventHandler<()>,
     on_config: EventHandler<Config>,
 ) -> Element {
+    let event = if calendar::deadline::is_marker(&event) {
+        let Some(original) = context
+            .events
+            .iter()
+            .find(|original| original.id == calendar::deadline::source_id(&event.id))
+        else {
+            return rsx! {};
+        };
+        original.clone()
+    } else {
+        event
+    };
     if event.details.sleep.is_some() {
         rsx! { SleepEditor { event, context, on_close, on_saved } }
     } else if event.is_task() {
@@ -124,8 +136,93 @@ fn TaskEditor(
     let mut busy = use_signal(|| false);
     let mut closing = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let repeat_seed = event.clone();
+    let mut task_rule = use_signal(move || EditDraft::from_event(&repeat_seed).rule);
+    let repeat_loading_seed = event.details.recurring_event_id.is_some();
+    let mut repeat_loading = use_signal(move || repeat_loading_seed);
+    let load_repeat_settings = context.settings.clone();
+    let load_repeat_event = event.clone();
+    let _repeat_load = use_resource(move || {
+        let settings = load_repeat_settings.clone();
+        let event = load_repeat_event.clone();
+        async move {
+            if !repeat_loading_seed {
+                return;
+            }
+            match worker(move || {
+                calendar::habit_edit_draft(
+                    &calendar::GoogleClient::from_settings(&settings),
+                    &event,
+                )
+            })
+            .await
+            {
+                Ok((_, draft)) => {
+                    task_rule.set(draft.rule);
+                    repeat_loading.set(false);
+                }
+                Err(message) => error.set(Some(message)),
+            }
+        }
+    });
+    let repeat_settings = context.settings.clone();
+    let repeat = use_callback(move |action: recurrence::Action| {
+        if busy() {
+            return;
+        }
+        let current = task();
+        if !current.is_calendar_task() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        let settings = repeat_settings.clone();
+        let rule = task_rule();
+        spawn(async move {
+            let result = worker(move || {
+                let (source, mut draft) = if current.details.recurring_event_id.is_some() {
+                    calendar::habit_edit_draft(
+                        &calendar::GoogleClient::from_settings(&settings),
+                        &current,
+                    )?
+                } else {
+                    (current.clone(), EditDraft::from_event(&current))
+                };
+                if source.details.recurring_event_id.is_none() {
+                    draft.rule = rule;
+                }
+                draft.rule.apply_action(action, draft.start.date_naive());
+                draft.recurrence_changed = true;
+                calendar::save_event_scope(
+                    &source,
+                    &draft,
+                    SaveScope::All,
+                    &draft.description,
+                    None,
+                )?;
+                let mut updated = current;
+                updated.details.recurrence = draft.recurrence_lines()?;
+                Ok((updated, draft.rule))
+            })
+            .await;
+            busy.set(false);
+            match result {
+                Ok((updated, rule)) => {
+                    task.set(updated);
+                    task_rule.set(rule);
+                    on_saved.call(());
+                }
+                Err(message) => error.set(Some(message)),
+            }
+            if closing() {
+                on_close.call(());
+            }
+        });
+    });
     let mut editing_due_time = use_signal(|| false);
-    let mut editing_deadline_time = use_signal(|| false);
+    let timed_deadline =
+        calendar::deadline::get(&event).is_some_and(|deadline| deadline.time.is_some());
+    let mut editing_deadline_time = use_signal(move || timed_deadline);
     let mut backlog_open = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
 
@@ -275,59 +372,6 @@ fn TaskEditor(
                     },
                 }
             }
-            Field { label: "Description",
-                textarea {
-                    class: "client-input editor-notes",
-                    rows: "4",
-                    placeholder: "Add description…",
-                    disabled: is_busy,
-                    value: "{values.description}",
-                    oninput: move |event| fields.write().description = event.value(),
-                    onchange: move |_| {
-                        let value = fields.peek().description.clone();
-                        if value != TaskFields::new(&task.peek()).description {
-                            apply.call(Change::Description(value));
-                        }
-                    },
-                }
-            }
-            ProjectsField {
-                selected: projects,
-                projects: context.projects.clone(),
-                busy: is_busy,
-                on_add: move |id| {
-                    let mut ids = projects_to_add.clone();
-                    ids.push(id);
-                    ids.sort_unstable();
-                    apply.call(Change::Projects(ids));
-                },
-                on_remove: move |id| {
-                    let mut ids = projects_to_remove.clone();
-                    ids.retain(|existing| *existing != id);
-                    apply.call(Change::Projects(ids));
-                },
-            }
-            Field { label: "Estimate (minutes)",
-                input {
-                    class: "client-input",
-                    r#type: "number",
-                    inputmode: "numeric",
-                    min: "0",
-                    max: "10080",
-                    disabled: is_busy,
-                    value: "{values.estimate}",
-                    oninput: move |event| fields.write().estimate = event.value(),
-                    onchange: move |_| {
-                        match fields.peek().estimate_change() {
-                            Ok(minutes) if minutes != tb::metadata(&task.peek()).minutes => {
-                                apply.call(Change::Estimate(minutes));
-                            }
-                            Ok(_) => {}
-                            Err(message) => error.set(Some(message)),
-                        }
-                    },
-                }
-            }
             Field { label: "Due Date",
                 input {
                     class: "client-input",
@@ -391,6 +435,15 @@ fn TaskEditor(
                     }
                 }
             }
+            if current.is_calendar_task() {
+                RepeatEditor {
+                    rule: task_rule(),
+                    anchor: current.start.date_naive(),
+                    first_day: context.settings.first_day_of_week,
+                    busy: is_busy || repeat_loading(),
+                    on_action: move |action| repeat.call(action),
+                }
+            }
             Field { label: "Deadline",
                 input {
                     class: "client-input",
@@ -434,6 +487,59 @@ fn TaskEditor(
                         onclick: move |_| submit(fields.peek().deadline_change(true)),
                         "Save time"
                     }
+                }
+            }
+            Field { label: "Description",
+                textarea {
+                    class: "client-input editor-notes",
+                    rows: "4",
+                    placeholder: "Add description…",
+                    disabled: is_busy,
+                    value: "{values.description}",
+                    oninput: move |event| fields.write().description = event.value(),
+                    onchange: move |_| {
+                        let value = fields.peek().description.clone();
+                        if value != TaskFields::new(&task.peek()).description {
+                            apply.call(Change::Description(value));
+                        }
+                    },
+                }
+            }
+            ProjectsField {
+                selected: projects,
+                projects: context.projects.clone(),
+                busy: is_busy,
+                on_add: move |id| {
+                    let mut ids = projects_to_add.clone();
+                    ids.push(id);
+                    ids.sort_unstable();
+                    apply.call(Change::Projects(ids));
+                },
+                on_remove: move |id| {
+                    let mut ids = projects_to_remove.clone();
+                    ids.retain(|existing| *existing != id);
+                    apply.call(Change::Projects(ids));
+                },
+            }
+            Field { label: "Estimate (minutes)",
+                input {
+                    class: "client-input",
+                    r#type: "number",
+                    inputmode: "numeric",
+                    min: "0",
+                    max: "10080",
+                    disabled: is_busy,
+                    value: "{values.estimate}",
+                    oninput: move |event| fields.write().estimate = event.value(),
+                    onchange: move |_| {
+                        match fields.peek().estimate_change() {
+                            Ok(minutes) if minutes != tb::metadata(&task.peek()).minutes => {
+                                apply.call(Change::Estimate(minutes));
+                            }
+                            Ok(_) => {}
+                            Err(message) => error.set(Some(message)),
+                        }
+                    },
                 }
             }
             LabelsField {
@@ -962,39 +1068,6 @@ fn EventEditor(
                     oninput: move |event| draft.write().title = event.value(),
                 }
             }
-            Field { label: "Description",
-                textarea {
-                    class: "client-input editor-notes",
-                    rows: "4",
-                    placeholder: "Add description…",
-                    disabled: is_busy,
-                    value: "{values.description}",
-                    oninput: move |event| draft.write().description = event.value(),
-                }
-            }
-            if habit && !new {
-                Field { label: "Completion",
-                    button {
-                        class: if completed { "btn editor-wide" } else { "btn primary editor-wide" },
-                        disabled: completing(),
-                        onclick: move |_| toggle_completed.call(()),
-                        if completing() {
-                            "Saving…"
-                        } else if completed {
-                            "Mark as not done"
-                        } else {
-                            "Mark as done"
-                        }
-                    }
-                }
-            }
-            ProjectsField {
-                selected: values.projects.ids.clone(),
-                projects: context.projects.clone(),
-                busy: is_busy,
-                on_add: move |id| draft.write().projects.update(calendar::projects::Action::Add(id)),
-                on_remove: move |id| draft.write().projects.update(calendar::projects::Action::Remove(id)),
-            }
             Field { label: if habit { "Start day" } else { "Start Time" },
                 div { class: "editor-row",
                     input {
@@ -1052,6 +1125,39 @@ fn EventEditor(
                     let anchor = draft.start.date_naive();
                     draft.rule.apply_action(action, anchor);
                 },
+            }
+            Field { label: "Description",
+                textarea {
+                    class: "client-input editor-notes",
+                    rows: "4",
+                    placeholder: "Add description…",
+                    disabled: is_busy,
+                    value: "{values.description}",
+                    oninput: move |event| draft.write().description = event.value(),
+                }
+            }
+            if habit && !new {
+                Field { label: "Completion",
+                    button {
+                        class: if completed { "btn editor-wide" } else { "btn primary editor-wide" },
+                        disabled: completing(),
+                        onclick: move |_| toggle_completed.call(()),
+                        if completing() {
+                            "Saving…"
+                        } else if completed {
+                            "Mark as not done"
+                        } else {
+                            "Mark as done"
+                        }
+                    }
+                }
+            }
+            ProjectsField {
+                selected: values.projects.ids.clone(),
+                projects: context.projects.clone(),
+                busy: is_busy,
+                on_add: move |id| draft.write().projects.update(calendar::projects::Action::Add(id)),
+                on_remove: move |id| draft.write().projects.update(calendar::projects::Action::Remove(id)),
             }
             if !habit {
                 LabelsField {
@@ -2346,6 +2452,18 @@ mod tests {
         for text in wanted {
             assert!(html.contains(text), "missing {text:?} in {html}");
         }
+    }
+
+    #[test]
+    fn a_scheduled_task_places_deadline_directly_after_repeat() {
+        let mut task = task();
+        task.id = "scheduled-report".into();
+        task.calendar_id = "blocks".into();
+        let html = render(task);
+        let repeat = html.find("class=\"editor-label\">Repeat").unwrap();
+        let deadline = html.find("class=\"editor-label\">Deadline").unwrap();
+        let description = html.find("class=\"editor-label\">Description").unwrap();
+        assert!(repeat < deadline && deadline < description);
     }
 
     #[test]

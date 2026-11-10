@@ -48,10 +48,14 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 } else {
                     button::text
                 });
+            let deadlines = state
+                .calendar
+                .deadline_markers_on(day, &state.config.calendar);
             let mut events = column![].spacing(3).width(Fill);
             for event in state
                 .calendar
                 .all_day_events_on(day, &state.config.calendar)
+                .chain(deadlines.iter().filter(|event| event.all_day))
             {
                 if !state.habits.matches_calendar_habit(event)
                     || !state
@@ -62,7 +66,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 }
                 // Overdue and undated tasks belong in the pending list rather
                 // than appearing in every date of a month.
-                if event.is_task() {
+                if event.is_task() && !calendar::deadline::is_marker(event) {
                     if event.start.date_naive() == day {
                         events = events.push(weekly_task_chip(state, event, &cell_metrics));
                     }
@@ -119,6 +123,30 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                         }),
                     event.details.sending,
                 ));
+            }
+            for marker in deadlines.iter().filter(|event| !event.all_day) {
+                if !state.habits.matches_calendar_habit(marker) {
+                    continue;
+                }
+                let label = if state.calendar.search.hides_details(marker) {
+                    PRIVATE_TITLE.to_owned()
+                } else {
+                    format!(
+                        "{} {}",
+                        calendar::time_format::clock(
+                            marker.start,
+                            state.config.appearance.time_format
+                        ),
+                        marker.title
+                    )
+                };
+                events = events.push(
+                    button(text(label).size(cell_metrics.label()))
+                        .width(Fill)
+                        .padding([3, 4])
+                        .on_press(Message::Event(EventMessage::EventOpened(marker.id.clone())))
+                        .style(crate::ui::controls::secondary),
+                );
             }
             if state.habits.calendar_habit.is_some()
                 && !state

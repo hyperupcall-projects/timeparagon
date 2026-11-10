@@ -11,6 +11,17 @@ use iced::{Border, Color, Element, Fill, Renderer, Shadow, Theme, Vector, mouse}
 use std::sync::Arc;
 use timeslay_core::theme as look;
 
+/// Consistent section captions for metadata editors.
+pub fn field_label<'a>(label: &'a str, size: f32) -> iced::widget::Text<'a> {
+    text(label)
+        .size(size)
+        .font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        })
+        .style(text::secondary)
+}
+
 type Change = Arc<dyn Fn(String) -> Message + Send + Sync>;
 #[derive(Clone)]
 pub struct Picker {

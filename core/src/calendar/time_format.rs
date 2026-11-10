@@ -111,6 +111,9 @@ pub fn hour(hour: u32, time_format: TimeFormat) -> String {
 }
 
 pub fn event(event: &super::Event, time_format: TimeFormat) -> String {
+    if super::deadline::is_marker(event) {
+        return clock(event.start, time_format);
+    }
     if event.all_day {
         "All day".into()
     } else {

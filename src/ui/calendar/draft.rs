@@ -124,9 +124,7 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
     }
 
     let mut description = column![
-        text("Description")
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
+        crate::ui::controls::field_label("Description", metrics.label() - 1.0),
         crate::ui::controls::text_editor(&state.form_editors.event_draft)
             .placeholder("Add description…")
             .on_action(|a| Message::Event(EventMessage::FormEdited(
@@ -460,9 +458,7 @@ pub(super) fn draft_calendar_picker<'a>(
         .map(|draft| draft.calendar_dropdown_open)
         .unwrap_or(false);
 
-    let caption = text("Calendar")
-        .size(metrics.label() - 1.0)
-        .style(text::secondary);
+    let caption = crate::ui::controls::field_label("Calendar", metrics.label() - 1.0);
 
     // A time block always goes to the app's TimeSlay calendar, so the picker
     // is a fixed label rather than a choice.
@@ -514,9 +510,7 @@ pub(super) fn calendar_select<'a>(
     on_select: fn(String) -> Message,
     on_toggle: Message,
 ) -> Element<'a, Message> {
-    let caption = text("Calendar")
-        .size(metrics.label() - 1.0)
-        .style(text::secondary);
+    let caption = crate::ui::controls::field_label("Calendar", metrics.label() - 1.0);
 
     if metrics.breakpoint.is_compact() {
         let shown = selected

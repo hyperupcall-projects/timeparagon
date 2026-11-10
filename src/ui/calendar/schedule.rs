@@ -8,10 +8,14 @@ pub fn schedule_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
     let compact = metrics.size.width < 600.0;
     let mut days = column![].width(Fill);
     for day in calendar::schedule::dates(state.week_anchor) {
+        let deadlines = state
+            .calendar
+            .deadline_markers_on(day, &state.config.calendar);
         let mut events: Vec<_> = state
             .calendar
             .all_day_events_on(day, &state.config.calendar)
             .chain(state.calendar.timed_events_on(day, &state.config.calendar))
+            .chain(deadlines.iter())
             .filter(|event| calendar::schedule::occurs_on(event, day))
             .filter(|event| {
                 state.habits.matches_calendar_habit(event)
