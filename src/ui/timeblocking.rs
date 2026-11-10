@@ -1045,16 +1045,20 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     );
     let query = state.timeblocking.available_query.trim().to_lowercase();
     let all_tasks = state.timeblocking.available_all;
+    let this_block = tb::block_key(block);
     let available: Vec<_> = state
         .calendar
         .events
         .iter()
-        .filter(|event| event.is_task() && !event.completed && tb::metadata(event).block.is_none())
         .filter(|event| {
-            state.timeblocking.available_planned || (event.all_day && tb::in_backlog(event))
+            offers_available(
+                event,
+                &this_block,
+                &query,
+                all_tasks,
+                state.timeblocking.available_planned,
+            )
         })
-        .filter(|event| query.is_empty() || event.title.to_lowercase().contains(&query))
-        .filter(|event| all_tasks || tb::on_today(event))
         .collect();
     // Habits are searchable too, so one can be recorded for the block's day.
     let habits: Vec<_> = if query.is_empty() {
@@ -1563,11 +1567,87 @@ pub fn propagation_confirmation<'a>(_state: &'a State, _metrics: &Metrics) -> El
     stack![backdrop, card].into()
 }
 
+/// Whether a block's "Available tasks" list offers `event`.
+///
+/// With "All tasks" on, every open task is offered: any task list, dated or
+/// not, timed on the calendar or planned in another block, whatever "Show
+/// planned tasks" says. Only completed and ignored tasks, and those already
+/// planned in this block, are left out. Otherwise only today's tasks are
+/// offered, and planned ones only when "Show planned tasks" is on.
+fn offers_available(
+    event: &Event,
+    this_block: &str,
+    query: &str,
+    all_tasks: bool,
+    show_planned: bool,
+) -> bool {
+    let meta = tb::metadata(event);
+    if !event.is_task()
+        || event.completed
+        || meta.ignored
+        || meta.block.as_deref() == Some(this_block)
+    {
+        return false;
+    }
+    if !query.is_empty() && !event.title.to_lowercase().contains(query) {
+        return false;
+    }
+    if all_tasks {
+        return true;
+    }
+    meta.block.is_none()
+        && (show_planned || (event.all_day && tb::in_backlog(event)))
+        && (all_tasks || tb::on_today(event))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::calendar;
     use iced::{Point, Size, mouse};
+
+    #[test]
+    fn all_tasks_offers_every_open_task_but_not_completed_ignored_or_already_here() {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:deep".into();
+        task.calendar_id = "tasks:list".into();
+        task.title = "hh".into();
+        task.all_day = false;
+        let task = state.calendar.event("task:deep").unwrap().clone();
+        let offers = |event: &Event, query| offers_available(event, "cal/here", query, true, false);
+        assert!(offers(&task, ""));
+        assert!(offers(&task, "hh"));
+        assert!(!offers(&task, "zz"));
+
+        let with_block = |block: &str| {
+            let mut planned = task.clone();
+            let mut meta = tb::metadata(&planned);
+            meta.block = Some(block.into());
+            planned.details.task_data = Some(timeslay_core::task_db::TaskData {
+                id: 1,
+                metadata: meta,
+            });
+            planned
+        };
+        // Planned in another block, or against a block that no longer
+        // resolves (such as a recurring series rather than one occurrence).
+        assert!(offers(&with_block("cal/series"), "hh"));
+        assert!(!offers(&with_block("cal/here"), "hh"));
+
+        let mut done = task.clone();
+        done.completed = true;
+        assert!(!offers(&done, "hh"));
+        let mut ignored = task.clone();
+        let mut meta = tb::metadata(&ignored);
+        meta.ignored = true;
+        ignored.details.task_data = Some(timeslay_core::task_db::TaskData {
+            id: 1,
+            metadata: meta,
+        });
+        assert!(!offers(&ignored, "hh"));
+    }
 
     #[test]
     fn inbox_button_moves_the_selected_task() {
