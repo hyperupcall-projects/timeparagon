@@ -741,6 +741,12 @@ pub enum EventMessage {
         String,
         Result<(calendar::Event, calendar::EditDraft), String>,
     ),
+    /// The repeat schedule of an ordinary recurring event's series. Google
+    /// only stores it on the master, not on the occurrence that was opened.
+    SeriesRuleLoaded(
+        String,
+        Result<(calendar::Event, calendar::EditDraft), String>,
+    ),
     EventEndDateChanged(String),
     EventLabelDraft(String),
     EventLabelAdd,

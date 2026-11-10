@@ -2630,3 +2630,49 @@ fn closing_the_life_side_window_dismisses_the_area() {
     assert!(state.life.open.is_none());
     assert!(state.editor_window.is_none());
 }
+
+#[test]
+fn an_opened_occurrence_shows_its_series_repeat_rule_unless_it_was_already_changed() {
+    for already_changed in [false, true] {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        let event = state
+            .calendar
+            .events
+            .iter_mut()
+            .find(|e| !e.is_task() && !e.all_day)
+            .unwrap();
+        event.details.habit = false;
+        event.details.recurring_event_id = Some("series".into());
+        event.details.recurrence.clear();
+        let event = event.clone();
+        let mut draft = calendar::EditDraft::from_event(&event);
+        draft.recurrence_changed = already_changed;
+        let before = draft.rule.clone();
+        state.calendar.open_event = Some(event.id.clone());
+        state.calendar.edit_draft = Some(draft);
+
+        let mut master = event.clone();
+        master.id = "series".into();
+        master.details.recurring_event_id = None;
+        master.details.recurrence = vec!["RRULE:FREQ=WEEKLY;BYDAY=MO,WE".into()];
+        let loaded = calendar::EditDraft::from_habit_occurrence(&event, &master);
+        let _ = update(
+            &mut state,
+            Message::Event(EventMessage::SeriesRuleLoaded(
+                event.id.clone(),
+                Ok((event.clone(), loaded.clone())),
+            )),
+        );
+
+        let draft = state.calendar.edit_draft.as_ref().unwrap();
+        assert!(!draft.loading);
+        if already_changed {
+            assert_eq!(draft.rule, before);
+            assert_eq!(draft.series_id, None);
+        } else {
+            assert_eq!(draft.rule, loaded.rule);
+            assert_eq!(draft.series_id.as_deref(), Some("series"));
+        }
+    }
+}

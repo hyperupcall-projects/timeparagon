@@ -163,6 +163,7 @@ fn event_footer_and_delete_menu_keep_their_layout() {
     event.details.description = "Meeting notes".into();
     event.details.meeting = "https://zoom.us/j/123456789".into();
     event.details.link = "https://calendar.google.com/event?eid=1".into();
+    event.details.recurring_event_id = Some("series".into());
     state.calendar.open_event = Some("standup".into());
     state.calendar.edit_draft = Some(calendar::EditDraft::from_event(
         state.calendar.event("standup").unwrap(),
@@ -367,7 +368,8 @@ fn habit_creation_has_one_save_button_and_existing_habits_disable_scopes_while_b
 fn save_menu_overlays_the_scroll_pane_without_changing_layout() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
-    let event = state.calendar.event("standup").unwrap().clone();
+    let mut event = state.calendar.event("standup").unwrap().clone();
+    event.details.recurring_event_id = Some("series".into());
     state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
     let metrics = Metrics::of(Size::new(400.0, 400.0));
     fn form<'a>(state: &'a State, event: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
@@ -484,7 +486,11 @@ fn an_open_event_is_edited_in_the_pane_without_an_edit_popup() {
     );
     assert!(ui.find("Start Time").is_ok());
     assert!(ui.find("End Time").is_ok());
-    assert!(ui.find("Save current event").is_ok());
+    // A one-off event has nothing to scope a save or delete to.
+    assert!(ui.find("Save").is_ok());
+    assert!(ui.find("Delete").is_ok());
+    assert!(ui.find("Save current event").is_err());
+    assert!(ui.find("▾").is_err());
     assert!(ui.find("Labels").is_ok());
     assert!(ui.find("View / edit description").is_ok() || ui.find("Add description").is_ok());
     assert!(ui.find("Edit").is_err());
