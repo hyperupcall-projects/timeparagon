@@ -24,7 +24,9 @@ pub fn occurs_on(event: &Event, day: NaiveDate) -> bool {
 }
 
 pub fn time_label(event: &Event, format: TimeFormat) -> String {
-    if event.all_day {
+    if super::deadline::is_marker(event) && !event.all_day {
+        time_format::clock(event.start, format)
+    } else if event.all_day {
         "All day".into()
     } else {
         time_format::range(event.start, event.end, format)

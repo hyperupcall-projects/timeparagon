@@ -426,8 +426,8 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
     };
     column![
         super::calendar::titled(state, task, title, metrics),
-        description,
         editor(state, task, metrics),
+        description,
     ]
     .spacing(metrics.spacing)
     .width(Fill)
@@ -472,10 +472,10 @@ pub fn editor<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
         .into();
     }
     column![
-        project_field(state, task, metrics),
-        column![field_label("Estimate", metrics), estimate].spacing(6),
         date_field(state, task, metrics, false),
         date_field(state, task, metrics, true),
+        project_field(state, task, metrics),
+        column![field_label("Estimate", metrics), estimate].spacing(6),
         labels_field(state, task, metrics),
         priority_field(state, task, metrics),
         location_field(state, task, metrics),
@@ -1462,7 +1462,7 @@ pub fn propagation_controls<'a>(
     ] {
         body = body.push(
             column![
-                text(name).size(metrics.label()).style(text::secondary),
+                field_label(name, metrics),
                 super::controls::date(
                     state.config.appearance.time_format,
                     &value.map(|date| date.value()).unwrap_or_default(),
@@ -1501,21 +1501,14 @@ pub fn propagation_controls<'a>(
         );
     }
     body = body.push(
-        column![
-            text("Priority")
-                .size(metrics.label())
-                .style(text::secondary),
-            priorities,
-        ]
-        .spacing(4)
-        .width(Fill),
+        column![field_label("Priority", metrics), priorities,]
+            .spacing(4)
+            .width(Fill),
     );
     let location = policy.location.and_then(|id| state.config.travel.place(id));
     body.push(
         column![
-            text("Location")
-                .size(metrics.label())
-                .style(text::secondary),
+            field_label("Location", metrics),
             super::travel::location_control(
                 state,
                 crate::travel::PickTarget::BlockChildren(block.id.clone()),

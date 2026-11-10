@@ -170,6 +170,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
         EventMessage::EventOpened(id) => {
+            let id = calendar::deadline::source_id(&id).to_owned();
             if let Some(task) = state.calendar.event(&id)
                 && task.task_ref().is_some()
                 && let Some(key) = crate::timeblocking::metadata(task).block

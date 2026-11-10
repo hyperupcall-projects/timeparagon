@@ -533,7 +533,7 @@ impl std::fmt::Display for NoteChoice {
 pub fn section<'a>(state: &'a State, target: Link, metrics: &Metrics) -> Element<'a, Message> {
     let size = metrics.label();
     let library = &state.notes.library;
-    let mut list = column![text("Notes").size(size).style(text::secondary)]
+    let mut list = column![crate::ui::controls::field_label("Notes", size)]
         .spacing(4.0)
         .width(Fill);
     for note in library.linked(&target) {

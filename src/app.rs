@@ -831,6 +831,7 @@ pub enum EventDraftMessage {
 /// The form for editing an event.
 #[derive(Debug, Clone)]
 pub enum EventEditMessage {
+    EventEditDeadlineChanged(String),
     EventEditDeleteMenuToggled,
     EventEditOptions(calendar::event_options::Action),
 

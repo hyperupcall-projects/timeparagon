@@ -553,6 +553,8 @@ pub enum SaveScope {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditDraft {
+    #[serde(default)]
+    pub deadline_text: String,
     /// Video call, guests and their permissions.
     pub meeting: meeting::Form,
     pub sleep: Option<sleep::Record>,
@@ -589,9 +591,18 @@ pub struct EditDraft {
 }
 
 impl EditDraft {
+    pub fn deadline(&self) -> Result<Option<deadline::Deadline>, String> {
+        if self.deadline_text.trim().is_empty() {
+            Ok(None)
+        } else {
+            deadline::parse_input(&self.deadline_text).map(Some)
+        }
+    }
+
     /// Build an edit draft from an existing event.
     pub fn from_event(event: &Event) -> Self {
         Self {
+            deadline_text: deadline::input_text(event),
             meeting: meeting::Form::from_event(&event.details),
             sleep: event.details.sleep.clone(),
             options: event.details.options.clone(),
@@ -1587,6 +1598,20 @@ impl Store {
         })
     }
 
+    pub fn deadline_markers_on(&self, day: NaiveDate, settings: &CalendarSettings) -> Vec<Event> {
+        let mut seen = std::collections::HashSet::new();
+        self.events
+            .iter()
+            .chain(self.cache.values().flatten())
+            .filter(|event| seen.insert(event.id.clone()))
+            .filter(|event| {
+                self.event_enabled(event, settings) && self.search_shows(event, day, settings)
+            })
+            .filter_map(deadline::marker)
+            .filter(|event| deadline::on_day(event, day, settings.day_start_hour()))
+            .collect()
+    }
+
     pub fn events_on(&self, day: NaiveDate) -> &[Event] {
         if day == self.day {
             &self.events
@@ -2163,6 +2188,9 @@ pub fn hour_label(hour: u32) -> String {
 }
 
 pub fn event_time_label(event: &Event) -> String {
+    if deadline::is_marker(event) && !event.all_day {
+        return clock_label(event.start);
+    }
     if event.all_day {
         "All day".to_owned()
     } else {
@@ -2670,6 +2698,7 @@ pub fn save_event_scope(
     event.details.projects = draft.projects.ids.clone();
     event.details.labels = draft.labels.clone();
     if let Some(data) = &mut event.details.task_data {
+        data.metadata.deadline = draft.deadline()?;
         data.metadata.projects = draft.projects.ids.clone();
         data.metadata.labels = draft.labels.clone();
         if !draft.all_day {

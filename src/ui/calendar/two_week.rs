@@ -210,10 +210,14 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         .calendar
         .first_day_of_week
         .week_start(state.week_anchor);
+    let deadlines = state
+        .calendar
+        .deadline_markers_on(day, &state.config.calendar);
     let mut items = Vec::new();
     for event in state
         .calendar
         .all_day_events_on(day, &state.config.calendar)
+        .chain(deadlines.iter().filter(|event| event.all_day))
     {
         if !state
             .calendar
@@ -223,7 +227,7 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         }
         // Overdue and undated tasks belong in the pending list rather than
         // appearing on every date.
-        if event.is_task() {
+        if event.is_task() && !calendar::deadline::is_marker(event) {
             if event.start.date_naive() == day {
                 items.push(crate::ui::controls::locked(
                     task_row(state, event, metrics),
@@ -237,7 +241,12 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
             ));
         }
     }
-    for event in state.calendar.timed_events_on(day, &state.config.calendar) {
+    for event in state
+        .calendar
+        .timed_events_on(day, &state.config.calendar)
+        .into_iter()
+        .chain(deadlines.iter().filter(|event| !event.all_day))
+    {
         if !state
             .calendar
             .search_shows(event, day, &state.config.calendar)

@@ -28,6 +28,14 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let day_metrics = Metrics::of(Size::new(width, metrics.size.height));
     let now = crate::clock::now();
     let all_day_height = if days.iter().any(|&day| {
+        if state
+            .calendar
+            .deadline_markers_on(day, &state.config.calendar)
+            .iter()
+            .any(|event| event.all_day)
+        {
+            return true;
+        }
         state
             .calendar
             .all_day_events_on(day, &state.config.calendar)

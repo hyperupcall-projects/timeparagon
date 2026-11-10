@@ -122,3 +122,96 @@ mod tests {
         assert!(at("2026-10-29").is_past(now));
     }
 }
+
+const MARKER_PREFIX: &str = "deadline:";
+
+pub fn source_id(id: &str) -> &str {
+    id.strip_prefix(MARKER_PREFIX).unwrap_or(id)
+}
+pub fn is_marker(event: &super::Event) -> bool {
+    event.id.starts_with(MARKER_PREFIX)
+}
+
+/// A second, display-only entry for a task's deadline. A timed deadline is a
+/// point represented by a short chip; a date-only deadline belongs above the grid.
+pub fn marker(task: &super::Event) -> Option<super::Event> {
+    use chrono::{Duration, Local, TimeZone};
+    if !task.is_task() || is_marker(task) {
+        return None;
+    }
+    let deadline = get(task)?;
+    let start = Local
+        .from_local_datetime(
+            &deadline
+                .date
+                .and_time(deadline.time.unwrap_or(NaiveTime::MIN)),
+        )
+        .earliest()?;
+    let mut marker = task.clone();
+    marker.id = format!("{MARKER_PREFIX}{}", task.id);
+    marker.title = format!("Deadline · {}", task.title);
+    marker.start = start;
+    marker.all_day = deadline.time.is_none();
+    marker.end = if marker.all_day {
+        super::at_clock(deadline.date.succ_opt()?, 0, 0)
+    } else {
+        start + Duration::minutes(15)
+    };
+    Some(marker)
+}
+
+/// The calendar cell holding the marker; date-only deadlines use calendar dates.
+pub fn on_day(marker: &super::Event, day: NaiveDate, day_start_hour: u32) -> bool {
+    if marker.all_day {
+        marker.start.date_naive() == day
+    } else {
+        super::day_at(marker.start, day_start_hour) == day
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+    fn task() -> super::super::Event {
+        let mut task = super::super::sample_snapshot().events.remove(0);
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 42,
+            metadata: Default::default(),
+        });
+        task
+    }
+    #[test]
+    fn deadlines_project_to_their_own_day_and_leave_the_schedule_intact() {
+        let mut task = task();
+        let schedule = (task.start, task.end);
+        let day = task.start.date_naive().succ_opt().unwrap();
+        task.details.task_data.as_mut().unwrap().metadata.deadline =
+            Some(parse_input(&format!("{day} 17:30")).unwrap());
+        let timed = marker(&task).unwrap();
+        assert!(is_marker(&timed));
+        assert_eq!(source_id(&timed.id), task.id);
+        assert_eq!(timed.start.date_naive(), day);
+        assert_eq!(timed.start.time(), parse_time("17:30").unwrap());
+        assert!(!timed.all_day);
+        assert!(on_day(&timed, day, 0));
+        assert!(!on_day(&timed, task.start.date_naive(), 0));
+        assert_eq!((task.start, task.end), schedule);
+        assert!(marker(&timed).is_none());
+        let mut draft = super::super::EditDraft::from_event(&task);
+        assert_eq!(draft.deadline().unwrap(), get(&task));
+        draft.deadline_text = day.to_string();
+        assert_eq!(draft.deadline().unwrap().unwrap().time, None);
+        draft.deadline_text.clear();
+        assert_eq!(draft.deadline().unwrap(), None);
+        draft.deadline_text = "2026-02-30".into();
+        assert!(draft.deadline().is_err());
+        task.details.task_data.as_mut().unwrap().metadata.deadline = Some(Deadline {
+            date: day,
+            time: None,
+        });
+        let dated = marker(&task).unwrap();
+        assert!(dated.all_day);
+        assert!(on_day(&dated, day, 4));
+        assert!(!on_day(&dated, day.pred_opt().unwrap(), 4));
+    }
+}

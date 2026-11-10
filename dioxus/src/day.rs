@@ -367,16 +367,23 @@ fn agenda_rows(
         .map(tb::block_key)
         .collect();
     let hour = settings.day_start_hour();
+    let mut display_events = snapshot.events.clone();
+    display_events.extend(
+        snapshot
+            .events
+            .iter()
+            .filter_map(calendar::deadline::marker),
+    );
     dates
         .iter()
         .map(|&date| {
-            let mut events: Vec<&Event> = snapshot
-                .events
+            let mut events: Vec<&Event> = display_events
                 .iter()
                 .filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
                 .filter(|event| !managed_copy(event, settings, &blocks))
                 .filter(|event| {
                     !(event.is_task()
+                        && !calendar::deadline::is_marker(event)
                         && tb::metadata(event)
                             .block
                             .is_some_and(|key| blocks.contains(&key)))
@@ -656,15 +663,22 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         .map(|block| (tb::block_key(&block.event), block_ref(block, day, offset)))
         .collect();
 
+    let mut display_events = events.clone();
+    display_events.extend(
+        events
+            .iter()
+            .filter_map(calendar::deadline::marker)
+            .filter(|event| calendar::deadline::on_day(event, day, hour_start)),
+    );
     let all_day = all_day_events(
-        &events,
+        &display_events,
         &snapshot.calendars,
         settings,
         &loaded_block_keys,
         &priority,
     );
     let timed = timed_events(
-        &events,
+        &display_events,
         snapshot,
         settings,
         day,
@@ -756,6 +770,9 @@ fn is_time_block(
 /// Mirrors `omit_managed_tasks_event`: app-owned scheduled copies are shown
 /// beside their task or inside their block, not as a second calendar chip.
 fn managed_copy(event: &Event, settings: &CalendarSettings, block_keys: &HashSet<String>) -> bool {
+    if calendar::deadline::is_marker(event) {
+        return false;
+    }
     let Some(managed) = settings.app_calendar.as_deref() else {
         return false;
     };
@@ -792,7 +809,7 @@ fn all_day_events(
 ) -> Vec<Event> {
     let mut all_day: Vec<_> = events
         .iter()
-        .filter(|event| !event.is_task() && event.all_day)
+        .filter(|event| (!event.is_task() || calendar::deadline::is_marker(event)) && event.all_day)
         .filter(|event| calendar::event_enabled(calendars, event, settings))
         .filter(|event| !managed_copy(event, settings, block_keys))
         .cloned()
@@ -829,6 +846,7 @@ fn timed_events(
         // block's popup, not drawn a second time as a chip on the grid.
         .filter(|event| {
             !(event.is_task()
+                && !calendar::deadline::is_marker(event)
                 && tb::metadata(event)
                     .block
                     .as_ref()
@@ -2351,5 +2369,74 @@ mod tests {
         assert_eq!(model.blocks.len(), 1);
         assert_eq!(model.blocks[0].tasks.len(), 1);
         assert!(model.timed[0].time_block);
+    }
+}
+
+#[cfg(test)]
+mod deadline_display_tests {
+    use super::*;
+    #[test]
+    fn calendar_keeps_the_scheduled_task_and_adds_its_deadline() {
+        let mut snapshot = calendar::sample_snapshot();
+        let mut task = snapshot
+            .events
+            .into_iter()
+            .find(|event| event.id == "standup")
+            .unwrap();
+        task.details.task_data = Some(timeslay_core::task_db::TaskData {
+            id: 73,
+            metadata: Default::default(),
+        });
+        snapshot.day = task.start.date_naive();
+        let deadline_day = snapshot.day.succ_opt().unwrap();
+        task.details.task_data.as_mut().unwrap().metadata.deadline =
+            Some(calendar::deadline::parse_input(&format!("{deadline_day} 17:00")).unwrap());
+        let id = task.id.clone();
+        let start = task.start;
+        snapshot.events = vec![task.clone()];
+        let settings = CalendarSettings::default();
+        let scheduled = build_model(&snapshot, &settings);
+        assert!(
+            scheduled
+                .timed
+                .iter()
+                .any(|entry| entry.event.id == id && entry.event.start == start)
+        );
+        assert!(
+            !scheduled
+                .timed
+                .iter()
+                .any(|entry| calendar::deadline::is_marker(&entry.event))
+        );
+        snapshot.day = deadline_day;
+        let deadline = build_model(&snapshot, &settings);
+        assert_eq!(
+            deadline
+                .timed
+                .iter()
+                .filter(|entry| calendar::deadline::is_marker(&entry.event))
+                .count(),
+            1
+        );
+        snapshot.events[0]
+            .details
+            .task_data
+            .as_mut()
+            .unwrap()
+            .metadata
+            .deadline
+            .as_mut()
+            .unwrap()
+            .time = None;
+        let dated = build_model(&snapshot, &settings);
+        assert!(dated.all_day.iter().any(calendar::deadline::is_marker));
+        let rows = schedule_agenda(&snapshot, &[deadline_day], &settings);
+        assert!(
+            rows[0]
+                .1
+                .iter()
+                .any(|row| calendar::deadline::is_marker(&row.event))
+        );
+        assert_eq!(snapshot.events[0].start, start);
     }
 }

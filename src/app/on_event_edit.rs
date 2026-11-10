@@ -4,6 +4,12 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Message> {
     match message {
+        EventEditMessage::EventEditDeadlineChanged(value) => {
+            if let Some(draft) = &mut state.calendar.edit_draft {
+                draft.deadline_text = value;
+            }
+            Task::none()
+        }
         EventEditMessage::EventEditMeeting(action) => {
             let Some(draft) = state
                 .calendar

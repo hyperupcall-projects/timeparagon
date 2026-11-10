@@ -44,7 +44,7 @@ pub fn event_editor<'a>(
         }
         return loading.into();
     }
-    let label = |name: &'static str| text(name).size(metrics.label()).style(text::secondary);
+    let label = |name: &'static str| crate::ui::controls::field_label(name, metrics.label());
 
     let title: Element<'a, Message> = if draft.editing_title {
         column![
@@ -135,32 +135,10 @@ pub fn event_editor<'a>(
             Message::EventEdit(EventEditMessage::EventEditCalendarDropdownToggled),
         ))
     };
-    let mut body = column![
-        titled(state, event, title, metrics),
-        source,
-        super::super::description::preview(&event.id, &draft.description, metrics),
-    ]
-    .spacing(metrics.spacing)
-    .width(Fill);
-    for meeting in super::super::meetings::links(event) {
-        body = body.push(super::super::meetings::join_button(meeting, metrics));
-    }
-    body = body
-        .push(event_projects(state, &draft.projects, metrics, |v0| {
-            Message::EventEdit(EventEditMessage::EventEditProjects(v0))
-        }))
-        .push(start);
-    if event.details.habit {
-        body = body.push(event_habit_picker(state, event, metrics));
-        body = body.push(super::super::recurrence::editor(
-            &draft.rule,
-            draft.start.date_naive(),
-            state.config.calendar.first_day_of_week,
-            metrics,
-            false,
-            |v0| Message::EventEdit(EventEditMessage::EventEditRecurrence(v0)),
-        ));
-    } else {
+    let mut body = column![titled(state, event, title, metrics), start]
+        .spacing(metrics.spacing)
+        .width(Fill);
+    if !event.details.habit {
         // An all-day end date is the last day covered, not Google's
         // exclusive end.
         let mut end = column![
@@ -191,6 +169,50 @@ pub fn event_editor<'a>(
             ));
         }
         body = body.push(end);
+    }
+    body = body.push(super::super::recurrence::editor(
+        &draft.rule,
+        draft.start.date_naive(),
+        state.config.calendar.first_day_of_week,
+        metrics,
+        false,
+        |v| Message::EventEdit(EventEditMessage::EventEditRecurrence(v)),
+    ));
+    if event.is_calendar_task() {
+        body = body.push(
+            column![
+                label("Deadline"),
+                super::super::controls::date(
+                    state.config.appearance.time_format,
+                    &draft.deadline_text,
+                    true,
+                    true,
+                    !draft.saving,
+                    metrics.label(),
+                    |value| Message::EventEdit(EventEditMessage::EventEditDeadlineChanged(value)),
+                ),
+            ]
+            .spacing(6)
+            .width(Fill),
+        );
+    }
+    if let Some(source) = source {
+        body = body.push(source);
+    }
+    body = body.push(super::super::description::preview(
+        &event.id,
+        &draft.description,
+        metrics,
+    ));
+    for meeting in super::super::meetings::links(event) {
+        body = body.push(super::super::meetings::join_button(meeting, metrics));
+    }
+    body = body.push(event_projects(state, &draft.projects, metrics, |v| {
+        Message::EventEdit(EventEditMessage::EventEditProjects(v))
+    }));
+    if event.details.habit {
+        body = body.push(event_habit_picker(state, event, metrics));
+    } else {
         let mut labels = column![label("Labels")].spacing(6).width(Fill);
         for value in &draft.labels {
             labels = labels.push(
@@ -223,14 +245,6 @@ pub fn event_editor<'a>(
         body = body.push(super::super::timeblocking::propagation_controls(
             state, event, metrics,
         ));
-        body = body.push(super::super::recurrence::editor(
-            &draft.rule,
-            draft.start.date_naive(),
-            state.config.calendar.first_day_of_week,
-            metrics,
-            false,
-            |v| Message::EventEdit(EventEditMessage::EventEditRecurrence(v)),
-        ));
     }
     if let Some(error) = &state.calendar.error {
         body = body.push(text(error).size(metrics.label()).style(text::danger));
@@ -256,7 +270,7 @@ pub(super) fn event_options<'a>(
     use calendar::event_options::{Action, Availability, Method, Unit, Visibility};
     let size = metrics.label();
     let mut notifications = column![
-        text("Notifications").size(size).style(text::secondary),
+        crate::ui::controls::field_label("Notifications", size),
         crate::ui::controls::checkbox(options.reminders.use_default)
             .label("Use calendar default notifications")
             .on_toggle(move |v| message(Action::Defaults(v)))
@@ -330,7 +344,7 @@ pub(super) fn event_options<'a>(
     );
     column![
         notifications,
-        text("Availability").size(size).style(text::secondary),
+        crate::ui::controls::field_label("Availability", size),
         crate::ui::controls::pick_list(
             [Availability::Busy, Availability::Free],
             Some(options.transparency),
@@ -338,7 +352,7 @@ pub(super) fn event_options<'a>(
         )
         .text_size(size)
         .width(Fill),
-        text("Visibility").size(size).style(text::secondary),
+        crate::ui::controls::field_label("Visibility", size),
         crate::ui::controls::pick_list(
             [Visibility::Default, Visibility::Public, Visibility::Private],
             Some(options.visibility),
@@ -500,11 +514,10 @@ pub(super) fn event_projects<'a>(
     message: fn(calendar::projects::Action) -> Message,
 ) -> Element<'a, Message> {
     use calendar::projects::Action;
-    let mut content = column![
-        text("Projects")
-            .size(metrics.label())
-            .style(text::secondary)
-    ]
+    let mut content = column![crate::ui::controls::field_label(
+        "Projects",
+        metrics.label()
+    )]
     .spacing(6)
     .width(Fill);
     if selection.ids.is_empty() {
@@ -732,7 +745,7 @@ fn event_habit_picker<'a>(
         .cloned()
         .or_else(|| options.first().cloned());
     column![
-        text("Habit").size(metrics.label()).style(text::secondary),
+        crate::ui::controls::field_label("Habit", metrics.label()),
         crate::ui::controls::pick_list(options, selected, |choice: HabitChoice| {
             Message::Habits(crate::habits::Action::EventHabitChosen(choice.id))
         })

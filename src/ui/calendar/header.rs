@@ -169,9 +169,13 @@ pub(super) fn all_day_row_on<'a>(
     day: NaiveDate,
     weekly: bool,
 ) -> Option<Element<'a, Message>> {
+    let deadlines = state
+        .calendar
+        .deadline_markers_on(day, &state.config.calendar);
     let mut events: Vec<_> = state
         .calendar
         .all_day_events_on(day, &state.config.calendar)
+        .chain(deadlines.iter().filter(|event| event.all_day))
         .collect();
     let sources = state.calendar.display_sources(&state.config.calendar);
     events.sort_by_key(|e| {
@@ -185,7 +189,8 @@ pub(super) fn all_day_row_on<'a>(
         )
     });
     events.retain(|event| {
-        !event.is_task()
+        calendar::deadline::is_marker(event)
+            || !event.is_task()
             || task_needs_slot(state, event, day)
             || crate::timeblocking::overdue(event)
     });
@@ -205,9 +210,9 @@ pub(super) fn all_day_row_on<'a>(
     });
     let chips: Vec<Element<'a, Message>> = events
         .into_iter()
-        .filter(|event| weekly || !event.is_task())
+        .filter(|event| weekly || !event.is_task() || calendar::deadline::is_marker(event))
         .map(|event| {
-            if event.is_task() {
+            if event.is_task() && !calendar::deadline::is_marker(event) {
                 weekly_task_chip(state, event, metrics)
             } else {
                 all_day_chip(state, event, metrics)

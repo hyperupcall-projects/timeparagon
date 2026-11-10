@@ -40,10 +40,14 @@ pub(super) fn day_canvas<'a>(
     let offset = state.config.calendar.day_end_minutes();
     let day_start_hour = state.config.calendar.day_start_hour();
 
+    let deadlines = state
+        .calendar
+        .deadline_markers_on(day, &state.config.calendar);
     let timed: Vec<_> = state
         .calendar
         .timed_events_on(day, &state.config.calendar)
         .into_iter()
+        .chain(deadlines.iter().filter(|event| !event.all_day))
         .filter(|event| {
             state
                 .calendar
@@ -110,7 +114,8 @@ pub(super) fn day_canvas<'a>(
                 } else {
                     event.display_color(&state.config.calendar)
                 },
-                editable: !hidden
+                editable: !calendar::deadline::is_marker(event)
+                    && !hidden
                     && event.details.sleep.is_none()
                     && (!event.is_task() || event.is_calendar_task()),
                 pending: event.details.sending
