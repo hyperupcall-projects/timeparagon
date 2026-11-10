@@ -7,17 +7,31 @@ pub(super) fn day_grid<'a>(
     metrics: &Metrics,
     now: DateTime<Local>,
 ) -> Element<'a, Message> {
-    container(
+    let edge = || {
+        iced::widget::rule::horizontal(1).style(|theme: &Theme| iced::widget::rule::Style {
+            color: crate::ui::controls::edge_color(theme),
+            radius: 0.0.into(),
+            fill_mode: iced::widget::rule::FillMode::Full,
+            snap: true,
+        })
+    };
+    container(iced::widget::column![
+        edge(),
         crate::ui::controls::scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
+            .direction(scrollable::Direction::Vertical(grid_scrollbar()))
             .id(iced::widget::Id::new(DAY_SCROLL))
             .on_scroll(grid_scrolled)
             .height(Fill)
             .width(Fill),
-    )
+        edge(),
+    ])
     .height(Fill)
     .width(Fill)
-    .padding(1)
-    .style(crate::ui::controls::card_surface)
+    .style(|theme: &Theme| container::Style {
+        border: iced::Border::default(),
+        shadow: iced::Shadow::default(),
+        ..crate::ui::controls::card_surface(theme)
+    })
     .into()
 }
 
@@ -31,7 +45,7 @@ pub(super) fn day_canvas<'a>(
     let hour_height = state.calendar.hour_height;
     let gutter = if weekly {
         32.0
-    } else if metrics.breakpoint.is_compact() {
+    } else if state.config.appearance.time_format.is_compact() {
         COMPACT_GUTTER
     } else {
         GUTTER

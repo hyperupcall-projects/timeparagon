@@ -66,8 +66,19 @@ use crate::calendar::{self, Event};
 
 use super::layout::Metrics;
 
-const GUTTER: f32 = 52.0;
-const COMPACT_GUTTER: f32 = 40.0;
+const GUTTER: f32 = 40.0;
+const COMPACT_GUTTER: f32 = 28.0;
+
+const GRID_SCROLLBAR_WIDTH: f32 = 10.0;
+const GRID_SCROLLBAR_SPACING: f32 = 4.0;
+const GRID_SCROLLBAR_SPACE: f32 = GRID_SCROLLBAR_WIDTH + GRID_SCROLLBAR_SPACING;
+
+/// Keep the calendar and its rounded event edges clear of the scrollbars.
+fn grid_scrollbar() -> scrollable::Scrollbar {
+    scrollable::Scrollbar::new()
+        .width(GRID_SCROLLBAR_WIDTH)
+        .spacing(GRID_SCROLLBAR_SPACING)
+}
 
 use timeslay_core::theme::{
     BLOCK_PADDING, BLOCK_PADDING_RIGHT, BLOCK_TOP, EVENT_GAP, EVENT_RADIUS, NEEDLE_RADIUS,
@@ -100,13 +111,19 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     // message, so scrolling stays on the widget's own path.
     let mut body = column![].spacing(metrics.spacing).height(Fill).width(Fill);
     if let Some(all_day) = all_day_row(state, metrics) {
-        body = body.push(all_day);
+        body = body.push(container(all_day).padding([0.0, metrics.padding]));
     }
     let body = body.push(grid);
 
-    let mut content = column![heading_with_alarm_hint(state, metrics, false), body]
+    let heading =
+        container(heading_with_alarm_hint(state, metrics, false)).padding([0.0, metrics.padding]);
+    let mut content = column![heading, body]
         .spacing(metrics.spacing)
-        .padding(metrics.padding)
+        .padding(iced::Padding {
+            top: metrics.padding,
+            bottom: metrics.padding,
+            ..iced::Padding::ZERO
+        })
         .width(Fill)
         .height(Fill);
 
