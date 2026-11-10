@@ -437,6 +437,57 @@ fn fetch_events(
     Ok(events)
 }
 
+/// Every occurrence of the series `series_id` on `calendar` between the
+/// starts of `first` and the end of `last`, as Google now has it. A series
+/// that no longer exists has no occurrences. Blocking: run it off the UI
+/// thread.
+pub fn fetch_series_instances(
+    access_token: &str,
+    calendar: &Calendar,
+    series_id: &str,
+    first: NaiveDate,
+    last: NaiveDate,
+    day_end_hour: u32,
+) -> Result<Vec<Event>, GoogleError> {
+    let (time_min, _) = day_bounds(first, day_end_hour);
+    let (_, time_max) = day_bounds(last, day_end_hour);
+    let mut page_token: Option<String> = None;
+    let mut events = Vec::new();
+    loop {
+        let mut url = format!(
+            "{EVENTS}/{}/events/{}/instances?maxResults=2500&timeMin={}&timeMax={}",
+            urlencoding::encode(&calendar.id),
+            urlencoding::encode(series_id),
+            urlencoding::encode(&time_min),
+            urlencoding::encode(&time_max),
+        );
+        if let Some(token) = &page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(token));
+        }
+        let list: EventList = match get(&url, access_token) {
+            Ok(list) => list,
+            // Deleted outright: nothing of the series is left to show.
+            Err(error) if matches!(error.status, Some(404 | 410)) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        for mut entry in list.items {
+            entry.options.default_reminders = list.default_reminders.clone();
+            if entry.status.as_deref() == Some("cancelled") {
+                continue;
+            }
+            if let Some(event) = parse_event_in_range(entry, calendar, first, last) {
+                events.push(event);
+            }
+        }
+        match list.next_page_token {
+            Some(next) => page_token = Some(next),
+            None => break,
+        }
+    }
+    Ok(events)
+}
+
 pub const TASK_LISTS: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lists";
 pub const TASKS: &str = "https://tasks.googleapis.com/tasks/v1/lists";
 
@@ -1639,6 +1690,11 @@ pub fn save_event_scope(
         super::calendar_tasks::write_data(&mut changes, &data)?;
     }
     let request_id = super::meeting::request_id()?;
+    let calendars = if moving {
+        vec![source.to_owned(), destination.to_owned()]
+    } else {
+        vec![source.to_owned()]
+    };
     if scope == SaveScope::Current || series_id.is_none() {
         let written = draft
             .meeting
@@ -1651,6 +1707,13 @@ pub fn save_event_scope(
             if written.zoom_needed {
                 link = link_after_move(access_token, destination, &original.id)?;
             }
+        }
+        // The event is itself a series, or has just become or stopped being
+        // one: its occurrences on other days changed with it.
+        if series_id.is_none()
+            && (!recurrence.is_empty() || !original.details.recurrence.is_empty())
+        {
+            super::series::note(destination, &original.id, calendars);
         }
         return Ok(Saved {
             link,
@@ -1734,6 +1797,7 @@ pub fn save_event_scope(
                 link = link_after_move(access_token, destination, series_id)?;
             }
         }
+        super::series::note(destination, series_id, calendars);
         return Ok(Saved {
             link,
             zoom_needed: written.zoom_needed,
@@ -1797,6 +1861,9 @@ pub fn save_event_scope(
         }
         return Err(error);
     }
+    // The old series now ends before this occurrence; the new one carries on.
+    super::series::note(source, series_id, vec![source.to_owned()]);
+    super::series::note(destination, &created.id, vec![destination.to_owned()]);
     Ok(Saved {
         link: created.html_link,
         zoom_needed: written.zoom_needed,
@@ -2014,8 +2081,19 @@ fn write_times(
         body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
         body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
     } else {
-        body["start"] = serde_json::json!({ "dateTime": start.with_timezone(&Utc).to_rfc3339() });
-        body["end"] = serde_json::json!({ "dateTime": end.with_timezone(&Utc).to_rfc3339() });
+        // Google rejects a recurring event without a time zone: it needs one
+        // to expand the rule across daylight-saving changes.
+        let zone = iana_time_zone::get_timezone().ok();
+        let time = |when: DateTime<Local>| {
+            let mut value =
+                serde_json::json!({ "dateTime": when.with_timezone(&Utc).to_rfc3339() });
+            if let Some(zone) = &zone {
+                value["timeZone"] = serde_json::Value::String(zone.clone());
+            }
+            value
+        };
+        body["start"] = time(start);
+        body["end"] = time(end);
     }
 }
 
@@ -2046,14 +2124,23 @@ pub fn delete_event_scope(
     let Some(series_id) = instance["recurringEventId"].as_str() else {
         return delete_event(event_id);
     };
+    let deleted_series = || -> Result<(), GoogleError> {
+        match delete_event(series_id) {
+            // Already gone is what a delete wants; the cache still has to catch up.
+            Err(error) if error.status != Some(404) => return Err(error),
+            _ => {}
+        }
+        super::series::note(calendar_id, series_id, vec![calendar_id.to_owned()]);
+        Ok(())
+    };
     if scope == SaveScope::All {
-        return delete_event(series_id);
+        return deleted_series();
     }
     let master_url = format!("{base}/{}", urlencoding::encode(series_id));
     let master: serde_json::Value = get(&master_url, access_token)?;
     let boundary = json_event_start(&instance["originalStartTime"])?;
     if boundary <= json_event_start(&master["start"])? {
-        return delete_event(series_id);
+        return deleted_series();
     }
     let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
         .map_err(|error| format!("Could not read series recurrence: {error}"))?;
@@ -2077,7 +2164,9 @@ pub fn delete_event_scope(
         access_token,
         &serde_json::json!({"recurrence": past}).to_string(),
         "Google Calendar",
-    )
+    )?;
+    super::series::note(calendar_id, series_id, vec![calendar_id.to_owned()]);
+    Ok(())
 }
 
 /// Deletes a single event on Google. A successful call returns `204 No

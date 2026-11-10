@@ -281,6 +281,8 @@ fn worker(path: &Path) -> &'static Worker {
         let path = path.to_owned();
         std::thread::spawn(move || {
             for write in receiver {
+                let entity = write.entity.clone();
+                super::series::take_noted();
                 let result = send_in(&path, write, |job| {
                     let settings = crate::config::Config::load().calendar;
                     execute(&GoogleClient::from_settings(&settings), &settings, job)
@@ -288,6 +290,9 @@ fn worker(path: &Path) -> &'static Worker {
                 if let Err(error) = result {
                     log_write(format!("Could not record a Google answer: {error}"), true);
                 }
+                // A write that changed a whole series has been acknowledged by
+                // now, so a fetch from here on shows it on every day.
+                super::series::refresh(&path, &entity, super::series::take_noted());
             }
         });
         Worker(Mutex::new(sender))
@@ -1224,6 +1229,61 @@ pub(super) fn observe_range(
     }
     prune_observed(&tx, fetched).map_err(|e| e.to_string())?;
     release_stale(&tx).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// [`observe_range`] for the one item `entity`, from a fetch of only some
+/// events between `first` and `last`: every other item may simply not have
+/// been asked for, so it is left alone.
+pub(super) fn observe_entity(
+    path: &std::path::Path,
+    entity: &str,
+    events: &[Event],
+    first: NaiveDate,
+    last: NaiveDate,
+    fetched: DateTime<Local>,
+) -> Result<(), String> {
+    let mut db = task_db::Database::open(path)?;
+    let tx = db
+        .connection()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let row = tx
+        .query_row(
+            "SELECT event,acknowledged_at FROM google_entities WHERE id=?1 AND acknowledged_at IS NOT NULL AND sending_since IS NULL",
+            [entity],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((json, ack)) = row else {
+        return Ok(());
+    };
+    if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
+        return Ok(());
+    }
+    let Some((calendar, id)) = entity.split_once('\n') else {
+        return Ok(());
+    };
+    let old = json
+        .as_ref()
+        .map(|j| serde_json::from_str::<Event>(j))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let current = events
+        .iter()
+        .find(|e| e.id == id && e.calendar_id == old.as_ref().map_or(calendar, |e| &e.calendar_id));
+    let covered = current.is_some()
+        || old
+            .as_ref()
+            .is_some_and(|e| e.start.date_naive() <= last && e.end.date_naive() >= first);
+    if covered {
+        let json = current
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![entity,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+    }
     tx.commit().map_err(|e| e.to_string())
 }
 

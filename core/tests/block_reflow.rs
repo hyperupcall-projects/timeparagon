@@ -142,3 +142,71 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
         "task deletion survives reopening the database"
     );
 }
+
+#[test]
+fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
+    let settings = CalendarSettings::default();
+    let mut block = calendar::sample_snapshot().events.remove(0);
+    block.id = "habit-planning-block".into();
+    block.calendar_id = "app".into();
+    block.all_day = false;
+    let task = task_edit::create_inbox_task(
+        &settings,
+        "",
+        "Read",
+        "Read a chapter",
+        Some(block.start.date_naive()),
+        Some(timeblocking::Metadata {
+            habit_id: Some("reading-library-habit".into()),
+            minutes: 30,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let id = task.id.clone();
+    let changed = task_edit::save_and_reflow(
+        task,
+        settings.clone(),
+        task_edit::Change::Block(timeblocking::block_key(&block), block.start, block.end),
+        1,
+        vec![block.clone()],
+        vec![],
+        |_| panic!("local edit must not access Google"),
+    )
+    .unwrap();
+    let task = changed.into_iter().find(|task| task.id == id).unwrap();
+    let changed = task_edit::save_and_reflow(
+        task,
+        settings.clone(),
+        task_edit::Change::Estimate(45),
+        1,
+        vec![block],
+        vec![],
+        |_| panic!("local edit must not access Google"),
+    )
+    .unwrap();
+    let task = changed.into_iter().find(|task| task.id == id).unwrap();
+    assert_eq!((task.end - task.start).num_minutes(), 45);
+    assert_eq!(
+        timeblocking::metadata(&task).habit_id.as_deref(),
+        Some("reading-library-habit")
+    );
+    let mut restored = Vec::new();
+    calendar::operations::load_overlay(&timeslay_core::task_db::path().unwrap())
+        .unwrap()
+        .apply(&mut restored, None);
+    let restored = restored.into_iter().find(|task| task.id == id).unwrap();
+    assert_eq!(
+        timeblocking::metadata(&restored),
+        timeblocking::metadata(&task)
+    );
+    let released = task_edit::save(restored, &settings, task_edit::Change::Unassign, 0, |_| {
+        panic!("local edit must not access Google")
+    })
+    .unwrap();
+    assert!(timeblocking::metadata(&released).block.is_none());
+    assert_eq!(
+        timeblocking::metadata(&released).habit_id.as_deref(),
+        Some("reading-library-habit")
+    );
+}

@@ -49,6 +49,13 @@ pub fn task_row<'a>(
         check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
     }
     let mut title_content = column![task_title(task, metrics.label())].spacing(2);
+    if m.habit_id.is_some() {
+        title_content = title_content.push(
+            text("Habit")
+                .size(metrics.label() - 2.0)
+                .style(text::secondary),
+        );
+    }
     let status = if busy {
         Some("Saving…")
     } else {
@@ -284,6 +291,13 @@ pub(super) fn editable_title<'a>(
         title.into()
     };
     let mut body = column![title].spacing(4);
+    if tb::metadata(task).habit_id.is_some() {
+        body = body.push(
+            text("Habit")
+                .size(metrics.label() - 1.0)
+                .style(text::secondary),
+        );
+    }
     if state.timeblocking.editing_title {
         body = body.push(
             text("Press Enter to save")
@@ -1081,19 +1095,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             )
         })
         .collect();
-    // Habits are searchable too, so one can be recorded for the block's day.
-    let habits: Vec<_> = if query.is_empty() {
-        Vec::new()
-    } else {
-        state
-            .habits
-            .library
-            .habits
-            .iter()
-            .filter(|habit| !habit.archived && habit.name.to_lowercase().contains(&query))
-            .collect()
-    };
-    if available.is_empty() && habits.is_empty() && !query.is_empty() {
+    if available.is_empty() && !query.is_empty() {
         body = body.push(text("No matching tasks").style(text::secondary));
     } else if available.is_empty() && !all_tasks {
         body = body.push(text("No tasks for today").style(text::secondary));
@@ -1110,40 +1112,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             body = body.push(row![task_row(state, task, metrics, false), add]);
         }
     }
-    if !habits.is_empty() {
-        body = body.push(text("Habits").size(metrics.label()).style(text::secondary));
-    }
-    let block_day = block.start.date_naive();
-    for habit in habits {
-        let swatch = container(iced::widget::Space::new().width(10).height(10)).style(
-            move |theme: &iced::Theme| container::Style {
-                background: Some(
-                    timeslay_core::habits::palette_color(
-                        habit.color,
-                        theme.extended_palette().is_dark,
-                    )
-                    .into(),
-                ),
-                border: iced::Border {
-                    radius: 5.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        );
-        let record = crate::ui::controls::quiet_button("Record").on_press(Message::Habits(
-            crate::habits::Action::OpenDay(habit.id.clone(), block_day),
-        ));
-        body = body.push(
-            row![
-                swatch,
-                text(habit.name.clone()).size(metrics.label()).width(Fill),
-                record
-            ]
-            .spacing(8)
-            .align_y(iced::Center),
-        );
-    }
+    body = body.push(available_habits(state, block, metrics));
     // A release anywhere on the panel assigns the dragged task, including on the
     // plus box. A release on a task row is captured first and reorders instead.
     mouse_area(
@@ -1154,6 +1123,90 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     )
     .on_release(msg(Action::DropBlock(block_id)))
     .into()
+}
+
+/// The library is independent of calendar occurrences and Habits tab filters.
+fn available_habits<'a>(
+    state: &'a State,
+    block: &Event,
+    metrics: &Metrics,
+) -> Element<'a, Message> {
+    let query = state
+        .timeblocking
+        .available_habit_query
+        .trim()
+        .to_lowercase();
+    let planned = tb::assigned_all(state, block);
+    let mut body = column![
+        super::controls::section_heading("Available habits", None, 16.0),
+        crate::ui::controls::text_input(
+            "Search all habits…",
+            &state.timeblocking.available_habit_query
+        )
+        .on_input(|value| msg(Action::AvailableHabitQuery(value)))
+        .size(metrics.label())
+        .width(Fill),
+    ]
+    .spacing(8);
+    let mut count = 0;
+    for habit in &state.habits.library.habits {
+        if !habit.name.to_lowercase().contains(&query)
+            || planned
+                .iter()
+                .any(|task| tb::metadata(task).habit_id.as_deref() == Some(&habit.id))
+        {
+            continue;
+        }
+        count += 1;
+        let swatch = container(iced::widget::Space::new().width(8).height(8)).style(
+            move |theme: &iced::Theme| container::Style {
+                background: Some(
+                    timeslay_core::habits::palette_color(
+                        habit.color,
+                        theme.extended_palette().is_dark,
+                    )
+                    .into(),
+                ),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let mut add = crate::ui::controls::quiet_button("+");
+        if state.timeblocking.busy.is_empty() {
+            add = add.on_press(msg(Action::AddHabit(habit.id.clone(), block.id.clone())));
+        }
+        body = body.push(
+            row![
+                swatch,
+                text(&habit.name).size(metrics.label()).width(Fill),
+                text(if habit.archived {
+                    "Habit · Archived"
+                } else {
+                    "Habit"
+                })
+                .size(metrics.label() - 2.0)
+                .style(text::secondary),
+                add,
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        );
+    }
+    if count == 0 {
+        body = body.push(
+            text(if query.is_empty() {
+                "No available habits"
+            } else {
+                "No matching habits"
+            })
+            .size(metrics.label())
+            .style(text::secondary),
+        );
+    }
+    body.into()
 }
 
 /// The planned-tasks box. The plus sits in the middle until it is clicked,
@@ -1615,6 +1668,65 @@ mod tests {
     use super::*;
     use crate::calendar;
     use iced::{Point, Size, mouse};
+
+    #[test]
+    fn available_habits_browses_library_and_adds_selected_habit() {
+        let mut state = State::blank();
+        state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+        // A library habit is available without any calendar series, even if
+        // hidden by the Habits tab's filters.
+        state.habits.library.hide_completed = true;
+        state
+            .habits
+            .library
+            .habits
+            .push(crate::habits::Habit::new("read", "Read a book"));
+        state
+            .habits
+            .library
+            .habits
+            .push(crate::habits::Habit::new("walk", "Take a walk"));
+        let size = Size::new(450.0, 900.0);
+        let metrics = Metrics::of(size);
+        let block = state.calendar.event("standup").unwrap();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            available_habits(&state, block, &metrics),
+        );
+        assert!(ui.find("Available habits").is_ok());
+        assert!(ui.find("Read a book").is_ok());
+        assert!(ui.find("Take a walk").is_ok());
+        drop(ui);
+        state.timeblocking.available_habit_query = "  BOOK  ".into();
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            available_habits(&state, state.calendar.event("standup").unwrap(), &metrics),
+        );
+        assert!(ui.find("Take a walk").is_err());
+        ui.click("+").unwrap();
+        assert!(ui.into_messages().any(|message| matches!(message, Message::TimeBlocking(Action::AddHabit(id, block)) if id == "read" && block == "standup")));
+        let block_key = tb::block_key(state.calendar.event("standup").unwrap());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.id = "task:read".into();
+        task.calendar_id = "tasks:list".into();
+        task.details.task_data = Some(timeslay_core::task_db::TaskData {
+            id: 1,
+            metadata: tb::Metadata {
+                habit_id: Some("read".into()),
+                block: Some(block_key),
+                ..Default::default()
+            },
+        });
+        let mut ui = iced_test::Simulator::with_size(
+            iced_test::core::Settings::default(),
+            size,
+            available_habits(&state, state.calendar.event("standup").unwrap(), &metrics),
+        );
+        assert!(ui.find("Read a book").is_err());
+        assert!(ui.find("No matching habits").is_ok());
+    }
 
     #[test]
     fn all_tasks_offers_every_open_task_but_not_completed_ignored_or_already_here() {
