@@ -251,6 +251,7 @@ pub fn fetch_range(
         })?;
         super::operations::observe_range(&path, &events, first, last, fetch_started)?;
     }
+    crate::timeblocking::resolve_block_series(&mut events);
     super::operations::cache_tasks(&events, tasks_loaded)?;
     calendars.extend(task_calendars);
     events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
@@ -1890,6 +1891,33 @@ fn count_prior_instances(
             None => return Ok(count),
         }
     }
+}
+
+/// The repeat rule of the series `series_id` from its occurrence starting at
+/// `from` on, so something joining the series there repeats with its
+/// remaining occurrences rather than overrunning a repeat count.
+pub fn series_recurrence_from(
+    token: &str,
+    calendar_id: &str,
+    series_id: &str,
+    from: DateTime<Local>,
+) -> Result<Vec<String>, GoogleError> {
+    let master_url = format!(
+        "{EVENTS}/{}/events/{}",
+        urlencoding::encode(calendar_id),
+        urlencoding::encode(series_id)
+    );
+    let master: serde_json::Value = get(&master_url, token)?;
+    let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
+        .map_err(|error| format!("Could not read the time block's repeat rule: {error}"))?;
+    if from <= json_event_start(&master["start"])?
+        || !lines.iter().any(|line| line.contains("COUNT="))
+    {
+        return Ok(lines);
+    }
+    let prior = count_prior_instances(token, &master_url, from)?;
+    let (_, future) = split_recurrence(&lines, from, prior, master["start"]["date"].is_string())?;
+    Ok(future)
 }
 
 /// Trim the old RRULE and retain the remaining COUNT for the replacement.

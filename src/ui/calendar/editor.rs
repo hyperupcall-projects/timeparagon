@@ -290,7 +290,11 @@ pub fn event_editor<'a>(
     }
     let mut body = column![
         titled(state, event, title, metrics),
-        form_section("Scheduling", scheduling, metrics),
+        form_section(
+            "Scheduling",
+            super::super::timeblocking::scheduled_by_block(event, scheduling, metrics),
+            metrics
+        ),
         form_section("Information", information, metrics),
     ]
     .spacing(metrics.spacing)

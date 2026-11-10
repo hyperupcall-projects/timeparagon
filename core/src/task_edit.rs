@@ -115,9 +115,28 @@ pub enum Change {
     Time(DateTime<Local>, DateTime<Local>),
     /// Automatic layout changes times without changing membership or estimate.
     Reflow(DateTime<Local>, DateTime<Local>),
+    /// Repeat with a recurring time block, from its occurrence starting at
+    /// `from`. The rule is read from Google when the change is sent.
+    JoinBlockSeries {
+        calendar: String,
+        series: String,
+        from: DateTime<Local>,
+    },
 }
 
-/// A recurring copy's source belongs to its current block's series only.
+impl Change {
+    /// Joining the series of `block`, when it is a recurring time block.
+    pub fn join_block_series(block: &Event) -> Option<Self> {
+        Some(Self::JoinBlockSeries {
+            calendar: block.calendar_id.clone(),
+            series: block.details.recurring_event_id.clone()?,
+            from: block.start,
+        })
+    }
+}
+
+/// A recurring copy's source, and the block series a task repeats with,
+/// belong to its current block only.
 pub(crate) fn reset_repeat_source(metadata: &mut crate::timeblocking::Metadata, change: &Change) {
     let moved = match change {
         Change::Block(key, _, _) => metadata.block.as_ref() != Some(key),
@@ -133,6 +152,7 @@ pub(crate) fn reset_repeat_source(metadata: &mut crate::timeblocking::Metadata, 
     };
     if moved {
         metadata.repeat_source = None;
+        metadata.block_series = None;
     }
 }
 
@@ -232,6 +252,16 @@ pub fn save(
     original.details.task_data = Some(data);
     let mut saved = calendar::calendar_tasks::apply(original.clone(), settings, &change, order)?;
     let token = access(settings)?;
+    if let Change::JoinBlockSeries {
+        calendar,
+        series,
+        from,
+    } = &change
+        && saved.details.recurring_event_id.is_none()
+    {
+        saved.details.recurrence =
+            calendar::api::series_recurrence_from(&token, calendar, series, *from)?;
+    }
     calendar::calendar_tasks::persist(&token, &original, &mut saved, settings)?;
     database.save(
         &saved,

@@ -48,7 +48,10 @@ pub fn body(task: &Event) -> Result<Value, String> {
         body["start"] = json!({"dateTime":task.start.to_rfc3339(),"timeZone":zone,"date":null});
         body["end"] = json!({"dateTime":task.end.to_rfc3339(),"timeZone":zone,"date":null});
     }
-    if task.details.recurring_event_id.is_none() {
+    // A task joining a block series has no rule here until Google's is read
+    // while sending, so an earlier queued edit must not clear it.
+    let awaiting_rule = task.details.recurrence.is_empty() && data.metadata.block_series.is_some();
+    if task.details.recurring_event_id.is_none() && !awaiting_rule {
         body["recurrence"] = json!(task.details.recurrence);
     }
     Ok(body)
@@ -81,6 +84,9 @@ pub fn apply(
         Change::Location(v) => data.metadata.location = *v,
         Change::Deadline(v) => data.metadata.deadline = *v,
         Change::BacklogSection(v) => data.metadata.backlog_section = *v,
+        Change::JoinBlockSeries {
+            calendar, series, ..
+        } => data.metadata.block_series = Some(format!("{calendar}/{series}")),
         Change::Time(start, end) | Change::Reflow(start, end) | Change::Block(_, start, end) => {
             if let Change::Block(key, _, _) = change {
                 data.metadata.block = Some(key.clone());
@@ -430,6 +436,50 @@ mod tests {
             read_data(&body["extendedProperties"]).unwrap(),
             saved.details.task_data.unwrap()
         );
+    }
+    #[test]
+    fn joining_a_block_series_links_the_task_until_it_leaves_the_block() {
+        let start =
+            super::super::at_clock(chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap(), 9, 0);
+        let end = start + Duration::minutes(45);
+        let placed = apply(
+            task(),
+            &settings(),
+            &Change::Block("app/b_1".into(), start, end),
+            0,
+        )
+        .unwrap();
+        let join = Change::JoinBlockSeries {
+            calendar: "app".into(),
+            series: "b".into(),
+            from: start,
+        };
+        let joined = apply(placed, &settings(), &join, 0).unwrap();
+        let meta = tb::metadata(&joined);
+        assert_eq!(meta.block_series.as_deref(), Some("app/b"));
+        assert_eq!(meta.block.as_deref(), Some("app/b_1"));
+        // Google's rule is read while sending, so a queued edit sent before
+        // then must not clear it with the empty local copy.
+        assert!(body(&joined).unwrap().get("recurrence").is_none());
+        let reflowed = apply(joined.clone(), &settings(), &Change::Reflow(start, end), 0).unwrap();
+        assert_eq!(
+            tb::metadata(&reflowed).block_series.as_deref(),
+            Some("app/b")
+        );
+        let mut repeating = joined.clone();
+        repeating.details.recurrence = vec!["RRULE:FREQ=DAILY".into()];
+        assert_eq!(
+            body(&repeating).unwrap()["recurrence"][0],
+            "RRULE:FREQ=DAILY"
+        );
+        for change in [
+            Change::Unassign,
+            Change::Time(start, end),
+            Change::Block("app/other".into(), start, end),
+        ] {
+            let moved = apply(joined.clone(), &settings(), &change, 0).unwrap();
+            assert_eq!(tb::metadata(&moved).block_series, None, "{change:?}");
+        }
     }
     #[test]
     fn occurrence_updates_do_not_rewrite_series_rules() {

@@ -50,6 +50,7 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
     let allowed = [
         "deadline",
         "repeat_source",
+        "block_series",
         "backlog_section",
         "block",
         "minutes",
@@ -166,6 +167,7 @@ mod tests {
                 backlog_section: crate::timeblocking::BacklogSection::NextQuarter,
                 minutes: 45,
                 block: Some("calendar/block".into()),
+                block_series: Some("calendar/series".into()),
                 labels: vec!["two\nlines: yes".into()],
                 projects: vec![1, 7],
                 priority: Some(crate::timeblocking::Priority::P1),

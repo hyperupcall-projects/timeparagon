@@ -18,6 +18,10 @@ pub struct Metadata {
     pub deadline: Option<calendar::deadline::Deadline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat_source: Option<i64>,
+    /// The recurring time block series this task repeats with, as
+    /// `calendar/series`. Each occurrence belongs to that day's block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_series: Option<String>,
     /// Creation instant recorded by TimeSlay; absent for tasks created elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -164,6 +168,49 @@ pub fn block_key(event: &Event) -> String {
     format!("{}/{}", event.calendar_id, event.id)
 }
 
+/// The series a recurring block occurrence belongs to, as `calendar/series`.
+pub fn block_series(block: &Event) -> Option<String> {
+    block
+        .details
+        .recurring_event_id
+        .as_ref()
+        .map(|series| format!("{}/{series}", block.calendar_id))
+}
+
+/// Google copies a series' metadata to every occurrence, so each occurrence
+/// of a task repeating with a block series still names the block it was
+/// first put in. Point it at the occurrence of the block on its own day, or
+/// at none when that day has no such block.
+pub fn resolve_block_series(events: &mut [Event]) {
+    let blocks: Vec<(String, NaiveDate, String)> = events
+        .iter()
+        .filter(|event| !event.is_task())
+        .filter_map(|block| {
+            Some((
+                block_series(block)?,
+                block.start.date_naive(),
+                block_key(block),
+            ))
+        })
+        .collect();
+    for task in events
+        .iter_mut()
+        .filter(|event| event.is_task() && event.details.recurring_event_id.is_some())
+    {
+        let day = task.start.date_naive();
+        let Some(data) = task.details.task_data.as_mut() else {
+            continue;
+        };
+        let Some(series) = data.metadata.block_series.as_ref() else {
+            continue;
+        };
+        data.metadata.block = blocks
+            .iter()
+            .find(|(s, d, _)| s == series && *d == day)
+            .map(|(_, _, key)| key.clone());
+    }
+}
+
 pub fn is_block(event: &Event, settings: &CalendarSettings) -> bool {
     !event.is_task()
         && !event.details.habit
@@ -261,6 +308,65 @@ mod tests {
         assert!(past_due(&task, now));
         task.completed = true;
         assert!(!past_due(&task, now));
+    }
+
+    #[test]
+    fn task_occurrences_belong_to_the_block_occurrence_on_their_day() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+        let occurrence = |id: &str, days: i64, hour: u32| {
+            let start = calendar::at_clock(day + chrono::Duration::days(days), hour, 0);
+            Event {
+                id: id.into(),
+                calendar_id: "app".into(),
+                title: id.into(),
+                start,
+                end: start + chrono::Duration::hours(1),
+                all_day: false,
+                color: calendar::colors::TASK,
+                completed: false,
+                details: calendar::Details {
+                    recurring_event_id: Some(id.split('_').next().unwrap().into()),
+                    ..Default::default()
+                },
+            }
+        };
+        let task = |id: &str, days: i64| {
+            let mut task = occurrence(id, days, 10);
+            task.details.task_data = Some(crate::task_db::TaskData {
+                id: 123,
+                metadata: Metadata {
+                    block: Some("app/block_0".into()),
+                    block_series: Some("app/block".into()),
+                    minutes: 30,
+                    ..Default::default()
+                },
+            });
+            task
+        };
+        let mut unrelated = task("other_0", 1);
+        unrelated
+            .details
+            .task_data
+            .as_mut()
+            .unwrap()
+            .metadata
+            .block_series = None;
+        let mut events = vec![
+            occurrence("block_0", 0, 10),
+            occurrence("block_1", 1, 10),
+            task("task_0", 0),
+            task("task_1", 1),
+            task("task_2", 2),
+            unrelated,
+        ];
+        assert_eq!(block_series(&events[0]).as_deref(), Some("app/block"));
+        resolve_block_series(&mut events);
+        let block = |id: &str| metadata(events.iter().find(|event| event.id == id).unwrap()).block;
+        assert_eq!(block("task_0").as_deref(), Some("app/block_0"));
+        assert_eq!(block("task_1").as_deref(), Some("app/block_1"));
+        // No block that day: the occurrence stands alone.
+        assert_eq!(block("task_2"), None);
+        assert_eq!(block("other_0").as_deref(), Some("app/block_0"));
     }
 
     #[test]
