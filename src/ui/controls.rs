@@ -655,9 +655,30 @@ pub fn summary_surface(theme: &Theme) -> container::Style {
     }
 }
 
-/// Greys out an event or task whose change is still on its way to Google
-/// ([`timeslay_core::calendar::Details::sending`]), and keeps the pointer off
-/// it until Google answers, so it cannot be changed again in the meantime.
+/// The border drawn around anything whose change is still on its way to the
+/// cloud (Google Calendar, Tasks, Contacts, …). The Dioxus day view keeps the
+/// same value in `--pending-border` in `dioxus/assets/day.css`.
+pub const PENDING_BORDER: Color = Color::from_rgb8(0x3B, 0x82, 0xF6);
+
+/// The font for text whose change is still on its way to the cloud: italic,
+/// so it reads as not yet final. Pair it with [`locked`], which adds the
+/// [`PENDING_BORDER`].
+pub fn pending_font(font: iced::Font, pending: bool) -> iced::Font {
+    if pending {
+        iced::Font {
+            style: iced::font::Style::Italic,
+            ..font
+        }
+    } else {
+        font
+    }
+}
+
+/// Outlines an event or task whose change is still on its way to Google
+/// ([`timeslay_core::calendar::Details::sending`]) in [`PENDING_BORDER`], and
+/// keeps the pointer off it until Google answers, so it cannot be changed
+/// again in the meantime. The text inside is made italic by its builder,
+/// with [`pending_font`].
 pub fn locked<'a>(content: impl Into<Element<'a, Message>>, locked: bool) -> Element<'a, Message> {
     let content = content.into();
     if !locked {
@@ -670,7 +691,7 @@ pub fn locked<'a>(content: impl Into<Element<'a, Message>>, locked: bool) -> Ele
                 container(Space::new())
                     .width(Fill)
                     .height(Fill)
-                    .style(locked_veil)
+                    .style(pending_outline)
             )
             .interaction(mouse::Interaction::NotAllowed)
         ),
@@ -678,20 +699,12 @@ pub fn locked<'a>(content: impl Into<Element<'a, Message>>, locked: bool) -> Ele
     .into()
 }
 
-fn locked_veil(theme: &Theme) -> container::Style {
+fn pending_outline(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(
-            theme
-                .extended_palette()
-                .background
-                .base
-                .color
-                .scale_alpha(0.6)
-                .into(),
-        ),
         border: Border {
+            color: PENDING_BORDER,
+            width: 2.0,
             radius: RADIUS_ROW.into(),
-            ..Border::default()
         },
         ..container::Style::default()
     }

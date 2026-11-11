@@ -197,6 +197,7 @@ impl canvas::Program<Message> for PreviewCanvas {
                     &block.when,
                     faint_ink,
                     11.0,
+                    false,
                 );
             }
         }
@@ -280,7 +281,15 @@ impl canvas::Program<Message> for PreviewCanvas {
             if rect.width >= badge_room + 22.0 {
                 label.width -= badge_room;
                 if label.height >= 14.0 {
-                    draw_block_label(&mut frame, label, &block.title, &block.when, ink, 12.0);
+                    draw_block_label(
+                        &mut frame,
+                        label,
+                        &block.title,
+                        &block.when,
+                        ink,
+                        12.0,
+                        false,
+                    );
                 }
             }
             draw_badge(&mut frame, badge, number, ink, block.color);

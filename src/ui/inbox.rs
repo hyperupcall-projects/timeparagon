@@ -204,10 +204,13 @@ fn task_card<'a>(
             text(&task.title)
                 .wrapping(text::Wrapping::WordOrGlyph)
                 .size(metrics.label() + 1.0)
-                .font(iced::Font {
-                    weight: iced::font::Weight::Semibold,
-                    ..iced::Font::DEFAULT
-                })
+                .font(super::controls::pending_font(
+                    iced::Font {
+                        weight: iced::font::Weight::Semibold,
+                        ..iced::Font::DEFAULT
+                    },
+                    task.details.sending,
+                ))
                 .width(Fill),
         )
         .width(Fill)

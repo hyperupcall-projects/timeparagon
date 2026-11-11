@@ -394,6 +394,10 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
             event.title.clone()
         })
         .size(13)
+        .font(super::controls::pending_font(
+            iced::Font::DEFAULT,
+            event.details.sending,
+        ))
     ]
     .spacing(5)
     .width(Fill);

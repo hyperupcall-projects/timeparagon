@@ -762,13 +762,7 @@ impl DayCanvas {
                 EVENT_RADIUS.into(),
             );
 
-            // An unconfirmed write is drawn lighter, so the chip reads as not
-            // yet final until Google accepts the new time.
-            let fill = if block.pending {
-                lighten(block.color)
-            } else {
-                block.color
-            };
+            let fill = block.color;
             // Canvas fills have no shadow of their own, so two faint offset
             // copies of the block stand in for one.
             for (drop, alpha) in EVENT_DROPS {
@@ -835,12 +829,22 @@ impl DayCanvas {
                     );
                 }
             }
+            // An unconfirmed write is outlined in blue with an italic label,
+            // so the block reads as not yet final until Google answers.
             frame.stroke(
                 &shape,
-                Stroke {
-                    style: Style::Solid(EVENT_EDGE),
-                    width: 1.0,
-                    ..Stroke::default()
+                if block.pending {
+                    Stroke {
+                        style: Style::Solid(crate::ui::controls::PENDING_BORDER),
+                        width: 2.0,
+                        ..Stroke::default()
+                    }
+                } else {
+                    Stroke {
+                        style: Style::Solid(EVENT_EDGE),
+                        width: 1.0,
+                        ..Stroke::default()
+                    }
                 },
             );
 
@@ -867,6 +871,7 @@ impl DayCanvas {
                     &block.when,
                     ink,
                     title_size,
+                    block.pending,
                 );
             }
             if block.time_block {
@@ -1206,7 +1211,7 @@ impl DayCanvas {
 
         // The label shows the time the event will land on, not the one it had.
         let when = self.range_label(drag.preview_start, drag.preview_end);
-        draw_block_label(frame, bounds, &block.title, &when, ink, title_size);
+        draw_block_label(frame, bounds, &block.title, &when, ink, title_size, false);
     }
 
     /// Which block is under the pointer, and which part of it was grabbed.

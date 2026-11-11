@@ -57,17 +57,21 @@ pub fn schedule_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
                     },
                     ..Default::default()
                 });
+            let font =
+                crate::ui::controls::pending_font(iced::Font::DEFAULT, event.details.sending);
             let time = text(calendar::schedule::time_label(
                 event,
                 state.config.appearance.time_format,
             ))
-            .size(metrics.label());
+            .size(metrics.label())
+            .font(font);
             let title = text(if hidden {
                 PRIVATE_TITLE.into()
             } else {
                 calendar::schedule::title(event, day)
             })
-            .size(metrics.label());
+            .size(metrics.label())
+            .font(font);
             let time = if past {
                 time.style(text::secondary)
             } else {

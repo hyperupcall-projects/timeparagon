@@ -3194,11 +3194,21 @@ textarea {
     }
 }
 
-/* A change on its way to Google: greyed out and locked until Google answers. */
+/* A change on its way to Google: outlined in blue, italic, and locked until
+   Google answers. Keep in step with `PENDING_BORDER` in src/ui/controls.rs. */
+:root {
+  --pending-border: #3b82f6;
+}
+
 [data-sending="true"] {
-  opacity: 0.45;
-  filter: grayscale(0.6);
+  outline: 2px solid var(--pending-border);
+  outline-offset: -2px;
+  font-style: italic;
   pointer-events: none;
+}
+
+[data-sending="true"] * {
+  font-style: italic;
 }
 
 /* ------------------------------------------------------------------ sleep */
