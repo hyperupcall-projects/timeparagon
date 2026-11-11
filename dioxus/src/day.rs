@@ -678,7 +678,9 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         &priority,
         &blocks,
     );
-    let (task_groups, tasks_hidden) = task_groups(&events, snapshot, settings, &block_refs);
+    let shown_blocks: Vec<Event> = blocks.iter().map(|block| block.event.clone()).collect();
+    let (task_groups, tasks_hidden) =
+        task_groups(&events, snapshot, settings, &block_refs, &shown_blocks);
 
     let summary = day_summary(snapshot, &events, settings);
 
@@ -937,6 +939,7 @@ fn task_groups(
     snapshot: &Snapshot,
     settings: &CalendarSettings,
     blocks: &HashMap<String, BlockRef>,
+    block_events: &[Event],
 ) -> (Vec<TaskGroup>, bool) {
     let mut groups: Vec<TaskGroup> = Vec::new();
 
@@ -964,10 +967,8 @@ fn task_groups(
         };
 
         let metadata = tb::metadata(event);
-        let block = metadata
-            .block
-            .as_ref()
-            .and_then(|key| blocks.get(key))
+        let block = tb::block_of(event, block_events, settings.day_start_hour())
+            .and_then(|block| blocks.get(&tb::block_key(block)))
             .cloned();
         groups[group_index].tasks.push(TaskRow {
             event: event.clone(),

@@ -19,16 +19,7 @@ pub fn task_row<'a>(
 ) -> Element<'a, Message> {
     let m = tb::metadata(task);
     let overdue = tb::overdue(task);
-    let over_capacity = m
-        .block
-        .as_ref()
-        .and_then(|key| {
-            state
-                .calendar
-                .events
-                .iter()
-                .find(|e| !e.is_task() && tb::block_key(e) == *key)
-        })
+    let over_capacity = tb::block_of(task, &state.calendar.events, tb::day_start_hour(state))
         .is_some_and(|block| {
             let tasks = tb::assigned(state, block);
             let mut total = 0u64;
