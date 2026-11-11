@@ -1,7 +1,7 @@
 # TimeSlay for Slack
 
 A small Slack app that adds a message to your TimeSlay inbox. It talks to the
-same `timeslay --webextension` native host the browser extension uses, so a
+same `timeslay webextension` native host the browser extension uses, so a
 Slack task gets the Gmail-aware link handling and the running-app IPC for free.
 
 The task's description holds the **whole message** (text, attachments and file
@@ -168,7 +168,7 @@ and [OAuth guide](https://docs.slack.dev/authentication/installing-with-oauth/).
 Slack (shortcut / command / home)
   └─ app.ts                       (builds the task from the Slack message)
        └─ timeslay.ts             (spawns the native host, frames one message)
-            └─ timeslay --webextension
+            └─ timeslay webextension
                  ├─ integrations::recognize/fetch   (Gmail subject, if any)
                  ├─ ipc::WINDOW / SIDEBAR / DOCK    (running app writes it)
                  └─ inbox::add                      (fallback if the app is closed)

@@ -46,7 +46,7 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 # Browsers cannot pass arguments to a native host, so the host manifest points
-# at this tiny wrapper. It is the only thing that adds --webextension.
+# at this tiny wrapper. It is the only thing that adds the webextension command.
 # Chrome and Firefox append the caller's origin to the command line; the host
 # does not need it, so it is dropped rather than forwarded.
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/timeslay"
@@ -54,7 +54,7 @@ mkdir -p -- "$DATA_DIR"
 WRAPPER="$DATA_DIR/timeslay-webextension"
 cat > "$WRAPPER" <<EOF
 #!/bin/sh
-exec "$BIN" --webextension
+exec "$BIN" webextension
 EOF
 chmod 0755 -- "$WRAPPER"
 

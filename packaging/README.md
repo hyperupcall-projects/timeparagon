@@ -11,22 +11,22 @@ desktop session:
   `~/.config/systemd/user/timeslay.service` and is enabled so the timer
   daemon starts with your graphical session;
 - a second service, `timeslay-shortcuts.service`, runs
-  `timeslay --daemon` so the global shortcuts (below) are ready and
+  `timeslay daemon` so the global shortcuts (below) are ready and
   listening;
 - `timeslay-slack.service` runs the Slack inbox bridge at login and restarts
   it on failure. The installer requires Node **22.18+** and npm and installs
   the bridge's production dependencies automatically.
 
 There is a single `timeslay` binary. The side panel, the dock and the
-shortcut daemon are modes of it, chosen by a flag (`timeslay --help` lists
-them):
+shortcut daemon are modes of it, chosen by a subcommand (`timeslay --help`
+lists them):
 
 | Command | What it runs |
 | --- | --- |
-| `timeslay` | The side panel (same as `--sidebar`) |
-| `timeslay --sidebar` | The side panel: the full app in a wide strip down a screen edge |
-| `timeslay --dock` | The dock: a very thin strip of today along a screen edge |
-| `timeslay --daemon` | The background process that owns the global shortcuts |
+| `timeslay` | The side panel (same as `sidebar`) |
+| `timeslay sidebar` | The side panel: the full app in a wide strip down a screen edge |
+| `timeslay dock` | The dock: a very thin strip of today along a screen edge |
+| `timeslay daemon` | The background process that owns the global shortcuts |
 
 Nothing needs root; everything lives under your home directory.
 
@@ -141,14 +141,14 @@ on the right rather than over the view: the window widens by `detail_width`
 beside the calendar or backlog. When the time block editor is open too, the
 details pane sits to the right of it. `detail_width` is the pane's default width.
 
-`timeslay --sidebar` opens **TimeSlay itself** as a slim panel — 200px
+`timeslay sidebar` opens **TimeSlay itself** as a slim panel — 200px
 wide by default — down the **left** edge of the screen. It is a separate
 instance of the real application, not a second, cut-down view: the same clock,
 calendar and settings, just in a narrow window.
 
 ### Shortcuts
 
-The shortcuts are owned by `timeslay --daemon`, a small process that does
+The shortcuts are owned by `timeslay daemon`, a small process that does
 nothing but register the keys through KDE's KGlobalAccel and show, hide or
 reshape the panel and the dock. There are two actions:
 
@@ -222,12 +222,12 @@ floating/fullscreen windows cannot overlap it.
 To run the shortcut daemon without installing it, launch it directly:
 
 ```sh
-cargo run --release -- --daemon
+cargo run --release -- daemon
 ```
 
 ## Dock strip
 
-`timeslay --dock` is a much thinner companion than the panel: a thin line
+`timeslay dock` is a much thinner companion than the panel: a thin line
 (the **Dock width** setting, 10px by default) down the left edge of the screen
 showing today. It is a real `zwlr_layer_shell_v1` surface, so it needs no window rule. KDE Plasma, Sway,
 Hyprland, niri and COSMIC provide that protocol; GNOME does not.
@@ -258,8 +258,8 @@ Switching modes: in the side panel, open the calendar **Menu** and press
 square at the very top of the dock brings back the panel and closes the dock.
 
 ```sh
-timeslay --dock
-cargo run --release -- --dock   # from a checkout
+timeslay dock
+cargo run --release -- dock   # from a checkout
 ```
 
 The **Toggle Shape** shortcut switches between the panel and the dock without

@@ -76,7 +76,7 @@ function isAddResult(value: unknown): value is AddResult {
 }
 
 /**
- * Runs `timeslay --webextension` for one message. The binary is the same
+ * Runs `timeslay webextension` for one message. The binary is the same
  * native host the browser uses, so the Slack app and the extension share one
  * code path (including the Gmail-aware link handling and the running-app IPC).
  */
@@ -121,7 +121,7 @@ export async function addToInbox(
 
     let child;
     try {
-      child = spawn(bin, ["--webextension"], {
+      child = spawn(bin, ["webextension"], {
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -157,7 +157,7 @@ export async function addToInbox(
       if (stdout.length === 0) {
         finish(
           failure(
-            `${bin} --webextension exited with code ${code ?? "unknown"} and sent no reply`,
+            `${bin} webextension exited with code ${code ?? "unknown"} and sent no reply`,
           ),
         );
         return;

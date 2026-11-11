@@ -6,7 +6,7 @@
 # *user* services so the app and the shortcut daemon start with your graphical
 # session and the Slack bridge starts at login. Requires Node 22.18+ and npm.
 # There is one `timeslay` binary: the side panel, the dock and the
-# shortcut daemon are its --sidebar, --dock and --daemon modes.
+# shortcut daemon are its sidebar, dock and daemon subcommands.
 #
 # Everything lands under your home directory by default; nothing needs root.
 #

@@ -1,4 +1,4 @@
-//! The shortcut daemon (`timeslay --daemon`): global shortcuts that show,
+//! The shortcut daemon (`timeslay daemon`): global shortcuts that show,
 //! hide and reshape TimeSlay **itself**.
 //!
 //! Two mechanisms (documented in `IMPLEMENTATION.md`):
@@ -8,8 +8,8 @@
 //!    process to be registered first.
 //!
 //! TimeSlay has two shapes, both started from the one binary: the **panel**
-//! (`timeslay --sidebar`, the full app in a wide edge strip) and the
-//! **dock** (`timeslay --dock`, a very thin strip of today). The daemon
+//! (`timeslay sidebar`, the full app in a wide edge strip) and the
+//! **dock** (`timeslay dock`, a very thin strip of today). The daemon
 //! draws neither. It has three actions, each of which can have several
 //! shortcuts:
 //!
