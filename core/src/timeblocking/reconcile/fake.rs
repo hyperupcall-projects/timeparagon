@@ -341,6 +341,35 @@ impl FakeGoogle {
             .or_default()
     }
 
+    /// A task on its own on `day`, all day, on the app calendar.
+    pub fn add_calendar_task(&mut self, day: NaiveDate, title: &str, minutes: u32) -> Event {
+        let id = self.id("ttsingle");
+        let task_id = 1000 + i64::from(self.next_id);
+        let start = calendar::at_clock(day, 0, 0);
+        let task = Event {
+            id,
+            calendar_id: CALENDAR.into(),
+            title: title.into(),
+            start,
+            end: start + Duration::days(1),
+            all_day: true,
+            color: calendar::colors::TASK,
+            completed: false,
+            details: Details {
+                task_data: Some(TaskData {
+                    id: task_id,
+                    metadata: Metadata {
+                        minutes,
+                        ..Default::default()
+                    },
+                }),
+                ..Default::default()
+            },
+        };
+        self.singles.push(task.clone());
+        task
+    }
+
     /// Edit one occurrence's time.
     pub fn move_occurrence(&mut self, series: &str, day: NaiveDate, start: DateTime<Local>) {
         let length = {
@@ -642,5 +671,295 @@ impl Remote for FakeGoogle {
             }
         }
         Ok(())
+    }
+}
+
+/// The same Google, answering Google Calendar's REST API, so the code that
+/// talks to the real one ([`crate::calendar::api::block_sync`]) can be run
+/// against it. Only what the reconciler uses is answered.
+impl FakeGoogle {
+    pub fn answer(
+        &mut self,
+        method: &str,
+        url: &str,
+        body: Option<&str>,
+    ) -> Result<String, (u16, String)> {
+        use serde_json::Value;
+        let rest = url
+            .strip_prefix(crate::calendar::api::EVENTS)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .ok_or((400, format!("not a calendar URL: {url}")))?;
+        let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let decode = |text: &str| urlencoding::decode(text).unwrap().into_owned();
+        let query: std::collections::HashMap<String, String> = query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .map(|(key, value)| (key.to_owned(), decode(value)))
+            .collect();
+        let time = |key: &str| {
+            query.get(key).map(|value| {
+                DateTime::parse_from_rfc3339(value)
+                    .unwrap()
+                    .with_timezone(&Local)
+            })
+        };
+        let parts: Vec<String> = path.split('/').map(decode).collect();
+        let body: Option<Value> = body.map(|body| serde_json::from_str(body).unwrap());
+        let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+        let reply = |value: Value| Ok(value.to_string());
+        match (method, parts.as_slice()) {
+            ("GET", [calendar, "events"]) => {
+                let first = time("timeMin").unwrap();
+                let last = time("timeMax").unwrap();
+                let listing = self.listing(calendar, first, last).unwrap();
+                let mut items: Vec<Value> = listing.events.iter().map(event_json).collect();
+                for (series, original) in listing.cancelled {
+                    items.push(serde_json::json!({
+                        "id": format!("{series}_{}", stamp(original)),
+                        "status": "cancelled",
+                        "recurringEventId": series,
+                        "originalStartTime": {"dateTime": original.to_rfc3339()},
+                    }));
+                }
+                reply(serde_json::json!({ "items": items }))
+            }
+            ("GET", [calendar, "events", id]) => {
+                if let Some(series) = self
+                    .series
+                    .iter()
+                    .find(|s| s.master.id == *id && s.master.calendar == *calendar)
+                {
+                    return reply(if series.cancelled {
+                        serde_json::json!({"id": id, "status": "cancelled"})
+                    } else {
+                        master_json(series)
+                    });
+                }
+                if let Some(single) = self.singles.iter().find(|e| e.id == *id) {
+                    return reply(event_json(single));
+                }
+                match self.instance(id) {
+                    Some((index, original)) => {
+                        reply(match self.occurrence(&self.series[index], original) {
+                            Some(event) => event_json(&event),
+                            None => serde_json::json!({"id": id, "status": "cancelled"}),
+                        })
+                    }
+                    None => Err((404, "Not Found".into())),
+                }
+            }
+            ("GET", [calendar, "events", id, "instances"]) => {
+                let fake = self
+                    .find_on(calendar, id)
+                    .ok_or((404, "Not Found".to_owned()))?;
+                let (first, last) = (time("timeMin"), time("timeMax"));
+                let items: Vec<Value> = expand(&fake.master, horizon())
+                    .into_iter()
+                    .filter_map(|start| self.occurrence(fake, start))
+                    .filter(|e| first.is_none_or(|first| e.end > first))
+                    .filter(|e| last.is_none_or(|last| e.start < last))
+                    .map(|e| event_json(&e))
+                    .collect();
+                reply(serde_json::json!({ "items": items }))
+            }
+            ("PATCH", [_, "events", id]) => {
+                let body = body.unwrap();
+                let start = rest_time(&body["start"]);
+                let end = rest_time(&body["end"]);
+                if let Some(fake) = self.find_mut(id) {
+                    if let Some(lines) = body["recurrence"].as_array() {
+                        fake.master.recurrence = lines
+                            .iter()
+                            .map(|line| line.as_str().unwrap().to_owned())
+                            .collect();
+                    }
+                    if let (Some(start), Some(end)) = (start, end) {
+                        fake.master.start = start;
+                        fake.master.end = end;
+                    }
+                    return reply(Value::Null);
+                }
+                // Given a repeat rule, a one-off event becomes a series.
+                let rule: Vec<String> =
+                    serde_json::from_value(body["recurrence"].clone()).unwrap_or_default();
+                if !rule.is_empty()
+                    && let Some(index) = self.singles.iter().position(|e| e.id == *id)
+                {
+                    let single = self.singles.remove(index);
+                    let properties = &body["extendedProperties"];
+                    self.series.push(FakeSeries {
+                        master: Series {
+                            calendar: single.calendar_id.clone(),
+                            id: single.id.clone(),
+                            recurrence: rule,
+                            start: start.unwrap_or(single.start),
+                            end: end.unwrap_or(single.end),
+                            all_day: false,
+                            split_from: Vec::new(),
+                            task: crate::calendar::calendar_tasks::read_data(properties)
+                                .ok()
+                                .or(single.details.task_data),
+                        },
+                        title: single.title,
+                        cancelled: false,
+                        exceptions: BTreeMap::new(),
+                    });
+                    return reply(Value::Null);
+                }
+                if let Some(single) = self.singles.iter_mut().find(|e| e.id == *id) {
+                    if let (Some(start), Some(end)) = (start, end) {
+                        single.start = start;
+                        single.end = end;
+                        single.all_day = body["start"]["date"].is_string();
+                    }
+                    if body["extendedProperties"]["private"]["ttDataCount"].is_string() {
+                        single.details.task_data = Some(
+                            crate::calendar::calendar_tasks::read_data(&body["extendedProperties"])
+                                .unwrap(),
+                        );
+                    }
+                    return reply(Value::Null);
+                }
+                let (index, original) = self.instance(id).ok_or((404, "Not Found".to_owned()))?;
+                let exception = self.series[index].exceptions.entry(original).or_default();
+                if let (Some(start), Some(end)) = (start, end) {
+                    exception.start = Some(start);
+                    exception.end = Some(end);
+                }
+                if let Some(done) = body["extendedProperties"]["private"]["ttCompleted"].as_str() {
+                    exception.completed = done == "true";
+                }
+                reply(Value::Null)
+            }
+            ("POST", [calendar, "events"]) => {
+                let body = body.unwrap();
+                let id = body["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| self.id("posted"));
+                if self.series.iter().any(|s| s.master.id == id)
+                    || self.singles.iter().any(|e| e.id == id)
+                {
+                    return Err((409, "The requested identifier already exists.".into()));
+                }
+                let properties = &body["extendedProperties"];
+                let master = Series {
+                    calendar: (*calendar).to_owned(),
+                    id: id.clone(),
+                    recurrence: serde_json::from_value(body["recurrence"].clone())
+                        .unwrap_or_default(),
+                    start: rest_time(&body["start"]).unwrap(),
+                    end: rest_time(&body["end"]).unwrap(),
+                    all_day: false,
+                    split_from: properties["private"]["ttSplitFrom"]
+                        .as_str()
+                        .map(|value| serde_json::from_str(value).unwrap())
+                        .unwrap_or_default(),
+                    task: crate::calendar::calendar_tasks::read_data(properties).ok(),
+                };
+                self.series.push(FakeSeries {
+                    master,
+                    title: body["summary"].as_str().unwrap_or_default().to_owned(),
+                    cancelled: false,
+                    exceptions: BTreeMap::new(),
+                });
+                reply(serde_json::json!({ "id": id }))
+            }
+            ("DELETE", [_, "events", id]) => {
+                if let Some(fake) = self.find_mut(id) {
+                    fake.cancelled = true;
+                    return Ok(String::new());
+                }
+                if let Some(index) = self.singles.iter().position(|e| e.id == *id) {
+                    self.singles.remove(index);
+                    return Ok(String::new());
+                }
+                let (index, original) = self.instance(id).ok_or((404, "Not Found".to_owned()))?;
+                let exception = self.series[index].exceptions.entry(original).or_default();
+                if exception.cancelled {
+                    return Err((410, "Resource has been deleted".into()));
+                }
+                exception.cancelled = true;
+                Ok(String::new())
+            }
+            _ => Err((400, format!("the fake does not answer {method} {url}"))),
+        }
+    }
+}
+
+/// A start or end as Google writes it.
+fn rest_time(value: &serde_json::Value) -> Option<DateTime<Local>> {
+    if let Some(time) = value["dateTime"].as_str() {
+        return Some(
+            DateTime::parse_from_rfc3339(time)
+                .ok()?
+                .with_timezone(&Local),
+        );
+    }
+    let date = NaiveDate::parse_from_str(value["date"].as_str()?, "%Y-%m-%d").ok()?;
+    Some(calendar::at_clock(date, 0, 0))
+}
+
+/// An event or occurrence as Google lists it.
+fn event_json(event: &Event) -> serde_json::Value {
+    let time = |when: DateTime<Local>| {
+        if event.all_day {
+            serde_json::json!({"date": when.date_naive().to_string()})
+        } else {
+            serde_json::json!({"dateTime": when.to_rfc3339(), "timeZone": "UTC"})
+        }
+    };
+    let mut value = serde_json::json!({
+        "id": event.id,
+        "status": "confirmed",
+        "summary": event.title,
+        "start": time(event.start),
+        "end": time(event.end),
+        "extendedProperties": {"private": {}},
+    });
+    if let Some(series) = &event.details.recurring_event_id {
+        value["recurringEventId"] = series.clone().into();
+        value["originalStartTime"] =
+            serde_json::json!({"dateTime": event.details.original_start.unwrap().to_rfc3339()});
+    }
+    properties(
+        &mut value,
+        &event.details.split_from,
+        event.details.task_data.as_ref(),
+        event.completed,
+    );
+    value
+}
+
+/// A series' master event as Google gives it.
+fn master_json(series: &FakeSeries) -> serde_json::Value {
+    let master = &series.master;
+    let mut value = serde_json::json!({
+        "id": master.id,
+        "status": "confirmed",
+        "summary": series.title,
+        "start": {"dateTime": master.start.to_rfc3339(), "timeZone": "UTC"},
+        "end": {"dateTime": master.end.to_rfc3339(), "timeZone": "UTC"},
+        "recurrence": master.recurrence,
+        "extendedProperties": {"private": {}},
+    });
+    properties(&mut value, &master.split_from, master.task.as_ref(), false);
+    value
+}
+
+fn properties(
+    value: &mut serde_json::Value,
+    split_from: &[String],
+    task: Option<&TaskData>,
+    completed: bool,
+) {
+    if !split_from.is_empty() {
+        value["extendedProperties"]["private"]["ttSplitFrom"] =
+            serde_json::to_string(split_from).unwrap().into();
+    }
+    if let Some(data) = task {
+        value["extendedProperties"]["private"]["ttKind"] = "task".into();
+        value["extendedProperties"]["private"]["ttCompleted"] = completed.to_string().into();
+        crate::calendar::calendar_tasks::write_data(value, data).unwrap();
     }
 }

@@ -239,12 +239,24 @@ pub fn save(
             task, settings, change, order,
         )?);
     }
+    let token = access(settings)?;
+    send(task, settings, change, order, &token)
+}
+
+/// Sends one change to Google with `token`, and records what Google then
+/// holds. What [`save`] does once the write is on its way.
+pub fn send(
+    task: Event,
+    settings: &CalendarSettings,
+    change: Change,
+    order: i64,
+    token: &str,
+) -> Result<Event, GoogleError> {
     let mut database = crate::task_db::open()?;
     let data = database.import(&task)?;
     let mut original = task;
     original.details.task_data = Some(data);
     let mut saved = calendar::calendar_tasks::apply(original.clone(), settings, &change, order)?;
-    let token = access(settings)?;
     if let Change::JoinBlockSeries {
         calendar,
         series,
@@ -253,9 +265,9 @@ pub fn save(
         && saved.details.recurring_event_id.is_none()
     {
         saved.details.recurrence =
-            calendar::api::series_recurrence_from(&token, calendar, series, *from)?;
+            calendar::api::series_recurrence_from(token, calendar, series, *from)?;
     }
-    calendar::calendar_tasks::persist(&token, &original, &mut saved, settings)?;
+    calendar::calendar_tasks::persist(token, &original, &mut saved, settings)?;
     database.save(
         &saved,
         saved

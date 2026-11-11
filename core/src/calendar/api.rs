@@ -15,6 +15,53 @@ use crate::hex;
 
 pub mod block_sync;
 
+/// Stands in for Google in tests: answers a request's method, URL and JSON
+/// body with the response body, or with an HTTP status and message.
+#[cfg(test)]
+pub(crate) type Transport =
+    Box<dyn FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)>>;
+
+#[cfg(test)]
+thread_local! {
+    static TRANSPORT: std::cell::RefCell<Option<Transport>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `body` with this thread's Google Calendar calls answered by
+/// `transport` instead of Google.
+#[cfg(test)]
+pub(crate) fn with_transport<T>(transport: Transport, body: impl FnOnce() -> T) -> T {
+    TRANSPORT.with(|slot| *slot.borrow_mut() = Some(transport));
+    let result = body();
+    TRANSPORT.with(|slot| *slot.borrow_mut() = None);
+    result
+}
+
+/// The test stand-in's answer, when one is installed on this thread.
+#[cfg(test)]
+pub(crate) fn faked(
+    method: &str,
+    url: &str,
+    body: Option<&str>,
+) -> Option<Result<String, (u16, String)>> {
+    TRANSPORT.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .map(|transport| transport(method, url, body))
+    })
+}
+
+#[cfg(test)]
+fn faked_google(
+    method: &str,
+    url: &str,
+    body: Option<&str>,
+) -> Option<Result<String, GoogleError>> {
+    faked(method, url, body).map(|answer| {
+        answer
+            .map_err(|(status, detail)| GoogleError::from_status("Google Calendar", status, detail))
+    })
+}
+
 const CALENDAR_LIST: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 pub const EVENTS: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
@@ -2652,6 +2699,11 @@ pub fn get<T: serde::de::DeserializeOwned>(
     url: &str,
     access_token: &str,
 ) -> Result<T, GoogleError> {
+    #[cfg(test)]
+    if let Some(answer) = faked_google("GET", url, None) {
+        return serde_json::from_str(&answer?)
+            .map_err(|error| GoogleError::transport("Google Calendar response", error));
+    }
     let result = agent()
         .get(url)
         .set("Authorization", &format!("Bearer {access_token}"))
@@ -2669,6 +2721,10 @@ pub fn get<T: serde::de::DeserializeOwned>(
 /// from Calendar or Tasks rather than from whichever call site happened to
 /// share this helper.
 pub fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), GoogleError> {
+    #[cfg(test)]
+    if let Some(answer) = faked_google("PATCH", url, Some(body)) {
+        return answer.map(|_| ());
+    }
     let result = agent()
         .request("PATCH", url)
         .set("Authorization", &format!("Bearer {access_token}"))
@@ -2683,6 +2739,10 @@ pub fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result
 /// A successful deletion comes back as `204 No Content` with no body, so there
 /// is nothing to parse. Blocking: call it from the app's `blocking::run`.
 fn delete(url: &str, access_token: &str, context: &str) -> Result<(), GoogleError> {
+    #[cfg(test)]
+    if let Some(answer) = faked_google("DELETE", url, None) {
+        return answer.map(|_| ());
+    }
     let result = agent()
         .request("DELETE", url)
         .set("Authorization", &format!("Bearer {access_token}"))
@@ -2701,6 +2761,10 @@ pub fn post(
     body: &str,
     context: &str,
 ) -> Result<String, GoogleError> {
+    #[cfg(test)]
+    if let Some(answer) = faked_google("POST", url, Some(body)) {
+        return answer;
+    }
     let result = agent()
         .post(url)
         .set("Authorization", &format!("Bearer {access_token}"))

@@ -382,12 +382,12 @@ impl Remote for GoogleRemote<'_> {
             }
             Fix::Release { task } => {
                 let order = crate::timeblocking::metadata(task).order;
-                task_edit::save(
+                task_edit::send(
                     (**task).clone(),
                     self.settings,
                     Change::Unassign,
                     order,
-                    task_edit::google_access,
+                    &self.token,
                 )
                 .map_err(String::from)?;
             }
