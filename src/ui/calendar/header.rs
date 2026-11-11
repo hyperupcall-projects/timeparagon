@@ -310,11 +310,18 @@ pub(crate) fn weekly_task_chip<'a>(
     } else {
         crate::timeblocking::task_label(task)
     };
-    let title = button(text(label).size(metrics.label()))
-        .padding([3, 2])
-        .width(Fill)
-        .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
-        .style(crate::ui::controls::ghost);
+    let title = button(
+        text(label)
+            .size(metrics.label())
+            .font(crate::ui::controls::pending_font(
+                iced::Font::DEFAULT,
+                task.details.sending,
+            )),
+    )
+    .padding([3, 2])
+    .width(Fill)
+    .on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
+    .style(crate::ui::controls::ghost);
     let chip = super::super::task_drag::task_drag(
         container(row![check, title].spacing(2).align_y(Alignment::Center))
             .width(Fill)

@@ -284,9 +284,14 @@ fn habit_row<'a>(
         .dragging
         .as_ref()
         .is_some_and(|drag| drag.id == habit.id);
+    let writing = store.writing.contains(&habit.id);
 
     let name = text(&habit.name)
         .size(metrics.label() + 1.0)
+        .font(crate::ui::controls::pending_font(
+            iced::Font::DEFAULT,
+            writing,
+        ))
         .wrapping(text::Wrapping::None)
         .style(colored(habit.color));
     let identity = row![
@@ -313,18 +318,20 @@ fn habit_row<'a>(
         cells = cells.push(day_button(habit, day, status, width));
     }
 
-    container(cells)
-        .padding([0, 8])
-        .width(Fill)
-        .style(move |theme: &Theme| {
-            let mut style = crate::ui::controls::card_surface(theme);
-            if dragging {
-                style.border.color = theme.extended_palette().primary.base.color;
-                style.border.width = 1.0;
-            }
-            style
-        })
-        .into()
+    crate::ui::controls::locked(
+        container(cells)
+            .padding([0, 8])
+            .width(Fill)
+            .style(move |theme: &Theme| {
+                let mut style = crate::ui::controls::card_surface(theme);
+                if dragging {
+                    style.border.color = theme.extended_palette().primary.base.color;
+                    style.border.width = 1.0;
+                }
+                style
+            }),
+        writing,
+    )
 }
 
 fn day_button<'a>(
@@ -917,6 +924,10 @@ fn events_card<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Ele
 fn event_row<'a>(state: &'a State, series: &'a Series, metrics: &Metrics) -> Element<'a, Message> {
     let format = state.config.appearance.time_format;
     let busy = state.habits.busy;
+    let font = crate::ui::controls::pending_font(
+        iced::Font::DEFAULT,
+        state.habits.writing.contains(&series.id),
+    );
     let mut edit =
         crate::ui::controls::quiet_button(text("Edit").size(metrics.label())).padding([2, 6]);
     let mut unlink =
@@ -925,25 +936,31 @@ fn event_row<'a>(state: &'a State, series: &'a Series, metrics: &Metrics) -> Ele
         edit = edit.on_press(msg(Action::EditEvent(series.id.clone())));
         unlink = unlink.on_press(msg(Action::UnlinkEvent(series.id.clone())));
     }
-    column![
-        row![
-            super::calendar::color_circle(series.color(&state.config.calendar)),
-            text(&series.title).size(metrics.label()).width(Fill),
-            edit,
-            unlink,
+    crate::ui::controls::locked(
+        column![
+            row![
+                super::calendar::color_circle(series.color(&state.config.calendar)),
+                text(&series.title)
+                    .size(metrics.label())
+                    .font(font)
+                    .width(Fill),
+                edit,
+                unlink,
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+            text(format!(
+                "{} · {}",
+                series.recurrence_label(),
+                crate::calendar::time_format::range(series.start, series.end, format),
+            ))
+            .size(metrics.label() - 1.0)
+            .font(font)
+            .style(text::secondary),
         ]
-        .spacing(6)
-        .align_y(Alignment::Center),
-        text(format!(
-            "{} · {}",
-            series.recurrence_label(),
-            crate::calendar::time_format::range(series.start, series.end, format),
-        ))
-        .size(metrics.label() - 1.0)
-        .style(text::secondary),
-    ]
-    .spacing(2)
-    .into()
+        .spacing(2),
+        state.habits.writing.contains(&series.id),
+    )
 }
 
 // --------------------------------------------------------- add and edit page

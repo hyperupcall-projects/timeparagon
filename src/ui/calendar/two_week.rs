@@ -381,6 +381,10 @@ fn task_row<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a
     let title = button(
         text(label)
             .size(metrics.label())
+            .font(crate::ui::controls::pending_font(
+                iced::Font::DEFAULT,
+                task.details.sending,
+            ))
             .wrapping(text::Wrapping::None),
     )
     .padding(0)

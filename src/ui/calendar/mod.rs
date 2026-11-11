@@ -272,6 +272,10 @@ fn event_label<'a>(state: &State, event: &Event, label: String, size: f32) -> El
     let mut content = row![
         text(label)
             .size(size)
+            .font(crate::ui::controls::pending_font(
+                iced::Font::DEFAULT,
+                event.details.sending,
+            ))
             .wrapping(text::Wrapping::None)
             .width(Fill)
     ]

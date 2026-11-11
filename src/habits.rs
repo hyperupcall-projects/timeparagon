@@ -331,6 +331,9 @@ pub struct Store {
     pub completing: HashSet<String>,
     /// A Calendar write is in flight.
     pub busy: bool,
+    /// The habits and calendar events whose Calendar write is in flight, so
+    /// they can be shown as not yet final.
+    pub writing: HashSet<String>,
     pub error: Option<String>,
     /// A deletion waiting for confirmation, by habit id.
     pub confirm_delete: Option<String>,
@@ -933,6 +936,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::DeleteConfirmed(id) => delete(state, id),
         Action::Deleted(id, result) => {
             state.habits.busy = false;
+            state.habits.writing.clear();
             state.habits.confirm_delete = None;
             if let Err(error) = result {
                 state.habits.error = Some(error);
@@ -993,6 +997,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         Action::UnlinkEvent(series_id) => link(state, series_id, None),
         Action::Linked(series_id, habit_id, result) => {
             state.habits.busy = false;
+            state.habits.writing.clear();
             if let Err(error) = result {
                 state.habits.error = Some(error);
                 return Task::none();
@@ -1262,6 +1267,7 @@ fn delete(state: &mut State, id: String) -> Task<Message> {
     let delete_events = state.habits.delete_events;
     let client = calendar::GoogleClient::from_settings(&state.config.calendar);
     state.habits.busy = true;
+    state.habits.writing.insert(id.clone());
     state.habits.error = None;
     let result_id = id.clone();
     blocking::run(move || {
@@ -1329,6 +1335,7 @@ fn write_link(
 ) -> Task<Message> {
     let client = calendar::GoogleClient::from_settings(&state.config.calendar);
     state.habits.busy = true;
+    state.habits.writing.insert(series_id.clone());
     state.habits.error = None;
     let event_id = series_id.clone();
     let link = habit_id.clone();
@@ -1407,6 +1414,7 @@ fn edit_event(state: &mut State, id: String) -> Task<Message> {
 
 fn saved_event(state: &mut State, result: Result<HabitEvent, String>) -> Task<Message> {
     state.habits.busy = false;
+    state.habits.writing.clear();
     match result {
         Ok(event) => {
             let series = Series::from_event(event);

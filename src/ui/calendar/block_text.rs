@@ -27,7 +27,9 @@ pub(super) fn draw_block_label(
     when: &str,
     ink: Color,
     title_size: f32,
+    pending: bool,
 ) {
+    let font = crate::ui::controls::pending_font(Font::DEFAULT, pending);
     let when_size = title_size - 1.0;
     let title_line = line_height(title_size);
     let when_line = line_height(when_size);
@@ -49,7 +51,7 @@ pub(super) fn draw_block_label(
                 ),
                 color: ink,
                 size: Pixels(title_size),
-                font: Font::DEFAULT,
+                font,
                 align_x: iced::alignment::Horizontal::Left.into(),
                 align_y: iced::alignment::Vertical::Top,
                 line_height: text::LineHeight::default(),
@@ -77,7 +79,7 @@ pub(super) fn draw_block_label(
                 position: Point::new(bounds.x + BLOCK_PADDING, top),
                 color: ink.scale_alpha(0.85),
                 size: Pixels(when_size),
-                font: Font::DEFAULT,
+                font,
                 align_x: iced::alignment::Horizontal::Left.into(),
                 align_y: iced::alignment::Vertical::Top,
                 line_height: text::LineHeight::default(),

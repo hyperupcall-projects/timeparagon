@@ -230,8 +230,9 @@ fn due_label(due: &crate::calendar::deadline::Deadline, time_format: TimeFormat)
 }
 
 pub(super) fn task_title<'a>(task: &'a Event, size: f32) -> Element<'a, Message> {
+    let font = crate::ui::controls::pending_font(iced::Font::DEFAULT, task.details.sending);
     if tb::task_status(task) == tb::TaskStatus::Ignored {
-        rich_text::<(), _, _, _>([span(task.title.as_str()).strikethrough(true)])
+        rich_text::<(), _, _, _>([span(task.title.as_str()).strikethrough(true).font(font)])
             .size(size)
             .width(Fill)
             .style(text::secondary)
@@ -239,6 +240,7 @@ pub(super) fn task_title<'a>(task: &'a Event, size: f32) -> Element<'a, Message>
     } else {
         text(&task.title)
             .size(size)
+            .font(font)
             .width(Fill)
             .style(if task.completed {
                 text::secondary

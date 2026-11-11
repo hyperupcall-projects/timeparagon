@@ -465,6 +465,7 @@ fn title_text<'a>(
         },
         ..iced::Font::default()
     };
+    let font = crate::ui::controls::pending_font(font, task.details.sending);
     if tb::task_status(task) == tb::TaskStatus::Ignored {
         rich_text::<(), _, _, _>([span(task.title.as_str()).strikethrough(true).font(font)])
             .size(size)
