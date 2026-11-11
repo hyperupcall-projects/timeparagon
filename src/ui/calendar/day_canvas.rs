@@ -1171,7 +1171,6 @@ impl DayCanvas {
             Size::new(bounds.width, bounds.height),
             EVENT_RADIUS.into(),
         );
-        frame.fill(&shape, Color::WHITE.scale_alpha(0.22));
         frame.stroke(
             &shape,
             Stroke {
@@ -1182,8 +1181,8 @@ impl DayCanvas {
         );
     }
 
-    /// Draws the block being dragged at its preview position, in the lighter
-    /// shade that marks a time change as not yet final.
+    /// Draws the block being dragged at its preview position, in its own
+    /// color with the same black outline as a hover.
     pub(super) fn draw_drag(&self, frame: &mut Frame, drag: &Drag) {
         let Some(block) = self.blocks.iter().find(|block| block.id == drag.id) else {
             return;
@@ -1195,13 +1194,13 @@ impl DayCanvas {
             EVENT_RADIUS.into(),
         );
 
-        let fill = lighten(block.color);
+        let fill = block.color;
         frame.fill(&shape, fill);
         frame.stroke(
             &shape,
             Stroke {
-                style: Style::Solid(Color::BLACK.scale_alpha(0.55)),
-                width: 1.0,
+                style: Style::Solid(Color::BLACK),
+                width: 2.0,
                 ..Stroke::default()
             },
         );
