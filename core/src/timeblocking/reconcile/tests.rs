@@ -429,9 +429,82 @@ fn the_past_is_left_alone() {
     assert!(!google.single(&one_off).all_day);
 }
 
+#[test]
+fn deleting_the_block_series_keeps_days_already_done() {
+    let mut google = FakeGoogle::default();
+    let block = google.add_block_series(at(2, 9, 0), 60, DAILY);
+    let repeating = google.add_follower(&block, day(12), "Inbox zero", 1, 30);
+    settle(&mut google, 0);
+    google.complete(&repeating, day(13));
+    google.delete_series(&block);
+    settle(&mut google, 0);
+    assert!(task_on(&google, &repeating, 13).unwrap().completed);
+    assert!(task_on(&google, &repeating, 14).is_none());
+}
+
+#[test]
+fn a_block_on_another_calendar_is_not_taken_for_deleted() {
+    let mut google = FakeGoogle::default();
+    let block = google.add_block_series_on("work", at(2, 9, 0), 60, DAILY);
+    let repeating = google.add_follower(&block, day(12), "Inbox zero", 1, 30);
+    // The task lives on the app calendar; the block does not, so the
+    // invariants (which look at one calendar) do not apply here.
+    let (first, last) = window();
+    let fixes = reconcile(&mut google, CALENDAR, first, last, 0, day(TODAY)).unwrap();
+    assert!(
+        !fixes.iter().any(|fix| matches!(
+            fix,
+            Fix::Delete { .. } | Fix::Rule { .. } | Fix::Cancel { .. }
+        )),
+        "{fixes:#?}"
+    );
+    assert!(task_on(&google, &repeating, 20).is_some());
+}
+
 fn task_on(google: &FakeGoogle, series: &str, d: u32) -> Option<Event> {
     google
         .occurrences(series)
         .into_iter()
         .find(|e| membership::original_start(e).date_naive() == day(d))
+}
+
+#[test]
+fn a_series_ended_at_an_occurrence_ends_the_day_before_it() {
+    let series = |hour: u32, minute: u32| Series {
+        calendar: CALENDAR.into(),
+        id: "s".into(),
+        recurrence: Vec::new(),
+        start: at(2, hour, minute),
+        end: at(2, hour, minute) + chrono::Duration::hours(1),
+        all_day: false,
+        split_from: Vec::new(),
+        task: None,
+    };
+    // As this app and Google write it: a second before the first occurrence
+    // dropped.
+    let until = |when: DateTime<Local>| {
+        (when - chrono::Duration::seconds(1))
+            .with_timezone(&chrono::Utc)
+            .format("%Y%m%dT%H%M%SZ")
+            .to_string()
+    };
+    assert_eq!(
+        until_day(&series(9, 0), &until(at(20, 9, 0)), 0),
+        Some(day(19))
+    );
+    assert_eq!(
+        until_day(&series(9, 0), &until(at(21, 0, 0)), 0),
+        Some(day(20))
+    );
+    assert_eq!(
+        until_day(&series(23, 0), &until(at(20, 23, 0)), 4),
+        Some(day(19))
+    );
+    // Half past midnight, with the planning day starting at 4: the 19th's
+    // occurrence is on the 20th's date.
+    assert_eq!(
+        until_day(&series(0, 30), &until(at(20, 0, 30)), 4),
+        Some(day(18))
+    );
+    assert_eq!(until_day(&series(9, 0), "20261120", 0), Some(day(20)));
 }

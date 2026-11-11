@@ -295,7 +295,8 @@ fn worker(path: &Path) -> &'static Worker {
                 loop {
                     match work {
                         Work::Write(write) => {
-                            stale |= touches_blocks(&write.job);
+                            let app = crate::config::Config::load().calendar.app_calendar;
+                            stale |= touches_blocks(&write.job, app.as_deref());
                             let entity = write.entity.clone();
                             super::series::take_noted();
                             let result = send_in(&path, write, |job| {
@@ -329,14 +330,16 @@ fn worker(path: &Path) -> &'static Worker {
     })
 }
 
-/// Whether a write can leave time blocks out of step: anything on a
-/// calendar rather than a task list, and any task edit.
-fn touches_blocks(job: &Job) -> bool {
+/// Whether a write can leave time blocks out of step: anything on the app's
+/// calendar (`app`), where blocks and the tasks repeating with them live,
+/// and any task edit.
+fn touches_blocks(job: &Job, app: Option<&str>) -> bool {
+    let on_app = |calendar: &str| app == Some(calendar);
     match job {
-        Job::Edit { original, .. } => !original.calendar_id.starts_with(ids::TASK_LIST),
+        Job::Edit { original, .. } => on_app(&original.calendar_id),
         Job::Time { calendar, .. }
         | Job::Delete { calendar, .. }
-        | Job::Create { calendar, .. } => !calendar.starts_with(ids::TASK_LIST),
+        | Job::Create { calendar, .. } => on_app(calendar),
         Job::TaskEdit { .. } | Job::CreateCalendarTask { .. } | Job::DeleteTask { .. } => true,
         Job::Location { .. }
         | Job::Status { .. }
@@ -1965,6 +1968,90 @@ mod tests {
                 .iter()
                 .any(Event::is_task)
         );
+    }
+
+    #[test]
+    fn a_repeating_occurrence_leaving_its_block_becomes_a_task_of_its_own() {
+        let settings = CalendarSettings {
+            app_calendar: Some("app".into()),
+            ..Default::default()
+        };
+        let start = at_clock(NaiveDate::from_ymd_opt(2030, 11, 4).unwrap(), 9, 0);
+        let occurrence = |n: u32, block_series: Option<&str>| Event {
+            id: format!("ttrepeat{n}_20301104T170000Z"),
+            calendar_id: "app".into(),
+            title: "Inbox zero".into(),
+            start,
+            end: start + chrono::Duration::minutes(30),
+            all_day: false,
+            color: colors::TASK,
+            completed: false,
+            details: Details {
+                recurring_event_id: Some(format!("ttrepeat{n}")),
+                task_data: Some(task_db::TaskData {
+                    id: 424_200 + i64::from(n),
+                    metadata: crate::timeblocking::Metadata {
+                        block_series: block_series.map(str::to_owned),
+                        block: Some("app/block_x".into()),
+                        minutes: 30,
+                        order: 7,
+                        ..Default::default()
+                    },
+                }),
+                ..Default::default()
+            },
+        };
+        let path = task_db::path().unwrap();
+        let gone = |event: &Event| {
+            let mut fetched = vec![event.clone()];
+            overlay(&path, &mut fetched, None).unwrap();
+            !fetched.iter().any(|shown| shown.id == event.id)
+        };
+
+        // Out of its block: a task of its own that day.
+        let first = occurrence(1, Some("app/block"));
+        let alone = edit_task(first.clone(), &settings, task_edit::Change::Unassign, 0).unwrap();
+        assert_ne!(alone.id, first.id);
+        assert!(alone.details.recurring_event_id.is_none());
+        assert!(alone.all_day && alone.start.date_naive() == start.date_naive());
+        let meta = crate::timeblocking::metadata(&alone);
+        assert!(meta.block.is_none() && meta.block_series.is_none());
+        assert_eq!((meta.minutes, alone.title.as_str()), (30, "Inbox zero"));
+        assert!(gone(&first), "the occurrence is deleted");
+
+        // Into another block: a one-off there.
+        let second = occurrence(2, Some("app/block"));
+        let later = start + chrono::Duration::hours(3);
+        let change = task_edit::Change::Block("app/other".into(), later, later);
+        let placed = edit_task(second.clone(), &settings, change, 0).unwrap();
+        assert!(placed.details.recurring_event_id.is_none());
+        assert_eq!(
+            crate::timeblocking::metadata(&placed).block.as_deref(),
+            Some("app/other")
+        );
+        assert!(gone(&second));
+
+        // A task with a repeat of its own goes into a block as a one-off.
+        let own = occurrence(3, None);
+        let change = task_edit::Change::Block("app/other".into(), later, later);
+        let placed = edit_task(own.clone(), &settings, change, 0).unwrap();
+        assert!(placed.details.recurring_event_id.is_none());
+        assert!(gone(&own));
+
+        // Laid out again inside its block, it keeps repeating with it.
+        let fourth = occurrence(4, Some("app/block"));
+        let change = task_edit::Change::Reflow(later, later + chrono::Duration::minutes(30));
+        let kept = edit_task(fourth.clone(), &settings, change, 0).unwrap();
+        assert_eq!(kept.id, fourth.id);
+        assert!(crate::timeblocking::is_follower(&kept));
+
+        // Something that repeats already cannot also repeat with a block.
+        let join = task_edit::Change::JoinBlockSeries {
+            calendar: "app".into(),
+            series: "block".into(),
+            from: start,
+        };
+        assert!(edit_task(occurrence(5, None), &settings, join, 0).is_err());
     }
 
     #[test]

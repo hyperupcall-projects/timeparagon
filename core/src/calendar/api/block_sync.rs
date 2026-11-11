@@ -143,7 +143,12 @@ impl<'a> GoogleRemote<'a> {
             let day = planning_day(crate::timeblocking::original_start(&occurrence), hour);
             let url = self.event_url(calendar, &occurrence.id);
             if skip.contains(&day) {
-                delete(&url, &self.token, "Time blocks").map_err(String::from)?;
+                match delete(&url, &self.token, "Time blocks") {
+                    Err(error) if !matches!(error.status, Some(404 | 410)) => {
+                        return Err(error.to_string());
+                    }
+                    _ => {}
+                }
             } else if done.contains(&day) {
                 let mut properties = self
                     .fetch(calendar, &occurrence.id)?
@@ -316,20 +321,20 @@ impl Remote for GoogleRemote<'_> {
                 data.metadata.block_series = Some(block_series.clone());
                 data.metadata.block = None;
                 crate::calendar::calendar_tasks::write_data(&mut copy, &data)?;
-                let response = post(
+                // Another device keeping the same blocks in step makes the
+                // same continuation with the same ID, so only one is kept.
+                let id = continuation_id(from, block_series, *start);
+                copy["id"] = id.clone().into();
+                match post(
                     &format!("{EVENTS}/{}/events", urlencoding::encode(calendar)),
                     &self.token,
                     &copy.to_string(),
                     "Time blocks",
-                )
-                .map_err(String::from)?;
-                let created: serde_json::Value =
-                    serde_json::from_str(&response).map_err(|error| error.to_string())?;
-                let id = created["id"]
-                    .as_str()
-                    .ok_or("Google did not return the new repeating task")?
-                    .to_owned();
-                self.carry(calendar, &id, skip, done)?;
+                ) {
+                    Ok(_) => self.carry(calendar, &id, skip, done)?,
+                    Err(error) if error.status == Some(409) => {}
+                    Err(error) => return Err(error.to_string()),
+                }
                 self.note(from);
                 self.note(&id);
             }
@@ -388,5 +393,184 @@ impl Remote for GoogleRemote<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// The ID a task series continuing `from` with `block_series` from `start`
+/// gets: the same on every device. Google takes IDs of 5 to 1024 characters
+/// from `a`–`v` and `0`–`9`, which hex digits are.
+fn continuation_id(from: &str, block_series: &str, start: DateTime<Local>) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{from}\n{block_series}\n{}", start.timestamp()));
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("ttc{}", &hex[..40])
+}
+
+/// Which block series a task series follows, and what Google says of it.
+fn followed(remote: &mut GoogleRemote<'_>, calendar: &str, series: &str) -> String {
+    let Ok(Some(task)) = remote.series(calendar, series) else {
+        return String::new();
+    };
+    let Some(name) = task.task.and_then(|data| data.metadata.block_series) else {
+        return String::new();
+    };
+    let Some((block_calendar, id)) = name.rsplit_once('/') else {
+        return format!(" (it follows {name})");
+    };
+    match remote.series(block_calendar, id) {
+        Ok(Some(block)) => format!(
+            " (its block series {id} on {block_calendar} repeats {}, from {})",
+            block.recurrence.join(" "),
+            block.start.format("%b %-d %Y")
+        ),
+        Ok(None) => format!(" (its block series {id} on {block_calendar} was deleted)"),
+        Err(error) => format!(" (its block series {id} could not be read: {error})"),
+    }
+}
+
+/// What keeping time blocks in step would change on the app calendar over
+/// the next weeks, and which tasks break the rule that an item in a block
+/// either repeats with it or is a one-off, as text. Reads only.
+pub fn report(settings: &CalendarSettings) -> Result<String, String> {
+    use crate::timeblocking::reconcile;
+    let calendar = settings
+        .app_calendar
+        .clone()
+        .ok_or("TimeSlay has no calendar of its own yet")?;
+    let token = super::super::GoogleClient::from_settings(settings)
+        .access_token()
+        .map_err(String::from)?;
+    let hour = settings.day_start_hour();
+    let today = crate::calendar::day_at(crate::clock::now(), hour);
+    let first = crate::calendar::at_clock(today, hour, 0);
+    let last = first + chrono::Duration::days(56);
+    let mut remote = GoogleRemote::new(token, settings, &calendar);
+    let listing = remote.listing(&calendar, first, last)?;
+    let title = |id: &str| {
+        listing
+            .events
+            .iter()
+            .find(|event| event.id == id || event.details.recurring_event_id.as_deref() == Some(id))
+            .map_or_else(|| id.to_owned(), |event| format!("“{}”", event.title))
+    };
+    let when = |at: &DateTime<Local>| at.format("%a %b %-d, %H:%M").to_string();
+    let fixes = reconcile::plan(&mut remote, &calendar, first, last, hour, today)?;
+    let mut out = format!(
+        "Time blocks from {} to {}\n\n",
+        first.format("%b %-d"),
+        last.format("%b %-d")
+    );
+    if fixes.is_empty() {
+        out.push_str("Everything is in step.\n");
+    } else {
+        out.push_str("Keeping them in step would:\n");
+        for fix in &fixes {
+            let line = match fix {
+                reconcile::Fix::Rule {
+                    series,
+                    recurrence,
+                    start,
+                    ..
+                } => format!(
+                    "repeat {} as its block does ({}), from {}",
+                    title(series),
+                    recurrence.join(" "),
+                    when(start)
+                ),
+                reconcile::Fix::Continue { from, start, .. } => format!(
+                    "carry {} on with its block from {}, as a new series",
+                    title(from),
+                    when(start)
+                ),
+                reconcile::Fix::Delete { series, .. } => {
+                    format!(
+                        "delete {}{}",
+                        title(series),
+                        followed(&mut remote, &calendar, series)
+                    )
+                }
+                reconcile::Fix::Move {
+                    event, start, end, ..
+                } => format!(
+                    "move {} to {}–{}",
+                    title(event),
+                    when(start),
+                    end.format("%H:%M")
+                ),
+                reconcile::Fix::Cancel { event, .. } => {
+                    format!("delete {} on a day its block was deleted", title(event))
+                }
+                reconcile::Fix::Release { task } => format!(
+                    "take “{}” out of a deleted block on {}",
+                    task.title,
+                    task.start.format("%a %b %-d")
+                ),
+            };
+            out.push_str(&format!("  - {line}\n"));
+        }
+        if fixes.iter().any(|fix| fix.series().is_some()) {
+            out.push_str(
+                "  (Changes to repeating tasks come first; how their days then line up is checked after.)\n",
+            );
+        }
+    }
+    let mut seen: Vec<(&str, &Event)> = Vec::new();
+    for event in &listing.events {
+        if let Some(series) = event.details.recurring_event_id.as_deref()
+            && !event.is_task()
+            && !event.details.habit
+            && event.details.sleep.is_none()
+            && !seen.iter().any(|(known, _)| *known == series)
+        {
+            seen.push((series, event));
+        }
+    }
+    if !seen.is_empty() {
+        out.push_str("\nRepeating blocks seen:\n");
+        for (series, event) in seen {
+            let lineage = crate::timeblocking::lineage(event);
+            let continues: Vec<&String> = lineage
+                .iter()
+                .filter(|name| **name != format!("{calendar}/{series}"))
+                .collect();
+            out.push_str(&format!("  - “{}” ({series})", event.title));
+            if !continues.is_empty() {
+                out.push_str(&format!(", continuing {continues:?}"));
+            }
+            out.push('\n');
+        }
+    }
+    let broken = reconcile::own_repeat_in_block(&mut remote, &calendar, first, last)?;
+    if !broken.is_empty() {
+        out.push_str(
+            "\nThese repeat on their own but sit in a block. Put each in its block again to make it a one-off there, or take it out:\n",
+        );
+        for task in broken {
+            out.push_str(&format!(
+                "  - “{}” on {}\n",
+                task.title,
+                task.start.format("%a %b %-d")
+            ));
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_continuation_has_the_same_valid_id_on_every_device() {
+        let start = crate::calendar::at_clock(NaiveDate::from_ymd_opt(2026, 11, 20).unwrap(), 9, 0);
+        let id = continuation_id("task1", "app/block2", start);
+        assert_eq!(id, continuation_id("task1", "app/block2", start));
+        assert_ne!(id, continuation_id("task1", "app/block3", start));
+        // Google's event IDs: 5 to 1024 of a–v and 0–9.
+        assert!((5..=1024).contains(&id.len()));
+        assert!(
+            id.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'v').contains(&b))
+        );
     }
 }

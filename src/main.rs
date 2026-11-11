@@ -16,6 +16,12 @@ fn main() -> iced::Result {
         Mode::Dock => dock::run(),
         Mode::Daemon => panel::run(),
         Mode::WebExtension => webextension::run(),
+        Mode::CheckTimeBlocks => {
+            let settings = timeslay_core::config::Config::load().calendar;
+            timeslay_core::calendar::api::block_sync::report(&settings)
+                .map(|report| print!("{report}"))
+                .map_err(anyhow::Error::msg)
+        }
         Mode::Sidebar | Mode::NewTask => {
             env_logger::Builder::from_env(
                 env_logger::Env::default().default_filter_or("timeslay=info"),

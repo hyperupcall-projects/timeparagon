@@ -200,7 +200,6 @@ including Google Tasks:
 | `default_reminders` | `Reminder[]` | The calendar's defaults from `events.list` (read only) |
 | `transparency` | `opaque` (Busy) / `transparent` (Free) | `transparency` |
 | `visibility` | `default` / `public` / `private` / `confidential` | `visibility` |
-| `child_metadata` | `ChildMetadata` | `ttChildMetadata`, see [Time blocks](#time-blocks) |
 
 ### What kind of item an event is
 
@@ -234,7 +233,7 @@ characters.
 | `ttHabit` | Habit occurrences | The [habit](#habits) ID it counts towards |
 | `ttProjects` | Any event | JSON array of project IDs, e.g. `"[7,3]"` |
 | `ttLabels` | Any event | JSON array of strings, e.g. `"[\"work\"]"` |
-| `ttChildMetadata` | Time blocks | JSON `ChildMetadata` |
+| `ttSplitFrom` | Recurring events split by this app | JSON array of the `calendar/series` names the series continues, oldest first. See [Time blocks](#time-blocks) |
 | `ttSleep` | Sleep | JSON `sleep::Record` |
 | `ttSleepDate` | Sleep | Wake date `YYYY-MM-DD`, used to look the night up with `privateExtendedProperty` |
 
@@ -310,7 +309,8 @@ newer one.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `minutes` | `u32` | required | Estimated duration. A timed task's length. `0` = no estimate (placed as 30 min) |
-| `block` | string? | required (nullable) | Block key of the time block the task is assigned to |
+| `block` | string? | required (nullable) | For a one-off in a time block, the block key of the occurrence it is in. Ignored on an occurrence of a task repeating with a block. See [Time blocks](#time-blocks) |
+| `block_series` | string? | — | For a task repeating with a time block, the block's series as `<calendar>/<series id>`. See [Time blocks](#time-blocks) |
 | `order` | `i64` | `0` | Position within its block or day |
 | `ignored` | bool | `false` | See [Task status](#task-status) |
 | `backlog_section` | enum | `someday` | `next_week_or_two`, `next_month`, `next_quarter`, `next_year`, `someday`, `never`. A planning horizon. It does not change due dates |
@@ -320,8 +320,7 @@ newer one.
 | `labels` | string[] | `[]` | Free-form labels |
 | `location` | `u64`? | — | [Place](#places-and-travel) ID |
 | `created_at` | datetime (UTC)? | — | Set only for tasks created in TimeSlay |
-| `repeat_source` | `i64`? | — | For a copy made by a recurring block, the task ID it was copied from. Cleared when the task leaves that block's series |
-| `inherited` | `InheritedMetadata`? | — | Snapshot of the time block's settings the task is following, see [Time blocks](#time-blocks) |
+| `repeat_source` | `i64`? | — | No longer written. Read so older tasks still load |
 
 Fields that are empty or `None` are left out when serializing.
 
@@ -387,43 +386,95 @@ write in the log (`Edit task Title`, `Edit task Block`, …):
 | `Reflow(start, end)` | Automatic re-layout. Membership and estimate unchanged |
 | `Unassign` | Leaves its block but keeps its day |
 | `Inbox`, `Triaged`, `Backlog(section?)`, `ClearSchedule` | Moves to an undated list |
-| `Inherit(InheritedMetadata)`, `ReleaseInheritance` | Starts or stops following a block's settings |
+| `JoinBlockSeries { calendar, series, from }` | Repeats with a recurring time block from its occurrence at `from`: sets `block_series`, and the block's repeat rule from there on is read from Google when the change is sent |
 
-Moving to another block or day also clears `repeat_source`.
+An occurrence of a task that leaves its series this way becomes a task of
+its own instead (`operations::edit_task`): a new task takes its place with
+the change made, and the occurrence is deleted. That happens when an
+occurrence repeating with a block is moved out of it (to another block,
+another day or time, or a task list), and when an occurrence of a task with
+a repeat rule of its own is put in a block.
 
 ---
 
 ## Time blocks
 
 A time block is a **timed event on the app calendar** that is not a task,
-habit or sleep. Tasks are assigned to it by `metadata.block = <block key>`
-and placed within it by `order`.
+habit or sleep. An event on another calendar also counts as one while a task
+is in it.
 
-A block can push settings onto its tasks. The block stores them in
-`ttChildMetadata` as `ChildMetadata`:
+An item (task or habit) in a block is one of two kinds, and nothing else:
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `force` | bool | Apply even over the task's own values |
-| `due` | `Deadline`? | |
-| `deadline` | `Deadline`? | |
-| `priority` | `P1`/`P2`? | |
-| `location` | `u64`? | Place ID |
+- **One-off**: in one occurrence of the block only. Its `metadata.block` is
+  that occurrence's block key.
+- **Repeating with the block**: its own Google series, with the block's
+  repeat rule, so each occurrence shows in Google Calendar too. Its
+  `metadata.block_series` names the block's series. Google copies the
+  series' metadata to every occurrence, `block` included; that copy is
+  ignored.
 
-When a task inherits from a block, the task records a full snapshot
-(`InheritedMetadata`) in its own metadata:
+Every task and habit stays its own event on Google, and a task never has a
+repeat rule of its own while it is in a block.
 
-| Field | Meaning |
-| --- | --- |
-| `series` | `<calendar>/<recurring event id>` for a recurring block |
-| `fields` | The block's `ChildMetadata` |
-| `projects`, `labels` | The block's |
-| `recurrence` | The block's RRULE lines (copied to the task) |
-| `options` | The block's `EventOptions` without `child_metadata` |
+### Which block a task is in
 
-What a task inherits: projects, labels, priority, location, deadline,
-recurrence and event options. What always stays the task's own: its identity,
-which block it belongs to, its estimate, its work history and its completion.
+`timeblocking::membership` is the only code that answers this. Both apps,
+the dock, search and layout ask it (`in_block`, `block_of`, `tasks_in`,
+`is_assigned`) rather than comparing keys.
+
+- A one-off's key is matched exactly first. For an occurrence of a
+  recurring block, the key holds Google's instance ID,
+  `<series>_<YYYYMMDDTHHMMSSZ>`, which changes when the series is retimed or
+  split. So a key that no longer matches still finds the occurrence of the
+  same series, or a series continuing it, on the same planning day.
+- An occurrence of a task repeating with a block belongs to the block
+  occurrence of the same series (or one continuing it) on the same planning
+  day.
+- Days are compared by when each occurrence was first scheduled, Google's
+  `originalStartTime` (`Details::original_start`), not where it is now, so
+  moving one block occurrence to another day takes its tasks along. The
+  planning day ends at `day_end_hour`, so a block running past midnight
+  keeps its small-hours tasks.
+- A series continues another when this app split it (`ttSplitFrom`, the
+  `calendar/series` names it continues, oldest first) or when Google's site
+  did (its ID is the old one followed by `_R` and a timestamp).
+
+Within a block, repeating tasks come first, then one-offs, each by `order`,
+laid end to end from the block's start (`membership::layout`). A one-off
+added on one day therefore never pushes the repeating ones later.
+
+### Keeping Google in step
+
+The block is the source of truth for the tasks repeating with it.
+`timeblocking::reconcile` reads what Google has and makes the writes that
+bring it back in step, rather than copying each change to a block across:
+
+- A task series gets its block series' repeat rule (a repeat count becomes
+  an end date) and starts at the block's time plus its place among the
+  block's repeating tasks.
+- When the block series is split, the task series ends where it does and a
+  new task series carries on with the new block series.
+- When the block series is deleted, the task series ends yesterday.
+- An occurrence whose block occurrence was deleted is deleted. Every task in
+  a block is moved to its place in the layout. A one-off whose block
+  occurrence no longer exists is taken out of the block.
+
+It leaves alone, on purpose: anything before today; completed occurrences;
+an occurrence of a task series deleted on its own (a skipped day); and a
+task series that ends before its block series does (ended on purpose, so not
+extended). If a task series that has past occurrences needs a new time or
+rule, it ends yesterday and continues as a new series from today, keeping
+its skipped and completed days, so its history is never rewritten.
+
+Running it twice in a row writes nothing the second time. It runs on the
+write worker once its queue is empty after any write to a calendar or a task
+(`operations::reconcile_blocks`), and after a sync, at most every five
+minutes, for changes made elsewhere. It covers the next eight weeks. It is
+tested against an in-memory Google (`reconcile::fake`) that models instance
+IDs, exceptions and both kinds of split.
+
+`timeslay --check-time-blocks` prints what it would change and any task that
+repeats on its own inside a block, without changing anything.
 
 Work done in a block is recorded in [work sessions](#work-sessions-distractions-and-pomodoro).
 
