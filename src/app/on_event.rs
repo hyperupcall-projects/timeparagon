@@ -1,7 +1,6 @@
 //! An event that already exists: opening, moving and deleting it.
 
 use super::*;
-use chrono::Datelike;
 
 pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> {
     match message {

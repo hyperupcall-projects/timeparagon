@@ -551,7 +551,7 @@ fn boot_task_popover() -> (Panel, Task<Message>) {
 
 fn boot_surface(popover: bool) -> (Panel, Task<Message>) {
     let (app, task) = if popover {
-        app::boot_new_task()
+        app::boot_add_something()
     } else {
         app::boot_sidebar()
     };

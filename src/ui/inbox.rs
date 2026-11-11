@@ -719,8 +719,8 @@ fn picker_day<'a>(
     .into()
 }
 
-/// The new-task popup, drawn over everything including the tabs.
-pub fn new_task_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+/// The add something popup, drawn over everything including the tabs.
+pub fn add_something_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     let Some(draft) = &state.inbox.draft else {
         return Space::new().into();
     };
@@ -943,7 +943,6 @@ pub(crate) fn view_in_calendar_button<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Datelike;
     use iced::Size;
 
     fn state_with_task(notes: &str) -> State {

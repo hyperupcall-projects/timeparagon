@@ -4,7 +4,7 @@
 //! exercised by tests without a compositor. A subcommand picks what it runs
 //! (see [`cli`]):
 //!
-//! * no subcommand — the side panel (the same as `sidebar`);
+//! * no subcommand — print the help and exit;
 //! * `sidebar` — the side panel, the full app in a wide edge strip;
 //! * `dock` — the dock (see [`dock`]), a very thin strip of today;
 //! * `daemon` — the shortcut daemon (see [`panel`]), which shows, hides and

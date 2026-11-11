@@ -170,7 +170,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
             let Some(draft) = state.calendar.draft.take() else {
                 return Task::none();
             };
-            crate::inbox::new_task_at(state, draft.title, draft.start, draft.end)
+            crate::inbox::new_something_at(state, draft.title, draft.start, draft.end)
         }
         EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::Habit) => {
             // Creation and editing share the habit details pane.

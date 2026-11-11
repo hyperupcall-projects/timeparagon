@@ -23,7 +23,7 @@ lists them):
 
 | Command | What it runs |
 | --- | --- |
-| `timeslay` | The side panel (same as `sidebar`) |
+| `timeslay` | Print the help and exit |
 | `timeslay sidebar` | The side panel: the full app in a wide strip down a screen edge |
 | `timeslay dock` | The dock: a very thin strip of today along a screen edge |
 | `timeslay daemon` | The background process that owns the global shortcuts |

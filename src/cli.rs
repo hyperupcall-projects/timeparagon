@@ -1,23 +1,25 @@
 //! The command line of the one `timeslay` binary.
 //!
 //! The side panel, dock and shortcut daemon share this binary.
-//! With no command it opens the side panel.
+//! With no command it prints the help.
 
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{ArgGroup, CommandFactory, Parser, Subcommand};
 
-/// What the binary was asked to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The selected command (or flag) to run on the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    NewTask,
-    /// The wide side panel (the default launch mode).
-    #[default]
+    /// Print the help and exit.
+    Help,
+    /// The wide side panel.
     Sidebar,
-    /// The thin dock strip.
+    /// The thin dock.
     Dock,
-    /// The background process that owns the global shortcuts.
+    /// The background process that requests to listen to the global keyboard shortcuts.
     Daemon,
-    /// The native-messaging host the browser extension talks to.
+    /// The browser extensions' native messaging host.
     WebExtension,
+    /// Opens the menu to add a new task.
+    Add,
     /// Print what keeping time blocks in step would change, and exit.
     CheckTimeBlocks,
 }
@@ -25,9 +27,7 @@ pub enum Mode {
 /// The commands that pick a running mode.
 #[derive(Debug, Subcommand)]
 enum ModeCommand {
-    /// Run the browser native-messaging host: read one message from the
-    /// extension on stdin, add its link to the inbox through the running app,
-    /// and answer on stdout
+    /// Run the browser extension's native messaging host
     Webextension {
         // Browsers launch a native-messaging host with the caller's origin as
         // an extra argument. The host does not need it, but taking it here
@@ -36,7 +36,7 @@ enum ModeCommand {
         origin: Vec<String>,
     },
 
-    /// Run the background process that listens to global keyboard shortcuts and launches/hides the dock and sidebar.
+    /// Run the background process that requests to listens to global keyboard shortcuts.
     Daemon,
 
     /// Launch the thin dock.
@@ -44,6 +44,9 @@ enum ModeCommand {
 
     /// Launch the wide sidebar.
     Sidebar,
+
+    /// Launch the menu to add a new task.
+    Add,
 }
 
 /// The command line, as declared to clap.
@@ -51,24 +54,19 @@ enum ModeCommand {
 #[command(
     name = "timeslay",
     version,
-    about = "TimeSlay: slay the day with TimeSlay.",
-    after_help = "With no options, TimeSlay opens its side panel.",
+    about = "TimeSlay: Slay the day with TimeSlay.",
     args_conflicts_with_subcommands = true,
-    group(ArgGroup::new("mode").args(["new_task", "check_time_blocks"]))
+    group(ArgGroup::new("mode").args(["check_time_blocks"]))
 )]
 struct Args {
-    /// Open the full task creation editor
-    #[arg(long, overrides_with = "new_task")]
-    new_task: bool,
+    #[command(subcommand)]
+    command: Option<ModeCommand>,
 
     /// Print what keeping time blocks in step with Google would change over
     /// the next eight weeks, and any task that repeats on its own inside a
     /// block, without changing anything
     #[arg(long, overrides_with = "check_time_blocks")]
     check_time_blocks: bool,
-
-    #[command(subcommand)]
-    command: Option<ModeCommand>,
 }
 
 /// Parses the arguments, which include the program name first.
@@ -82,10 +80,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, clap::Error
         Some(ModeCommand::Daemon) => Mode::Daemon,
         Some(ModeCommand::Dock) => Mode::Dock,
         Some(ModeCommand::Sidebar) => Mode::Sidebar,
-        None if args.new_task => Mode::NewTask,
+        Some(ModeCommand::Add) => Mode::Add,
         None if args.check_time_blocks => Mode::CheckTimeBlocks,
-        None => Mode::default(),
+        None => Mode::Help,
     })
+}
+
+/// Prints the command line's help to stdout.
+pub fn print_help() -> std::io::Result<()> {
+    Args::command().print_help()
 }
 
 #[cfg(test)]
@@ -112,17 +115,17 @@ mod tests {
     }
 
     #[test]
-    fn no_arguments_open_the_panel() {
-        assert_eq!(parse_all(&[]).unwrap(), Mode::Sidebar);
+    fn no_arguments_show_the_help() {
+        assert_eq!(parse_all(&[]).unwrap(), Mode::Help);
     }
 
     #[test]
     fn each_mode_has_its_own_command() {
-        assert_eq!(parse_all(&["--new-task"]).unwrap(), Mode::NewTask);
         assert_eq!(parse_all(&["sidebar"]).unwrap(), Mode::Sidebar);
         assert_eq!(parse_all(&["dock"]).unwrap(), Mode::Dock);
         assert_eq!(parse_all(&["daemon"]).unwrap(), Mode::Daemon);
         assert_eq!(parse_all(&["webextension"]).unwrap(), Mode::WebExtension);
+        assert_eq!(parse_all(&["add"]).unwrap(), Mode::Add);
     }
 
     #[test]
@@ -147,14 +150,14 @@ mod tests {
         assert!(parse_all(&["--nope"]).is_err());
         assert!(parse_all(&["dock", "--from"]).is_err());
         assert!(parse_all(&["dock", "--from=moon"]).is_err());
-        assert!(parse_all(&["--new-task", "dock"]).is_err());
+        assert!(parse_all(&["--check-time-blocks", "dock"]).is_err());
     }
 
     #[test]
     fn repeating_a_flag_is_harmless() {
         assert_eq!(
-            parse_all(&["--new-task", "--new-task"]).unwrap(),
-            Mode::NewTask
+            parse_all(&["--check-time-blocks", "--check-time-blocks"]).unwrap(),
+            Mode::CheckTimeBlocks
         );
     }
 

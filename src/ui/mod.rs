@@ -182,7 +182,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
     task_drop::host(window_frame(state, content.into(), "editor-body"))
 }
 
-/// New-task dialogs belong to the main sidebar even while a planning window
+/// Add task dialogs belong to the main sidebar even while a planning window
 /// is open. Keep the form's auxiliary dialogs (pickers, estimates, etc.) with it.
 fn push_editor_dialogs<'a>(
     layers: &mut Vec<Element<'a, Message>>,
@@ -218,7 +218,7 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
         layers.push(brain_dump::editor_overlay(state, metrics));
     }
     if state.inbox.draft.is_some() {
-        layers.push(inbox::new_task_overlay(state, metrics));
+        layers.push(inbox::add_something_overlay(state, metrics));
     }
     if state.timeblocking.estimate_task.is_some() {
         layers.push(timeblocking::estimate_overlay(state, metrics));
@@ -279,7 +279,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         let metrics = Metrics::of(size);
 
         if state.task_creation_window {
-            let mut layers = vec![inbox::new_task_overlay(state, &metrics)];
+            let mut layers = vec![inbox::add_something_overlay(state, &metrics)];
             if state.timeblocking.estimate_task.is_some() {
                 layers.push(timeblocking::estimate_overlay(state, &metrics));
             }
@@ -395,7 +395,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             layers.push(activity_log(state, &nav_metrics));
         }
         // Shared state is visible to both windows, but dialogs have one owner.
-        // New-task creation stays in the sidebar, including its supporting dialogs.
+        // Add task creation stays in the sidebar, including its supporting dialogs.
         if state.editor_window.is_none() || state.inbox.draft.is_some() {
             push_dialogs(&mut layers, state, &metrics);
         } else if state.timeblocking.focus.is_some() && state.details_pane_open {

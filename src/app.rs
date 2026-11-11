@@ -1183,7 +1183,7 @@ fn system_theme_task() -> Task<Message> {
 }
 
 /// Opens the task editor as a layer-shell popover.
-pub fn boot_new_task() -> (State, Task<Message>) {
+pub fn boot_add_something() -> (State, Task<Message>) {
     let mut state = boot_state();
     state.task_creation_window = true;
     state.main_size = Size::new(480.0, 800.0);

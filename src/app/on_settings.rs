@@ -1,7 +1,6 @@
 //! Changes made on the Settings page.
 
 use super::*;
-use chrono::Datelike;
 
 pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Message> {
     match message {

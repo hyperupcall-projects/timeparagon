@@ -1,6 +1,6 @@
 //! Services a task can come from.
 //!
-//! Paste a link into the new-task box and the matching [`Integration`] reads
+//! Paste a link into the add something box and the matching [`Integration`] reads
 //! the page behind it through that service's API, so the task arrives with a
 //! real title instead of a bare URL. The link itself is kept in the task's
 //! notes, which is what lets the task show the service's icon later, on any

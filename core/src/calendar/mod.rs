@@ -389,7 +389,7 @@ pub enum DraftKind {
     Habit,
     Sleep,
     /// A Google Task planned for the selected range; choosing it hands the
-    /// popup's title and times to the new-task popup.
+    /// popup's title and times to the add something popup.
     Task,
 }
 

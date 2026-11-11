@@ -165,7 +165,7 @@ pub struct QuickTask {
     pub metadata: tb::Metadata,
 }
 
-/// Reads the keywords out of what was typed, like the desktop's new-task box.
+/// Reads the keywords out of what was typed, like the desktop's add something box.
 pub fn quick_task(text: &str, today: NaiveDate, projects: &ProjectsSettings) -> QuickTask {
     let tokens = task_input::detect(text, today, projects);
     let mut task = QuickTask {

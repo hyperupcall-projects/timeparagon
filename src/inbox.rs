@@ -22,7 +22,7 @@ use crate::{blocking, task_db};
 
 pub use crate::calendar::scheduled::DEFAULT_LIST;
 pub use crate::calendar::task_sort::InboxSort;
-/// Widget id of the new-task text box, so it can be focused when it opens.
+/// Widget id of the add task text box, so it can be focused when it opens.
 pub const TITLE_FIELD: &str = "inbox-title";
 const MAX_TITLE_CHARS: usize = 1024;
 
@@ -33,7 +33,7 @@ pub struct Inbox {
     /// Inactive creation forms, retained while another type is selected.
     pub(crate) entry_drafts: Vec<calendar::Draft>,
     previous_calendar_draft: Option<calendar::Draft>,
-    /// The new-task popup, while it is open.
+    /// The add something popup, while it is open.
     pub draft: Option<Draft>,
     /// "View in calendar": what is about to be created, over its day or week.
     pub preview: Option<preview::Preview>,
@@ -103,7 +103,7 @@ pub enum Action {
     Image(crate::image_input::Action),
     Sort(InboxSort),
     OverdueSort(InboxSort),
-    /// Open the new-task popup.
+    /// Open the add something popup.
     NewTask,
     KindSelected(calendar::DraftKind),
     /// The "View in calendar" preview.
@@ -809,7 +809,7 @@ pub(crate) fn write(
 }
 
 /// Adds a task that already has its title and notes, for callers outside the
-/// new-task popup: the browser extension and the Slack app. The notes keep the
+/// add something popup: the browser extension and the Slack app. The notes keep the
 /// link that lets the task show its source later.
 pub fn add(
     settings: &crate::config::CalendarSettings,
@@ -898,9 +898,9 @@ pub fn today() -> NaiveDate {
     crate::clock::now().date_naive()
 }
 
-/// Opens the new-task popup already planned for `start` to `end`, as when a
+/// Opens the add something popup already planned for `start` to `end`, as when a
 /// range is chosen on the calendar.
-pub(crate) fn new_task_at(
+pub(crate) fn new_something_at(
     state: &mut State,
     title: String,
     start: chrono::DateTime<Local>,
@@ -1571,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_task_popup_opens_and_closes() {
+    fn the_new_something_popup_opens_and_closes() {
         let mut state = state();
         let _ = update(&mut state, Action::NewTask);
         assert!(state.inbox.draft.is_some());
