@@ -36,6 +36,22 @@ pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Re
             transport: false,
         });
     }
+    #[cfg(test)]
+    if let Some(answer) = api::faked(method, url, body.map(|b| b.to_string()).as_deref()) {
+        return match answer {
+            Ok(text) if text.is_empty() => Ok(Value::Null),
+            Ok(text) => serde_json::from_str(&text).map_err(|e| Error {
+                status: None,
+                message: format!("Google response: {e}"),
+                transport: true,
+            }),
+            Err((status, message)) => Err(Error {
+                status: Some(status),
+                message,
+                transport: false,
+            }),
+        };
+    }
     let request = api::agent()
         .request(method, url)
         .set("Authorization", &format!("Bearer {token}"))

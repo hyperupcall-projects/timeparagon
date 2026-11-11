@@ -508,3 +508,184 @@ fn a_series_ended_at_an_occurrence_ends_the_day_before_it() {
     );
     assert_eq!(until_day(&series(9, 0), "20261120", 0), Some(day(20)));
 }
+
+// The code that talks to the real Google, run against the fake's REST API.
+
+/// Reconciles through `GoogleRemote`, the real Google client, with its
+/// requests answered by the fake's REST API.
+fn reconcile_through_the_api(google: FakeGoogle) -> (FakeGoogle, Vec<Fix>, Vec<Fix>) {
+    use std::{cell::RefCell, rc::Rc};
+    let shared = Rc::new(RefCell::new(google));
+    let answering = shared.clone();
+    let settings = crate::config::CalendarSettings {
+        app_calendar: Some(CALENDAR.into()),
+        day_end_hour: 0,
+        ..Default::default()
+    };
+    let (first, last) = window();
+    let (fixes, again) = crate::calendar::api::with_transport(
+        Box::new(move |method, url, body| answering.borrow_mut().answer(method, url, body)),
+        || {
+            let mut remote = crate::calendar::api::block_sync::GoogleRemote::new(
+                "token".into(),
+                &settings,
+                CALENDAR,
+            );
+            let fixes = reconcile(&mut remote, CALENDAR, first, last, 0, day(TODAY)).unwrap();
+            let again = reconcile(&mut remote, CALENDAR, first, last, 0, day(TODAY)).unwrap();
+            (fixes, again)
+        },
+    );
+    let google = Rc::try_unwrap(shared).unwrap().into_inner();
+    (google, fixes, again)
+}
+
+/// What the calendar holds, by task and time rather than by Google's IDs
+/// (a series made through the API is named differently).
+fn outcome(google: &mut FakeGoogle) -> Vec<(String, Option<i64>, DateTime<Local>, bool, bool)> {
+    let (first, last) = window();
+    let mut seen: Vec<_> = google
+        .listing(CALENDAR, first, last)
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|e| {
+            let task = e.details.task_data.as_ref().map(|data| data.id);
+            (e.title.clone(), task, e.start, e.all_day, e.completed)
+        })
+        .collect();
+    seen.sort();
+    seen
+}
+
+/// Sets a calendar up, settles it, then makes a change.
+type Scenario = fn(&mut FakeGoogle);
+
+fn scenarios() -> Vec<(&'static str, Scenario)> {
+    vec![
+        ("split in this app, with done and skipped days", |google| {
+            let block = google.add_block_series(at(2, 9, 0), 60, DAILY);
+            let task = google.add_follower(&block, day(5), "Inbox zero", 1, 30);
+            google.add_follower(&block, day(12), "Plan", 2, 15);
+            settle(google, 0);
+            google.complete(&task, day(22));
+            google.delete_occurrence(&task, day(23));
+            google.split(&block, day(20), at(20, 13, 0), None, false);
+        }),
+        ("split on Google's site with new days", |google| {
+            let block = google.add_block_series(at(2, 9, 0), 60, "FREQ=WEEKLY;BYDAY=MO,WE,FR");
+            google.add_follower(&block, day(11), "Review", 1, 30);
+            settle(google, 0);
+            google.split(
+                &block,
+                day(16),
+                at(17, 8, 0),
+                Some("FREQ=WEEKLY;BYDAY=TU,TH"),
+                true,
+            );
+        }),
+        ("retimed, with history", |google| {
+            let block = google.add_block_series(at(2, 9, 0), 120, DAILY);
+            google.add_follower(&block, day(5), "Inbox zero", 1, 30);
+            google.add_follower(&block, day(14), "Plan", 2, 15);
+            settle(google, 0);
+            google.retime_series(&block, 10, 30);
+        }),
+        ("an occurrence moved and one deleted", |google| {
+            let block = google.add_block_series(at(2, 9, 0), 120, DAILY);
+            google.add_follower(&block, day(12), "Inbox zero", 1, 30);
+            let moved = google.occurrence_on(&block, day(15));
+            google.add_one_off(&moved, "Call", 2, 20);
+            let deleted = google.occurrence_on(&block, day(16));
+            google.add_one_off(&deleted, "Write", 3, 20);
+            settle(google, 0);
+            google.move_occurrence(&block, day(15), at(16, 18, 0));
+            google.delete_occurrence(&block, day(16));
+        }),
+        ("a repeat count", |google| {
+            let block = google.add_block_series(at(2, 9, 0), 60, "FREQ=DAILY;COUNT=20");
+            google.add_follower(&block, day(5), "Inbox zero", 1, 30);
+        }),
+        ("the block series deleted", |google| {
+            let block = google.add_block_series(at(2, 9, 0), 60, DAILY);
+            google.add_follower(&block, day(3), "Inbox zero", 1, 30);
+            let later = google.add_follower(&block, day(14), "Later", 2, 30);
+            settle(google, 0);
+            google.complete(&later, day(15));
+            google.delete_series(&block);
+        }),
+    ]
+}
+
+#[test]
+fn the_google_client_does_what_the_reconciler_asks_of_it() {
+    for (name, scenario) in scenarios() {
+        let mut direct = FakeGoogle::default();
+        scenario(&mut direct);
+        let (mut through_api, fixes, again) = reconcile_through_the_api(direct.clone());
+        settle(&mut direct, 0);
+        assert!(!fixes.is_empty(), "{name}: nothing to do");
+        assert!(again.is_empty(), "{name}: a second pass wrote {again:#?}");
+        let problems = check(&mut through_api, 0);
+        assert!(problems.is_empty(), "{name}: {problems:#?}");
+        assert_eq!(
+            outcome(&mut through_api),
+            outcome(&mut direct),
+            "{name}: Google ends up unlike the fake"
+        );
+    }
+}
+
+#[test]
+fn a_task_put_in_a_repeating_block_to_repeat_with_it_does_so_on_google() {
+    use crate::task_edit::{self, Change};
+    use std::{cell::RefCell, rc::Rc};
+    let mut google = FakeGoogle::default();
+    let block = google.add_block_series(at(2, 9, 0), 120, DAILY);
+    let first = google.add_follower(&block, day(5), "Inbox zero", 1, 30);
+    settle(&mut google, 0);
+    let task = google.add_calendar_task(day(12), "Plan", 15);
+    let task_id = task.details.task_data.as_ref().unwrap().id;
+    let occurrence = google.occurrence_on(&block, day(12));
+    let shared = Rc::new(RefCell::new(google));
+    let answering = shared.clone();
+    let settings = crate::config::CalendarSettings {
+        app_calendar: Some(CALENDAR.into()),
+        ..Default::default()
+    };
+    // What the apps send: into the block, then repeating with it.
+    crate::calendar::api::with_transport(
+        Box::new(move |method, url, body| answering.borrow_mut().answer(method, url, body)),
+        || {
+            let key = crate::timeblocking::block_key(&occurrence);
+            let placed = task_edit::send(
+                task,
+                &settings,
+                Change::Block(key, occurrence.start, occurrence.end),
+                9,
+                "token",
+            )
+            .unwrap();
+            let join = Change::join_block_series(&occurrence).unwrap();
+            task_edit::send(placed, &settings, join, 9, "token").unwrap();
+        },
+    );
+    let google = Rc::try_unwrap(shared).unwrap().into_inner();
+    let (mut google, _, again) = reconcile_through_the_api(google);
+    assert!(again.is_empty(), "{again:#?}");
+    assert!(
+        check(&mut google, 0).is_empty(),
+        "{:#?}",
+        check(&mut google, 0)
+    );
+    let plan = google.followers_of(task_id);
+    assert_eq!(
+        plan.len(),
+        1,
+        "the task is one series repeating with the block"
+    );
+    assert_eq!(titles_on(&mut google, &block, 20), ["Inbox zero", "Plan"]);
+    assert_eq!(task_on(&google, &first, 20).unwrap().start, at(20, 9, 0));
+    assert!(on(&google, task_id, 11).is_none());
+    assert_eq!(on(&google, task_id, 20).unwrap().start, at(20, 9, 30));
+}

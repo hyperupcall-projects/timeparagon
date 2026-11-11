@@ -442,8 +442,12 @@ fn record_in(
     let mut writes = vec![record_tx(&tx, job.clone(), event, calendar, id)?];
     if let Job::Delete { calendar, id, .. } = &job {
         // Removing a container releases its children; deleting the container
-        // and recording all child edits is one local transaction.
-        let block = format!("{calendar}/{id}");
+        // and recording all child edits is one local transaction. Which tasks
+        // are its one-offs is decided as everywhere else, so one placed
+        // before its series was retimed still counts. Tasks repeating with
+        // it are not released: the reconciler deletes that day of them.
+        let block = deleted_block(calendar, id);
+        let hour = crate::config::Config::load().calendar.day_start_hour();
         let children = {
             let mut q = tx
                 .prepare("SELECT event FROM google_task_records")
@@ -456,10 +460,10 @@ fn record_in(
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
-        for original in children
-            .into_iter()
-            .filter(|child| crate::timeblocking::metadata(child).block.as_deref() == Some(&block))
-        {
+        for original in children.into_iter().filter(|child| {
+            !crate::timeblocking::is_follower(child)
+                && crate::timeblocking::in_block(child, &block, hour)
+        }) {
             let mut released = original.clone();
             let data = released
                 .details
@@ -489,6 +493,29 @@ fn record_in(
         begin(path, &write.entity);
     }
     Ok(writes)
+}
+
+/// Enough of a deleted event, known only by its ID, to tell which tasks
+/// were in it: for an occurrence, its series and original start, which its
+/// ID holds.
+fn deleted_block(calendar: &str, id: &str) -> Event {
+    let instance = crate::timeblocking::membership::parse_instance_id(id);
+    let start = instance.map_or_else(crate::clock::now, |(_, start)| start);
+    Event {
+        id: id.to_owned(),
+        calendar_id: calendar.to_owned(),
+        title: String::new(),
+        start,
+        end: start,
+        all_day: false,
+        color: colors::DEFAULT_EVENT,
+        completed: false,
+        details: Details {
+            recurring_event_id: instance.map(|(series, _)| series.to_owned()),
+            original_start: instance.map(|(_, start)| start),
+            ..Default::default()
+        },
+    }
 }
 
 /// What a job does, as the log says it.
@@ -1908,6 +1935,36 @@ mod tests {
         assert!(restored[0].details.sending);
         assert!(crate::timeblocking::metadata(&restored[0]).block.is_none());
         assert_eq!(restored[0].start.date_naive(), block.start.date_naive());
+    }
+
+    #[test]
+    fn deleting_a_retimed_occurrence_releases_the_one_offs_placed_before() {
+        let (_dir, path) = db();
+        let day = NaiveDate::from_ymd_opt(2030, 11, 4).unwrap();
+        let stamp = |hour| {
+            at_clock(day, hour, 0)
+                .with_timezone(&Utc)
+                .format("%Y%m%dT%H%M%SZ")
+                .to_string()
+        };
+        let mut child = super::super::sample_snapshot().events.remove(0);
+        child.id = "task:placed".into();
+        child.calendar_id = "tasks:list".into();
+        let mut database = task_db::Database::open(&path).unwrap();
+        let mut data = database.import(&child).unwrap();
+        // Placed when the series ran at 9; it runs at 10 now.
+        data.metadata.block = Some(format!("app/blockseries_{}", stamp(9)));
+        child.details.task_data = Some(data);
+        cache_tasks_in(&path, &[child.clone()], true).unwrap();
+        let retimed = format!("blockseries_{}", stamp(10));
+        let delete = Job::Delete {
+            calendar: "app".into(),
+            id: retimed.clone(),
+            scope: SaveScope::Current,
+            notify: false,
+        };
+        let writes = record_in(&path, delete, None, "app", &retimed).unwrap();
+        assert_eq!(writes.len(), 2, "the one-off is released");
     }
 
     #[test]
