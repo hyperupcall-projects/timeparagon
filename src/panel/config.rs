@@ -1,5 +1,5 @@
-//! Settings for the side-panel companion: the `[panel]` table of the main
-//! `config.toml`.
+//! Settings for the side-panel companion: the `panel.*` settings, which stay
+//! on this device (see `timeslay_core::settings`).
 //!
 //! Every field is optional; a missing table or field falls back to the
 //! defaults below, so the panel runs out of the box.
@@ -121,7 +121,7 @@ impl PanelConfig {
         }
     }
 
-    /// The `[panel]` table of the main config, falling back to defaults.
+    /// The `panel.*` settings, falling back to defaults.
     pub fn load() -> Self {
         crate::config::Config::load().panel
     }

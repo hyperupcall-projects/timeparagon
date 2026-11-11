@@ -1,5 +1,5 @@
 //! Markdown notes, one `.md` file per note in the directory set by
-//! `[notes] directory` in `config.toml`.
+//! `notes.directory` setting, which each device has its own of.
 //!
 //! A note's file name is its title. Its color and connections, when it has
 //! any, are kept in front matter at the top of the file (see [`files`]), so

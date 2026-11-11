@@ -1,13 +1,13 @@
-//! Persisted calendar settings for the data layer.
+//! The settings both apps share, and the minimal config the Dioxus app reads.
 //!
-//! [`CalendarSettings`] is the one definition of the `[calendar]` table, used by
-//! both apps. [`Config`] is deliberately a subset of the iced app's config: the
-//! Dioxus day view only needs that table. Unknown settings in a full desktop
-//! config are ignored, so the same `config.toml` can be dropped onto a phone
-//! without rewriting it.
+//! [`CalendarSettings`] is the one definition of the calendar settings, used
+//! by both apps. [`Config`] is deliberately a subset of the iced app's config:
+//! the Dioxus app only needs these parts. Both are kept in the database by
+//! [`crate::settings`], which reads and writes only the parts each one has,
+//! so the phone never disturbs the desktop's settings and the other way
+//! around.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -34,6 +34,23 @@ pub struct Config {
     pub reminders: crate::reminders::ReminderSettings,
 }
 
+/// A setting of this device read on its own, or empty when it is not set or
+/// cannot be read.
+fn device_text(key: &str) -> String {
+    let value = database().and_then(|path| crate::settings::device_value(&path, key));
+    match value {
+        Ok(value) => value
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        Err(error) => {
+            log::warn!("could not read the setting {key}: {error}");
+            String::new()
+        }
+    }
+}
+
 /// Device-local server settings. An empty URL disables network sync.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -42,22 +59,15 @@ pub struct DatabaseSyncSettings {
 }
 
 impl DatabaseSyncSettings {
-    /// Read only sync settings, without opening the local database.
+    /// Reads only the sync URL, without the rest of the settings.
     pub fn load() -> Self {
-        #[derive(Default, Deserialize)]
-        #[serde(default)]
-        struct Settings {
-            database_sync: DatabaseSyncSettings,
+        Self {
+            url: device_text("database_sync.url"),
         }
-        config_path()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|text| toml::from_str::<Settings>(&text).ok())
-            .unwrap_or_default()
-            .database_sync
     }
 }
 
-/// `[notes]`: where the notes are kept, one Markdown file each. Empty, the
+/// Where the notes are kept, one Markdown file each. Empty, the
 /// default, means nowhere: notes cannot be saved until it is set.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -67,18 +77,11 @@ pub struct NotesSettings {
 }
 
 impl NotesSettings {
-    /// Reads only `[notes]`, without opening the local database.
+    /// Reads only the notes directory, without the rest of the settings.
     pub fn load() -> Self {
-        #[derive(Default, Deserialize)]
-        #[serde(default)]
-        struct Settings {
-            notes: NotesSettings,
+        Self {
+            directory: device_text("notes.directory"),
         }
-        config_path()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|text| toml::from_str::<Settings>(&text).ok())
-            .unwrap_or_default()
-            .notes
     }
 
     pub fn is_empty(&self) -> bool {
@@ -100,22 +103,19 @@ impl NotesSettings {
     }
 }
 
-/// Changes only this device's notes folder, preserving other settings.
+/// Changes only this device's notes folder.
 pub fn save_notes_directory(directory: &str) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_notes_directory_at(&path, directory)
+    save_notes_directory_at(&database()?, directory)
 }
 
-fn save_notes_directory_at(path: &Path, directory: &str) -> io::Result<()> {
-    edit_table(path, "notes", |table| {
-        table.insert("directory".into(), directory.trim().into());
-        Ok(())
+fn save_notes_directory_at(database: &Path, directory: &str) -> io::Result<()> {
+    update_at(database, |config| {
+        config.notes.directory = directory.trim().to_owned();
     })
 }
 
 pub fn save_database_sync_url(url: &str) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_database_sync_url_at(&path, url)
+    save_database_sync_url_at(&database()?, url)
 }
 
 /// Checks a sync server URL the way the sync client will read it. A blank URL
@@ -143,22 +143,21 @@ pub fn validate_database_sync_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn save_database_sync_url_at(path: &std::path::Path, url: &str) -> io::Result<()> {
+fn save_database_sync_url_at(database: &Path, url: &str) -> io::Result<()> {
     validate_database_sync_url(url).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-    edit_table(path, "database_sync", |table| {
-        table.insert("url".into(), url.trim().into());
-        Ok(())
+    update_at(database, |config| {
+        config.database_sync.url = url.trim().to_owned();
     })
 }
 
-/// The part of `[notepad]` the Dioxus app edits. Its font size is the desktop's.
+/// The part of `notepad` the Dioxus app edits. Its font size is the desktop's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotepadText {
     pub text: String,
 }
 
-/// The part of `[appearance]` the Dioxus app follows. The theme is left out:
+/// The part of `appearance` the Dioxus app follows. The theme is left out:
 /// it is chosen per device there.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -955,214 +954,160 @@ fn isolated_root() -> Option<&'static Path> {
     .map(tempfile::TempDir::path)
 }
 
+/// The settings file older versions kept. The first start of this version
+/// imports it into the database and renames it (see [`crate::settings`]).
 pub fn config_path() -> Option<PathBuf> {
     Some(project_dirs()?.config_dir().join("config.toml"))
 }
 
-/// Stores the Google OAuth client in `config.toml`, keeping every other
-/// setting (including ones this crate does not know about) as it was.
-///
-/// The file is created readable by the app only, since it holds the secret.
-pub fn save_google_client(client_id: &str, client_secret: &str) -> io::Result<()> {
-    let path = config_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
-    save_google_client_at(&path, client_id, client_secret)
-}
-
-fn save_google_client_at(
-    path: &std::path::Path,
-    client_id: &str,
-    client_secret: &str,
-) -> io::Result<()> {
-    edit_calendar_table(path, |calendar| {
-        calendar.insert("client_id".into(), client_id.trim().into());
-        calendar.insert("client_secret".into(), client_secret.trim().into());
-    })
-}
-
-/// Saves which sources are switched off, leaving the rest of the file alone.
-pub fn save_calendar_visibility(settings: &CalendarSettings) -> io::Result<()> {
-    let path = config_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config directory available"))?;
-    save_calendar_visibility_at(&path, settings)
-}
-
-fn save_calendar_visibility_at(
-    path: &std::path::Path,
-    settings: &CalendarSettings,
-) -> io::Result<()> {
-    edit_calendar_table(path, |calendar| {
-        calendar.insert("disabled".into(), settings.disabled.clone().into());
-        calendar.insert("show_tasks".into(), settings.show_tasks.into());
-    })
-}
-
-/// Saves the orders of the Inbox and Overdue lists, leaving the rest of the
-/// file alone.
-pub fn save_task_sorts(
-    inbox: crate::calendar::task_sort::InboxSort,
-    overdue: crate::calendar::task_sort::InboxSort,
-) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_task_sorts_at(&path, inbox, overdue)
-}
-
-fn save_task_sorts_at(
-    path: &std::path::Path,
-    inbox: crate::calendar::task_sort::InboxSort,
-    overdue: crate::calendar::task_sort::InboxSort,
-) -> io::Result<()> {
-    edit_calendar_table(path, |calendar| {
-        calendar.insert("inbox_sort".into(), inbox.name().into());
-        calendar.insert("overdue_sort".into(), overdue.name().into());
-    })
-}
-
-/// Saves which day weeks start on, leaving the rest of the file alone.
-pub fn save_first_day_of_week(
-    first_day: crate::calendar::first_day::FirstDayOfWeek,
-) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_first_day_of_week_at(&path, first_day)
-}
-
-fn save_first_day_of_week_at(
-    path: &std::path::Path,
-    first_day: crate::calendar::first_day::FirstDayOfWeek,
-) -> io::Result<()> {
-    edit_calendar_table(path, |calendar| {
-        calendar.insert("first_day_of_week".into(), first_day.name().into());
-    })
-}
-
-/// Saves the weekly sleep schedule and its dated changes, leaving the rest of
-/// the file alone.
-pub fn save_sleep_schedule(settings: &CalendarSettings) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_sleep_schedule_at(&path, settings)
-}
-
-fn save_sleep_schedule_at(path: &std::path::Path, settings: &CalendarSettings) -> io::Result<()> {
-    let invalid = |error: toml::ser::Error| io::Error::new(io::ErrorKind::InvalidData, error);
-    let schedule = toml::Value::try_from(settings.sleep_schedule).map_err(invalid)?;
-    let changes = toml::Value::try_from(&settings.sleep_schedule_changes).map_err(invalid)?;
-    edit_calendar_table(path, |calendar| {
-        calendar.insert("sleep_schedule".into(), schedule);
-        calendar.insert("sleep_schedule_changes".into(), changes);
-    })
-}
-
-/// Saves whether travel is shown on the calendar.
-pub fn save_travel_show(show: bool) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_travel_show_at(&path, show)
-}
-
-fn save_travel_show_at(path: &std::path::Path, show: bool) -> io::Result<()> {
-    edit_table(path, "travel", |travel| {
-        travel.insert("show".into(), show.into());
-        Ok(())
-    })
-}
-
-/// Replaces the `[reminders]` table, leaving the rest of the file alone.
-pub fn save_reminders(settings: &crate::reminders::ReminderSettings) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_reminders_at(&path, settings)
-}
-
-fn save_reminders_at(
-    path: &std::path::Path,
-    settings: &crate::reminders::ReminderSettings,
-) -> io::Result<()> {
-    let value = toml::Value::try_from(settings)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let toml::Value::Table(replacement) = value else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "reminder settings are not a table",
-        ));
-    };
-    edit_table(path, "reminders", |table| {
-        *table = replacement;
-        Ok(())
-    })
-}
-
-/// Saves a place Mapbox found and returns its id, reusing one already saved.
-pub fn save_found_place(found: &crate::places::Found) -> io::Result<u64> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_found_place_at(&path, found)
-}
-
-fn save_found_place_at(path: &std::path::Path, found: &crate::places::Found) -> io::Result<u64> {
-    let mut id = 0;
-    edit_table(path, "travel", |travel| {
-        let invalid = |error: String| io::Error::new(io::ErrorKind::InvalidData, error);
-        let mut places: Vec<crate::places::Place> = match travel.get("places") {
-            Some(places) => places
-                .clone()
-                .try_into()
-                .map_err(|error: toml::de::Error| invalid(error.to_string()))?,
-            None => Vec::new(),
-        };
-        id = crate::places::add_place(
-            &mut places,
-            &found.name,
-            &found.address,
-            &found.place_id,
-            found.lat,
-            found.lng,
-        );
-        let places = toml::Value::try_from(places)
-            .map_err(|error: toml::ser::Error| invalid(error.to_string()))?;
-        travel.insert("places".into(), places);
-        Ok(())
-    })?;
-    Ok(id)
-}
-
-/// Records the saved place a calendar event was given, or forgets it. The iced
-/// app prefers this over the event's location text, so a change has to reach it.
-pub fn save_event_place(event_id: &str, place: Option<u64>) -> io::Result<()> {
-    let path = config_path().ok_or_else(no_config_directory)?;
-    save_event_place_at(&path, event_id, place)
-}
-
-fn save_event_place_at(
-    path: &std::path::Path,
-    event_id: &str,
-    place: Option<u64>,
-) -> io::Result<()> {
-    edit_table(path, "travel", |travel| {
-        let places = travel
-            .entry("event_places")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "event_places is not a table")
-            })?;
-        match place {
-            Some(place) => {
-                let place = i64::try_from(place)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                places.insert(event_id.to_owned(), place.into());
-            }
-            None => {
-                places.remove(event_id);
-            }
-        }
-        Ok(())
-    })
-}
-
-/// The local database, which holds the scratch data below.
+/// The local database, which holds the settings.
 fn database() -> io::Result<PathBuf> {
     crate::task_db::path()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data directory available"))
 }
 
-/// Replaces the notepad's text. Its font size is a setting, left in the config.
+/// Changes the saved settings: reads them, lets `change` change them and saves
+/// what it changed, with other writers held off in between. Settings this
+/// type does not have (the desktop's) are left exactly as they are.
+pub fn update<R>(change: impl FnOnce(&mut Config) -> R) -> io::Result<R> {
+    update_at(&database()?, change)
+}
+
+fn update_at<R>(database: &Path, change: impl FnOnce(&mut Config) -> R) -> io::Result<R> {
+    crate::settings::update(database, change)
+}
+
+/// Stores the Google OAuth client.
+pub fn save_google_client(client_id: &str, client_secret: &str) -> io::Result<()> {
+    save_google_client_at(&database()?, client_id, client_secret)
+}
+
+fn save_google_client_at(database: &Path, client_id: &str, client_secret: &str) -> io::Result<()> {
+    update_at(database, |config| {
+        config.calendar.client_id = client_id.trim().to_owned();
+        config.calendar.client_secret = client_secret.trim().to_owned();
+    })
+}
+
+/// Saves which sources are switched off.
+pub fn save_calendar_visibility(settings: &CalendarSettings) -> io::Result<()> {
+    save_calendar_visibility_at(&database()?, settings)
+}
+
+fn save_calendar_visibility_at(database: &Path, settings: &CalendarSettings) -> io::Result<()> {
+    update_at(database, |config| {
+        config.calendar.disabled = settings.disabled.clone();
+        config.calendar.show_tasks = settings.show_tasks;
+    })
+}
+
+/// Saves the orders of the Inbox and Overdue lists.
+pub fn save_task_sorts(
+    inbox: crate::calendar::task_sort::InboxSort,
+    overdue: crate::calendar::task_sort::InboxSort,
+) -> io::Result<()> {
+    save_task_sorts_at(&database()?, inbox, overdue)
+}
+
+fn save_task_sorts_at(
+    database: &Path,
+    inbox: crate::calendar::task_sort::InboxSort,
+    overdue: crate::calendar::task_sort::InboxSort,
+) -> io::Result<()> {
+    update_at(database, |config| {
+        config.calendar.inbox_sort = inbox;
+        config.calendar.overdue_sort = overdue;
+    })
+}
+
+/// Saves which day weeks start on.
+pub fn save_first_day_of_week(
+    first_day: crate::calendar::first_day::FirstDayOfWeek,
+) -> io::Result<()> {
+    save_first_day_of_week_at(&database()?, first_day)
+}
+
+fn save_first_day_of_week_at(
+    database: &Path,
+    first_day: crate::calendar::first_day::FirstDayOfWeek,
+) -> io::Result<()> {
+    update_at(database, |config| {
+        config.calendar.first_day_of_week = first_day;
+    })
+}
+
+/// Saves the weekly sleep schedule and its dated changes.
+pub fn save_sleep_schedule(settings: &CalendarSettings) -> io::Result<()> {
+    save_sleep_schedule_at(&database()?, settings)
+}
+
+fn save_sleep_schedule_at(database: &Path, settings: &CalendarSettings) -> io::Result<()> {
+    update_at(database, |config| {
+        config.calendar.sleep_schedule = settings.sleep_schedule;
+        config.calendar.sleep_schedule_changes = settings.sleep_schedule_changes.clone();
+    })
+}
+
+/// Saves whether travel is shown on the calendar.
+pub fn save_travel_show(show: bool) -> io::Result<()> {
+    save_travel_show_at(&database()?, show)
+}
+
+fn save_travel_show_at(database: &Path, show: bool) -> io::Result<()> {
+    update_at(database, |config| config.travel.show = show)
+}
+
+/// Replaces the reminder settings.
+pub fn save_reminders(settings: &crate::reminders::ReminderSettings) -> io::Result<()> {
+    save_reminders_at(&database()?, settings)
+}
+
+fn save_reminders_at(
+    database: &Path,
+    settings: &crate::reminders::ReminderSettings,
+) -> io::Result<()> {
+    update_at(database, |config| config.reminders = settings.clone())
+}
+
+/// Saves a place Mapbox found and returns its id, reusing one already saved.
+pub fn save_found_place(found: &crate::places::Found) -> io::Result<u64> {
+    save_found_place_at(&database()?, found)
+}
+
+fn save_found_place_at(database: &Path, found: &crate::places::Found) -> io::Result<u64> {
+    update_at(database, |config| {
+        crate::places::add_place(
+            &mut config.travel.places,
+            &found.name,
+            &found.address,
+            &found.place_id,
+            found.lat,
+            found.lng,
+        )
+    })
+}
+
+/// Records the saved place a calendar event was given, or forgets it. The iced
+/// app prefers this over the event's location text, so a change has to reach it.
+pub fn save_event_place(event_id: &str, place: Option<u64>) -> io::Result<()> {
+    save_event_place_at(&database()?, event_id, place)
+}
+
+fn save_event_place_at(database: &Path, event_id: &str, place: Option<u64>) -> io::Result<()> {
+    update_at(database, |config| match place {
+        Some(place) => {
+            config
+                .travel
+                .event_places
+                .insert(event_id.to_owned(), place);
+        }
+        None => {
+            config.travel.event_places.remove(event_id);
+        }
+    })
+}
+
+/// Replaces the notepad's text. Its font size is a setting of each device.
 pub fn save_notepad_text(text: &str) -> io::Result<()> {
     let notepad = NotepadText {
         text: text.to_owned(),
@@ -1180,102 +1125,32 @@ pub fn save_projects(projects: &ProjectsSettings) -> io::Result<()> {
     crate::shared_data::save_section(&database()?, "projects", projects)
 }
 
-fn no_config_directory() -> io::Error {
-    io::Error::new(io::ErrorKind::NotFound, "no config directory available")
-}
-
-/// Rewrites only the given keys of `[calendar]`. The Dioxus app's [`Config`] is
-/// a subset of the file, so saving that struct would drop the desktop settings.
-fn edit_calendar_table(
-    path: &std::path::Path,
-    edit: impl FnOnce(&mut toml::Table),
-) -> io::Result<()> {
-    edit_table(path, "calendar", |calendar| {
-        edit(calendar);
-        Ok(())
-    })
-}
-
-/// Rewrites one table of the config, leaving the rest of the file alone.
-fn edit_table(
-    path: &std::path::Path,
-    name: &str,
-    edit: impl FnOnce(&mut toml::Table) -> io::Result<()>,
-) -> io::Result<()> {
-    crate::fsutil::locked(path, || {
-        let mut document = match fs::read_to_string(path) {
-            Ok(text) => toml::from_str::<toml::Table>(&text)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => toml::Table::new(),
-            Err(error) => return Err(error),
-        };
-        let table = document
-            .entry(name)
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("[{name}] is not a table"),
-                )
-            })?;
-        edit(table)?;
-
-        let text = toml::to_string_pretty(&document)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        crate::fsutil::write_atomic(path, text.as_bytes(), crate::fsutil::Kind::Private)
-    })
-}
-
 impl Config {
-    /// Reads the config, with the scratch data from the database, falling back
-    /// to defaults for anything unreadable.
+    /// Reads the settings, falling back to defaults for anything unreadable.
     pub fn load() -> Self {
-        let database = crate::task_db::path();
-        let Some(path) = config_path() else {
-            log::warn!("no config directory available; using defaults");
-            return Self::default();
-        };
-        if let Err(error) = crate::fsutil::make_private(&path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            log::warn!("could not make {} private: {error}", path.display());
+        match database() {
+            Ok(path) => Self::load_from(&path),
+            Err(error) => {
+                log::warn!("{error}; using default settings");
+                Self::default()
+            }
         }
-        Self::load_from(&path, database.as_deref())
     }
 
-    fn load_from(path: &std::path::Path, database: Option<&std::path::Path>) -> Self {
-        let mut table = match fs::read_to_string(path) {
-            Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
-                Ok(table) => table,
-                Err(error) => {
-                    log::warn!(
-                        "{} could not be parsed, using defaults instead: {error}",
-                        path.display()
-                    );
-                    toml::Table::new()
+    fn load_from(database: &Path) -> Self {
+        // The desktop's settings are not this type's, so they are not reported.
+        match crate::settings::load::<Self>(database, |_| {}) {
+            Ok(loaded) => {
+                for problem in &loaded.problems {
+                    log::warn!("ignoring a setting that cannot be read: {problem}");
                 }
-            },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => toml::Table::new(),
-            Err(error) => {
-                log::warn!("{} could not be read: {error}", path.display());
-                toml::Table::new()
+                loaded.value
             }
-        };
-        if let Some(database) = database
-            && let Err(error) = crate::shared_data::overlay(database, &mut table)
-        {
-            log::warn!("could not read the scratch data: {error}");
-        }
-        toml::Value::Table(table)
-            .try_into()
-            .unwrap_or_else(|error| {
-                log::warn!(
-                    "{} could not be parsed, using defaults instead: {error}",
-                    path.display()
-                );
+            Err(error) => {
+                log::warn!("could not read the settings, using defaults instead: {error}");
                 Self::default()
-            })
+            }
+        }
     }
 }
 
@@ -1283,40 +1158,58 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn database() -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("timeslay.sqlite3");
+        (directory, path)
+    }
+
+    /// A desktop setting this type knows nothing about, to check it survives.
+    fn desktop_setting(path: &Path) -> Option<String> {
+        let mut db = crate::task_db::Database::open(path).unwrap();
+        let connection = db.connection();
+        connection
+            .execute(
+                "INSERT INTO device_settings VALUES('window.width','321') ON CONFLICT DO NOTHING",
+                [],
+            )
+            .unwrap();
+        connection
+            .query_row(
+                "SELECT value FROM device_settings WHERE key='window.width'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+
     #[test]
     fn notes_folder_setting_preserves_desktop_settings() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(
-            &path,
-            "[window]\nwidth = 321\n[notes]\nfuture_option = true\n",
-        )
-        .unwrap();
+        let (_directory, path) = database();
+        desktop_setting(&path);
         save_notes_directory_at(&path, "  ~/Documents/Shared Notes  ").unwrap();
         assert_eq!(
-            Config::load_from(&path, None).notes.directory,
+            Config::load_from(&path).notes.directory,
             "~/Documents/Shared Notes"
         );
-        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(table["window"]["width"].as_integer(), Some(321));
-        assert_eq!(table["notes"]["future_option"].as_bool(), Some(true));
+        assert_eq!(desktop_setting(&path).as_deref(), Some("321"));
         save_notes_directory_at(&path, " ").unwrap();
-        assert!(Config::load_from(&path, None).notes.path().is_none());
+        assert!(Config::load_from(&path).notes.path().is_none());
     }
 
     #[test]
     fn sync_url_defaults_to_disabled_and_preserves_other_settings() {
         assert!(Config::default().database_sync.url.is_empty());
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(&path, "[window]\nwidth = 321\n").unwrap();
+        let (_directory, path) = database();
+        desktop_setting(&path);
         save_database_sync_url_at(&path, "  https://sync.example.com  ").unwrap();
-        let loaded = Config::load_from(&path, None);
-        assert_eq!(loaded.database_sync.url, "https://sync.example.com");
-        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(table["window"]["width"].as_integer(), Some(321));
+        assert_eq!(
+            Config::load_from(&path).database_sync.url,
+            "https://sync.example.com"
+        );
+        assert_eq!(desktop_setting(&path).as_deref(), Some("321"));
         save_database_sync_url_at(&path, "  ").unwrap();
-        assert!(Config::load_from(&path, None).database_sync.url.is_empty());
+        assert!(Config::load_from(&path).database_sync.url.is_empty());
     }
 
     #[test]
@@ -1337,38 +1230,31 @@ mod tests {
         ] {
             assert!(validate_database_sync_url(url).is_err(), "{url}");
         }
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
+        let (_directory, path) = database();
         save_database_sync_url_at(&path, "https://sync.example.com").unwrap();
         let error = save_database_sync_url_at(&path, "sync.example.com").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(
-            Config::load_from(&path, None).database_sync.url,
+            Config::load_from(&path).database_sync.url,
             "https://sync.example.com"
         );
     }
 
     #[test]
-    fn scratch_data_comes_from_the_database_and_leaves_the_config_alone() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let database = directory.path().join("test.sqlite3");
-        let original = "[pomodoro]\nwork_minutes = 25\n[notepad]\nfont_size = 120\n";
-        std::fs::write(&path, original).unwrap();
-
+    fn shared_documents_come_back_with_the_settings() {
+        let (_directory, path) = database();
         let mut dumps = crate::brain_dump::Dumps::default();
         dumps.set(
             chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
             "idea".into(),
         );
-        crate::shared_data::save_section(&database, "brain_dump", &dumps).unwrap();
+        crate::shared_data::save_section(&path, "brain_dump", &dumps).unwrap();
         let notepad = NotepadText { text: "new".into() };
-        crate::shared_data::save_section(&database, "notepad", &notepad).unwrap();
+        crate::shared_data::save_section(&path, "notepad", &notepad).unwrap();
 
-        let read = Config::load_from(&path, Some(&database));
+        let read = Config::load_from(&path);
         assert_eq!(read.brain_dump, dumps);
         assert_eq!(read.notepad.text, "new");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[test]
@@ -1400,53 +1286,35 @@ mod tests {
     }
 
     #[test]
-    fn saving_the_client_keeps_other_settings_and_is_private() {
-        let dir = std::env::temp_dir().join(format!("tt-config-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let path = dir.join("nested").join("config.toml");
-
+    fn saving_the_client_keeps_other_settings() {
+        let (_directory, path) = database();
+        save_task_sorts_at(
+            &path,
+            crate::calendar::task_sort::InboxSort::ALL[1],
+            crate::calendar::task_sort::InboxSort::ALL[1],
+        )
+        .unwrap();
         save_google_client_at(&path, " id ", " secret ").unwrap();
-        let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("client_id = \"id\""));
-        assert!(text.contains("client_secret = \"secret\""));
-
-        fs::write(&path, "[other]\nkeep = 1\n\n[calendar]\nsync_minutes = 5\n").unwrap();
         save_google_client_at(&path, "id2", "secret2").unwrap();
-        let config: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(config["other"]["keep"].as_integer(), Some(1));
-        assert_eq!(config["calendar"]["sync_minutes"].as_integer(), Some(5));
-        assert_eq!(config["calendar"]["client_id"].as_str(), Some("id2"));
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::remove_file(&path);
-            save_google_client_at(&path, "a", "b").unwrap();
-            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
-        }
-        let _ = fs::remove_dir_all(&dir);
+        let config = Config::load_from(&path);
+        assert_eq!(config.calendar.client_id, "id2");
+        assert_eq!(config.calendar.client_secret, "secret2");
+        assert_eq!(
+            config.calendar.inbox_sort,
+            crate::calendar::task_sort::InboxSort::ALL[1]
+        );
     }
 
     #[test]
     fn saving_the_first_day_of_the_week_keeps_other_settings() {
         use crate::calendar::first_day::FirstDayOfWeek;
 
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(
-            &path,
-            "[calendar]\nsync_minutes = 30\n\n[window]\nalways_on_top = true\n",
-        )
-        .unwrap();
-
+        let (_directory, path) = database();
+        save_travel_show_at(&path, true).unwrap();
         save_first_day_of_week_at(&path, FirstDayOfWeek::Saturday).unwrap();
 
-        let text = fs::read_to_string(&path).unwrap();
-        let document: toml::Table = toml::from_str(&text).unwrap();
-        assert_eq!(document["window"]["always_on_top"].as_bool(), Some(true));
-        let config: Config = toml::from_str(&text).unwrap();
-        assert_eq!(config.calendar.sync_minutes, 30);
+        let config = Config::load_from(&path);
+        assert!(config.travel.show);
         assert_eq!(config.calendar.first_day_of_week, FirstDayOfWeek::Saturday);
     }
 
@@ -1454,9 +1322,8 @@ mod tests {
     fn saving_the_sleep_schedule_reads_back_and_keeps_other_settings() {
         use crate::calendar::sleep;
 
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(&path, "[calendar]\nsync_minutes = 30\n").unwrap();
+        let (_directory, path) = database();
+        save_travel_show_at(&path, true).unwrap();
         let mut settings = CalendarSettings::default();
         let from = chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap();
         sleep::set_weekday_times(
@@ -1470,8 +1337,8 @@ mod tests {
 
         save_sleep_schedule_at(&path, &settings).unwrap();
 
-        let config: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(config.calendar.sync_minutes, 30);
+        let config = Config::load_from(&path);
+        assert!(config.travel.show);
         assert_eq!(config.calendar.sleep_schedule, settings.sleep_schedule);
         assert_eq!(
             config.calendar.sleep_schedule_changes,
@@ -1480,20 +1347,16 @@ mod tests {
     }
 
     #[test]
-    fn saving_the_task_sorts_reads_back_and_keeps_other_settings() {
+    fn saving_the_task_sorts_reads_back() {
         use crate::calendar::task_sort::InboxSort;
 
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(&path, "[calendar]\nsync_minutes = 30\n").unwrap();
-
+        let (_directory, path) = database();
         for (inbox, overdue) in InboxSort::ALL
             .into_iter()
             .zip(InboxSort::ALL.into_iter().rev())
         {
             save_task_sorts_at(&path, inbox, overdue).unwrap();
-            let config: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(config.calendar.sync_minutes, 30);
+            let config = Config::load_from(&path);
             assert_eq!(config.calendar.inbox_sort, inbox);
             assert_eq!(config.calendar.overdue_sort, overdue);
             assert_eq!(InboxSort::parse(inbox.name()), Some(inbox));
@@ -1501,62 +1364,34 @@ mod tests {
     }
 
     #[test]
-    fn the_travel_switch_keeps_the_rest_of_travel() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(
-            &path,
-            "[travel]\napi_key = \"pk\"\n\n[[travel.routes]]\nfrom = 1\nto = 2\nmode = \"car\"\nseconds = 600\nmeters = 5000\n",
-        )
-        .unwrap();
-
-        save_travel_show_at(&path, true).unwrap();
-
-        let saved: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(saved.travel.show);
-        assert_eq!(saved.travel.api_key, "pk");
-        assert_eq!(saved.travel.routes.len(), 1);
-    }
-
-    #[test]
-    fn saving_reminders_replaces_only_their_table() {
+    fn saving_reminders_reads_back_and_keeps_other_settings() {
         use crate::reminders::{ReminderSettings, Sound};
         use crate::sounds::Tone;
 
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        fs::write(
-            &path,
-            "[window]\nwidth = 800\n\n[reminders]\nenabled = false\nstale = 1\n",
-        )
-        .unwrap();
+        let (_directory, path) = database();
+        save_travel_show_at(&path, true).unwrap();
         let mut settings = ReminderSettings {
             enabled: true,
             ..ReminderSettings::default()
         };
         settings.travel.sound = Sound::Tone { tone: Tone::Bell };
+        settings.events.minutes_before = 25;
 
         save_reminders_at(&path, &settings).unwrap();
 
-        let text = fs::read_to_string(&path).unwrap();
-        let table: toml::Table = toml::from_str(&text).unwrap();
-        assert_eq!(table["window"]["width"].as_integer(), Some(800));
-        assert!(table["reminders"].get("stale").is_none());
-        let saved: Config = toml::from_str(&text).unwrap();
-        assert_eq!(saved.reminders, settings);
+        let config = Config::load_from(&path);
+        assert_eq!(config.reminders, settings);
+        assert!(config.travel.show);
+        save_reminders_at(&path, &ReminderSettings::default()).unwrap();
+        assert_eq!(
+            Config::load_from(&path).reminders,
+            ReminderSettings::default()
+        );
     }
 
     #[test]
-    fn saving_places_keeps_the_rest_of_travel_and_reuses_a_saved_place() {
-        let dir = std::env::temp_dir().join(format!("tt-places-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-        fs::write(
-            &path,
-            "[window]\nwidth = 900\n\n[travel]\napi_key = \"pk\"\n",
-        )
-        .unwrap();
+    fn saving_places_reuses_a_saved_place_and_links_events() {
+        let (_directory, path) = database();
         let found = crate::places::Found {
             place_id: "mapbox-1".into(),
             name: "Library".into(),
@@ -1571,45 +1406,27 @@ mod tests {
         save_event_place_at(&path, "other", Some(id)).unwrap();
         save_event_place_at(&path, "other", None).unwrap();
 
-        let saved: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let saved = Config::load_from(&path);
         assert_eq!(saved.travel.places.len(), 1);
-        assert_eq!(saved.travel.api_key, "pk");
+        assert_eq!(saved.travel.places[0].address, "1 Main St");
         assert_eq!(saved.travel.event_places.len(), 1);
         assert_eq!(saved.travel.event_places["standup"], id);
-        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(table["window"]["width"].as_integer(), Some(900));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn saving_visibility_keeps_other_settings_and_refuses_a_broken_file() {
-        let dir = std::env::temp_dir().join(format!("tt-visibility-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-        fs::write(
-            &path,
-            "[window]\nwidth = 900\n\n[calendar]\nclient_id = \"id\"\ndisabled = [\"old\"]\n",
-        )
-        .unwrap();
-
+    fn saving_visibility_keeps_other_settings() {
+        let (_directory, path) = database();
+        save_google_client_at(&path, "id", "").unwrap();
         let settings = CalendarSettings {
-            disabled: vec!["work".into(), "timeslay:habits".into()],
+            disabled: vec!["timeslay:habits".into(), "work".into()],
             show_tasks: false,
             ..CalendarSettings::default()
         };
         save_calendar_visibility_at(&path, &settings).unwrap();
 
-        let saved: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let saved = Config::load_from(&path);
         assert_eq!(saved.calendar.disabled, settings.disabled);
         assert!(!saved.calendar.show_tasks);
         assert_eq!(saved.calendar.client_id, "id");
-        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(table["window"]["width"].as_integer(), Some(900));
-
-        fs::write(&path, "not [ toml").unwrap();
-        assert!(save_calendar_visibility_at(&path, &settings).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "not [ toml");
-        let _ = fs::remove_dir_all(&dir);
     }
 }

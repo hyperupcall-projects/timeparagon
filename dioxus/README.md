@@ -5,7 +5,7 @@ own screen and the rest of the app in sheets over it:
 
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
-  `[notes] directory` set in `config.toml`.
+  notes directory chosen on each device.
 - Search and filters for the day.
 - **Do**, **Plan** (Day, Multi-day, Month or Schedule), **Tasks**
   with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
@@ -39,10 +39,11 @@ own screen and the rest of the app in sheets over it:
   Google accounts stay on the desktop, as the phone has no secure store for
   their tokens yet.
 
-Alarms, habits, the notepad, brain dumps, projects and work sessions sync
-through the Turso server configured in **Settings → Database sync** on each
-device. The URL is stored in `[database_sync].url` in `config.toml`; a blank URL
-disables sync. Each device needs network access to that server. Changes save locally
+Alarms, habits, the notepad, brain dumps, projects, work sessions and most
+settings (calendars, places, reminders, the sleep schedule, …) sync through the
+Turso server configured in **Settings → Database sync** on each device. The URL
+is the `database_sync.url` device setting, which stays on the device; a blank
+URL disables sync. Each device needs network access to that server. Changes save locally
 when offline and retry automatically. Local data stays in the data directory,
 because Android may empty an app's cache.
 
@@ -61,7 +62,9 @@ Only one process per device opens the Turso replica. The desktop dock, panel
 and Android widget service continue using SQLite; journal triggers capture
 changes from every process. Credentials, theme, calendar/contacts/route
 caches and fetch timestamps stay local. Google Calendar and Tasks remain their
-own sources of truth. Settings in `config.toml` stay local to each device.
+own sources of truth. Settings that describe one device (its notes folder, sync
+server, window layout and so on) stay on it; see
+[Settings](../docs/data-model.md#settings).
 
 These stay on the desktop: the dock and panel, global shortcuts, the
 Pomodoro timer, voice input, the
@@ -70,10 +73,10 @@ ordinary tasks.
 
 Both apps share data and code via the `timeslay-core` crate:
 
-- the config at `~/.config/timeslay/config.toml`,
 - the local database at `~/.local/share/timeslay/timeslay.sqlite3`, which holds
-  tasks and time-block metadata, cached events, habits and the scratch data,
-- notes as Markdown files in the `[notes] directory` from the config,
+  the settings, tasks and time-block metadata, cached events, habits and the
+  scratch data,
+- notes as Markdown files in each device's notes directory,
 - on the desktop, the OAuth token in `~/.local/state/timeslay/secrets.json`,
   kept out of the database,
 - the calendar sync and Google Tasks code in `core/`.
@@ -170,15 +173,17 @@ The Android build does **not** compile iced or any desktop-only crates; it uses
 
 Nothing is embedded in the APK: no config, client ID or secret. On first
 launch the app asks for the Google OAuth client ID and secret and saves them to
-its private storage (`config.toml`, readable only by the app):
+the settings in its database, in private storage readable only by the app:
 
 ```text
-/data/user/0/dev.timeslay.day/files/config/timeslay/config.toml
+/data/user/0/dev.timeslay.day/files/data/timeslay/timeslay.sqlite3
 ```
 
-After **Save and connect**, sign in with Google in the browser. The rest of the
-config (calendars, task lists) is local to this device. Configure it here or
-copy the settings from the iced app.
+After **Save and connect**, sign in with Google in the browser. Once database
+sync is set up, the settings made on the desktop (the OAuth client, calendars,
+task lists, places, reminders, …) arrive on their own. A `config.toml` an
+older version left in `files/config/timeslay/` is imported once and renamed
+`config.toml.imported`.
 
 The app sets `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` to
 its Android internal storage before starting, so the shared data layer uses
@@ -186,10 +191,11 @@ the same relative layout as it does on desktop.
 
 ### Settings and data sync
 
-Turso is required for shared data sync, including habits and
-projects. Notes are files and are not synced through Turso. `config.toml` stays local to each device. Both apps watch it and
-reload local edits; they do not upload or download settings through Google
-Drive, and Google sign-in does not request Drive access.
+Turso is required for shared data sync, including habits, projects and
+settings. Notes are files and are not synced through Turso. Both apps notice
+settings changed by another process or by sync and reload them; they do not
+upload or download settings through Google Drive, and Google sign-in does not
+request Drive access.
 
 To remove a previously granted Drive permission, revoke the app's access in
 [Google Account connections](https://myaccount.google.com/connections), then
@@ -283,8 +289,8 @@ clean tree, because the manifest names the widget's resources.
 - Only the Dioxus crate enables the desktop/mobile renderers; the root
   workspace defaults to the iced package (`default-members = ["."]`).
 - **View → Calendars** which switches Google calendars,
-  task lists and TimeSlay event kinds on or off. It saves to this device's
-  `[calendar]` settings. Tasks inside a time block's popup stay visible.
+  task lists and TimeSlay event kinds on or off. It saves to the shared
+  `calendar_sources` settings. Tasks inside a time block's popup stay visible.
 - **Settings** edits the theme, first day of the week, database sync,
-  reminders and the Google client ID and secret. Other settings live
-  in the iced application; this crate reloads the same config when it changes.
+  reminders and the Google client ID and secret. Other settings are edited
+  in the iced application; this crate reloads the settings when they change.

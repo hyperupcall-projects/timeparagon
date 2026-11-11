@@ -32,7 +32,6 @@ use timeslay_core::calendar::search::Search;
 use timeslay_core::calendar::time_format::{self, TimeFormat};
 use timeslay_core::calendar::{self, Event};
 use timeslay_core::config::CalendarSettings;
-use timeslay_core::config_watch;
 use timeslay_core::theme as look;
 use timeslay_core::timeblocking as tb;
 
@@ -61,7 +60,6 @@ return false;
 
 #[cfg(not(target_os = "android"))]
 fn main() {
-    config_watch::start();
     timeslay_core::database_sync::start();
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
@@ -93,7 +91,6 @@ fn window_background() -> (u8, u8, u8, u8) {
 #[cfg(target_os = "android")]
 fn main() {
     prepare_android_storage();
-    config_watch::start();
     timeslay_core::database_sync::start();
     dioxus::launch(App);
 }
@@ -183,9 +180,9 @@ fn App() -> Element {
     // Local settings can change under the view when the iced app saves them.
     let mut config = use_signal(day::load_config);
     let settings = config.read().calendar.clone();
-    let config_hint = timeslay_core::config::config_path()
+    let config_hint = timeslay_core::task_db::path()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "config.toml".to_owned());
+        .unwrap_or_else(|| "timeslay.sqlite3".to_owned());
 
     let mut current_day = use_signal(|| day::today(&settings));
     let mut revision = use_signal(|| 0u32);
@@ -358,14 +355,10 @@ fn App() -> Element {
         }
     });
 
-    // Follow the config file. Only the calendar settings, projects and places
-    // drive this view, so anything else changing (the iced app saving its
-    // window size, say) does not trigger a re-render.
+    // Follow the settings, which another process or another device (through
+    // sync) can change. The view is only re-rendered when what it was given
+    // differs, so the desktop saving its window size, say, costs one read.
     use_future(move || async move {
-        let mut seen = (
-            config_watch::generation(),
-            timeslay_core::database_sync::generation(),
-        );
         // The local edits are only drawn again when the database says they
         // changed, which is one small query instead of a full read, and the
         // notes only when their directory's fingerprint moved.
@@ -401,13 +394,11 @@ fn App() -> Element {
                 reminders::republish(&config.peek());
             }
             notes_store.reload_shared();
+            // Nothing to compare against before the first read, which only
+            // repeats the load the view started with.
+            let settings_moved = changes.is_some() && moved(|c| c.config);
             changes = counters;
-            let generation = (
-                config_watch::generation(),
-                timeslay_core::database_sync::generation(),
-            );
-            if generation != seen {
-                seen = generation;
+            if settings_moved {
                 let reloaded = day::load_config();
                 if reloaded.notes != config.peek().notes
                     && let Err(error) = notes_store.configure(&reloaded.notes.directory)
@@ -952,7 +943,7 @@ fn App() -> Element {
                             {state_connect_error}
                             p { class: "hint",
                                 "The day view uses the same OAuth token and settings as the iced app. "
-                                "The configuration lives at {config_hint}."
+                                "The settings live in {config_hint}."
                             }
                             div { class: "state-actions",
                                 button {

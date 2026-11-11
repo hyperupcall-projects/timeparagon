@@ -63,7 +63,11 @@ fn sound_plan(sound: &Sound) -> SoundPlan {
         Sound::Default => ("default", String::new(), String::new()),
         Sound::Silent => ("silent", String::new(), String::new()),
         Sound::Tone { tone } => ("tone", tone.android_resource(), String::new()),
-        Sound::Device { uri, .. } => ("device", String::new(), uri.clone()),
+        // Reminder settings are synced, so this can be a desktop's sound file,
+        // which Android cannot play: like the desktop does with a phone's
+        // ringtone, use the default sound instead.
+        Sound::Device { uri, .. } if uri.contains("://") => ("device", String::new(), uri.clone()),
+        Sound::Device { .. } => ("default", String::new(), String::new()),
     };
     SoundPlan {
         key: sound.key(),
@@ -606,6 +610,23 @@ pub fn ReminderSection(config: Signal<Config>) -> Element {
 mod tests {
     use super::*;
     use timeslay_core::reminders::Due;
+
+    #[test]
+    fn a_desktop_sound_file_synced_to_the_phone_plays_the_default_sound() {
+        let phone = sound_plan(&Sound::Device {
+            name: "Chime".into(),
+            uri: "content://media/internal/audio/media/12".into(),
+        });
+        assert_eq!(
+            (phone.kind, phone.uri.as_str()),
+            ("device", "content://media/internal/audio/media/12")
+        );
+        let desktop = sound_plan(&Sound::Device {
+            name: "Ocean · Bell".into(),
+            uri: "/usr/share/sounds/ocean/stereo/bell.oga".into(),
+        });
+        assert_eq!((desktop.kind, desktop.uri.as_str()), ("default", ""));
+    }
     use timeslay_core::sounds::Tone;
 
     #[test]

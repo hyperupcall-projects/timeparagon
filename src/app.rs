@@ -1208,7 +1208,7 @@ pub fn boot_new_task() -> (State, Task<Message>) {
 /// Opens the clock as the side panel: a separate, narrow instance pinned to one
 /// screen edge and kept above other windows.
 ///
-/// The width and edge come from the `[panel]` table of `config.toml`, and the width is also fixed by
+/// The width and edge come from the `panel.*` settings, and the width is also fixed by
 /// the window's minimum and maximum so the compositor cannot stretch it. The
 /// height is filled in once the monitor size is known, in [`Message::MonitorSized`].
 ///
@@ -1296,8 +1296,9 @@ fn sidebar_settings(panel: &panel::PanelConfig, views: &config::ViewSettings) ->
 /// config, the same cached days and the same running track. It deliberately
 /// opens no window: the two callers want different ones.
 fn boot_state() -> State {
-    let mut state = State::new(Config::load(), Catalog::load());
-    state.config_error = Config::load_problem();
+    let (config, problem) = Config::load_checked();
+    let mut state = State::new(config, Catalog::load());
+    state.config_error = problem;
 
     // Start sync only for the running app; hand-built test states stay offline.
     crate::database_sync::start();

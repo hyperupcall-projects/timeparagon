@@ -4,16 +4,15 @@
 //! Google Tasks and time-block metadata. Those modules live here without any
 //! desktop UI dependencies, so they also cross-compile for Android.
 //!
-//! `config` holds the `[calendar]` settings both apps share and the minimal
+//! `config` holds the calendar settings both apps share and the minimal
 //! data-only config the Dioxus app reads. The iced application embeds those
-//! same settings in its full config.
+//! same settings in its full config. `settings` keeps both in the database.
 
 pub mod alarms;
 pub mod brain_dump;
 pub mod calendar;
 pub mod clock;
 pub mod config;
-pub mod config_watch;
 pub mod database_migration;
 pub mod database_sync;
 pub mod fsutil;
@@ -27,6 +26,7 @@ pub mod places;
 pub mod recurrence;
 pub mod reminders;
 pub mod secrets;
+pub mod settings;
 pub mod shared_data;
 pub mod sounds;
 pub mod task_db;

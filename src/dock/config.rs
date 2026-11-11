@@ -189,7 +189,7 @@ impl DockConfig {
     }
 }
 
-/// `dock.toml`, beside the main `config.toml`.
+/// `dock.toml`, in the config directory.
 pub fn path() -> Option<PathBuf> {
     Some(
         crate::config::project_dirs()?

@@ -17,10 +17,11 @@
 //! late is recognized.
 pub mod model;
 pub(crate) mod projection;
+mod rows;
 use model::Edit;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs, io,
     path::Path,
     sync::{
@@ -31,7 +32,8 @@ use std::{
 };
 
 const TABLE: &str = "timeslay_revisions_v1";
-/// The documents shared between devices. Everything else stays local.
+/// The documents shared between devices. The rows of the synced settings
+/// tables are too (see [`rows`]); everything else stays local.
 const SHARED_KEYS: [&str; 6] = [
     "habits",
     "alarms",
@@ -105,7 +107,10 @@ pub fn unsent_edits() -> usize {
         })
         .and_then(|db| {
             db.query_row(
-                &format!("SELECT COUNT(*) FROM timeslay_sync_edits WHERE uploaded=0 AND document IN ({})", shared_sql()),
+                &format!(
+                    "SELECT COUNT(*) FROM timeslay_sync_edits WHERE uploaded=0 AND ({})",
+                    shared_predicate()
+                ),
                 [],
                 |r| r.get::<_, i64>(0),
             )
@@ -135,7 +140,7 @@ fn describe_edits(edits: &[&Edit]) -> String {
             "shared.brain_dump" => "brain dump",
             "shared.projects" => "project",
             "shared.task_work" => "task work",
-            _ => "data",
+            document => rows::parse(document).map_or("data", |(table, _)| table.noun),
         };
         if !kinds.contains(&kind) {
             kinds.push(kind);
@@ -157,6 +162,12 @@ fn shared_sql() -> String {
         .map(|key| format!("'{key}'"))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// An SQL condition on `document` that holds for everything replicated:
+/// shared documents and rows of synced tables.
+fn shared_predicate() -> String {
+    format!("document IN ({}) OR {}", shared_sql(), rows::predicate())
 }
 
 pub fn generation() -> u64 {
@@ -225,7 +236,8 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(other)?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS timeslay_sync_control(singleton INTEGER PRIMARY KEY CHECK(singleton=1), projecting INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS timeslay_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);").map_err(other)?;
+        CREATE TABLE IF NOT EXISTS timeslay_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS timeslay_sync_edits_clock ON timeslay_sync_edits(clock);").map_err(other)?;
     install_snapshots(&tx).map_err(other)?;
     let shared = shared_sql();
     let enrolled = tx
@@ -241,6 +253,11 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         tx.execute("INSERT INTO timeslay_sync_control VALUES(1,0,0)", [])
             .map_err(other)?;
         tx.execute_batch(&format!("INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,1,0 FROM documents WHERE key IN ({shared});")).map_err(other)?;
+    }
+    // Every write to a synced table journals the row, triggers included.
+    rows::install(&tx).map_err(other)?;
+    if !enrolled {
+        rows::journal_existing(&tx).map_err(other)?;
     }
     for (name, kind, condition, key, before, after) in [
         ("insert", "INSERT", "1", "NEW.key", "NULL", "NEW.value"),
@@ -297,8 +314,8 @@ fn edits(db: &Connection, pending: bool) -> io::Result<Vec<Edit>> {
 fn rows(db: &Connection, pending: bool) -> io::Result<Vec<(Edit, Local)>> {
     // Keep retired history on disk, but never replay or upload it.
     let filter = format!(
-        "WHERE document IN ({}){}",
-        shared_sql(),
+        "WHERE ({}){}",
+        shared_predicate(),
         if pending { " AND uploaded=0" } else { "" }
     );
     let mut out: Vec<(Edit, Local)> = db
@@ -365,7 +382,7 @@ fn rows(db: &Connection, pending: bool) -> io::Result<Vec<(Edit, Local)>> {
 }
 
 fn shared(key: &str) -> bool {
-    SHARED_KEYS.contains(&key)
+    SHARED_KEYS.contains(&key) || rows::parse(key).is_some()
 }
 
 /// Every ID this device knows: journaled, snapshotted or deleted.
@@ -526,6 +543,10 @@ fn apply(
     )
     .map_err(other)?;
     for (key, value) in projection {
+        if let Some((table, row)) = rows::parse(&key) {
+            applied.changed |= rows::project(&tx, table, &row, value.as_deref())?;
+            continue;
+        }
         let old: Option<String> = tx
             .query_row("SELECT value FROM documents WHERE key=?1", [&key], |r| {
                 r.get(0)
@@ -578,20 +599,30 @@ fn apply(
     Ok(applied)
 }
 
+/// Each document's journal, so that work on one document does not scan every
+/// other's: with one document per synced row, there are many.
+fn by_document(all: Vec<(Edit, Local)>) -> BTreeMap<String, Vec<(Edit, Local)>> {
+    let mut documents = BTreeMap::<String, Vec<(Edit, Local)>>::new();
+    for (edit, local) in all {
+        documents
+            .entry(edit.document.clone())
+            .or_default()
+            .push((edit, local));
+    }
+    documents
+}
+
 /// Drops what the server's contents show to be stale or settled.
 fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
     let all = rows(tx, false)?;
-    let edits_only: Vec<Edit> = all.iter().map(|(e, _)| e.clone()).collect();
-    let local: HashMap<&str, Local> = all.iter().map(|(e, l)| (e.id.as_str(), *l)).collect();
-    let documents: BTreeSet<&str> = edits_only.iter().map(|e| e.document.as_str()).collect();
 
     // A save that reached the server but was not marked as uploaded (the
     // worker stopped in between) may since have been folded. It must not be
     // sent again, or it would reappear after its fold.
-    let folded_anywhere: HashSet<&str> = edits_only
+    let folded_anywhere: HashSet<&str> = all
         .iter()
-        .filter(|e| e.snapshot)
-        .flat_map(|e| e.folds.iter().map(String::as_str))
+        .filter(|(e, _)| e.snapshot)
+        .flat_map(|(e, _)| e.folds.iter().map(String::as_str))
         .collect();
     for (edit, state) in &all {
         if !state.uploaded && folded_anywhere.contains(edit.id.as_str()) {
@@ -603,8 +634,11 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
         }
     }
 
-    for document in documents {
-        let heads = model::heads(&edits_only, document);
+    for (document, journal) in by_document(all) {
+        let edits_only: Vec<Edit> = journal.iter().map(|(e, _)| e.clone()).collect();
+        let local: HashMap<&str, Local> =
+            journal.iter().map(|(e, l)| (e.id.as_str(), *l)).collect();
+        let heads = model::heads(&edits_only, &document);
         // A snapshot made here that lost a race to one already on the server
         // is withdrawn before it is ever sent: what it folded is still here.
         for head in &heads {
@@ -630,12 +664,8 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
             .map(|h| h.clock)
             .max();
         if let Some(horizon) = newest_remote_head {
-            for (edit, state) in &all {
-                if edit.document == document
-                    && state.uploaded
-                    && !remote.contains(&edit.id)
-                    && edit.clock <= horizon
-                {
+            for (edit, state) in &journal {
+                if state.uploaded && !remote.contains(&edit.id) && edit.clock <= horizon {
                     delete_row(tx, &edit.id, true, at)?;
                 }
             }
@@ -650,7 +680,7 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
                 .and_then(|l| l.seen_at)
                 .is_some_and(|seen| seen <= at - GRACE)
         {
-            for id in model::covered(&edits_only, document) {
+            for id in model::covered(&edits_only, &document) {
                 delete_row(tx, &id, false, at)?;
             }
         }
@@ -666,27 +696,20 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
 /// Folds the oldest edits of any document over the threshold into a snapshot,
 /// to be uploaded by the cycle that called this.
 fn compact(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
-    let all = rows(tx, false)?;
-    let edits_only: Vec<Edit> = all.iter().map(|(e, _)| e.clone()).collect();
-    let unsent_snapshot: HashSet<&str> = all
-        .iter()
-        .filter(|(e, l)| e.snapshot && !l.uploaded)
-        .map(|(e, _)| e.document.as_str())
-        .collect();
-    let documents: BTreeSet<&str> = edits_only.iter().map(|e| e.document.as_str()).collect();
-    for document in documents {
-        if unsent_snapshot.contains(document) {
+    for (document, journal) in by_document(rows(tx, false)?) {
+        if journal.iter().any(|(e, l)| e.snapshot && !l.uploaded) {
             continue;
         }
-        let covered: HashSet<String> = model::covered(&edits_only, document).into_iter().collect();
+        let edits_only: Vec<Edit> = journal.into_iter().map(|(e, _)| e).collect();
+        let covered: HashSet<String> = model::covered(&edits_only, &document).into_iter().collect();
         let live = edits_only
             .iter()
-            .filter(|e| e.document == document && !e.snapshot && !covered.contains(&e.id))
+            .filter(|e| !e.snapshot && !covered.contains(&e.id))
             .count();
         if live <= KEEP + BATCH {
             continue;
         }
-        let plan = model::plan_snapshot(&edits_only, document, KEEP, |edit| {
+        let plan = model::plan_snapshot(&edits_only, &document, KEEP, |edit| {
             remote.contains(&edit.id)
         })
         .map_err(other)?;
@@ -1091,6 +1114,99 @@ mod tests {
             assert_eq!(result.alarms[0].id, b.id);
             assert_eq!(result.alarms[0].label, "Edited on phone");
         }
+    }
+
+    #[test]
+    fn settings_rows_merge_column_by_column_between_devices() {
+        use crate::config::Config;
+        use crate::settings::{load, update};
+        let read = |path: &Path| load::<Config>(path, |_| {}).unwrap().value;
+        let sync = |devices: [&Path; 2], server: &mut HashMap<String, Edit>| {
+            for path in devices {
+                send(path, server);
+            }
+            let remote: Vec<Edit> = server.values().cloned().collect();
+            for path in devices {
+                apply(path, &remote, None, now()).unwrap();
+            }
+        };
+        let (_a, desktop) = db();
+        let (_b, phone) = db();
+        let mut server = HashMap::new();
+        let id = update(&desktop, |config: &mut Config| {
+            config.calendar.sync_minutes = 30;
+            crate::places::add_place(
+                &mut config.travel.places,
+                "Library",
+                "1 Main St",
+                "m-1",
+                1.5,
+                2.5,
+            )
+        })
+        .unwrap();
+        sync([&desktop, &phone], &mut server);
+        let on_phone = read(&phone);
+        assert_eq!(on_phone.calendar.sync_minutes, 30);
+        assert_eq!(on_phone.travel.places[0].id, id);
+        assert!(
+            edits(&open(&phone).unwrap(), true).unwrap().is_empty(),
+            "rows written by sync are not journaled again"
+        );
+        assert!(
+            !apply(&phone, &[], None, now()).unwrap().changed,
+            "and stay put"
+        );
+
+        // Offline, the desktop renames the place while the phone stars it.
+        update(&desktop, |config: &mut Config| {
+            config.travel.places[0].name = "Campus".into()
+        })
+        .unwrap();
+        update(&phone, |config: &mut Config| {
+            config.travel.places[0].favorite = true;
+            config.reminders.enabled = true;
+            config.notes.directory = "content://phone/notes".into();
+        })
+        .unwrap();
+        sync([&desktop, &phone], &mut server);
+        for path in [&desktop, &phone] {
+            let config = read(path);
+            assert_eq!(config.travel.places[0].name, "Campus");
+            assert!(config.travel.places[0].favorite);
+            assert!(config.reminders.enabled);
+        }
+        assert!(
+            read(&desktop).notes.directory.is_empty(),
+            "device settings stay put"
+        );
+        assert!(
+            history(&phone)
+                .unwrap()
+                .iter()
+                .all(|edit| !edit.document.starts_with("device_settings"))
+        );
+
+        // A deletion reaches the other device, and wins over an edit to the
+        // same row made meanwhile.
+        update(&desktop, |config: &mut Config| config.travel.places.clear()).unwrap();
+        update(&phone, |config: &mut Config| {
+            config.travel.places[0].address = "2 Main St".into()
+        })
+        .unwrap();
+        sync([&desktop, &phone], &mut server);
+        assert!(read(&desktop).travel.places.is_empty());
+        assert!(read(&phone).travel.places.is_empty());
+        assert_eq!(
+            describe_edits(
+                &history(&desktop)
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e.document.starts_with("places"))
+                    .collect::<Vec<_>>()
+            ),
+            "5 place edits"
+        );
     }
 
     #[test]

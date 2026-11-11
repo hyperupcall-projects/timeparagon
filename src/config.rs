@@ -1,12 +1,11 @@
-//! Persisted settings.
+//! The desktop's settings, kept in the database by `timeslay_core::settings`.
 //!
-//! A malformed config must never stop the app from starting, so every read
-//! falls back to defaults. It must not be lost to those defaults either, so a
-//! save refuses to replace a file it cannot parse. Every write goes through a
-//! temporary file that is renamed into place.
+//! A setting that cannot be read must never stop the app from starting, so it
+//! is left at its default and reported. It is not lost to that default either:
+//! a save writes only what was changed in the app, so the stored value stays
+//! until it is changed.
 
 use crate::calendar::time_format::TimeFormat;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,7 +23,7 @@ pub use timeslay_core::config::{
 };
 pub use timeslay_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
 
-/// How long to wait after the last change before writing to disk.
+/// How long to wait after the last change before saving.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,10 +92,8 @@ impl Default for Appearance {
     }
 }
 
-/// The notepad: a page of free text that is kept between sessions.
-///
-/// It lives in the config file rather than in a document of its own, so there
-/// is exactly one place the app reads and writes.
+/// The notepad: a page of free text that is kept between sessions. Its text
+/// is shared between devices; its size is this screen's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Notepad {
@@ -128,15 +125,15 @@ impl Notepad {
     /// How much one press of the size buttons changes it.
     pub const FONT_SIZE_STEP: u8 = 10;
 
-    /// Whether the page is untouched, which is what keeps it out of the file.
+    /// Whether the page is untouched, so there is nothing to store.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty() && self.font_size == default_font_size()
     }
 
     /// The size of the text on the page, as a multiplier.
     ///
-    /// It is clamped, so that a hand-edited config cannot ask for text that
-    /// will not fit on the screen.
+    /// It is clamped, so that a stored size cannot ask for text that will not
+    /// fit on the screen.
     pub fn font_scale(&self) -> f32 {
         let size = self
             .font_size
@@ -574,333 +571,207 @@ impl TravelSettings {
 pub use timeslay_core::alarms::{AlarmProfile, Flash, Notification, Sound, SoundChoice, Urgency};
 
 impl Config {
-    /// Reads the config, with the shared data from the database, falling back
-    /// to defaults for anything unreadable.
+    /// Reads the settings, falling back to defaults for anything unreadable.
     pub fn load() -> Self {
-        let database = crate::task_db::path();
-        let Some(path) = config_path() else {
-            log::warn!("no config directory available; using defaults");
-            return Self::default();
-        };
-        // It holds the OAuth client secret and API keys, and older versions
-        // wrote it readable by everyone.
-        if let Err(error) = crate::fsutil::make_private(&path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            log::warn!("could not make {} private: {error}", path.display());
-        }
-
-        let database = database.as_deref();
-        let contents = match fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-            Err(error) => {
-                log::warn!("{} could not be read: {error}", path.display());
-                String::new()
-            }
-        };
-        match Self::parse(&with_shared(&contents, database)) {
-            Ok(config) => config,
-            Err(error) => {
-                log::warn!(
-                    "{} could not be parsed, using defaults instead: {error}",
-                    path.display()
-                );
-                // Saving stays refused until the file is fixed, so the data
-                // shown here cannot be overwritten by these defaults.
-                Self::parse(&with_shared("", database)).unwrap_or_default()
-            }
-        }
+        Self::load_checked().0
     }
 
-    /// Accept fields written by other app versions, reporting their paths.
-    fn parse(contents: &str) -> Result<Self, toml::de::Error> {
-        Self::parse_with_ignored(contents, |path| {
-            log::warn!("ignoring unknown config field: {path}");
-        })
-    }
-
-    fn parse_with_ignored(
-        contents: &str,
-        mut ignored: impl FnMut(String),
-    ) -> Result<Self, toml::de::Error> {
-        let config: Self =
-            serde_ignored::deserialize(toml::de::Deserializer::parse(contents)?, |path| {
-                ignored(path.to_string());
-            })?;
-        Ok(config)
-    }
-
-    /// Unlike startup, a failed live read must keep the current settings.
-    fn read_from(path: &Path, database: Option<&Path>) -> io::Result<Self> {
-        let contents = fs::read_to_string(path)?;
-        Self::parse(&with_shared(&contents, database))
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-    }
-
-    /// The file's text, after the shared data has gone to the database.
-    fn file_contents(&self, database: Option<&Path>) -> io::Result<String> {
-        let mut table = toml::Table::try_from(self)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if let Some(database) = database {
-            crate::shared_data::store(database, &mut table, &crate::shared_data::SECTIONS)?;
-        }
-        toml::to_string_pretty(&table)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-    }
-
-    /// Why the config on disk cannot be used, if it cannot.
+    /// Why some settings could not be used, if any could not.
     pub fn load_problem() -> Option<String> {
-        check_replaceable(&config_path()?)
-            .err()
-            .map(|error| error.to_string())
+        Self::load_checked().1
     }
 
-    pub fn save(&self) -> io::Result<()> {
-        let path = config_path().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "no config directory available")
+    /// The settings, and why some could not be used, if any could not.
+    pub fn load_checked() -> (Self, Option<String>) {
+        let Some(database) = crate::task_db::path() else {
+            log::warn!("no data directory available; using default settings");
+            return (Self::default(), None);
+        };
+        match Self::read(&database) {
+            Ok(loaded) if loaded.problems.is_empty() => (loaded.value, None),
+            Ok(loaded) => {
+                let problem = format!(
+                    "Some settings could not be read and are at their defaults until changed: {}",
+                    loaded.problems.join("; ")
+                );
+                (loaded.value, Some(problem))
+            }
+            Err(error) => {
+                log::warn!("could not read the settings, using defaults instead: {error}");
+                let problem = format!("The settings could not be read: {error}");
+                (Self::default(), Some(problem))
+            }
+        }
+    }
+
+    /// Reads the settings in `database`. Settings this build does not know
+    /// (a newer version's) are reported and left alone.
+    fn read(database: &Path) -> io::Result<timeslay_core::settings::Loaded<Self>> {
+        let loaded = timeslay_core::settings::load::<Self>(database, |path| {
+            log::warn!("ignoring unknown setting: {path}");
         })?;
-        let database = crate::task_db::path();
-        self.save_to(&path, database.as_deref())
+        for problem in &loaded.problems {
+            log::warn!("ignoring a setting that cannot be read: {problem}");
+        }
+        Ok(loaded)
     }
 
-    /// The shared data goes to `database`, the rest to the file at `path`.
-    /// Neither is written while the file there does not parse.
-    fn save_to(&self, path: &Path, database: Option<&Path>) -> io::Result<()> {
-        crate::fsutil::locked(path, || {
-            check_replaceable(path)?;
-            let contents = self.file_contents(database)?;
-            write_private(path, contents.as_bytes())
-        })
-    }
-
-    /// Changes the config on disk rather than this process's copy of it, with
-    /// other writers held off between the read and the write.
-    pub fn update_on_disk(change: impl FnOnce(&mut Self)) -> io::Result<()> {
-        let path = config_path().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "no config directory available")
+    /// Saves what changed since `baseline`, the settings as they were last
+    /// loaded or saved. Whatever else changed meanwhile, in another process
+    /// or on another device, is left as it is.
+    pub fn save(&self, baseline: &Config) -> io::Result<()> {
+        let database = crate::task_db::path().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no data directory available")
         })?;
-        let database = crate::task_db::path();
-        Self::update_at(&path, database.as_deref(), change)
+        self.save_at(&database, baseline)
     }
 
-    fn update_at(
-        path: &Path,
-        database: Option<&Path>,
-        change: impl FnOnce(&mut Self),
-    ) -> io::Result<()> {
-        crate::fsutil::locked(path, || {
-            let mut config = match Self::read_from(path, database) {
-                Ok(config) => config,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    Self::parse(&with_shared("", database)).unwrap_or_default()
-                }
-                Err(error) => return Err(error),
-            };
-            change(&mut config);
-            let contents = config.file_contents(database)?;
-            write_private(path, contents.as_bytes())
-        })
+    fn save_at(&self, database: &Path, baseline: &Config) -> io::Result<()> {
+        timeslay_core::settings::save(database, baseline, self)
+    }
+
+    /// Changes the stored settings rather than this process's copy of them,
+    /// with other writers held off between the read and the write.
+    pub fn update_stored(change: impl FnOnce(&mut Self)) -> io::Result<()> {
+        let database = crate::task_db::path().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no data directory available")
+        })?;
+        timeslay_core::settings::update(&database, change)
+    }
+
+    /// Whether `other` would be stored the same as this. A reload of this
+    /// process's own save can differ in the order of lists kept as sets.
+    pub fn stored_same(&self, other: &Config) -> bool {
+        timeslay_core::settings::same_stored(self, other)
     }
 }
 
-/// The config's text with the shared data from the database put back in, ready
-/// to parse. Text that does not parse is returned as it is, for its error.
-fn with_shared(contents: &str, database: Option<&Path>) -> String {
-    let Some(database) = database else {
-        return contents.to_owned();
-    };
-    let Ok(mut table) = toml::from_str::<toml::Table>(contents) else {
-        return contents.to_owned();
-    };
-    if let Err(error) = crate::shared_data::overlay(database, &mut table) {
-        log::warn!("could not read the shared data: {error}");
-    }
-    toml::to_string(&table).unwrap_or_else(|_| contents.to_owned())
-}
+/// How often the settings are checked for changes made elsewhere: by another
+/// TimeSlay process, or by database sync bringing another device's.
+const WATCH_INTERVAL: Duration = Duration::from_millis(300);
 
-/// Watch the directory, not the inode: editors and our own saves replace the
-/// file by renaming a temporary file. The native watcher does no idle polling.
-/// The database is watched too, for shared data that another process or the
-/// Turso sync changed.
+/// The settings, each time they change. The first is sent at once, which
+/// closes any gap since they were loaded.
 pub fn watch() -> iced::Subscription<Config> {
     iced::Subscription::run(config_changes)
 }
 
 fn config_changes() -> impl iced::futures::Stream<Item = Config> {
-    let database = crate::task_db::path();
-    config_changes_at(config_path(), database)
+    config_changes_at(crate::task_db::path())
 }
 
-fn config_changes_at(
-    path: Option<PathBuf>,
-    database: Option<PathBuf>,
-) -> impl iced::futures::Stream<Item = Config> {
+fn config_changes_at(database: Option<PathBuf>) -> impl iced::futures::Stream<Item = Config> {
     iced::stream::channel(16, async move |mut output| {
         use iced::futures::{SinkExt, StreamExt};
-        let Some(path) = path else { return };
-        let Some(parent) = path.parent() else { return };
+        let Some(database) = database else { return };
         let (sender, mut receiver) = iced::futures::channel::mpsc::unbounded();
-        let (events, event_rx) = std::sync::mpsc::channel();
-        let watched: Vec<PathBuf> = std::iter::once(path.clone())
-            .chain(database.clone())
-            .collect();
-        let mut watcher =
-            match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                match event {
-                    Ok(event)
-                        if event.paths.iter().any(|path| watched.contains(path))
-                            && matches!(
-                                event.kind,
-                                notify::EventKind::Create(_)
-                                    | notify::EventKind::Modify(_)
-                                    | notify::EventKind::Remove(_)
-                            ) =>
-                    {
-                        let _ = events.send(());
-                    }
-                    Err(error) => log::warn!("config watcher error: {error}"),
-                    _ => {}
-                }
-            }) {
-                Ok(watcher) => watcher,
-                Err(error) => {
-                    log::warn!("could not create config watcher: {error}");
-                    return;
-                }
-            };
-        if let Err(error) = fs::create_dir_all(parent).and_then(|()| {
-            notify::Watcher::watch(&mut watcher, parent, notify::RecursiveMode::NonRecursive)
-                .map_err(io::Error::other)
+        if let Err(error) = spawn_watcher_at(database, move |config| {
+            sender.unbounded_send(config).is_ok()
         }) {
-            log::warn!("could not watch {}: {error}", parent.display());
+            log::warn!("could not watch the settings: {error}");
             return;
-        }
-        if let Some(directory) = database.as_deref().and_then(Path::parent)
-            && directory != parent
-            && let Err(error) =
-                notify::Watcher::watch(&mut watcher, directory, notify::RecursiveMode::NonRecursive)
-        {
-            log::warn!("could not watch {}: {error}", directory.display());
-        }
-        let reload_path = path.clone();
-        let reload_database = database.clone();
-        let worker = std::thread::Builder::new()
-            .name("timeslay-config-watch".into())
-            .spawn(move || {
-                while event_rx.recv().is_ok() {
-                    // Wait for the write burst to settle: a truncate-and-write
-                    // editor can otherwise briefly look like a valid empty config.
-                    loop {
-                        match event_rx.recv_timeout(Duration::from_millis(150)) {
-                            Ok(()) => continue,
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-                        }
-                    }
-                    match Config::read_from(&reload_path, reload_database.as_deref()) {
-                        Ok(config) => {
-                            if sender.unbounded_send(config).is_err() {
-                                return;
-                            }
-                        }
-                        Err(error) => log::warn!(
-                            "could not reload {}; keeping current settings: {error}",
-                            reload_path.display()
-                        ),
-                    }
-                }
-            });
-        if let Err(error) = worker {
-            log::warn!("could not start config reload worker: {error}");
-            return;
-        }
-        // Close the gap between startup's read and installing the watcher.
-        if let Ok(config) = Config::read_from(&path, database.as_deref()) {
-            let _ = output.send(config).await;
         }
         while let Some(config) = receiver.next().await {
             if output.send(config).await.is_err() {
                 break;
             }
         }
-        drop(watcher);
     })
 }
 
-/// A config that does not parse may be one typo away from all of the user's
-/// settings and notes, while what is in memory is only defaults. Keeping the
-/// file prevents a save of the defaults from destroying recoverable settings.
-fn check_replaceable(path: &Path) -> io::Result<()> {
-    let contents = match fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(io::Error::new(
-                error.kind(),
-                format!("{} could not be read: {error}", path.display()),
-            ));
-        }
-    };
-    Config::parse_with_ignored(&contents, |_| {}).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "{} has an error, so changes are not being saved. Fix or remove the file: {error}",
-                path.display()
-            ),
-        )
-    })?;
-    Ok(())
+/// Calls `changed` on a thread of its own with the settings, at once and then
+/// each time they change, until it returns `false`. A cheap counter is all
+/// that is read until something changes (see `local_changes`).
+pub fn spawn_watcher(changed: impl FnMut(Config) -> bool + Send + 'static) -> io::Result<()> {
+    let database = crate::task_db::path()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data directory available"))?;
+    spawn_watcher_at(database, changed)
 }
 
-fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
-    crate::fsutil::write_atomic(path, contents, crate::fsutil::Kind::Private)
+fn spawn_watcher_at(
+    database: PathBuf,
+    mut changed: impl FnMut(Config) -> bool + Send + 'static,
+) -> io::Result<()> {
+    std::thread::Builder::new()
+        .name("timeslay-config-watch".into())
+        .spawn(move || {
+            let mut reader = None;
+            let mut seen = None;
+            loop {
+                if reader.is_none() {
+                    reader = timeslay_core::local_changes::Reader::open(&database)
+                        .map_err(|error| log::warn!("could not watch the settings: {error}"))
+                        .ok();
+                }
+                if let Some(counters) = reader.as_mut().and_then(|reader| {
+                    reader
+                        .read()
+                        .map_err(|error| log::warn!("could not watch the settings: {error}"))
+                        .ok()
+                }) && seen != Some(counters.config)
+                {
+                    // A failed read keeps the current settings, and is tried
+                    // again on the next change.
+                    match Config::read(&database) {
+                        Ok(loaded) => {
+                            seen = Some(counters.config);
+                            if !changed(loaded.value) {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("could not reload the settings; keeping these: {error}");
+                        }
+                    }
+                }
+                std::thread::sleep(WATCH_INTERVAL);
+            }
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn a_save_never_replaces_a_config_it_cannot_parse() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "[notepad]\ntext = \"precious\"\n[broken\n").unwrap();
+    fn database() -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("timeslay.sqlite3");
+        (directory, path)
+    }
 
-        let error = Config::default().save_to(&path, None).unwrap_err();
-
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("not being saved"), "{error}");
-        assert!(fs::read_to_string(&path).unwrap().contains("precious"));
-        assert!(check_replaceable(&path).is_err());
-
-        fs::write(&path, "[notepad]\ntext = \"fixed\"\n").unwrap();
-        Config::default().save_to(&path, None).unwrap();
-        assert!(check_replaceable(&path).is_ok());
+    fn read(path: &Path) -> Config {
+        Config::read(path).unwrap().value
     }
 
     #[test]
-    fn saving_makes_the_config_private() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o664)).unwrap();
+    fn a_save_writes_only_what_changed_since_its_baseline() {
+        let (_directory, path) = database();
+        let baseline = read(&path);
+        // Another process changes something meanwhile.
+        timeslay_core::settings::update(&path, |config: &mut Config| {
+            config.views.dock_width = 20.0;
+        })
+        .unwrap();
 
-        Config::default().save_to(&path, None).unwrap();
+        let mut config = baseline.clone();
+        config.appearance.theme = "Ocean".into();
+        config.save_at(&path, &baseline).unwrap();
 
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        let saved = read(&path);
+        assert_eq!(saved.appearance.theme, "Ocean");
+        assert_eq!(
+            saved.views.dock_width, 20.0,
+            "not put back to what this one saw"
+        );
     }
 
     #[test]
-    fn concurrent_updates_on_disk_do_not_lose_each_others_changes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
+    fn concurrent_updates_do_not_lose_each_others_changes() {
+        let (_directory, path) = database();
         std::thread::scope(|scope| {
             for _ in 0..4 {
                 scope.spawn(|| {
                     for _ in 0..5 {
-                        Config::update_at(&path, None, |config| {
+                        timeslay_core::settings::update(&path, |config: &mut Config| {
                             config.notepad.text.push('x');
                         })
                         .unwrap();
@@ -908,56 +779,130 @@ mod tests {
                 });
             }
         });
-        assert_eq!(
-            Config::read_from(&path, None).unwrap().notepad.text.len(),
-            20
-        );
+        assert_eq!(read(&path).notepad.text.len(), 20);
+    }
+
+    #[test]
+    fn the_desktops_settings_survive_the_phones_saves() {
+        let (_directory, path) = database();
+        let baseline = read(&path);
+        let mut config = baseline.clone();
+        config.views.dock_side = DockSide::Bottom;
+        config.panel.width = 240;
+        config.voice.binary = "/opt/whisper".into();
+        config.travel.map_app = MapApp::GoogleMaps;
+        config.save_at(&path, &baseline).unwrap();
+
+        // The phone's smaller config knows none of these.
+        timeslay_core::settings::update(&path, |phone: &mut timeslay_core::config::Config| {
+            phone.calendar.sync_minutes = 5;
+            phone.travel.show = true;
+        })
+        .unwrap();
+
+        let saved = read(&path);
+        assert_eq!(saved.views.dock_side, DockSide::Bottom);
+        assert_eq!(saved.panel.width, 240);
+        assert_eq!(saved.voice.binary, "/opt/whisper");
+        assert_eq!(saved.travel.map_app, MapApp::GoogleMaps);
+        assert!(saved.travel.show);
+        assert_eq!(saved.calendar.sync_minutes, 5);
     }
 
     #[test]
     fn shared_data_is_saved_to_the_database_and_read_back_with_the_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let database = dir.path().join("test.sqlite3");
-        let mut config = Config::default();
+        let (_directory, path) = database();
+        let baseline = read(&path);
+        let mut config = baseline.clone();
         config.notepad.text = "milk".into();
         config.notepad.font_size = 120;
         config.brain_dump.set(
             chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
             "idea".into(),
         );
-        config.save_to(&path, Some(&database)).unwrap();
-
-        let file: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        for section in ["brain_dump", "projects", "task_work"] {
-            assert!(file.get(section).is_none(), "{section} left the file");
-        }
-        assert_eq!(file["notepad"].as_table().unwrap().len(), 1);
-        assert_eq!(file["notepad"]["font_size"].as_integer(), Some(120));
-
-        let read = Config::read_from(&path, Some(&database)).unwrap();
-        assert_eq!(read, config);
-
-        // And a config that does not parse keeps the data from being replaced.
-        fs::write(&path, "[broken\n").unwrap();
-        assert!(Config::default().save_to(&path, Some(&database)).is_err());
-        fs::write(&path, "").unwrap();
-        assert_eq!(
-            Config::read_from(&path, Some(&database))
-                .unwrap()
-                .brain_dump,
-            config.brain_dump
-        );
+        config.save_at(&path, &baseline).unwrap();
+        assert_eq!(read(&path), config);
+        assert!(read(&path).stored_same(&config));
     }
 
     #[test]
-    fn an_update_on_disk_refuses_a_broken_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        fs::write(&path, "[broken\n").unwrap();
+    fn unknown_settings_warn_without_discarding_known_settings() {
+        let (_directory, path) = database();
+        timeslay_core::settings::update(&path, |config: &mut Config| {
+            config.appearance.theme = "Ocean".into();
+            config.alarm.sound.volume = 25;
+        })
+        .unwrap();
+        // As a newer version would store them.
+        let mut phone = timeslay_core::settings::load::<serde_json::Value>(&path, |_| {})
+            .unwrap()
+            .value;
+        phone["future_section"] = serde_json::json!({"setting": true});
+        phone["appearance"]["future_theme_setting"] = 42.into();
+        timeslay_core::settings::save(&path, &serde_json::json!({}), &phone).unwrap();
 
-        assert!(Config::update_at(&path, None, |_| {}).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "[broken\n");
+        let mut ignored = Vec::new();
+        let config = timeslay_core::settings::load::<Config>(&path, |path| ignored.push(path))
+            .unwrap()
+            .value;
+        assert_eq!(config.appearance.theme, "Ocean");
+        assert_eq!(config.alarm.sound.volume, 25);
+        assert_eq!(ignored.len(), 2, "{ignored:?}");
+        assert!(ignored.contains(&"future_section".to_owned()));
+        assert!(ignored.contains(&"appearance.future_theme_setting".to_owned()));
+
+        // A save of something else leaves them stored.
+        let baseline = read(&path);
+        let mut changed = baseline.clone();
+        changed.window.width = 500.0;
+        changed.save_at(&path, &baseline).unwrap();
+        let mut ignored = Vec::new();
+        timeslay_core::settings::load::<Config>(&path, |path| ignored.push(path)).unwrap();
+        assert_eq!(ignored.len(), 2);
+    }
+
+    #[test]
+    fn the_watcher_sends_the_settings_and_then_each_change() {
+        use iced::futures::StreamExt;
+        let (_directory, path) = database();
+        timeslay_core::settings::update(&path, |config: &mut Config| {
+            config.alarm.sound.volume = 25
+        })
+        .unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let watched = path.clone();
+        let worker = std::thread::spawn(move || {
+            iced::futures::executor::block_on(async move {
+                let changes = config_changes_at(Some(watched));
+                iced::futures::pin_mut!(changes);
+                while let Some(config) = changes.next().await {
+                    let done = config.alarm.sound.volume == 60;
+                    if sender.send(config).is_err() || done {
+                        break;
+                    }
+                }
+            });
+        });
+        let wait_for_volume = |volume| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let config = receiver
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .unwrap();
+                if config.alarm.sound.volume == volume {
+                    break;
+                }
+            }
+        };
+        wait_for_volume(25);
+        for volume in [40, 60] {
+            timeslay_core::settings::update(&path, |config: &mut Config| {
+                config.alarm.sound.volume = volume;
+            })
+            .unwrap();
+            wait_for_volume(volume);
+        }
+        worker.join().unwrap();
     }
 
     use super::*;
@@ -1106,91 +1051,6 @@ mod tests {
 
         let views: ViewSettings = toml::from_str("dock_width = nan").unwrap();
         assert_eq!(views.dock_width(), 10.0);
-    }
-
-    #[test]
-    fn unknown_fields_warn_without_discarding_known_settings() {
-        let mut ignored = Vec::new();
-        let config = Config::parse_with_ignored(
-            r#"
-            future_setting = true
-            [appearance]
-            theme = "Ocean"
-            future_theme_setting = 42
-            [alarm.sound]
-            volume = 25
-            future_sound_setting = "anything"
-            "#,
-            |path| ignored.push(path),
-        )
-        .unwrap();
-        assert_eq!(config.appearance.theme, "Ocean");
-        assert_eq!(config.alarm.sound.volume, 25);
-        assert_eq!(ignored.len(), 3, "{ignored:?}");
-        assert!(ignored.contains(&"future_setting".to_owned()));
-        assert!(ignored.contains(&"appearance.future_theme_setting".to_owned()));
-        assert!(ignored.contains(&"alarm.sound.future_sound_setting".to_owned()));
-    }
-
-    #[test]
-    fn watcher_survives_atomic_replacements_and_invalid_edits() {
-        use iced::futures::StreamExt;
-        let directory = std::env::temp_dir().join(format!(
-            "timeslay-config-watch-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("config.toml");
-        fs::write(&path, "[alarm.sound]\nvolume = 25").unwrap();
-        let watched_path = path.clone();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            iced::futures::executor::block_on(async move {
-                let changes = config_changes_at(Some(watched_path), None);
-                iced::futures::pin_mut!(changes);
-                // Repeated native events are allowed; forward all snapshots.
-                while let Some(config) = changes.next().await {
-                    let done = config.alarm.sound.volume == 60;
-                    if sender.send(config).is_err() || done {
-                        break;
-                    }
-                }
-            });
-        });
-        let wait_for_volume = |volume| {
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let config = receiver
-                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                    .unwrap();
-                if config.alarm.sound.volume == volume {
-                    break;
-                }
-            }
-        };
-        wait_for_volume(25); // Initial read means the watcher is installed.
-        write_private(&path, b"[alarm.sound]\nvolume = 40").unwrap();
-        wait_for_volume(40);
-        fs::write(&path, "[alarm.sound]\nvolume = ").unwrap();
-        assert!(Config::read_from(&path, None).is_err());
-        // Allow the native callback to read the invalid edit before replacing it.
-        let deadline = std::time::Instant::now() + Duration::from_millis(300);
-        while let Ok(config) =
-            receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-        {
-            assert_eq!(
-                config.alarm.sound.volume, 40,
-                "invalid edits must not emit defaults"
-            );
-        }
-        write_private(&path, b"[alarm.sound]\nvolume = 60").unwrap();
-        wait_for_volume(60);
-        worker.join().unwrap();
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

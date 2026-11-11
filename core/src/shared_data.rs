@@ -1,9 +1,9 @@
 //! The notepad's text, brain dumps, projects and work sessions: data the
-//! user writes, kept in the local database and shared between devices through
-//! Turso by [`crate::database_sync`].
+//! user writes, kept as documents in the local database and shared between
+//! devices through Turso by [`crate::database_sync`].
 //!
-//! Loading overlays these documents into the in-memory configuration. Saving
-//! stores them separately from device settings.
+//! [`crate::settings`] lays these documents into the settings tree when it is
+//! read, and stores a changed section back here when it is saved.
 //!
 //! Each section is one document. A section with nothing in it is not stored at
 //! all, so a fresh device holds nothing that could replace another device's
@@ -12,13 +12,13 @@
 use std::io;
 use std::path::Path;
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::task_db::Database;
 
-/// The sections, by their names in the config.
+/// The sections, by their names in the settings tree.
 pub const SECTIONS: [&str; 4] = ["notepad", "brain_dump", "projects", "task_work"];
 
 /// The time the shared data last changed, as milliseconds since the epoch.
@@ -45,78 +45,33 @@ fn blank(value: &Value) -> bool {
     }
 }
 
-fn toml_to_json(value: toml::Value) -> Value {
-    match value {
-        toml::Value::String(text) => Value::String(text),
-        toml::Value::Integer(number) => number.into(),
-        toml::Value::Float(number) => serde_json::Number::from_f64(number)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
-        toml::Value::Boolean(flag) => Value::Bool(flag),
-        toml::Value::Datetime(time) => Value::String(time.to_string()),
-        toml::Value::Array(items) => Value::Array(items.into_iter().map(toml_to_json).collect()),
-        toml::Value::Table(table) => Value::Object(
-            table
-                .into_iter()
-                .map(|(name, value)| (name, toml_to_json(value)))
-                .collect(),
-        ),
-    }
-}
-
-/// TOML has no null, so a null field is left out, as serializing to TOML does.
-fn json_to_toml(value: Value) -> Option<toml::Value> {
-    Some(match value {
-        Value::Null => return None,
-        Value::Bool(flag) => toml::Value::Boolean(flag),
-        Value::Number(number) => match number.as_i64() {
-            Some(integer) => toml::Value::Integer(integer),
-            None => toml::Value::Float(number.as_f64()?),
-        },
-        Value::String(text) => toml::Value::String(text),
-        Value::Array(items) => {
-            toml::Value::Array(items.into_iter().filter_map(json_to_toml).collect())
-        }
-        Value::Object(fields) => toml::Value::Table(
-            fields
-                .into_iter()
-                .filter_map(|(name, value)| Some((name, json_to_toml(value)?)))
-                .collect(),
-        ),
-    })
-}
-
-/// Takes a section out of a config's table. The notepad's table also holds its
-/// font size, a setting, so only its text is taken.
-fn take(table: &mut toml::Table, section: &str) -> Option<Value> {
+/// A section as it is stored, taken from a settings tree. The notepad's table
+/// also holds its font size, a device setting, so only its text is taken.
+pub(crate) fn section(tree: &Map<String, Value>, section: &str) -> Option<Value> {
     if section == "notepad" {
-        let notepad = table.get_mut("notepad")?.as_table_mut()?;
-        let text = notepad.remove("text")?;
-        if notepad.is_empty() {
-            table.remove("notepad");
-        }
-        let mut fields = toml::Table::new();
+        let text = tree.get("notepad")?.get("text")?.clone();
+        let mut fields = Map::new();
         fields.insert("text".to_owned(), text);
-        return Some(toml_to_json(toml::Value::Table(fields)));
+        return Some(Value::Object(fields));
     }
-    table.remove(section).map(toml_to_json)
+    tree.get(section).cloned()
 }
 
-fn put(table: &mut toml::Table, section: &str, value: Value) {
-    let Some(toml::Value::Table(value)) = json_to_toml(value) else {
+fn put(tree: &mut Map<String, Value>, section: &str, value: Value) {
+    let Value::Object(value) = value else {
         return;
     };
-    let entry = table
+    let entry = tree
         .entry(section)
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        .or_insert_with(|| Value::Object(Map::new()));
     match entry {
         // Keeps the notepad's font size beside its text.
-        toml::Value::Table(existing) if section == "notepad" => existing.extend(value),
-        _ => *entry = toml::Value::Table(value),
+        Value::Object(existing) if section == "notepad" => existing.extend(value),
+        _ => *entry = Value::Object(value),
     }
 }
 
-fn document(connection: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<String>> {
+fn document(connection: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     connection
         .query_row("SELECT value FROM documents WHERE key=?1", [key], |row| {
             row.get(0)
@@ -128,43 +83,55 @@ fn now_ms() -> i64 {
     crate::clock::now().timestamp_millis()
 }
 
-/// Puts the saved sections into a config's table, ready to be parsed. A section
-/// the database does not have is left as the table has it.
-pub fn overlay(database: &Path, table: &mut toml::Table) -> io::Result<()> {
-    let path = database;
-    let mut database = Database::open(database).map_err(other)?;
-    let connection = database.connection();
+/// Puts the saved sections into a settings tree. A section the database does
+/// not have is left as the tree has it.
+pub(crate) fn overlay(
+    connection: &Connection,
+    path: &Path,
+    tree: &mut Map<String, Value>,
+) -> io::Result<()> {
     for section in SECTIONS {
         if let Some(text) = document(connection, &key(section)).map_err(other)? {
             let value: Value = serde_json::from_str(&text)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             crate::database_sync::projection::remember(path, &key(section), Some(text));
-            put(table, section, value);
+            put(tree, section, value);
         }
     }
     Ok(())
 }
 
-/// Takes `sections` out of a config's table and saves them. One missing from
-/// the table, or holding nothing, is saved as empty.
-pub fn store(database: &Path, table: &mut toml::Table, sections: &[&str]) -> io::Result<()> {
+/// What was saved, to be remembered as read once the transaction commits.
+#[must_use]
+pub(crate) struct Stored(Vec<(String, Option<String>)>);
+
+impl Stored {
+    pub(crate) fn remember(self, path: &Path) {
+        for (key, value) in self.0 {
+            crate::database_sync::projection::remember(path, &key, value);
+        }
+    }
+}
+
+/// Saves `sections` as `tree` has them, inside the caller's transaction. One
+/// missing from the tree, or holding nothing, is saved as empty.
+pub(crate) fn store_in(
+    tx: &Connection,
+    path: &Path,
+    tree: &Map<String, Value>,
+    sections: &[&str],
+) -> io::Result<Stored> {
     let values: Vec<(String, Option<String>)> = sections
         .iter()
-        .map(|section| {
-            let value = take(table, section).filter(|value| !blank(value));
-            (key(section), value.map(|value| value.to_string()))
+        .map(|name| {
+            let value = section(tree, name).filter(|value| !blank(value));
+            (key(name), value.map(|value| value.to_string()))
         })
         .collect();
-    let path = database;
-    let mut database = Database::open(database).map_err(other)?;
-    let tx = database
-        .connection()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(other)?;
     let mut changed = false;
     for (key, desired) in &values {
-        let value = crate::database_sync::projection::prepare(path, &tx, key, desired)?;
-        if document(&tx, key).map_err(other)? == value {
+        let value = crate::database_sync::projection::prepare(path, tx, key, desired)?;
+        if document(tx, key).map_err(other)? == value {
             continue;
         }
         changed = true;
@@ -184,20 +151,24 @@ pub fn store(database: &Path, table: &mut toml::Table, sections: &[&str]) -> io:
         )
         .map_err(other)?;
     }
-    tx.commit().map_err(other)?;
-    for (key, value) in values {
-        crate::database_sync::projection::remember(path, &key, value);
-    }
-    Ok(())
+    Ok(Stored(values))
 }
 
-/// Saves one section, given as it appears in the config.
+/// Saves one section, given as it appears in the settings.
 pub fn save_section(database: &Path, section: &str, value: &impl Serialize) -> io::Result<()> {
     let value =
-        toml::Value::try_from(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let mut table = toml::Table::new();
-    table.insert(section.to_owned(), value);
-    store(database, &mut table, &[section])
+        serde_json::to_value(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut tree = Map::new();
+    tree.insert(section.to_owned(), value);
+    let mut db = Database::open(database).map_err(other)?;
+    let tx = db
+        .connection()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(other)?;
+    let stored = store_in(&tx, database, &tree, &[section])?;
+    tx.commit().map_err(other)?;
+    stored.remember(database);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -230,25 +201,27 @@ mod tests {
         Ok((serde_json::to_string(&fields).map_err(other)?, modified))
     }
 
-    fn table(text: &str) -> toml::Table {
-        toml::from_str(text).unwrap()
-    }
-
     #[test]
-    fn sections_leave_the_table_on_save_and_come_back_on_load() {
+    fn only_the_notepad_text_is_a_document_and_it_comes_back_beside_the_font_size() {
         let (_directory, path) = database();
-        let mut saved =
-            table("[notepad]\ntext = \"milk\"\nfont_size = 120\n\n[window]\nwidth = 5\n");
-        store(&path, &mut saved, &SECTIONS).unwrap();
-        assert_eq!(
-            saved,
-            table("[notepad]\nfont_size = 120\n\n[window]\nwidth = 5\n")
-        );
+        save_section(
+            &path,
+            "notepad",
+            &serde_json::json!({"text": "milk", "font_size": 120}),
+        )
+        .unwrap();
+        let (text, _) = snapshot(&path).unwrap();
+        assert_eq!(text, r#"{"notepad":{"text":"milk"}}"#);
 
-        overlay(&path, &mut saved).unwrap();
-        assert_eq!(saved["notepad"]["text"].as_str(), Some("milk"));
-        assert_eq!(saved["notepad"]["font_size"].as_integer(), Some(120));
-        assert!(saved.get("brain_dump").is_none());
+        let mut tree = serde_json::json!({"notepad": {"font_size": 120}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut db = Database::open(&path).unwrap();
+        overlay(db.connection(), &path, &mut tree).unwrap();
+        assert_eq!(tree["notepad"]["text"], "milk");
+        assert_eq!(tree["notepad"]["font_size"], 120);
+        assert!(tree.get("brain_dump").is_none());
     }
 
     #[test]

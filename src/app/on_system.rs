@@ -75,13 +75,12 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
             Task::none()
         }
         SystemMessage::ConfigReloaded(config) => {
-            // Only a config that parsed gets here, so the file is usable again.
-            state.config_error = None;
-            if config == state.disk_config {
+            // This process's own save, coming back.
+            if config.stored_same(&state.disk_config) {
                 return Task::none();
             }
             state.disk_config = config.clone();
-            if config == state.config {
+            if config.stored_same(&state.config) {
                 return Task::none();
             }
             let previous = std::mem::replace(&mut state.config, config);
@@ -169,10 +168,10 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
                 return Task::none();
             }
             state.save_queued = false;
-            state.disk_config = state.config.clone();
+            let baseline = std::mem::replace(&mut state.disk_config, state.config.clone());
             let config = state.config.clone();
 
-            blocking::run(move || config.save().map_err(|error| error.to_string()))
+            blocking::run(move || config.save(&baseline).map_err(|error| error.to_string()))
                 .map(|v0| Message::System(SystemMessage::ConfigSaved(v0)))
         }
         SystemMessage::AudioStatusPolled => {
@@ -361,7 +360,8 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
                 // otherwise keep running with no windows left.
                 if !state.config.task_work.is_empty() {
                     let config = state.config.clone();
-                    return blocking::run(move || config.save()).then(|_| iced::exit());
+                    let baseline = std::mem::replace(&mut state.disk_config, config.clone());
+                    return blocking::run(move || config.save(&baseline)).then(|_| iced::exit());
                 }
                 return iced::exit();
             }

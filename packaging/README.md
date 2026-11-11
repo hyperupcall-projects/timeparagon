@@ -118,20 +118,15 @@ remain unless `packaging/uninstall.sh --purge` is used.
 
 **Settings → View layout** controls the calendar width, the width of the time
 block pane beside it, the width of the event details pane, and the screen
-margin. Changes apply immediately and save automatically in `config.toml`.
-Width fields have −10/+10 buttons; the margin field has −1/+1 buttons and
-accepts 0–30 pixels. Values can also be typed directly:
+margin. Changes apply immediately and save automatically to this device's
+settings (`views.calendar_width`, `views.time_block_width`,
+`views.detail_width`, `views.margin`; see
+[Settings](../docs/data-model.md#settings)). Width fields have −10/+10
+buttons; the margin field has −1/+1 buttons and accepts 0–30 pixels. Values
+can also be typed directly.
 
-```toml
-[views]
-calendar_width = 280.0
-time_block_width = 400.0
-detail_width = 360.0
-margin = 8.0
-```
-
-Widths are in logical pixels. If `calendar_width` is omitted, the side panel
-uses the `[panel]` width. The margin defaults
+Widths are in logical pixels. If `calendar_width` is not set, the side panel
+uses the panel width. The margin defaults
 to 8 and leaves transparent space along the panel's screen edge, top and bottom
 (mirrored for a right-side panel). It also applies while the time block pane is
 open.
@@ -177,22 +172,31 @@ systemctl --user restart timeslay-shortcuts.service
 journalctl --user -u timeslay-shortcuts.service -f
 ```
 
-Its settings live in the `[panel]` table of `~/.config/timeslay/config.toml`:
+Its settings are this device's `panel.*` settings, kept in the database:
 
-```toml
-[panel]
-# Which edge to anchor the panel to: "left" or "right".
-side = "left"
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `panel.side` | `"left"` | Which edge to anchor the panel to: `"left"` or `"right"` |
+| `panel.width` | `200` | Panel width in logical pixels; set by resizing the panel. Height always fills the screen |
+| `panel.toggle_visibility` | `["Meta+U"]` | Global shortcuts, as `Modifier+Key`. Any number per action |
+| `panel.toggle_shape` | `["Meta+Shift+U"]` | |
+| `panel.toggle_reservation` | `[]` | |
 
-# Panel width in logical pixels. Height always fills the screen.
-width = 200
+The shortcuts are set in **Settings**, and are only defaults: once registered
+they also appear in System Settings → Shortcuts, where they can be rebound.
+The edge has no control in the app; set it with `sqlite3`, then restart
+TimeSlay (`--sidebar`) for the panel to move:
 
-# Global shortcuts, as Modifier+Key. Any number per action. These are only the
-# defaults: once registered they also appear in System Settings -> Shortcuts,
-# where they can be rebound.
-toggle_visibility = ["Meta+U"]
-toggle_shape = ["Meta+Shift+U"]
+```sh
+sqlite3 ~/.local/share/timeslay/timeslay.sqlite3 \
+  "INSERT INTO device_settings VALUES('panel.side','\"right\"')
+   ON CONFLICT(key) DO UPDATE SET value=excluded.value"
 ```
+
+Any other setting can be changed the same way: values are JSON, and a
+shared setting goes in `settings` instead of `device_settings`, from where it
+syncs to the other devices. Running apps reload settings within a second of a
+change, though some (like the edge) only take effect when a window opens.
 
 ### Panel placement and space reservation
 
@@ -310,9 +314,9 @@ For a custom build/runtime location, set `CEF_PATH` at build time and
 
 Normal installs also build `core/examples/sync_database`, install it as
 `timeslay-database-sync`, and enable `timeslay-database-sync.service`. It syncs
-SQLite user documents with the Turso server configured in **Settings → Database sync**
-while windows are closed. The URL is stored in `[database_sync].url` in
-`config.toml`; an empty URL disables sync. No server is configured by default. Its replica owner lock is shared with the panel and dock workers, so
+SQLite user documents and settings with the Turso server configured in
+**Settings → Database sync** while windows are closed. The URL is this device's
+`database_sync.url` setting; an empty URL disables sync. No server is configured by default. Its replica owner lock is shared with the panel and dock workers, so
 only one process opens the native replica at a time. `--no-enable` installs the
 unit without starting it; uninstall removes the worker and unit but keeps data.
 
