@@ -19,6 +19,8 @@ pub enum Mode {
     Daemon,
     /// The native-messaging host the browser extension talks to.
     WebExtension,
+    /// Print what keeping time blocks in step would change, and exit.
+    CheckTimeBlocks,
 }
 
 /// The command line, as declared to clap.
@@ -28,7 +30,7 @@ pub enum Mode {
     version,
     about = "TimeSlay: slay the day with TimeSlay.",
     after_help = "With no options, TimeSlay opens its side panel.",
-    group(ArgGroup::new("mode").args(["new_task", "sidebar", "dock", "daemon", "webextension"]))
+    group(ArgGroup::new("mode").args(["new_task", "sidebar", "dock", "daemon", "webextension", "check_time_blocks"]))
 )]
 struct Args {
     /// Open the full task creation editor
@@ -57,6 +59,12 @@ struct Args {
     #[arg(long, overrides_with = "webextension")]
     webextension: bool,
 
+    /// Print what keeping time blocks in step with Google would change over
+    /// the next eight weeks, and any task that repeats on its own inside a
+    /// block, without changing anything
+    #[arg(long, overrides_with = "check_time_blocks")]
+    check_time_blocks: bool,
+
     // Browsers launch a native-messaging host with the caller's origin as an
     // extra argument, so `--webextension` tolerates positional arguments
     // instead of failing the way every other mode does.
@@ -80,6 +88,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, clap::Error
         Mode::Daemon
     } else if args.webextension {
         Mode::WebExtension
+    } else if args.check_time_blocks {
+        Mode::CheckTimeBlocks
     } else {
         Mode::default()
     };
@@ -103,6 +113,15 @@ mod tests {
                 .chain(list.iter().copied())
                 .map(str::to_owned),
         )
+    }
+
+    #[test]
+    fn checking_time_blocks_is_its_own_mode() {
+        assert_eq!(
+            parse_all(&["--check-time-blocks"]).unwrap(),
+            Mode::CheckTimeBlocks
+        );
+        assert!(parse_all(&["--check-time-blocks", "--dock"]).is_err());
     }
 
     #[test]

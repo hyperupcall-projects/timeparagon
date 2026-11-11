@@ -176,6 +176,35 @@ fn TaskEditor(
             }
         }
     });
+    // A task repeating with its block stops from this occurrence on: it and
+    // the later ones are deleted.
+    let stop_repeating = use_callback(move |()| {
+        if busy() {
+            return;
+        }
+        let current = task();
+        busy.set(true);
+        error.set(None);
+        spawn(async move {
+            let result = worker(move || {
+                calendar::delete_event_scope(
+                    &current.calendar_id,
+                    &current.id,
+                    SaveScope::CurrentAndFuture,
+                    false,
+                )
+            })
+            .await;
+            busy.set(false);
+            match result {
+                Ok(()) => {
+                    on_saved.call(());
+                    on_close.call(());
+                }
+                Err(message) => error.set(Some(message)),
+            }
+        });
+    });
     let repeat_settings = context.settings.clone();
     let repeat = use_callback(move |action: recurrence::Action| {
         if busy() {
@@ -384,76 +413,88 @@ fn TaskEditor(
                 }
             }
             FormSection { title: "Scheduling",
-                Field { label: "Due Date",
-                    input {
-                        class: "client-input",
-                        r#type: "date",
-                        disabled: is_busy,
-                        value: "{values.date}",
-                        oninput: move |event| fields.write().date = event.value(),
+                if tb::is_follower(&current) {
+                    p { class: "hint",
+                        "Repeats with its time block, on the block's days and at its time. Change it from the time block."
                     }
                     button {
-                        class: "btn primary editor-wide",
+                        class: "btn editor-wide",
                         disabled: is_busy,
-                        onclick: move |_| submit(fields.peek().day_change()),
-                        "Schedule Day"
+                        onclick: move |_| stop_repeating.call(()),
+                        "Stop from this day"
                     }
-                    div { class: "editor-row",
-                        button {
-                            class: "btn editor-grow",
+                } else {
+                    Field { label: "Due Date",
+                        input {
+                            class: "client-input",
+                            r#type: "date",
                             disabled: is_busy,
-                            onclick: move |_| editing_due_time.toggle(),
-                            "Schedule Time"
-                        }
-                        button {
-                            class: "btn editor-grow",
-                            disabled: is_busy,
-                            onclick: move |_| submit(fields.peek().day_change()),
-                            "Reset Time"
-                        }
-                    }
-                    if editing_due_time() {
-                        div { class: "editor-row",
-                            input {
-                                class: "client-input",
-                                r#type: "time",
-                                aria_label: "Start time",
-                                disabled: is_busy,
-                                value: "{values.start}",
-                                oninput: move |event| fields.write().start = event.value(),
-                            }
-                            if metadata.minutes == 0 {
-                                input {
-                                    class: "client-input",
-                                    r#type: "time",
-                                    aria_label: "End time",
-                                    disabled: is_busy,
-                                    value: "{values.end}",
-                                    oninput: move |event| fields.write().end = event.value(),
-                                }
-                            }
-                        }
-                        if metadata.minutes > 0 {
-                            p { class: "hint", "Lasts {day::duration_label(metadata.minutes)}, its estimate." }
+                            value: "{values.date}",
+                            oninput: move |event| fields.write().date = event.value(),
                         }
                         button {
                             class: "btn primary editor-wide",
                             disabled: is_busy,
-                            onclick: move |_| {
-                                let estimate = tb::metadata(&task.peek()).minutes;
-                                submit(fields.peek().time_change(estimate));
-                            },
-                            "Save time"
+                            onclick: move |_| submit(fields.peek().day_change()),
+                            "Schedule Day"
+                        }
+                        div { class: "editor-row",
+                            button {
+                                class: "btn editor-grow",
+                                disabled: is_busy,
+                                onclick: move |_| editing_due_time.toggle(),
+                                "Schedule Time"
+                            }
+                            button {
+                                class: "btn editor-grow",
+                                disabled: is_busy,
+                                onclick: move |_| submit(fields.peek().day_change()),
+                                "Reset Time"
+                            }
+                        }
+                        if editing_due_time() {
+                            div { class: "editor-row",
+                                input {
+                                    class: "client-input",
+                                    r#type: "time",
+                                    aria_label: "Start time",
+                                    disabled: is_busy,
+                                    value: "{values.start}",
+                                    oninput: move |event| fields.write().start = event.value(),
+                                }
+                                if metadata.minutes == 0 {
+                                    input {
+                                        class: "client-input",
+                                        r#type: "time",
+                                        aria_label: "End time",
+                                        disabled: is_busy,
+                                        value: "{values.end}",
+                                        oninput: move |event| fields.write().end = event.value(),
+                                    }
+                                }
+                            }
+                            if metadata.minutes > 0 {
+                                p { class: "hint", "Lasts {day::duration_label(metadata.minutes)}, its estimate." }
+                            }
+                            button {
+                                class: "btn primary editor-wide",
+                                disabled: is_busy,
+                                onclick: move |_| {
+                                    let estimate = tb::metadata(&task.peek()).minutes;
+                                    submit(fields.peek().time_change(estimate));
+                                },
+                                "Save time"
+                            }
                         }
                     }
-                }
-                if current.is_calendar_task() {
-                    RepeatEditor {
-                        rule: task_rule(),
-                        anchor: current.start.date_naive(),
-                        first_day: context.settings.first_day_of_week,
-                        busy: is_busy || repeat_loading(),
-                        on_action: move |action| repeat.call(action),
+                    if current.is_calendar_task() {
+                        RepeatEditor {
+                            rule: task_rule(),
+                            anchor: current.start.date_naive(),
+                            first_day: context.settings.first_day_of_week,
+                            busy: is_busy || repeat_loading(),
+                            on_action: move |action| repeat.call(action),
+                        }
                     }
                 }
                 Field { label: "Deadline",
@@ -2711,6 +2752,31 @@ mod tests {
         let mut dom = VirtualDom::new_with_props(Harness, HarnessProps { event });
         dom.rebuild_in_place();
         dioxus_ssr::render(&dom)
+    }
+
+    #[test]
+    fn a_task_repeating_with_its_block_takes_its_schedule_from_the_block() {
+        let mut repeating = task();
+        repeating.id = "t_20261026T160000Z".into();
+        repeating.calendar_id = "blocks".into();
+        repeating.all_day = false;
+        repeating.details.recurring_event_id = Some("t".into());
+        repeating
+            .details
+            .task_data
+            .as_mut()
+            .unwrap()
+            .metadata
+            .block_series = Some("blocks/b".into());
+        let html = render(repeating);
+        assert_offers(
+            &html,
+            &["Repeats with its time block", "Stop from this day"],
+        );
+        assert!(!html.contains(">Due Date<"));
+        assert!(!html.contains("class=\"editor-label\">Repeat<"));
+        // A task of its own keeps its scheduling.
+        assert!(render(task()).contains(">Due Date<"));
     }
 
     #[track_caller]

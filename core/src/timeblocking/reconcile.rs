@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 use super::membership::{
     block_of, is_follower, layout, original_start, planning_day, series_lineage, tasks_in,
@@ -176,14 +176,9 @@ pub fn reconcile(
     today: NaiveDate,
 ) -> Result<Vec<Fix>, String> {
     let mut applied = Vec::new();
-    // Series changes first, since they change the occurrences; then the
-    // occurrences. Each pass reads Google afresh.
+    // Each pass reads Google afresh.
     for _ in 0..6 {
-        let listing = remote.listing(calendar, first, last)?;
-        let mut fixes = series_fixes(remote, calendar, &listing, day_start_hour, today)?;
-        if fixes.is_empty() {
-            fixes = occurrence_fixes(remote, calendar, &listing, day_start_hour, today)?;
-        }
+        let fixes = plan(remote, calendar, first, last, day_start_hour, today)?;
         if fixes.is_empty() {
             return Ok(applied);
         }
@@ -193,6 +188,48 @@ pub fn reconcile(
         applied.extend(fixes);
     }
     Err("Time blocks did not settle after several passes".into())
+}
+
+/// The writes one pass of [`reconcile`] would make, without making them:
+/// changes to task series first, since they change the occurrences, and
+/// only when there are none, changes to occurrences.
+pub fn plan(
+    remote: &mut impl Remote,
+    calendar: &str,
+    first: DateTime<Local>,
+    last: DateTime<Local>,
+    day_start_hour: u32,
+    today: NaiveDate,
+) -> Result<Vec<Fix>, String> {
+    let listing = remote.listing(calendar, first, last)?;
+    let fixes = series_fixes(remote, calendar, &listing, day_start_hour, today)?;
+    if !fixes.is_empty() {
+        return Ok(fixes);
+    }
+    occurrence_fixes(remote, calendar, &listing, day_start_hour, today)
+}
+
+/// Tasks between `first` and `last` that break the rule that an item in a
+/// time block either repeats with it or is a one-off: occurrences of a task
+/// with a repeat of its own that sit in a block. Nothing puts these right
+/// by itself; moving one into its block again makes it a one-off.
+pub fn own_repeat_in_block(
+    remote: &mut impl Remote,
+    calendar: &str,
+    first: DateTime<Local>,
+    last: DateTime<Local>,
+) -> Result<Vec<Event>, String> {
+    Ok(remote
+        .listing(calendar, first, last)?
+        .events
+        .into_iter()
+        .filter(|event| {
+            event.is_task()
+                && event.details.recurring_event_id.is_some()
+                && !is_follower(event)
+                && metadata(event).block.is_some()
+        })
+        .collect())
 }
 
 /// The parts of a series' one `RRULE:` line, in order.
@@ -221,20 +258,33 @@ fn rule_shape(parts: &[(String, String)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The planning day an `UNTIL=` value ends on.
-fn until_day(value: &str, day_start_hour: u32) -> Option<NaiveDate> {
+/// The last planning day a series ending at `UNTIL=value` has an
+/// occurrence on. Ending a series at an occurrence sets `UNTIL` a second
+/// before it, so a 9am series ended from the 20th has `UNTIL` early on the
+/// 20th and its last day is the 19th: what counts is whether the series'
+/// own time of day on that day is still within it.
+fn until_day(series: &Series, value: &str, day_start_hour: u32) -> Option<NaiveDate> {
     if value.len() == 8 {
         return NaiveDate::parse_from_str(value, "%Y%m%d").ok();
     }
     let naive = chrono::NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S"))
         .ok()?;
-    let when = if value.ends_with('Z') {
+    let until = if value.ends_with('Z') {
         Utc.from_utc_datetime(&naive).with_timezone(&Local)
     } else {
         Local.from_local_datetime(&naive).earliest()?
     };
-    Some(planning_day(when, day_start_hour))
+    let day = planning_day(until, day_start_hour);
+    let time = series.start.time();
+    // Before the planning day starts, the clock time falls on the next date.
+    let date = if time.hour() < day_start_hour.min(23) {
+        day.succ_opt()?
+    } else {
+        day
+    };
+    let start = Local.from_local_datetime(&date.and_time(time)).earliest()?;
+    Some(if start <= until { day } else { day.pred_opt()? })
 }
 
 /// The `UNTIL=` value that keeps every occurrence on `day` and none after.
@@ -258,7 +308,7 @@ fn last_day(
         return Ok(None);
     };
     if let Some((_, until)) = parts.iter().find(|(key, _)| key == "UNTIL") {
-        return Ok(until_day(until, day_start_hour));
+        return Ok(until_day(series, until, day_start_hour));
     }
     if parts.iter().any(|(key, _)| key == "COUNT") {
         return Ok(remote
@@ -298,7 +348,8 @@ fn series_fixes(
     // The task series seen repeating with a block, and the block series
     // seen at all.
     let mut follower_ids: Vec<String> = Vec::new();
-    let mut block_ids: Vec<String> = Vec::new();
+    // As (calendar, series): a block can be on another calendar.
+    let mut block_ids: Vec<(String, String)> = Vec::new();
     for event in &listing.events {
         let Some(series) = &event.details.recurring_event_id else {
             continue;
@@ -307,8 +358,12 @@ fn series_fixes(
             if !follower_ids.contains(series) {
                 follower_ids.push(series.clone());
             }
-        } else if !event.is_task() && !block_ids.contains(series) {
-            block_ids.push(series.clone());
+        } else if !event.is_task()
+            && !event.details.habit
+            && event.details.sleep.is_none()
+            && !block_ids.iter().any(|(_, known)| known == series)
+        {
+            block_ids.push((calendar.to_owned(), series.clone()));
         }
     }
     let mut followers: Vec<Series> = Vec::new();
@@ -324,15 +379,16 @@ fn series_fixes(
     for follower in &followers {
         if let Some(name) = follower.block_series()
             && let Some((cal, id)) = name.rsplit_once('/')
-            && cal == calendar
-            && !block_ids.iter().any(|known| known == id)
+            && !block_ids
+                .iter()
+                .any(|(known_cal, known)| known_cal == cal && known == id)
         {
-            block_ids.push(id.to_owned());
+            block_ids.push((cal.to_owned(), id.to_owned()));
         }
     }
     let mut spans: Vec<Span> = Vec::new();
-    for id in &block_ids {
-        if let Some(series) = remote.series(calendar, id)?
+    for (cal, id) in &block_ids {
+        if let Some(series) = remote.series(cal, id)?
             && rule_parts(&series.recurrence).is_some()
         {
             let first = planning_day(series.start, day_start_hour);
@@ -366,43 +422,71 @@ fn series_fixes(
             continue;
         }
         let history = follower.first < today;
-        // Nothing left of its block from here on: keep what is past, drop
-        // the rest.
+        // Done already from today on: kept, as history is.
+        let done_last = listing
+            .events
+            .iter()
+            .filter(|event| {
+                event.completed && event.details.recurring_event_id.as_deref() == Some(&series.id)
+            })
+            .map(|event| planning_day(original_start(event), day_start_hour))
+            .max();
+        // Nothing left of its block from here on: keep what is past and
+        // what is done, drop the rest.
         let end_here = || {
-            if history {
-                Fix::Rule {
+            let keep = done_last
+                .filter(|day| *day >= today)
+                .or(history.then_some(yesterday));
+            let Some(last) = keep else {
+                return vec![Fix::Delete {
                     calendar: calendar.to_owned(),
                     series: series.id.clone(),
-                    recurrence: ended(series, yesterday, day_start_hour),
+                }];
+            };
+            let mut fixes: Vec<Fix> = listing
+                .events
+                .iter()
+                .filter(|event| {
+                    !event.completed
+                        && event.details.recurring_event_id.as_deref() == Some(&series.id)
+                        && (today..=last)
+                            .contains(&planning_day(original_start(event), day_start_hour))
+                })
+                .map(|event| Fix::Cancel {
+                    calendar: calendar.to_owned(),
+                    event: event.id.clone(),
+                })
+                .collect();
+            if follower.last != Some(last) {
+                fixes.push(Fix::Rule {
+                    calendar: calendar.to_owned(),
+                    series: series.id.clone(),
+                    recurrence: ended(series, last, day_start_hour),
                     start: series.start,
                     end: series.end,
-                }
-            } else {
-                Fix::Delete {
-                    calendar: calendar.to_owned(),
-                    series: series.id.clone(),
-                }
+                });
             }
+            fixes
         };
         let from = follower.first.max(today);
         let name = series.block_series().unwrap_or_default().to_owned();
         let Some(governing) = governing(&spans, &name, from) else {
-            fixes.push(end_here());
+            fixes.extend(end_here());
             continue;
         };
         let span = &spans[governing];
         let Some(first_block) = remote.first_occurrence(
-            calendar,
+            &span.series.calendar,
             &span.series.id,
             calendar::at_clock(from.max(span.first), day_start_hour.min(23), 0),
         )?
         else {
-            fixes.push(end_here());
+            fixes.extend(end_here());
             continue;
         };
         let first_day = planning_day(original_start(&first_block), day_start_hour);
         if span.last.is_some_and(|last| first_day > last) {
-            fixes.push(end_here());
+            fixes.extend(end_here());
             continue;
         }
         let order = series.order();
@@ -419,7 +503,8 @@ fn series_fixes(
         if !history {
             if start != series.start
                 || end != series.end
-                || !same_rule(&recurrence, &series.recurrence, day_start_hour)
+                || !same_shape(&recurrence, &series.recurrence)
+                || last != follower.last
             {
                 fixes.push(Fix::Rule {
                     calendar: calendar.to_owned(),
@@ -431,8 +516,7 @@ fn series_fixes(
             }
         } else if start.time() != series.start.time()
             || end - start != series.end - series.start
-            || rule_parts(&recurrence).map(|p| rule_shape(&p))
-                != rule_parts(&series.recurrence).map(|p| rule_shape(&p))
+            || !same_shape(&recurrence, &series.recurrence)
         {
             // Its days or time changed. Rewriting the whole series would
             // rewrite its past too, so it ends yesterday and carries on as
@@ -448,9 +532,9 @@ fn series_fixes(
                 skip,
                 done,
             });
-            fixes.push(end_here());
+            fixes.extend(end_here());
             continue;
-        } else if !same_rule(&recurrence, &series.recurrence, day_start_hour) {
+        } else if last != follower.last {
             fixes.push(Fix::Rule {
                 calendar: calendar.to_owned(),
                 series: series.id.clone(),
@@ -481,7 +565,7 @@ fn series_fixes(
             continue;
         }
         let Some(next_first) = remote.first_occurrence(
-            calendar,
+            &next_span.series.calendar,
             &next_span.series.id,
             calendar::at_clock(next_span.first.max(today), day_start_hour.min(23), 0),
         )?
@@ -636,20 +720,12 @@ fn ended(series: &Series, last: NaiveDate, day_start_hour: u32) -> Vec<String> {
         .collect()
 }
 
-/// Whether two sets of recurrence lines repeat alike and end on the same day.
-fn same_rule(wanted: &[String], have: &[String], day_start_hour: u32) -> bool {
-    let (Some(wanted), Some(have)) = (rule_parts(wanted), rule_parts(have)) else {
-        return false;
-    };
-    let until = |parts: &[(String, String)]| {
-        parts
-            .iter()
-            .find(|(key, _)| key == "UNTIL")
-            .and_then(|(_, value)| until_day(value, day_start_hour))
-    };
-    rule_shape(&wanted) == rule_shape(&have)
-        && until(&wanted) == until(&have)
-        && !have.iter().any(|(key, _)| key == "COUNT")
+/// Whether two sets of recurrence lines repeat alike, wherever they end.
+fn same_shape(wanted: &[String], have: &[String]) -> bool {
+    match (rule_parts(wanted), rule_parts(have)) {
+        (Some(wanted), Some(have)) => rule_shape(&wanted) == rule_shape(&have),
+        _ => false,
+    }
 }
 
 fn occurrence_fixes(

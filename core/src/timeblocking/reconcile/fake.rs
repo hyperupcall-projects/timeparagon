@@ -143,6 +143,10 @@ impl FakeGoogle {
             .find(|s| s.master.id == id && !s.cancelled)
     }
 
+    fn find_on(&self, calendar: &str, id: &str) -> Option<&FakeSeries> {
+        self.find(id).filter(|s| s.master.calendar == calendar)
+    }
+
     fn find_mut(&mut self, id: &str) -> Option<&mut FakeSeries> {
         self.series
             .iter_mut()
@@ -163,7 +167,7 @@ impl FakeGoogle {
         let start = exception.start.unwrap_or(original);
         Some(Event {
             id: format!("{}_{}", series.master.id, stamp(original)),
-            calendar_id: CALENDAR.into(),
+            calendar_id: series.master.calendar.clone(),
             title: series.title.clone(),
             start,
             end: exception.end.unwrap_or(start + length),
@@ -194,10 +198,21 @@ impl FakeGoogle {
     // What a person does, in the app or on Google's site.
 
     pub fn add_block_series(&mut self, start: DateTime<Local>, minutes: i64, rule: &str) -> String {
+        self.add_block_series_on(CALENDAR, start, minutes, rule)
+    }
+
+    /// A repeating block on a calendar of its own.
+    pub fn add_block_series_on(
+        &mut self,
+        calendar: &str,
+        start: DateTime<Local>,
+        minutes: i64,
+        rule: &str,
+    ) -> String {
         let id = self.id("block");
         self.series.push(FakeSeries {
             master: Series {
-                calendar: CALENDAR.into(),
+                calendar: calendar.into(),
                 id: id.clone(),
                 recurrence: vec![format!("RRULE:{rule}")],
                 start,
@@ -251,7 +266,8 @@ impl FakeGoogle {
         minutes: u32,
     ) -> String {
         let occurrence = self.occurrence_on(block, from);
-        let rule = self.find(block).unwrap().master.recurrence.clone();
+        let block_master = self.find(block).unwrap().master.clone();
+        let rule = block_master.recurrence.clone();
         let id = self.id("task");
         let task_id = 1000 + i64::from(self.next_id);
         self.series.push(FakeSeries {
@@ -267,7 +283,7 @@ impl FakeGoogle {
                     id: task_id,
                     metadata: Metadata {
                         block: Some(crate::timeblocking::block_key(&occurrence)),
-                        block_series: Some(format!("{CALENDAR}/{block}")),
+                        block_series: Some(format!("{}/{block}", block_master.calendar)),
                         order,
                         minutes,
                         ..Default::default()
@@ -400,14 +416,15 @@ impl FakeGoogle {
         id
     }
 
-    /// Delete "this and following" from `day`.
+    /// Delete "this and following" from `day`. As this app and Google do,
+    /// the series' `UNTIL` is set a second before the first occurrence it
+    /// drops.
     pub fn delete_following(&mut self, series: &str, day: NaiveDate) {
         let master = &mut self.find_mut(series).unwrap().master;
-        let last = day.pred_opt().unwrap();
-        let until = (calendar::at_clock(day, 0, 0) - Duration::seconds(1))
+        let boundary = calendar::at_clock(day, master.start.hour(), master.start.minute());
+        let until = (boundary - Duration::seconds(1))
             .with_timezone(&Utc)
             .format("%Y%m%dT%H%M%SZ");
-        let _ = last;
         let rule = master.recurrence[0]
             .trim_start_matches("RRULE:")
             .split(';')
@@ -460,9 +477,12 @@ impl Remote for FakeGoogle {
         first: DateTime<Local>,
         last: DateTime<Local>,
     ) -> Result<Listing, String> {
-        assert_eq!(calendar, CALENDAR);
         let mut listing = Listing::default();
-        for series in self.series.iter().filter(|s| !s.cancelled) {
+        for series in self
+            .series
+            .iter()
+            .filter(|s| !s.cancelled && s.master.calendar == calendar)
+        {
             for original in expand(&series.master, horizon()) {
                 match self.occurrence(series, original) {
                     Some(event) if event.end > first && event.start < last => {
@@ -479,24 +499,24 @@ impl Remote for FakeGoogle {
         listing.events.extend(
             self.singles
                 .iter()
-                .filter(|e| e.end > first && e.start < last)
+                .filter(|e| e.calendar_id == calendar && e.end > first && e.start < last)
                 .cloned(),
         );
         listing.events.sort_by_key(|e| (e.start, e.id.clone()));
         Ok(listing)
     }
 
-    fn series(&mut self, _calendar: &str, id: &str) -> Result<Option<Series>, String> {
-        Ok(self.find(id).map(|s| s.master.clone()))
+    fn series(&mut self, calendar: &str, id: &str) -> Result<Option<Series>, String> {
+        Ok(self.find_on(calendar, id).map(|s| s.master.clone()))
     }
 
     fn first_occurrence(
         &mut self,
-        _calendar: &str,
+        calendar: &str,
         series: &str,
         from: DateTime<Local>,
     ) -> Result<Option<Event>, String> {
-        let Some(fake) = self.find(series) else {
+        let Some(fake) = self.find_on(calendar, series) else {
             return Ok(None);
         };
         Ok(expand(&fake.master, horizon())
@@ -505,8 +525,8 @@ impl Remote for FakeGoogle {
             .find_map(|start| self.occurrence(fake, start)))
     }
 
-    fn last_occurrence(&mut self, _calendar: &str, series: &str) -> Result<Option<Event>, String> {
-        let Some(fake) = self.find(series) else {
+    fn last_occurrence(&mut self, calendar: &str, series: &str) -> Result<Option<Event>, String> {
+        let Some(fake) = self.find_on(calendar, series) else {
             return Ok(None);
         };
         Ok(expand(&fake.master, horizon())
