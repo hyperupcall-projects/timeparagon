@@ -112,10 +112,20 @@ pub struct PendingRecurring {
     pub block: String,
 }
 
+/// A one-off habit in a repeating block, waiting on whether it repeats with
+/// the block, which ends the habit's own repeat from that day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingJoin {
+    pub task: String,
+    pub block: String,
+}
+
 #[derive(Default)]
 pub struct Workspace {
     /// The recurring item whose move into a block is being confirmed.
     pub pending_recurring: Option<PendingRecurring>,
+    /// The one-off habit whose repeating with its block is being confirmed.
+    pub pending_join: Option<PendingJoin>,
     /// What is added to a repeating block goes in this occurrence only,
     /// rather than repeating with the block.
     pub one_off: bool,
@@ -209,6 +219,12 @@ pub enum Action {
     /// Take a task repeating with its block out of it from this occurrence
     /// on: this occurrence and the later ones are deleted.
     StopRepeating(String),
+    /// Have a one-off task or habit (first) in a repeating block (second)
+    /// repeat with the block from this occurrence on.
+    RepeatWithBlock(String, String),
+    /// Go ahead with the habit waiting in [`Workspace::pending_join`].
+    ConfirmRepeatWithBlock,
+    CancelRepeatWithBlock,
     View(String),
     Plan(String),
     CloseView,
@@ -1356,6 +1372,19 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::none();
         }
         Action::StopRepeating(id) => return stop_repeating(state, &id),
+        Action::RepeatWithBlock(task, block) => {
+            return repeat_with_block(state, &task, &block, false);
+        }
+        Action::ConfirmRepeatWithBlock => {
+            let Some(PendingJoin { task, block }) = state.timeblocking.pending_join.take() else {
+                return Task::none();
+            };
+            return repeat_with_block(state, &task, &block, true);
+        }
+        Action::CancelRepeatWithBlock => {
+            state.timeblocking.pending_join = None;
+            return Task::none();
+        }
         Action::MoveRecurring(future) => return move_recurring(state, future),
         Action::Title(value) => {
             state.timeblocking.title = value;
@@ -2105,6 +2134,81 @@ fn stop_repeating(state: &mut State, id: &str) -> Task<Message> {
     .map(move |result| Message::TimeBlocking(Action::SavedMany(key.clone(), result)))
 }
 
+/// Has a one-off task or habit in a repeating block repeat with the block
+/// from this occurrence on. A habit that also repeats on its own is asked
+/// about first: once `confirmed`, its own repeat ends from this day, so it
+/// is not on the calendar twice.
+fn repeat_with_block(
+    state: &mut State,
+    task_id: &str,
+    block_id: &str,
+    confirmed: bool,
+) -> Task<Message> {
+    if !state.timeblocking.busy.is_empty() {
+        return Task::none();
+    }
+    let hour = day_start_hour(state);
+    let Some(block) = event(state, block_id)
+        .filter(|block| is_block(block, &state.config.calendar))
+        .cloned()
+    else {
+        return Task::none();
+    };
+    let Some(task) = event(state, task_id)
+        .filter(|task| can_repeat_with(task, &block, hour))
+        .cloned()
+    else {
+        return Task::none();
+    };
+    let Some(join) = Change::join_block_series(&block) else {
+        return Task::none();
+    };
+    let habit = metadata(&task).habit_id;
+    if !confirmed
+        && let Some(habit) = &habit
+        && repeats_on_its_own(state, habit)
+    {
+        state.timeblocking.pending_join = Some(PendingJoin {
+            task: task.id.clone(),
+            block: block.id.clone(),
+        });
+        return Task::none();
+    }
+    let ended = habit.filter(|_| confirmed);
+    let from = calendar::at_clock(membership::planning_day(block.start, hour), hour.min(23), 0);
+    let settings = state.config.calendar.clone();
+    let order = metadata(&task).order;
+    state.timeblocking.revision += 1;
+    state.timeblocking.busy.insert(task.id.clone());
+    let key = BusyKey::from(task.id.clone());
+    blocking::run(move || {
+        // Found before anything is written, so failing to look leaves the
+        // habit as it was rather than on the calendar twice.
+        let ended = match ended {
+            Some(habit) => calendar::habit_repeats_from(&settings, &habit, from)?,
+            None => Vec::new(),
+        };
+        let saved = save(task, &settings, join, order)?;
+        for (calendar_id, occurrence) in ended {
+            calendar::delete_event_scope(
+                &calendar_id,
+                &occurrence,
+                calendar::SaveScope::CurrentAndFuture,
+                false,
+            )?;
+        }
+        Ok(vec![saved])
+    })
+    .map(move |result| Message::TimeBlocking(Action::SavedMany(key.clone(), result)))
+}
+
+/// Whether the habit has a repeating event of its own on the calendar.
+pub fn repeats_on_its_own(state: &State, habit_id: &str) -> bool {
+    state.habits.series.iter().any(|series| {
+        series.habit_id.as_deref() == Some(habit_id) && !series.recurrence.lines().is_empty()
+    })
+}
+
 /// Per repeating event of the habit, the occurrence a block on `day` takes
 /// the place of: the one that day, or with `future` the first from then on.
 fn habit_occurrences<'a>(
@@ -2529,6 +2633,99 @@ mod tests {
         let mut state = recurring_state();
         let _ = update(&mut state, Action::StopRepeating("deep".into()));
         assert!(state.timeblocking.busy.is_empty());
+    }
+
+    /// `recurring_state`, with the block repeating and "deep" a one-off in
+    /// today's occurrence of it.
+    fn one_off_state() -> State {
+        let mut state = recurring_state();
+        state
+            .calendar
+            .events
+            .retain(|event| event.id != "deep_next");
+        let block = state.calendar.event_mut("standup").unwrap();
+        block.details.recurring_event_id = Some("standup-series".into());
+        let key = block_key(state.calendar.event("standup").unwrap());
+        let task = state.calendar.event_mut("deep").unwrap();
+        task.details.recurring_event_id = None;
+        task.details.task_data.as_mut().unwrap().metadata.block = Some(key);
+        state
+    }
+
+    fn repeat_deep(state: &mut State) {
+        let _ = update(
+            state,
+            Action::RepeatWithBlock("deep".into(), "standup".into()),
+        );
+    }
+
+    #[test]
+    fn a_one_off_in_a_repeating_block_can_start_repeating_with_it() {
+        let mut state = one_off_state();
+        repeat_deep(&mut state);
+        assert!(state.timeblocking.pending_join.is_none());
+        assert!(state.timeblocking.busy.contains_task("deep"));
+
+        // Not a task repeating with the block already, nor one in a block
+        // that does not repeat.
+        let mut following = following_state();
+        repeat_deep(&mut following);
+        let mut single = one_off_state();
+        single
+            .calendar
+            .event_mut("standup")
+            .unwrap()
+            .details
+            .recurring_event_id = None;
+        repeat_deep(&mut single);
+        for state in [following, single] {
+            assert!(state.timeblocking.busy.is_empty());
+            assert!(state.timeblocking.pending_join.is_none());
+        }
+    }
+
+    #[test]
+    fn a_habit_repeating_on_its_own_asks_before_repeating_with_the_block() {
+        let habit_one_off = || {
+            let mut state = one_off_state();
+            let task = state.calendar.event_mut("deep").unwrap();
+            task.details.task_data.as_mut().unwrap().metadata.habit_id = Some("read".into());
+            state
+        };
+        // Without a repeating event of its own, it goes ahead at once.
+        let mut plain = habit_one_off();
+        repeat_deep(&mut plain);
+        assert!(plain.timeblocking.pending_join.is_none());
+        assert!(plain.timeblocking.busy.contains_task("deep"));
+
+        let mut state = habit_one_off();
+        let occurrence = habit_occurrence(&state, "read_1", 1);
+        state.habits.series.push(crate::habits::Series {
+            id: "read-series".into(),
+            calendar_id: occurrence.calendar_id.clone(),
+            title: "Read".into(),
+            notes: String::new(),
+            start: occurrence.start,
+            end: occurrence.end,
+            recurrence: crate::habits::Recurrence::from_lines(&["RRULE:FREQ=DAILY".into()]),
+            color_id: None,
+            habit_id: Some("read".into()),
+        });
+        repeat_deep(&mut state);
+        let pending = Some(PendingJoin {
+            task: "deep".into(),
+            block: "standup".into(),
+        });
+        assert_eq!(state.timeblocking.pending_join, pending);
+        assert!(state.timeblocking.busy.is_empty());
+        let _ = update(&mut state, Action::CancelRepeatWithBlock);
+        assert!(state.timeblocking.pending_join.is_none());
+        assert!(state.timeblocking.busy.is_empty());
+
+        repeat_deep(&mut state);
+        let _ = update(&mut state, Action::ConfirmRepeatWithBlock);
+        assert!(state.timeblocking.pending_join.is_none());
+        assert!(state.timeblocking.busy.contains_task("deep"));
     }
 
     #[test]
