@@ -107,7 +107,7 @@ The documentation below (and pretty  much everywhere else) is AI-generated.
 - [Meeetings](./docs/meetings.md)
 - [Notes](./docs/notes.md)
 - [Reminders](./docs/reminders.md)
-- [Shortcut](./docs/shortcut.md)
+- [Shortcut Daemon](./docs/shortcut-daemon.md)
 - [Voice input](./docs/voice-input.md)
 
 ## Internals

@@ -82,6 +82,12 @@ and every row of the synced [settings tables](#settings):
 | `shared.projects` | [Projects, life areas, goals, objectives](#life-areas-goals-objectives-and-projects) |
 | `shared.task_work` | [Work sessions and distractions](#work-sessions-distractions-and-pomodoro) |
 
+The `shared.` prefix does not mean "synced". It marks the documents that the
+apps' `Config` holds as sections (once part of `config.toml`), which
+`shared_data` reads and writes. `habits` and `alarms` have their own libraries
+and keys (`task_db::keys`), so they have no prefix, but they are synced all the
+same. Only `SHARED_KEYS` decides what is replicated.
+
 Everything else stays on the device. That includes the Google caches and the
 local copies of edits being sent (each device talks to Google itself), contacts, cached routes,
 calendar sync state, the Android theme, `device_settings`, secrets and
