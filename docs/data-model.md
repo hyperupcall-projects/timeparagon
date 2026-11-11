@@ -852,7 +852,7 @@ reading it is an error, so nothing can overwrite it.
 
 The Slack companion app (`slack/`) keeps its own files,
 `.slack-installations.json` and `.slack-app-tokens.json` (mode `0600`). To
-add a message to the inbox, it runs `timeslay --webextension`, the same
+add a message to the inbox, it runs `timeslay webextension`, the same
 native-messaging host the browser extension uses. That host forwards the
 request to the running app over its IPC socket.
 

@@ -8,21 +8,21 @@ use std::process::{Child, Command};
 
 use anyhow::{Context, Result};
 
-/// The switch that makes the main binary run the dock.
-pub const DOCK_FLAG: &str = "--dock";
+/// The subcommand that makes the main binary run the dock.
+pub const DOCK_COMMAND: &str = "dock";
 
-/// The switch that makes the main binary run the side panel.
-pub const SIDEBAR_FLAG: &str = "--sidebar";
+/// The subcommand that makes the main binary run the side panel.
+pub const SIDEBAR_COMMAND: &str = "sidebar";
 
 /// Starts the dock. The caller is expected to put its own window away once
 /// this succeeds.
 ///
-/// The dock is the running program itself with [`DOCK_FLAG`], which is always
-/// there, whatever was installed.
+/// The dock is the running program itself with [`DOCK_COMMAND`], which is
+/// always there, whatever was installed.
 pub fn open_dock() -> Result<Child> {
     let exe = main_binary()?;
     Command::new(&exe)
-        .arg(DOCK_FLAG)
+        .arg(DOCK_COMMAND)
         .spawn()
         .with_context(|| format!("failed to run {}", exe.display()))
 }
@@ -31,7 +31,7 @@ pub fn open_dock() -> Result<Child> {
 pub fn open_sidebar() -> Result<Child> {
     let exe = main_binary()?;
     Command::new(&exe)
-        .arg(SIDEBAR_FLAG)
+        .arg(SIDEBAR_COMMAND)
         .spawn()
         .with_context(|| format!("failed to run {}", exe.display()))
 }

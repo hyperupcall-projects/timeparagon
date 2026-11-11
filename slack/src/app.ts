@@ -11,7 +11,7 @@
 //   * an App Home tab with instructions.
 //
 // Every path builds the same task and sends it through the same native host
-// (`timeslay --webextension`) the browser extension uses, so the Gmail-aware
+// (`timeslay webextension`) the browser extension uses, so the Gmail-aware
 // link handling and the running-app IPC are shared.
 
 import { pathToFileURL } from "node:url";

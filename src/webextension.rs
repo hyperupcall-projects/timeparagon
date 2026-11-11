@@ -1,4 +1,4 @@
-//! The browser native-messaging host (`timeslay --webextension`) and the
+//! The browser native-messaging host (`timeslay webextension`) and the
 //! inbox request the Slack app shares with it.
 //!
 //! The browser starts this process for one message and expects one answer on

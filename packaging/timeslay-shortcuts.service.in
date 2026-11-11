@@ -9,7 +9,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=@EXEC@ --daemon
+ExecStart=@EXEC@ daemon
 Restart=on-failure
 RestartSec=2
 

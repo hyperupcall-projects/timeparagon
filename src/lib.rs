@@ -1,15 +1,15 @@
 //! TimeSlay: slay the day with TimeSlay.
 //!
 //! The library backs a single binary, `timeslay`, so the interface can be
-//! exercised by tests without a compositor. A flag picks what it runs (see
-//! [`cli`]):
+//! exercised by tests without a compositor. A subcommand picks what it runs
+//! (see [`cli`]):
 //!
-//! * no flag — the side panel (the same as `--sidebar`);
-//! * `--sidebar` — the side panel, the full app in a wide edge strip;
-//! * `--dock` — the dock (see [`dock`]), a very thin strip of today;
-//! * `--daemon` — the shortcut daemon (see [`panel`]), which shows, hides and
+//! * no subcommand — the side panel (the same as `sidebar`);
+//! * `sidebar` — the side panel, the full app in a wide edge strip;
+//! * `dock` — the dock (see [`dock`]), a very thin strip of today;
+//! * `daemon` — the shortcut daemon (see [`panel`]), which shows, hides and
 //!   switches between the panel and the dock;
-//! * `--webextension` — the browser native-messaging host (see
+//! * `webextension` — the browser native-messaging host (see
 //!   [`webextension`]), which adds a link to the inbox and exits.
 
 pub use timeslay_core::{

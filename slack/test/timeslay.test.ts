@@ -14,7 +14,7 @@ const directory = mkdtempSync(join(tmpdir(), "timeslay-slack-"));
 process.on("exit", () => rmSync(directory, { recursive: true, force: true }));
 
 /**
- * A tiny stand-in for `timeslay --webextension`: it reads one framed request,
+ * A tiny stand-in for `timeslay webextension`: it reads one framed request,
  * records it to FAKE_HOST_OUT, and answers with FAKE_HOST_REPLY.
  */
 const FAKE_HOST = `#!/usr/bin/env node
