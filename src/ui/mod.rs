@@ -205,6 +205,9 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
     if state.timeblocking.pending_recurring.is_some() {
         layers.push(timeblocking::recurring_confirmation(state, metrics));
     }
+    if state.timeblocking.pending_join.is_some() {
+        layers.push(timeblocking::join_confirmation(state, metrics));
+    }
     if state.timeblocking.session_edit.is_some() {
         layers.push(timeblocking::session_editor(state, metrics));
     }

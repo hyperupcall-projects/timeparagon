@@ -292,7 +292,7 @@ pub fn event_editor<'a>(
         titled(state, event, title, metrics),
         form_section(
             "Scheduling",
-            super::super::timeblocking::scheduled_by_block(event, scheduling, metrics),
+            super::super::timeblocking::scheduled_by_block(state, event, scheduling, metrics),
             metrics
         ),
         form_section("Information", information, metrics),

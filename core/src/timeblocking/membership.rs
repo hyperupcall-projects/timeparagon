@@ -130,6 +130,18 @@ pub fn repeats_with_block(task: &Event) -> bool {
     task.is_task() && metadata(task).block_series.is_some()
 }
 
+/// Whether `task`, a one-off in `block`, can be made to repeat with it: the
+/// block repeats, and the task is an open calendar task with no repeat of
+/// its own that is not repeating with a block already.
+pub fn can_repeat_with(task: &Event, block: &Event, day_start_hour: u32) -> bool {
+    block.details.recurring_event_id.is_some()
+        && task.is_calendar_task()
+        && !task.completed
+        && !task.is_recurring()
+        && !repeats_with_block(task)
+        && in_block(task, block, day_start_hour)
+}
+
 /// The task belongs in some block, whether or not that block is loaded.
 pub fn is_assigned(task: &Event) -> bool {
     task.is_task() && (metadata(task).block.is_some() || is_follower(task))
@@ -304,6 +316,41 @@ mod tests {
             metadata: meta,
         });
         event
+    }
+
+    #[test]
+    fn only_an_open_one_off_in_a_repeating_block_can_start_repeating_with_it() {
+        let block = occurrence("block", 9, 9);
+        let one_off = task(Metadata {
+            block: Some(block_key(&block)),
+            ..Default::default()
+        });
+        assert!(can_repeat_with(&one_off, &block, 0));
+        // Not in a block that does not repeat, nor in another block.
+        let mut single = block.clone();
+        single.details.recurring_event_id = None;
+        assert!(!can_repeat_with(&one_off, &single, 0));
+        assert!(!can_repeat_with(&one_off, &occurrence("other", 9, 9), 0));
+        // Not when done, when it repeats already, or once it is joining.
+        let mut done = one_off.clone();
+        done.completed = true;
+        assert!(!can_repeat_with(&done, &block, 0));
+        let mut own = one_off.clone();
+        own.details.recurrence = vec!["RRULE:FREQ=DAILY".into()];
+        assert!(!can_repeat_with(&own, &block, 0));
+        let mut joining = one_off.clone();
+        joining
+            .details
+            .task_data
+            .as_mut()
+            .unwrap()
+            .metadata
+            .block_series = Some("app/block".into());
+        assert!(!can_repeat_with(&joining, &block, 0));
+        // Nor a Google Tasks list item, which is no calendar event.
+        let mut listed = one_off.clone();
+        listed.calendar_id = format!("{}list", crate::calendar::ids::TASK_LIST);
+        assert!(!can_repeat_with(&listed, &block, 0));
     }
 
     #[test]

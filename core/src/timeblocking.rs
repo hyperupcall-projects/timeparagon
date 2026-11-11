@@ -9,8 +9,8 @@ use crate::config::CalendarSettings;
 pub mod membership;
 pub mod reconcile;
 pub use membership::{
-    block_of, holding_blocks, in_block, is_assigned, is_follower, layout, lineage, original_start,
-    repeats_with_block, tasks_in,
+    block_of, can_repeat_with, holding_blocks, in_block, is_assigned, is_follower, layout, lineage,
+    original_start, repeats_with_block, tasks_in,
 };
 
 pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();

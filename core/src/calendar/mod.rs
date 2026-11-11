@@ -2909,6 +2909,37 @@ pub fn delete_event_scope(
     )
 }
 
+/// Where each of a habit's own repeating events next occurs from `from` on,
+/// as (calendar, occurrence ID). Deleting "this and following" at each ends
+/// the habit's own repeat there, as when it starts repeating with a time
+/// block instead. Blocking: call it from a worker thread.
+pub fn habit_repeats_from(
+    settings: &CalendarSettings,
+    habit_id: &str,
+    from: DateTime<Local>,
+) -> Result<Vec<(String, String)>, String> {
+    use crate::timeblocking::reconcile::Remote;
+    // Test runs keep everything local: nothing may reach Google.
+    if crate::config::isolated() {
+        return Ok(Vec::new());
+    }
+    let token = GoogleClient::from_settings(settings)
+        .access_token()
+        .map_err(|error| error.to_string())?;
+    let mut found = Vec::new();
+    for habit in api::fetch_habits(&token, settings.app_calendar.as_deref())? {
+        if habit.habit_id.as_deref() != Some(habit_id) || habit.recurrence.is_empty() {
+            continue;
+        }
+        let mut remote =
+            api::block_sync::GoogleRemote::new(token.clone(), settings, &habit.calendar_id);
+        if let Some(next) = remote.first_occurrence(&habit.calendar_id, &habit.id, from)? {
+            found.push((habit.calendar_id, next.id));
+        }
+    }
+    Ok(found)
+}
+
 /// Turns a read-only-token rejection into something a user can act on,
 /// keeping the error's kind.
 fn describe_task_write_error(error: GoogleError) -> GoogleError {

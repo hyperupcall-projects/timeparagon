@@ -1807,6 +1807,62 @@ pub fn BlockTasks(
             }
         });
     });
+    // A one-off starts repeating with the block from this occurrence on. A
+    // habit with a repeating event of its own is asked about first, since
+    // that event then ends from this day: these are its next occurrences.
+    let mut confirming = use_signal(|| None::<(Event, Vec<(String, String)>)>);
+    let hour = context.settings.day_start_hour();
+    let from = calendar::at_clock(
+        tb::membership::planning_day(block.event.start, hour),
+        hour.min(23),
+        0,
+    );
+    let repeat_context = context.clone();
+    let repeat_join = Change::join_block_series(&block.event);
+    let repeat_with_block = use_callback(
+        move |(task, ended): (Event, Option<Vec<(String, String)>>)| {
+            let Some(join) = repeat_join.clone() else {
+                return;
+            };
+            if busy() {
+                return;
+            }
+            busy.set(true);
+            error.set(None);
+            confirming.set(None);
+            let context = repeat_context.clone();
+            spawn(async move {
+                let result = worker(move || {
+                    let habit = tb::metadata(&task).habit_id;
+                    if ended.is_none()
+                        && let Some(habit) = habit
+                    {
+                        let found = calendar::habit_repeats_from(&context.settings, &habit, from)?;
+                        if !found.is_empty() {
+                            return Ok(Some((task, found)));
+                        }
+                    }
+                    day::save_task(task, join, &context)?;
+                    for (calendar_id, occurrence) in ended.unwrap_or_default() {
+                        calendar::delete_event_scope(
+                            &calendar_id,
+                            &occurrence,
+                            SaveScope::CurrentAndFuture,
+                            false,
+                        )?;
+                    }
+                    Ok(None)
+                })
+                .await;
+                busy.set(false);
+                match result {
+                    Ok(Some(ask)) => confirming.set(Some(ask)),
+                    Ok(None) => on_saved.call(()),
+                    Err(message) => error.set(Some(message)),
+                }
+            });
+        },
+    );
 
     let is_busy = busy();
     let key = tb::block_key(&block.event);
@@ -1816,6 +1872,28 @@ pub fn BlockTasks(
     rsx! {
         if let Some(message) = error() {
             p { class: "editor-error", role: "alert", "{message}" }
+        }
+        if let Some((task, ended)) = confirming() {
+            div { class: "editor-confirm", role: "alert",
+                p { "Repeat “{task.title}” with this block?" }
+                p { class: "hint",
+                    "It also has a repeating event of its own. Repeating with the time block ends that one from this day on, so the habit is not on the calendar twice."
+                }
+                div { class: "editor-row",
+                    button {
+                        class: "btn editor-grow",
+                        disabled: is_busy,
+                        onclick: move |_| confirming.set(None),
+                        "Cancel"
+                    }
+                    button {
+                        class: "btn primary editor-grow",
+                        disabled: is_busy,
+                        onclick: move |_| repeat_with_block.call((task.clone(), Some(ended.clone()))),
+                        "Repeat with this block"
+                    }
+                }
+            }
         }
         if block.tasks.is_empty() {
             div { class: "modal-empty",
@@ -1827,11 +1905,13 @@ pub fn BlockTasks(
                 for task in block.tasks.iter().cloned() {
                     AssignedRow {
                         key: "{task.event.id}",
+                        can_repeat: tb::can_repeat_with(&task.event, &block.event, hour),
                         task,
                         busy: is_busy,
                         on_open,
                         on_remove: move |event: Event| apply.call((event, Change::Unassign)),
                         on_stop: move |event: Event| stop.call(event),
+                        on_repeat: move |event: Event| repeat_with_block.call((event, None)),
                     }
                 }
             }
@@ -1896,6 +1976,9 @@ fn AssignedRow(
     on_remove: EventHandler<Event>,
     /// Stop a task repeating with its block from this occurrence on.
     on_stop: EventHandler<Event>,
+    /// A one-off in a repeating block, which can start repeating with it.
+    can_repeat: bool,
+    on_repeat: EventHandler<Event>,
 ) -> Element {
     let status_class = match task.status {
         tb::TaskStatus::Active => "active",
@@ -1915,6 +1998,7 @@ fn AssignedRow(
     let opened = task.event.clone();
     let removed = task.event.clone();
     let stopped = task.event.clone();
+    let joined = task.event.clone();
     let repeating = tb::is_follower(&task.event);
     let title = task.event.title.clone();
     let minutes = day::duration_label(task.minutes);
@@ -1934,6 +2018,9 @@ fn AssignedRow(
                         if repeating {
                             span { class: "meta-pill", "↻ Repeats with this block" }
                         }
+                        if can_repeat {
+                            span { class: "meta-pill", "This day only" }
+                        }
                     }
                 }
                 span { class: "assigned-minutes", "{minutes}" }
@@ -1946,6 +2033,16 @@ fn AssignedRow(
                     disabled: busy,
                     onclick: move |_| on_stop.call(stopped.clone()),
                     "Stop"
+                }
+            }
+            if can_repeat {
+                button {
+                    class: "btn small",
+                    title: "Repeat with this block from this day",
+                    aria_label: "Repeat {title} with this block from this day",
+                    disabled: busy,
+                    onclick: move |_| on_repeat.call(joined.clone()),
+                    "Repeat"
                 }
             }
             button {
@@ -2777,6 +2874,72 @@ mod tests {
         assert!(!html.contains("class=\"editor-label\">Repeat<"));
         // A task of its own keeps its scheduling.
         assert!(render(task()).contains(">Due Date<"));
+    }
+
+    #[derive(Props, Clone, PartialEq)]
+    struct BlockHarnessProps {
+        block: TimeBlock,
+    }
+
+    #[allow(non_snake_case)]
+    fn BlockHarness(props: BlockHarnessProps) -> Element {
+        let busy = use_signal(|| false);
+        rsx! {
+            BlockTasks {
+                block: props.block,
+                context: context(),
+                busy,
+                on_open: |_| {},
+                on_saved: |_| {},
+            }
+        }
+    }
+
+    /// A repeating block holding `task`, as its block task list shows it.
+    fn render_block(task: Event) -> String {
+        let mut block = event("b_20261026T160000Z", "blocks", "Deep work");
+        block.details.recurring_event_id = Some("b".into());
+        let block = TimeBlock {
+            event: block,
+            tasks: vec![AssignedTask {
+                event: task,
+                status: tb::TaskStatus::Active,
+                minutes: 45,
+                list_name: "Work".into(),
+            }],
+            capacity_minutes: 60,
+            planned_minutes: 45,
+        };
+        let mut dom = VirtualDom::new_with_props(BlockHarness, BlockHarnessProps { block });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    #[test]
+    fn a_one_off_in_a_repeating_block_offers_to_repeat_with_it() {
+        let mut one_off = task();
+        one_off.id = "one-off".into();
+        one_off.calendar_id = "blocks".into();
+        one_off.all_day = false;
+        let data = one_off.details.task_data.as_mut().unwrap();
+        data.metadata.block = Some("blocks/b_20261026T160000Z".into());
+        let html = render_block(one_off.clone());
+        assert_offers(
+            &html,
+            &["This day only", "Repeat Write report with this block"],
+        );
+        assert!(!html.contains("Repeats with this block"));
+
+        // One repeating with it offers to stop instead.
+        let mut repeating = one_off;
+        repeating.id = "t_20261026T160000Z".into();
+        repeating.details.recurring_event_id = Some("t".into());
+        let data = repeating.details.task_data.as_mut().unwrap();
+        data.metadata.block = None;
+        data.metadata.block_series = Some("blocks/b".into());
+        let html = render_block(repeating);
+        assert_offers(&html, &["↻ Repeats with this block", "Stop Write report"]);
+        assert!(!html.contains("This day only"));
     }
 
     #[track_caller]
