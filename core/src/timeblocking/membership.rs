@@ -433,4 +433,110 @@ mod tests {
             [block_key(&block)].into()
         );
     }
+
+    /// Every bug this module replaced came from code reading a task's stored
+    /// block key itself, which goes stale when Google renames an occurrence
+    /// and is meaningless on a task repeating with its block. So nothing
+    /// outside these files reads it: ask [`in_block`], [`block_of`],
+    /// [`tasks_in`] or [`is_assigned`] instead. Writing it is fine.
+    #[test]
+    fn nothing_else_reads_the_stored_block_key() {
+        // Each allowed file, and why it may.
+        const ALLOWED: [&str; 3] = [
+            // The rule itself.
+            "core/src/timeblocking/membership.rs",
+            // Reports tasks that break the rule, and checks a deleted
+            // block by the key a one-off names.
+            "core/src/timeblocking/reconcile.rs",
+            // Whether a change moves a task to another block than the one
+            // it names.
+            "core/src/task_edit.rs",
+        ];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut found = Vec::new();
+        let mut files = Vec::new();
+        for dir in ["core/src", "src", "dioxus/src"] {
+            let mut stack = vec![root.join(dir)];
+            while let Some(path) = stack.pop() {
+                for entry in std::fs::read_dir(&path).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == "rs") {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        assert!(files.len() > 50, "the source was not found");
+        for path in files {
+            let name = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if ALLOWED.contains(&name.as_str())
+                || name.ends_with("/tests.rs")
+                || name.contains("/reconcile/")
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let text = text.split("#[cfg(test)]\nmod tests").next().unwrap();
+            let code: String = text
+                .lines()
+                .map(|line| line.split("//").next().unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            for (at, _) in code.match_indices(".block") {
+                let rest = &code[at + ".block".len()..];
+                if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let next = rest.trim_start();
+                if next.starts_with('=') && !next.starts_with("==") {
+                    continue;
+                }
+                if is_metadata(code[..at].trim_end()) {
+                    let line = code[..at].lines().count();
+                    found.push(format!("{name}:{line}"));
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "These read a task's stored block key; ask timeblocking::membership instead:\n{}",
+            found.join("\n")
+        );
+    }
+
+    /// Whether the expression ending `before` is a task's metadata:
+    /// `metadata(…)`, or a binding named `metadata`, `meta` or `m`.
+    fn is_metadata(before: &str) -> bool {
+        if let Some(open) = before.strip_suffix(')') {
+            let mut depth = 1;
+            for (i, c) in open.char_indices().rev() {
+                match c {
+                    ')' => depth += 1,
+                    '(' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return open[..i].ends_with("metadata");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return false;
+        }
+        let name: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        matches!(name.as_str(), "metadata" | "meta" | "m")
+    }
 }
