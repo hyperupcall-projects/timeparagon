@@ -213,6 +213,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
                     .and_then(|event| event.details.color_id.clone());
                 let (habit_id, created) = crate::habits::habit_for_new_event(state, &draft.title);
                 state.habits.busy = true;
+                state.habits.writing.insert(habit_id.clone());
                 state.calendar.error = None;
                 let write = blocking::run(move || {
                     calendar::create_habit(&draft, color_id.as_deref(), &habit_id)

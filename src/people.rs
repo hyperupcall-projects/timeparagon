@@ -159,6 +159,11 @@ impl Store {
             .is_some_and(|d| d.account == account && d.contact.resource == resource)
     }
 
+    /// Whether this contact's change is still on its way to Google.
+    pub fn is_saving(&self, account: &str, resource: &str) -> bool {
+        self.is_open(account, resource) && self.draft.as_ref().is_some_and(|d| d.saving)
+    }
+
     fn book_mut(&mut self, account: &str) -> Option<&mut Book> {
         self.books.iter_mut().find(|book| book.account() == account)
     }

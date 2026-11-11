@@ -231,24 +231,27 @@ fn contact_row<'a>(
     metrics: &Metrics,
 ) -> Element<'a, Message> {
     let small = (metrics.label() - 1.0).max(10.0);
-    let mut lines = column![text(contact.name.as_str()).size(metrics.label())]
+    let saving = state.people.is_saving(book.account(), &contact.resource);
+    let font = crate::ui::controls::pending_font(iced::Font::DEFAULT, saving);
+    let mut lines = column![text(contact.name.as_str()).size(metrics.label()).font(font)]
         .spacing(2)
         .width(Fill);
     let summary = contact.summary();
     if !summary.is_empty() {
-        lines = lines.push(text(summary).size(small).style(text::secondary));
+        lines = lines.push(text(summary).size(small).font(font).style(text::secondary));
     }
     if let Some(note) = contact.note_hint(&state.people.query) {
         lines = lines.push(
             text(format!("Notes: {note}"))
                 .size(small)
+                .font(font)
                 .style(text::secondary),
         );
     }
     if !contact.labels.is_empty() {
         lines = lines.push(
             row(contact.labels.iter().map(|label| {
-                container(text(label.as_str()).size(small))
+                container(text(label.as_str()).size(small).font(font))
                     .padding([0, 6])
                     .style(crate::ui::controls::tag)
                     .into()
@@ -257,18 +260,20 @@ fn contact_row<'a>(
             .wrap(),
         );
     }
-    button(lines)
-        .width(Fill)
-        .padding([4, 6])
-        .style(crate::ui::controls::nav(
-            state.people.is_open(book.account(), &contact.resource),
-        ))
-        .on_press(people(Action::Open(Target {
-            account: book.account().to_owned(),
-            resource: contact.resource.clone(),
-            directory,
-        })))
-        .into()
+    crate::ui::controls::locked(
+        button(lines)
+            .width(Fill)
+            .padding([4, 6])
+            .style(crate::ui::controls::nav(
+                state.people.is_open(book.account(), &contact.resource),
+            ))
+            .on_press(people(Action::Open(Target {
+                account: book.account().to_owned(),
+                resource: contact.resource.clone(),
+                directory,
+            }))),
+        saving,
+    )
 }
 
 fn quiet<'a>(message: &'a str, metrics: &Metrics) -> Element<'a, Message> {
@@ -341,7 +346,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         row![
             text(draft.contact.name.as_str())
                 .size(metrics.label() + 4.0)
-                .font(bold())
+                .font(crate::ui::controls::pending_font(bold(), draft.saving))
                 .width(Fill),
             close,
         ]
@@ -362,6 +367,9 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
     } else {
         editor(state, draft, metrics)
     };
+    // The fields stay as they were sent, outlined and out of reach, until
+    // Google answers.
+    let body = crate::ui::controls::locked(body, draft.saving);
     let mut pane = column![
         header,
         crate::ui::controls::scrollable(
