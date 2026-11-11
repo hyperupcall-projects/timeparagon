@@ -1231,6 +1231,49 @@ fn an_empty_range_result_does_not_fetch_forever() {
 }
 
 #[test]
+fn the_footer_returns_to_logs_as_soon_as_a_day_sync_result_arrives() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    state.calendar.connection = Connection::SignedIn;
+    state.calendar.last_sync = Some(crate::clock::now());
+    state.calendar.sync = SyncState::Syncing;
+    let _ = update(&mut state, Message::System(SystemMessage::ActivityTick));
+    assert_eq!(state.activity.label(), "Loading from cloud");
+
+    // The result has landed: the data is in, so the label must say Logs in
+    // this very update, not one deferred message later.
+    let revision = state.timeblocking.revision;
+    let _ = update(
+        &mut state,
+        Message::Calendar(CalendarMessage::CalendarSyncedAt(
+            revision,
+            Ok(calendar::sample_snapshot()),
+        )),
+    );
+    assert_eq!(state.calendar.sync, SyncState::Idle);
+    assert_eq!(state.activity.label(), crate::activity::IDLE_LABEL);
+}
+
+#[test]
+fn a_queued_fetch_does_not_keep_the_footer_on_loading() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    state.calendar.connection = Connection::SignedIn;
+    state.calendar.sync = SyncState::Idle;
+    // Days waiting for a free moment are not a request in flight.
+    state.calendar_fetch_pending = vec![state.calendar.day];
+
+    assert!(
+        state.current_activities().is_empty(),
+        "a queued fetch is not loading yet"
+    );
+    state
+        .activity
+        .observe(state.current_activities(), Instant::now());
+    assert_eq!(state.activity.label(), crate::activity::IDLE_LABEL);
+}
+
+#[test]
 fn calendar_sync_refreshes_habit_links_for_a_new_series_without_opening_habits() {
     use crate::habits::{Action, Habit, Mark};
 

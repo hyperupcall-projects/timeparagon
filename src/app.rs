@@ -1038,8 +1038,13 @@ impl State {
         self.screen == Screen::People && self.people.draft.is_some()
     }
 
+    /// A calendar fetch is actually under way, for the footer and the month
+    /// view. Days merely queued in `calendar_fetch_pending` do not count: no
+    /// request is running yet, and saying "Loading from cloud" while the
+    /// queue waits on something else (a pending move, a time block write)
+    /// left the footer stuck on loading after the fetch had finished.
     pub(crate) fn calendar_loading(&self) -> bool {
-        self.calendar.is_busy() || !self.calendar_fetch_pending.is_empty()
+        self.calendar.is_busy()
     }
 
     /// A state touching nothing outside itself: default settings and the

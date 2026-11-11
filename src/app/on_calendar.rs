@@ -348,14 +348,18 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
         CalendarMessage::CalendarSyncedAt(revision, result) => {
             if revision != state.timeblocking.revision {
                 state.calendar.sync = SyncState::Idle;
-                return Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested));
+                return update(state, CalendarMessage::CalendarSyncRequested);
             }
-            Task::done(Message::Calendar(CalendarMessage::CalendarSynced(result)))
+            // Apply the result in this update rather than handing it to a
+            // follow-up message. The follow-up arrived (and cleared the
+            // footer's "Loading from cloud") a frame later, so the label
+            // lingered after the data was already in.
+            update(state, CalendarMessage::CalendarSynced(result))
         }
         CalendarMessage::CalendarRangeSynced(revision, dates, result) => {
             if revision != state.timeblocking.revision {
                 state.calendar.sync = SyncState::Idle;
-                return Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested));
+                return update(state, CalendarMessage::CalendarSyncRequested);
             }
             match result {
                 Ok(mut snapshot) => {
