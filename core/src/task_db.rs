@@ -100,8 +100,6 @@ impl Database {
         let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         tx.execute_batch("
-            CREATE TABLE IF NOT EXISTS counter (singleton INTEGER PRIMARY KEY CHECK(singleton=1), next_id INTEGER NOT NULL CHECK(next_id >= 100));
-            INSERT OR IGNORE INTO counter VALUES (1,100);
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -257,44 +255,27 @@ impl Database {
         let data = if let Some(data) = existing {
             data
         } else {
-            let synced = tx
-                .query_row(
-                    "SELECT 1 FROM sqlite_master WHERE name='timeslay_sync_control'",
-                    [],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            let id: i64 = if synced {
-                loop {
-                    let mut bytes = [0u8; 8];
-                    getrandom::fill(&mut bytes).map_err(|_| rusqlite::Error::InvalidQuery)?;
-                    let candidate = (u64::from_le_bytes(bytes) & ((1u64 << 62) - 1)) as i64;
-                    if candidate < 100 {
-                        continue;
-                    }
-                    if !tx
-                        .query_row("SELECT 1 FROM tasks WHERE id=?1", [candidate], |_| Ok(()))
-                        .optional()?
-                        .is_some()
-                    {
-                        break candidate;
-                    }
+            let id: i64 = loop {
+                let mut bytes = [0u8; 8];
+                getrandom::fill(&mut bytes).map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let candidate = (u64::from_le_bytes(bytes) & ((1u64 << 62) - 1)) as i64;
+                if candidate < 100 {
+                    continue;
                 }
-            } else {
-                tx.query_row("SELECT next_id FROM counter WHERE singleton=1", [], |r| {
-                    r.get(0)
-                })?
+                if tx
+                    .query_row("SELECT 1 FROM tasks WHERE id=?1", [candidate], |_| Ok(()))
+                    .optional()?
+                    .is_none()
+                {
+                    break candidate;
+                }
             };
-            // Refuse overflow rather than wrapping or switching to random IDs.
-            let next = id.checked_add(1).ok_or(rusqlite::Error::InvalidQuery)?;
             let metadata = Metadata::default();
             let json = serde_json::to_string(&metadata).expect("metadata serializes");
             tx.execute(
                 "INSERT INTO tasks(id,metadata) VALUES (?1,?2)",
                 params![id, json],
             )?;
-            tx.execute("UPDATE counter SET next_id=?1 WHERE singleton=1", [next])?;
             TaskData { id, metadata }
         };
         tx.execute(
@@ -335,8 +316,6 @@ impl Database {
             let tx = self.0.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let json = serde_json::to_string(&data.metadata).expect("metadata serializes");
             tx.execute("INSERT INTO tasks (id,metadata) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata", params![data.id,json])?;
-            let next = data.id.checked_add(1).ok_or(rusqlite::Error::InvalidQuery)?;
-            tx.execute("UPDATE counter SET next_id=max(next_id,?1) WHERE singleton=1", [next])?;
             tx.execute("INSERT INTO task_aliases VALUES (?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id", params![crate::timeblocking::block_key(event),data.id])?;
             tx.commit()
         })().map_err(|e| e.to_string())
