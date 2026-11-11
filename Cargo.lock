@@ -8399,6 +8399,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "serde",
+ "serde_ignored",
  "serde_json",
  "sha2",
  "tempfile",

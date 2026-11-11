@@ -1,8 +1,9 @@
 //! The single local database: remote task metadata, durable ID/alias allocation,
 //! and everything else this device keeps between runs.
 //!
-//! Tasks and cached calendar months have tables of their own. The rest are JSON
-//! documents, one per kind of data, named in [`keys`].
+//! Tasks, cached calendar months and settings (see [`crate::settings`]) have
+//! tables of their own. The rest are JSON documents, one per kind of data,
+//! named in [`keys`].
 //!
 use crate::calendar::ids;
 use crate::{calendar::Event, timeblocking::Metadata};
@@ -34,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=3;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=4;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
     db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -109,6 +110,9 @@ impl Database {
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
+        // Schema 5: the settings, which used to be config.toml.
+        tx.execute_batch(crate::settings::schema::CREATE)
+            .map_err(|e| e.to_string())?;
         crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
         Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -116,6 +120,16 @@ impl Database {
         if !memory {
             crate::database_sync::enroll(path).map_err(|e| e.to_string())?;
             crate::database_sync::install_snapshots(db).map_err(|e| e.to_string())?;
+            // After enrolling, so the imported settings are journaled for sync.
+            // Only this device's own database takes its config file. A failed
+            // import must not keep the database from opening; it is logged
+            // and the file left in place.
+            if Some(path) == self::path().as_deref()
+                && let Some(file) = crate::config::config_path()
+                && let Err(error) = crate::settings::import_once(db, path, &file)
+            {
+                log::error!("could not import {}: {error}", file.display());
+            }
             // Readers no longer wait on a writer, so a poll on the UI thread
             // cannot stall behind the sync worker's transaction. The mode is
             // kept by the file. It cannot change while another connection is

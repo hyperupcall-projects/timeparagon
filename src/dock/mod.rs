@@ -130,10 +130,12 @@ pub fn run() -> Result<()> {
     let mut event_loop: EventLoop<Dock> = EventLoop::try_new()?;
     let handle = event_loop.handle();
 
-    // Settings can be edited in the regular app while the dock is visible.
-    // Watch the directory because saves atomically replace config.toml.
+    // Settings can be edited in the regular app, or on another device, while
+    // the dock is visible.
     let (config_tx, config_rx) = channel::channel::<Config>();
-    let _config_watcher = watch_config(config_tx);
+    if let Err(error) = crate::config::spawn_watcher(move |config| config_tx.send(config).is_ok()) {
+        log::warn!("live dock settings unavailable: {error}");
+    }
     handle
         .insert_source(config_rx, |event, _, dock| {
             if let channel::Event::Msg(config) = event {
@@ -308,39 +310,6 @@ fn configure_layer(layer: &LayerSurface, config: &config::DockConfig) {
     layer.commit();
 }
 
-fn watch_config(sender: channel::Sender<Config>) -> Option<notify::RecommendedWatcher> {
-    use notify::Watcher;
-
-    let path = crate::config::config_path()?;
-    let parent = path.parent()?.to_path_buf();
-    let watched_path = path.clone();
-    let result = (|| {
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if let Ok(event) = event
-                    && event.paths.contains(&watched_path)
-                    && matches!(
-                        event.kind,
-                        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
-                    )
-                    && let Ok(contents) = std::fs::read_to_string(&watched_path)
-                    && let Ok(config) = toml::from_str::<Config>(&contents)
-                {
-                    let _ = sender.send(config);
-                }
-            })?;
-        watcher.watch(&parent, notify::RecursiveMode::NonRecursive)?;
-        Ok::<_, notify::Error>(watcher)
-    })();
-    match result {
-        Ok(watcher) => Some(watcher),
-        Err(error) => {
-            log::warn!("live dock reservation settings unavailable: {error}");
-            None
-        }
-    }
-}
-
 /// Answers the shortcut daemon (`status`, `hide`) and the browser extension or
 /// Slack app (a JSON inbox request).
 fn spawn_ipc(
@@ -363,7 +332,7 @@ fn spawn_ipc(
                 }
                 match command {
                     "toggle-reservation" => {
-                        match Config::update_on_disk(|config| {
+                        match Config::update_stored(|config| {
                             config.views.dock_reserve_space = !config.views.dock_reserve_space;
                         }) {
                             Ok(()) => ipc::OK.to_owned(),

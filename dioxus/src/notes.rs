@@ -1,4 +1,4 @@
-//! Notes: Markdown files in the notes directory set in `config.toml`.
+//! Notes: Markdown files in the notes directory, a setting of each device.
 //!
 //! The files are handled in `timeslay_core::notes`, the same as on the
 //! desktop. This is the phone's screen for them, and the section that

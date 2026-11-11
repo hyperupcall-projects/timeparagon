@@ -19,7 +19,6 @@ flowchart TB
     end
     subgraph Device["Each device"]
         DB[(timeslay.sqlite3)]
-        CFG[config.toml]
         SEC[secrets.json /<br/>Android Keystore blob]
         NOTES[Notes directory<br/>*.md]
     end
@@ -29,7 +28,7 @@ flowchart TB
     GC <-- "immediate writes + refresh" --> DB
     GT <-- "immediate writes + refresh" --> DB
     GP <-- "cache" --> DB
-    DB <-- "6 shared documents" --> TURSO
+    DB <-- "6 shared documents,<br/>settings rows" --> TURSO
     NOTES <-. "you sync it" .-> SYNCTHING
 ```
 
@@ -38,8 +37,7 @@ flowchart TB
 | **Google Calendar** | Events, time blocks, scheduled (dated) tasks, habit occurrences, sleep nights, meeting guests and replies | Google |
 | **Google Tasks** | Undated tasks (inbox, triaged, backlog) | Google |
 | **Google People** | Contacts, contact groups, Workspace directory | Google |
-| **SQLite** `timeslay.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions; caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents only |
-| **`config.toml`** | Device settings: calendar choices, colors, views, window, panel, voice, places and travel, pomodoro, reminders, sync URL, Google OAuth client | Not shared. Copy it by hand if you want to. |
+| **SQLite** `timeslay.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents and the synced settings tables |
 | **`secrets.json`** | Google tokens, connected Gmail accounts, OpenRouter token | Not shared |
 | **Notes directory** | Markdown notes, one file each | Whatever syncs the folder (Syncthing, say) |
 
@@ -56,8 +54,8 @@ Paths use the XDG directories for app ID `dev.TimeSlay.timeslay`:
 
 | File | Linux |
 | --- | --- |
-| Config | `~/.config/timeslay/config.toml` |
-| Database | `~/.local/share/timeslay/timeslay.sqlite3` |
+| Database (settings included) | `~/.local/share/timeslay/timeslay.sqlite3` |
+| Settings of older versions | `~/.config/timeslay/config.toml`, imported once and renamed `config.toml.imported` (see [Settings](#settings)) |
 | Turso replica | `~/.local/share/timeslay/turso/replica.db` |
 | Secrets | `~/.local/state/timeslay/secrets.json` (mode `0600`) |
 | IPC sockets | `$XDG_RUNTIME_DIR/timeslay-sidebar.sock`, `timeslay-dock.sock` |
@@ -72,7 +70,8 @@ scratch directory and never contact Google or the sync server.
 
 ### What is shared between devices
 
-Turso replicates exactly these `documents` rows (`database_sync::SHARED_KEYS`):
+Turso replicates exactly these `documents` rows (`database_sync::SHARED_KEYS`),
+and every row of the synced [settings tables](#settings):
 
 | Document | Holds |
 | --- | --- |
@@ -85,7 +84,7 @@ Turso replicates exactly these `documents` rows (`database_sync::SHARED_KEYS`):
 
 Everything else stays on the device. That includes the Google caches and the
 local copies of edits being sent (each device talks to Google itself), contacts, cached routes,
-calendar sync state, the Android theme, all of `config.toml`, secrets and
+calendar sync state, the Android theme, `device_settings`, secrets and
 notes.
 
 Concurrent edits are merged **field by field**, not by whichever document was
@@ -133,7 +132,7 @@ time blocks by ID, so you can rename those freely.
 | --- | --- | --- |
 | `id` | string | Google calendar ID, or `tasks:<listId>` for a Google Tasks list |
 | `name` | string | |
-| `color` | color | Google's color, which `config.toml` can override |
+| `color` | color | Google's color, which a `calendar_sources` row can override |
 | `primary` | bool | The account's primary calendar |
 | `selected_by_google` | bool | Checked in Google Calendar's own list |
 
@@ -143,7 +142,8 @@ shown as calendar sources: `Inbox`, `Triaged` and `Backlog` (or the lists
 configured as `inbox_list`, `triaged_list` and `backlog_list`).
 
 The **app calendar** is the one Google calendar TimeSlay writes its own items
-to. It is named `TimeSlay` and its ID is recorded as `[calendar] app_calendar`.
+to. It is named `TimeSlay` and its ID is recorded as the `calendar.app_calendar`
+setting.
 It holds time blocks, all-day app events, dated tasks, habit occurrences and
 sleep.
 
@@ -604,8 +604,8 @@ A habit's **calendar event** is a recurring event on the app calendar with
 
 ## Life areas, goals, objectives and projects
 
-Stored as the `shared.projects` document (shared). In `config.toml` this is the
-`[projects]` table (`config::ProjectsSettings`):
+Stored as the `shared.projects` document (shared). In the apps' config it is
+`projects` (`config::ProjectsSettings`):
 
 ```mermaid
 erDiagram
@@ -652,23 +652,23 @@ erDiagram
 
 ## Places and travel
 
-Device-local, in `config.toml` under `[travel]`:
+Shared between devices, in tables of their own (see [Settings](#settings)):
 
-| Field | Meaning |
-| --- | --- |
-| `api_key` | Mapbox token |
-| `home` | Place ID |
-| `places` | `[{id, name, address, place_id, lat, lng, favorite}]`. `place_id` is Mapbox's ID (older entries hold a Google ID). `name` can be renamed freely |
-| `event_places` | `{event_id: place_id}`. Links a calendar event to a saved place |
-| `default_mode` | `walk` / `bike` / `car` |
-| `modes` | `[{from, to, mode}]`. Per-trip overrides |
-| `routes` | `[{from, to, mode, seconds, meters}]`. Trips that have been calculated |
-| `show` | Show travel on the calendar |
-| `map_app` | Desktop only: which map to open |
+| Table | Row | Notes |
+| --- | --- | --- |
+| `places` | `{id, name, address, provider_id, lat, lng, favorite}` | `provider_id` is Mapbox's ID (older entries hold a Google ID), which keeps one place from being saved twice. `name` can be renamed freely |
+| `event_places` | `{event_id, place_id}` | Links a calendar event to a saved place |
+| `travel_modes` | `{from_place, to_place, mode}` | Per-trip overrides of the default mode |
+| `travel_routes` | `{from_place, to_place, mode, seconds, meters}` | Trips the desktop has calculated, for devices that do not |
+
+and the settings `travel.api_key` (Mapbox token), `travel.home` (place ID),
+`travel.default_mode` (`walk` / `bike` / `car`), `travel.show` (show travel
+on the calendar) and `travel.map_app` (desktop only: which map to open).
 
 Tasks refer to places with `metadata.location`, and time blocks pass a place
 down with `ChildMetadata.location`. The desktop app also caches calculated
-trips in the `routes` document (same shape as `routes` above).
+trips in the `routes` document (same shape as `travel_routes`), which stays
+on the device.
 
 ---
 
@@ -676,7 +676,7 @@ trips in the `routes` document (same shape as `routes` above).
 
 | | Document | Shape |
 | --- | --- | --- |
-| Notepad | `shared.notepad` | `{"text": "…"}`. The font size (`[notepad] font_size`) stays in `config.toml` per device |
+| Notepad | `shared.notepad` | `{"text": "…"}`. The font size is the device setting `notepad.font_size` |
 | Brain dump | `shared.brain_dump` | `{"entries": [{"date": "2026-11-09", "text": "…"}]}`. At most one page per day. Never sent to Google |
 
 ---
@@ -706,7 +706,7 @@ Recorded in time-block focus mode. Stored as the `shared.task_work` document
 - The active session is the most recent one with `stopped_at = null`.
 - Distractions are 1, 5, 10, 15 or 30 minutes long.
 
-The pomodoro timer (`[pomodoro]` in `config.toml`, device-local) stores work
+The pomodoro timer (the `pomodoro.*` device settings) stores work
 and break lengths (25/5 by default), the current phase, the time remaining,
 and the task to resume after a break.
 
@@ -740,20 +740,25 @@ Stored as the `alarms` document (shared), type `alarms::Library`:
   `knock`, `bubble`) or `{"file": "/path/to/sound.ogg"}`.
 - `repeats: 0` loops until dismissed. Flash pulses are never shorter than
   334 ms (at most 3 per second), whatever the config says.
-- The default profile for new alarms is `[alarm]` in `config.toml`.
+- The default profile for new alarms is the `alarm.*` settings (shared).
 
 ---
 
 ## Reminders
 
-Notifications for upcoming items are configured per device in `[reminders]`
-(`reminders::ReminderSettings`). Reminders are computed, not stored:
+Notifications for upcoming items are configured in the shared
+`reminders.enabled` and `reminders.use_calendar_reminders` settings and the
+`reminders` table, one row per kind (`reminders::ReminderSettings`).
+Reminders are computed, not stored:
 
 | Field | Meaning |
 | --- | --- |
 | `enabled` | Master switch. Off by default |
 | `use_calendar_reminders` | Use each event's Google reminders instead of `events.minutes_before` |
-| `events`, `tasks`, `time_blocks`, `habits`, `sleep`, `travel` | `{enabled, minutes_before, sound}` per category |
+| `events`, `tasks`, `time_blocks`, `habits`, `sleep`, `travel` | `{enabled, minutes_before, sound}` per category: a row of `reminders` |
+
+A device sound (`{"kind":"device", …}`) names a file on the desktop or a
+ringtone on Android. A device given the other kind plays its default sound.
 
 Each due reminder gets a key that is unique per event, occurrence and lead
 time, so it is never delivered twice, and a moved event gets a new reminder.
@@ -764,7 +769,7 @@ See [Reminders](./reminders.md).
 ## Notes
 
 Notes are **not in the database**. Each note is `<title>.md` in the folder set
-by `[notes] directory`:
+by the device setting `notes.directory`:
 
 ```markdown
 ---
@@ -811,32 +816,75 @@ edits can round-trip fields TimeSlay does not display.
 
 ---
 
-## Settings (`config.toml`)
+## Settings
 
-Both apps read the same `config.toml`. The Android app uses only a subset
-(`core::config::Config`) and ignores the settings it does not know, so you can
-copy a desktop config onto a phone as it is. When either app loads the config,
-the four shared sections are replaced with the versions from the database.
+Settings are rows in the database, kept by `settings` (`core/src/settings/`).
+Both apps hold them in their `Config` type: the Android app's
+(`core::config::Config`) is a subset of the desktop's. Each app reads, and
+writes back, only the parts its type has, so neither disturbs the other's.
 
-| Section | Scope | Contents |
-| --- | --- | --- |
-| `[calendar]` | device | OAuth client, sync interval, hidden calendars, source order, app calendar and task-list IDs, triage requirements, day-end hour, weekly bedtime and wake-up schedule, first day of week, colors per calendar, list and kind |
-| `[projects]` | **shared** via `shared.projects` | See [Life areas…](#life-areas-goals-objectives-and-projects) |
-| `[notepad]` | `text` **shared** via `shared.notepad`; `font_size` device | |
-| `[brain_dump]` | **shared** via `shared.brain_dump` | |
-| `[task_work]` | **shared** via `shared.task_work` | |
-| `[travel]` | device | See [Places and travel](#places-and-travel) |
-| `[alarm]` | device | Default alarm profile |
-| `[reminders]` | device | See [Reminders](#reminders) |
-| `[notes]` | device | `directory` |
-| `[database_sync]` | device | `url`. Empty disables sync |
-| `[appearance]` | device | `theme`, `time_format`, `distance_unit` |
-| `[window]`, `[views]`, `[panel]` | desktop | Size, dock and panel geometry, borders, animation, shortcut |
-| `[voice]` | desktop | Speech-to-text backend settings |
-| `[pomodoro]` | desktop | Timer state |
+Most settings are **shared** between devices like any other synced data.
+Those that describe one device stay on it, in `device_settings`: its files and
+folders, the sync server it uses, its screen and windows, its speech-to-text
+setup and the timer running on it. Another device would be broken by them.
 
-Sections are left out of the file while they hold only defaults, so an
-untouched config stays minimal.
+| Settings | Where | Shared |
+| --- | --- | :---: |
+| `calendar.*`: OAuth client, sync interval, app calendar and task-list IDs, task sorts, triage requirements, day-end hour, first day of week, week view, colors per kind | `settings` | ✅ |
+| Hidden calendars, source order, colors per calendar or task list | `calendar_sources` | ✅ |
+| Weekly bedtime and wake-up times, and dated changes to them | `sleep_schedule`, `sleep_schedule_changes` | ✅ |
+| Card order on the week board | `weekly_task_order` | ✅ |
+| Places, the place of each event, trip modes, calculated trips | `places`, `event_places`, `travel_modes`, `travel_routes` | ✅ |
+| `travel.*`: Mapbox token, home, default mode, map app, show travel | `settings` | ✅ |
+| Reminders per kind; `reminders.enabled`, `reminders.use_calendar_reminders` | `reminders`; `settings` | ✅ |
+| `alarm.*`: the default alarm profile | `settings` | ✅ |
+| `appearance.*`: theme, time format, distance unit | `settings` | ✅ |
+| Projects, notepad text, brain dump, work sessions | their [documents](#what-is-shared-between-devices) | ✅ |
+| `database_sync.url`. Empty disables sync | `device_settings` | — |
+| `notes.directory` | `device_settings` | — |
+| `window.*`, `views.*`, `panel.*`: sizes, dock and panel geometry, borders, animation, shortcuts | `device_settings` | — |
+| `voice.*`: speech-to-text and image input backends | `device_settings` | — |
+| `pomodoro.*`: timer lengths and state | `device_settings` | — |
+| `notepad.font_size` | `device_settings` | — |
+
+The split is `settings::mapping::DEVICE_SECTIONS`.
+
+A setting is named `section.field`, as in the apps' `Config`
+(`calendar.sync_minutes`), and its value is JSON (`30`, `"Ocean"`, or an
+object for `alarm.sound`). **A setting at its default is not stored**: no
+row means the default. So a device that never touched a setting cannot
+override another device's choice, and an untouched install stores nothing.
+
+**A save writes only what changed** since the settings were loaded: the rows
+that differ, and of those only the columns that differ. A window holding
+settings that another device has since changed does not put them back when
+it saves something else. A stored setting the app cannot read (written by a
+newer version, or damaged) is left at its default for the session, reported,
+and kept in the database untouched.
+
+Apps notice changes made by another process, or brought by sync, through the
+`settings` change counter (see
+[Change detection](./database-schema.md#change-detection)).
+
+### Upgrading from `config.toml`
+
+Older versions kept the settings in `config.toml`. The first time this version
+opens a device's database, it imports that device's file (values at their
+default left out), records `settings_imported_at` in `documents`, and renames
+the file `config.toml.imported`. It is not read after that. A file that does
+not parse is left where it is and not imported; the error is logged.
+
+When two devices each import a file, the files' rows are journaled as the
+oldest possible edits, so a setting changed in the app afterwards, on any
+device, always wins over a file. Where only the two files disagree, one of
+them wins and every device ends up with the same one. Places and other
+table rows from both files are kept.
+
+To try an import first, on copies:
+
+```sh
+cargo run -p timeslay-core --example import_settings -- copy.sqlite3 copy-config.toml
+```
 
 ## Secrets
 
@@ -879,3 +927,9 @@ request to the running app over its IPC socket.
   concurrent remote change.
 - **The app calendar is identified by name** (`TimeSlay`) until its ID is
   recorded, so a fresh device can recognize it.
+- **References between settings tables are not enforced.** Two devices can
+  delete a place and link an event to it at the same moment, so code reading
+  `event_places`, `travel_*` or `travel.home` skips a place that is gone.
+- **Save settings with a baseline** (`settings::save`, or `settings::update`).
+  Writing a whole `Config` without one would put back what other devices
+  changed.

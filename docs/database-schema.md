@@ -38,15 +38,25 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `3` | Upgraded to 4 on open: see below. |
-| `4` | Current (`task_db::SCHEMA_VERSION`). |
-| anything else | Refused: `Unsupported database schema N; expected 4`. |
+| `2`, `3`, `4` | Upgraded to 5 on open: see below. |
+| `5` | Current (`task_db::SCHEMA_VERSION`). |
+| anything else | Refused: `Unsupported database schema N; expected 5`. |
+
+Builds from before version 5 refuse a version 5 file, so every TimeSlay
+process on a device (panel, dock, shortcut daemon, browser host) has to be
+upgraded together, and a device still on an older build stops syncing (it
+refuses the settings rows it receives) until it is upgraded.
 
 Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 `INSERT OR IGNORE`). Setup runs inside one `IMMEDIATE` transaction, so two
 processes setting up at once, or a crash halfway through, cause no harm. Once a
-file is stamped with version 4, setup is skipped, because the apps open the
-database many times a minute.
+file is stamped with the current version, setup is skipped, because the apps
+open the database many times a minute.
+
+**4 → 5** creates the [settings tables](#settings), their journal triggers and
+change counters, and an index on `timeslay_sync_edits(clock)`. Then, for the
+device's own database only, it imports `config.toml` once (see
+[Upgrading from `config.toml`](./data-model.md#upgrading-from-configtoml)).
 
 **3 → 4** (`Database::remove_write_queue`) removes the old durable Google write
 queue. It adds `google_entities.sending_since`, deletes the `google_entities`
@@ -73,6 +83,7 @@ erDiagram
     documents ||--o{ timeslay_sync_edits : "journaled by trigger"
     timeslay_sync_snapshots ||--o{ timeslay_sync_edits : "folds (JSON list)"
     timeslay_sync_folded }o--|| timeslay_sync_edits : "tombstone of"
+    settings_tables ||--o{ timeslay_sync_edits : "journaled by trigger"
 
     tasks {
         INTEGER id PK
@@ -141,13 +152,16 @@ erDiagram
         INTEGER remote_deleted
         INTEGER folded_at
     }
+    settings_tables {
+        TEXT see_Settings "settings, places, reminders, …"
+    }
 ```
 
 The only foreign key SQLite enforces is `task_aliases.task_id`. The other
 relationships in the diagram are logical: the code keeps them, not
 constraints.
 
-The tables fall into five groups:
+The tables fall into six groups:
 
 | Group | Tables | Created by |
 | --- | --- | --- |
@@ -155,11 +169,12 @@ The tables fall into five groups:
 | [Documents](#documents) | `documents` | `task_db::Database::set_up` |
 | [Google cache](#google-cache) | `calendar_months`, `google_task_records` | `task_db::Database::set_up` |
 | [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
+| [Settings](#settings) | `settings`, `device_settings`, `calendar_sources`, `sleep_schedule`, `sleep_schedule_changes`, `weekly_task_order`, `places`, `event_places`, `travel_modes`, `travel_routes`, `reminders` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
 | [Change detection](#change-detection) | `timeslay_change_counters` + triggers | `local_changes::install` |
 | [Device sync](#device-sync-turso) | `timeslay_sync_control`, `timeslay_sync_edits`, `timeslay_sync_snapshots`, `timeslay_sync_folded` + triggers | `database_sync::enroll`, `database_sync::install_snapshots` |
 
-None of the Google tables are replicated between devices. Only six
-`documents` rows are replicated. See
+None of the Google tables are replicated between devices. Six `documents`
+rows and the rows of every settings table but `device_settings` are. See
 [What is shared between devices](./data-model.md#what-is-shared-between-devices).
 
 ---
@@ -245,11 +260,12 @@ empty value, so callers can refuse to save over data they could not read.
 | `calendar_sync_state` | — | `day_cache::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}]}` |
 | `calendar_task_snapshot` | — | `true` | Google task refresh | Marks that `google_task_records` holds a complete task snapshot |
 | `dioxus_theme` | — | `String` | Android app | Theme name. The Android home-screen widget reads it directly with SQL (`DayRenderer.kt`) |
+| `settings_imported_at` | — | RFC 3339 string | Schema 5 setup | When this database imported `config.toml`, or found none to import. Present means it never imports one again |
 
 `shared.*` documents are written by `shared_data` (`core/src/shared_data.rs`).
-On load, the apps lay these documents over the matching `config.toml` sections
-(`notepad.text`, `brain_dump`, `projects`, `task_work`). On save, the sections
-are taken out of the config and written here instead. An empty section
+The apps' `Config` holds them as `notepad.text`, `brain_dump`, `projects` and
+`task_work`, laid in among the [settings](#settings) when those are read; a
+save writes back a section that changed. An empty section
 (only defaults, empty strings, zeros) is **not stored at all**, so a fresh
 device cannot overwrite another device's data during sync.
 
@@ -447,6 +463,88 @@ also use it.
 
 ---
 
+## Settings
+
+The settings both apps keep, which used to be `config.toml`. What each one
+means is in the [data model](./data-model.md#settings). The tables are
+described once in `settings::schema`, which the settings code and sync both
+use; a test checks the description against the tables created.
+
+```sql
+-- One value each, named "section.field". Only values that differ from the
+-- built-in default are stored. Shared.
+CREATE TABLE settings (
+  key   TEXT PRIMARY KEY,        -- "calendar.sync_minutes"
+  value TEXT NOT NULL            -- JSON: 30, "Ocean", {"volume":70,…}
+);
+-- The same, for what describes this device. Never leaves it.
+CREATE TABLE device_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE calendar_sources (
+  id       TEXT PRIMARY KEY,           -- Google calendar ID, "tasks:<list>", "tasks:", "timeslay:habits", …
+  hidden   INTEGER NOT NULL DEFAULT 0, -- switched off in the calendar menu
+  position INTEGER,                    -- left-to-right order of overlapping events; NULL = unordered
+  color    TEXT                        -- "#RRGGBB" instead of the source's own; NULL = its own
+);
+CREATE TABLE sleep_schedule (
+  weekday INTEGER PRIMARY KEY CHECK (weekday BETWEEN 0 AND 6), -- 0 = Monday: the night ending that day
+  bedtime TEXT NOT NULL,         -- "HH:MM:SS"
+  wakeup  TEXT NOT NULL
+);
+CREATE TABLE sleep_schedule_changes (
+  from_date        TEXT PRIMARY KEY, -- "YYYY-MM-DD": the first night it applies to; its weekday is the one changed
+  previous_bedtime TEXT NOT NULL,    -- the times before it, for earlier nights
+  previous_wakeup  TEXT NOT NULL,
+  bedtime          TEXT NOT NULL,
+  wakeup           TEXT NOT NULL
+);
+CREATE TABLE weekly_task_order (
+  day   TEXT PRIMARY KEY,        -- a column of the week board
+  cards TEXT NOT NULL            -- JSON array of card IDs, in order
+);
+CREATE TABLE places (
+  id          INTEGER PRIMARY KEY,  -- ms since the epoch when saved; what tasks refer to
+  name        TEXT NOT NULL,
+  address     TEXT NOT NULL DEFAULT '',
+  provider_id TEXT NOT NULL DEFAULT '', -- Mapbox's ID (older: Google's)
+  lat         REAL NOT NULL,
+  lng         REAL NOT NULL,
+  favorite    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE event_places (event_id TEXT PRIMARY KEY, place_id INTEGER NOT NULL);
+CREATE TABLE travel_modes (
+  from_place INTEGER NOT NULL, to_place INTEGER NOT NULL,
+  mode       TEXT NOT NULL,      -- "walk" / "bike" / "car"
+  PRIMARY KEY (from_place, to_place)
+);
+CREATE TABLE travel_routes (
+  from_place INTEGER NOT NULL, to_place INTEGER NOT NULL, mode TEXT NOT NULL,
+  seconds    INTEGER NOT NULL, meters INTEGER NOT NULL,
+  PRIMARY KEY (from_place, to_place, mode)
+);
+CREATE TABLE reminders (
+  category       TEXT PRIMARY KEY, -- events, tasks, time_blocks, habits, sleep, travel
+  enabled        INTEGER NOT NULL,
+  minutes_before INTEGER NOT NULL,
+  sound          TEXT NOT NULL     -- JSON: reminders::Sound
+);
+```
+
+- **Absent means default.** Neither a setting nor a `sleep_schedule` or
+  `reminders` row is stored while it holds the default.
+- **References are not enforced.** `place_id`, `from_place`, `to_place` and
+  the `travel.home` setting name `places.id`, but nothing stops the place
+  going: sync must be able to store whatever two devices did at once.
+  Readers skip a place that is gone.
+- **No `CHECK` on values** other than the weekday's range, so a value a newer
+  build adds (a reminder kind, say) syncs to an older one instead of
+  stopping its sync. Code ignores what it does not know.
+- **A column added later needs a `DEFAULT`**, since rows synced from an
+  older build do not have it.
+- **Write through `settings`** (`save` with a baseline, or `update`). It
+  writes only what changed, in one `IMMEDIATE` transaction. JSON that does not
+  parse cannot be written by the apps at all: the journal triggers refuse it.
+
 ## Change detection
 
 The apps poll the database every couple of seconds to pick up writes from other
@@ -467,6 +565,13 @@ CREATE TABLE timeslay_change_counters (
 | --- | --- |
 | `doc:<key>` | Any `INSERT`/`UPDATE`/`DELETE` on `documents` for that key |
 | `google.overlay` | Any change to `google_entities` or `google_id_map` (so a write being answered unlocks its item everywhere) |
+| `settings` | Any change to a [settings table](#settings), by an app or by sync |
+
+`Counters::config` is `settings` plus the `doc:` counters of the four
+`shared.*` documents: it moves whenever anything the apps' `Config` holds
+changes. The desktop's watchers (panel and dock) read it about three times a
+second over one connection (`local_changes::Reader`), and the phone every two
+seconds, and only then read the settings again.
 
 A counter that has never been incremented reads as `0`.
 
@@ -476,6 +581,7 @@ Triggers (`AFTER` each of `INSERT`, `UPDATE`, `DELETE`):
 timeslay_change_documents_{insert,update,delete}
 timeslay_change_google_entities_{insert,update,delete}
 timeslay_change_google_id_map_{insert,update,delete}
+timeslay_change_<settings table>_{insert,update,delete}
 ```
 
 A trigger body cannot rely on UPSERT or `OR IGNORE`, because the outer
@@ -489,9 +595,10 @@ knows nothing about them still increments the counters.
 
 ## Device sync (Turso)
 
-Six documents are shared between devices through a Turso sync server
-(see `[database_sync] url` in `config.toml`). Sync works as an append-only
-**journal of whole-document edits**. Each device merges the journal
+Six documents and the rows of the synced settings tables are shared between
+devices through a Turso sync server (the `database_sync.url` device setting).
+Sync works as an append-only **journal of whole-document edits**, a settings
+row counting as a document of its own (see [Settings rows](#settings-rows)). Each device merges the journal
 deterministically, field by field, and writes the result back into
 `documents`. The SQLite file stays an ordinary SQLite file that the Android
 widget and older builds can still read.
@@ -542,7 +649,8 @@ CREATE TABLE timeslay_sync_edits (
 );
 ```
 
-There is one row per save of a shared document, written by trigger:
+There is one row per save of a shared document, written by trigger. `clock`
+is indexed (`timeslay_sync_edits_clock`), since every trigger reads its maximum:
 
 ```sql
 CREATE TRIGGER timeslay_sync_update AFTER UPDATE ON documents
@@ -564,6 +672,38 @@ any old trigger that still mentions `shared.todos`.
 Rows received from the server are inserted with `uploaded = 1`. If an incoming
 ID already exists with different contents, it is a collision: sync stops and
 keeps the local data.
+
+### Settings rows
+
+Each row of a synced settings table is a document of its own in the journal,
+named after its table and primary key as a JSON array:
+
+| Document | Row |
+| --- | --- |
+| `settings:["calendar.sync_minutes"]` | `{"key":"calendar.sync_minutes","value":30}` |
+| `places:[1730000000000]` | `{"id":1730000000000,"name":"Home",…,"favorite":0}` |
+| `travel_modes:[1,2]` | `{"from_place":1,"to_place":2,"mode":"car"}` |
+
+The value is the row as `json_object(…)` of its columns, with JSON columns
+(`settings.value`, `weekly_task_order.cards`, `reminders.sound`) embedded as
+JSON rather than as text. So the [merge rules](#merge-rules) apply unchanged:
+concurrent edits to different columns of one row both survive (and to
+different fields inside a JSON value), a deleted row stays deleted whatever
+was edited in it meanwhile, and each row is snapshotted and compacted on its
+own.
+
+Four triggers per table journal what the apps do (`database_sync::rows`):
+`timeslay_sync_<table>_insert`, `_update` (when the row changed),
+`_rekey` (a changed primary key journals a deletion and an insertion) and
+`_delete`. Like the document triggers they skip writes made while
+`projecting = 1`. Enrollment creates them, replacing any that differ from
+what the build would create, and journals rows already present when a file
+is first enrolled. `device_settings` has none.
+
+When applying the journal, the worker writes a row only when a column the
+journal holds differs from the table (columns the journal lacks, from an
+older build, are not compared), so a settled row is not rewritten every
+cycle.
 
 ### `timeslay_sync_snapshots`
 
@@ -687,6 +827,14 @@ WHERE a.source = 'tasks:<listId>/task:<taskId>';
 -- Size of each document
 SELECT key, length(value) FROM documents ORDER BY 2 DESC;
 
+-- Settings that are not at their defaults, shared and this device's own
+SELECT 'shared', key, value FROM settings
+UNION ALL SELECT 'device', key, value FROM device_settings ORDER BY 2;
+
+-- Settings rows not yet sent to the sync server, by table
+SELECT substr(document, 1, instr(document, ':') - 1) AS tbl, count(*)
+FROM timeslay_sync_edits WHERE uploaded = 0 AND document GLOB '*:*' GROUP BY tbl;
+
 -- Habits by name
 SELECT json_extract(h.value,'$.id'), json_extract(h.value,'$.name')
 FROM documents d, json_each(d.value,'$.habits') h WHERE d.key='habits';
@@ -697,6 +845,7 @@ There are also small programs in `core/examples/`:
 | Example | Purpose |
 | --- | --- |
 | `database_backup.rs` | Verified backup of the live database |
+| `import_settings.rs` | Import a `config.toml` into a database (try it on copies) |
 | `database_history.rs` | Export every journaled version, including superseded values and deletions |
 | `sync_preflight.rs` | Check a sync server without changing it |
 | `sync_database.rs` | Enroll and sync without opening a window (`--watch` to keep running) |

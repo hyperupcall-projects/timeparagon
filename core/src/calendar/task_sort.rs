@@ -21,7 +21,7 @@ impl InboxSort {
         Self::ModifiedDescending,
     ];
 
-    /// The name it is saved under in `config.toml`.
+    /// The name it is saved under in the settings.
     pub fn name(self) -> &'static str {
         match self {
             Self::Manual => "manual",

@@ -14,11 +14,12 @@ is a device-local setting; choose the corresponding synced folder on each
 device to see the same notes. Switching folders saves pending edits in the
 previous folder first. Notes drafted before setup are saved in the chosen folder.
 
-The setting can also be set in `config.toml`:
+It is the `notes.directory` row of `device_settings` in the database (see
+[Settings](./data-model.md#settings)), which never leaves the device:
 
-```toml
-[notes]
-directory = "~/Documents/Notes"
+```sh
+sqlite3 ~/.local/share/timeslay/timeslay.sqlite3 \
+  "SELECT value FROM device_settings WHERE key = 'notes.directory'"
 ```
 
 The setting is empty by default, and notes are not saved until it is set.

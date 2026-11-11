@@ -316,8 +316,9 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
         }
         SettingsMessage::RestartRequested => {
             let config = state.config.clone();
+            let baseline = std::mem::replace(&mut state.disk_config, config.clone());
             blocking::run(move || {
-                let saved = config.save();
+                let saved = config.save(&baseline);
                 (saved, crate::dock::launch::relaunch())
             })
             .then(|(saved, relaunched)| {

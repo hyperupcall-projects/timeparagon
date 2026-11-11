@@ -14,7 +14,7 @@ pub enum FirstDayOfWeek {
 impl FirstDayOfWeek {
     pub const ALL: [Self; 3] = [Self::Saturday, Self::Sunday, Self::Monday];
 
-    /// The name it is stored under in `config.toml`.
+    /// The name it is stored under in the settings.
     pub fn name(self) -> &'static str {
         match self {
             Self::Sunday => "sunday",

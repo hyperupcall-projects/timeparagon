@@ -1,6 +1,6 @@
 //! Reminders for what is coming up on the calendar.
 //!
-//! Both apps share the `[reminders]` table and the planning here. Each one
+//! Both apps share the reminder settings and the planning here. Each one
 //! delivers the result its platform's way: the desktop posts a freedesktop
 //! notification and plays the sound itself; Android hands the plan to
 //! `AlarmManager` and posts on a notification channel whose sound is the
@@ -203,7 +203,7 @@ impl Default for CategorySettings {
     }
 }
 
-/// The `[reminders]` table.
+/// The reminder settings: `reminders.*` and the `reminders` table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReminderSettings {
