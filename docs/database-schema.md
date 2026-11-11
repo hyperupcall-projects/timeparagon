@@ -68,17 +68,12 @@ manifest and runs an integrity check before publishing the backup.
 
 ```mermaid
 erDiagram
-    counter ||--o{ tasks : "allocates id (unsynced only)"
     tasks ||--o{ task_aliases : "task_id"
     tasks ||--o| google_task_backend_state : "task_id (logical)"
     documents ||--o{ timeslay_sync_edits : "journaled by trigger"
     timeslay_sync_snapshots ||--o{ timeslay_sync_edits : "folds (JSON list)"
     timeslay_sync_folded }o--|| timeslay_sync_edits : "tombstone of"
 
-    counter {
-        INTEGER singleton PK "always 1"
-        INTEGER next_id ">= 100"
-    }
     tasks {
         INTEGER id PK
         TEXT metadata "JSON Metadata"
@@ -156,7 +151,7 @@ The tables fall into five groups:
 
 | Group | Tables | Created by |
 | --- | --- | --- |
-| [Tasks](#tasks) | `counter`, `tasks`, `task_aliases` | `task_db::Database::set_up` |
+| [Tasks](#tasks) | `tasks`, `task_aliases` | `task_db::Database::set_up` |
 | [Documents](#documents) | `documents` | `task_db::Database::set_up` |
 | [Google cache](#google-cache) | `calendar_months`, `google_task_records` | `task_db::Database::set_up` |
 | [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
@@ -176,25 +171,10 @@ Google's IDs. A task's Google ID changes when it moves between Google Tasks and
 Google Calendar or between task lists, but its TimeSlay ID stays the same.
 This ID is what time blocks, work sessions and recurring copies refer to.
 
-### `counter`
-
-```sql
-CREATE TABLE counter (
-  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-  next_id   INTEGER NOT NULL CHECK(next_id >= 100)
-);
-INSERT OR IGNORE INTO counter VALUES (1, 100);
-```
-
-This table always holds exactly one row: the next sequential task ID.
-
-The counter is only used while the file is **not enrolled in sync**. Today
-that means in-memory test databases. An on-disk database is enrolled during
-setup, so the
-`timeslay_sync_control` table exists. Once it does, new IDs are random 62-bit
-integers ≥ 100 instead, so two devices cannot pick the same ID while offline.
-Saving a task always raises `next_id` to at least `id + 1`, and allocation
-refuses to overflow rather than wrap.
+New IDs are random 62-bit integers ≥ 100, so two devices cannot pick the same
+ID while offline. Allocation retries until it finds an ID not already in
+`tasks`. Files created by older versions may still hold a `counter` table from
+when IDs were sequential; nothing reads or writes it any more.
 
 ### `tasks`
 
