@@ -1818,10 +1818,10 @@ impl Store {
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
         let events = self.events_on(day);
-        let blocks: Vec<_> = events
+        let blocks: Vec<Event> = events
             .iter()
             .filter(|event| crate::timeblocking::is_block(event, settings))
-            .map(crate::timeblocking::block_key)
+            .cloned()
             .collect();
         events
             .iter()
@@ -2126,7 +2126,7 @@ impl Store {
         &'a self,
         settings: &'a CalendarSettings,
     ) -> impl Iterator<Item = &'a Event> {
-        let blocks = self.time_block_keys(settings);
+        let blocks = self.time_blocks(settings);
         self.visible_events(settings).filter(move |event| {
             event.all_day
                 && (!event.is_task()
@@ -2143,7 +2143,7 @@ impl Store {
     ) -> impl Iterator<Item = &'a Event> {
         timed_in(
             self.visible_events(settings),
-            self.time_block_keys(settings),
+            self.time_blocks(settings),
             self.day,
             settings,
         )
@@ -2196,7 +2196,7 @@ impl Store {
         let blocks = events
             .iter()
             .filter(|event| crate::timeblocking::is_block(event, settings))
-            .map(crate::timeblocking::block_key)
+            .cloned()
             .collect();
         let mut found: Vec<&Event> = timed_in(
             events
@@ -2227,11 +2227,11 @@ impl Store {
 
     /// Keys of the time blocks currently loaded, so a scheduled task can be
     /// recognized as already drawn beside its block.
-    fn time_block_keys(&self, settings: &CalendarSettings) -> Vec<String> {
+    fn time_blocks(&self, settings: &CalendarSettings) -> Vec<Event> {
         self.events
             .iter()
             .filter(|event| crate::timeblocking::is_block(event, settings))
-            .map(crate::timeblocking::block_key)
+            .cloned()
             .collect()
     }
 }
@@ -2239,7 +2239,7 @@ impl Store {
 /// The events of `events` that sit on the grid for `day`.
 fn timed_in<'a>(
     events: impl Iterator<Item = &'a Event> + 'a,
-    blocks: Vec<String>,
+    blocks: Vec<Event>,
     day: NaiveDate,
     settings: &'a CalendarSettings,
 ) -> impl Iterator<Item = &'a Event> {
@@ -2262,7 +2262,7 @@ fn timed_in<'a>(
 /// occupies the grid because that chip is the only place its time is visible.
 fn omit_managed_tasks_event(
     event: &Event,
-    time_blocks: &[String],
+    time_blocks: &[Event],
     settings: &CalendarSettings,
 ) -> bool {
     let Some(managed) = settings.app_calendar.as_deref() else {
@@ -2270,10 +2270,7 @@ fn omit_managed_tasks_event(
     };
     event.is_calendar_task()
         && event.calendar_id == managed
-        && crate::timeblocking::metadata(event)
-            .block
-            .as_ref()
-            .is_some_and(|key| time_blocks.iter().any(|block| block == key))
+        && crate::timeblocking::block_of(event, time_blocks, settings.day_start_hour()).is_some()
 }
 
 impl Default for Store {
@@ -4485,5 +4482,46 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_task_repeating_with_its_block_is_drawn_in_the_block_only() {
+        let mut snapshot = sample_snapshot();
+        let mut block = snapshot
+            .events
+            .iter()
+            .find(|event| event.id == "standup")
+            .unwrap()
+            .clone();
+        block.id = "standup_1".into();
+        block.details.recurring_event_id = Some("standup".into());
+        let mut task = block.clone();
+        task.id = "routine_1".into();
+        task.title = "Routine".into();
+        task.details.recurring_event_id = Some("routine".into());
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 100,
+            metadata: crate::timeblocking::Metadata {
+                // Google copies the first day's key to every occurrence.
+                block: Some(format!("{}/standup_0", block.calendar_id)),
+                block_series: Some(format!("{}/standup", block.calendar_id)),
+                minutes: 15,
+                ..Default::default()
+            },
+        });
+        let settings = CalendarSettings {
+            app_calendar: Some(block.calendar_id.clone()),
+            ..Default::default()
+        };
+        snapshot.events.retain(|event| event.id != "standup");
+        snapshot.events.push(block);
+        snapshot.events.push(task);
+        let store = Store::with_snapshot(snapshot);
+        let timed: Vec<&str> = store
+            .timed_events(&settings)
+            .map(|event| event.id.as_str())
+            .collect();
+        assert!(timed.contains(&"standup_1"));
+        assert!(!timed.contains(&"routine_1"), "{timed:?}");
     }
 }
