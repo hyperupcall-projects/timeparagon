@@ -169,7 +169,6 @@ fn write(
         DraftKind::Task => unreachable!("tasks use the task writer"),
         DraftKind::Sleep => {
             event.id = calendar::sleep::NEW_ID.into();
-            event.color = calendar::sleep::COLOR;
             event.title = "Sleep".into();
             event.details.sleep = Some(calendar::sleep::Record {
                 wake_date: event.end.date_naive(),
@@ -188,7 +187,6 @@ fn write(
             let saved = calendar::create_habit(&edit, None, &habit)?;
             event.id = saved.id;
             event.calendar_id = saved.calendar_id;
-            event.color = settings.habit_color();
             event.details.habit = true;
             event.details.habit_id = Some(habit);
         }
@@ -204,7 +202,6 @@ fn write(
             )?;
             event.id = id;
             event.calendar_id = calendar;
-            event.color = settings.time_block_color();
         }
         DraftKind::Event => {
             let saved = calendar::create_event(

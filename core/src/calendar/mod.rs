@@ -113,8 +113,15 @@ pub struct Event {
 }
 
 impl Event {
-    /// Apply a local calendar color while preserving explicit event colors and
-    /// the separate TimeSlay task, habit and time-block color settings.
+    /// The color this item is drawn in, resolved from what the item is rather
+    /// than from a color previously written into the event.
+    ///
+    /// An explicit Google event color wins for a habit or a plain event. The
+    /// app's own kinds then use the color configured for their kind, a task
+    /// list uses its list's color, and an event on another calendar uses that
+    /// calendar's configured or Google color. The event's raw `color` is only a
+    /// fallback for an external calendar with no configured color; it is never
+    /// used for app-owned items.
     pub fn display_color(&self, settings: &CalendarSettings) -> Color {
         if self.details.sleep.is_some() {
             return settings.sleep_color();
@@ -127,30 +134,26 @@ impl Event {
                 .and_then(colors::event)
                 .unwrap_or_else(|| settings.habit_color());
         }
-        if self.details.color_id.is_none()
-            && !self.is_task()
-            && !self.is_calendar_task()
-            && !self.all_day
-            && settings.app_calendar.as_deref() == Some(self.calendar_id.as_str())
-        {
-            return settings.time_block_color();
+        if let Some(color) = self.details.color_id.as_deref().and_then(colors::event) {
+            return color;
         }
-        if !self.is_task()
-            && !self.is_calendar_task()
-            && !self.details.habit
-            && self.details.color_id.is_none()
-        {
-            if self.all_day && settings.app_calendar.as_deref() == Some(self.calendar_id.as_str()) {
-                return settings.event_color();
-            }
-            if self.all_day || settings.app_calendar.as_deref() != Some(self.calendar_id.as_str()) {
-                return settings
-                    .calendar_colors
-                    .get(&self.calendar_id)
-                    .map_or(self.color, |color| color.0);
-            }
+        if self.is_calendar_task() {
+            return settings.task_event_color();
         }
-        self.color
+        if self.is_task() {
+            return task_color(settings, &self.calendar_id);
+        }
+        if settings.app_calendar.as_deref() == Some(self.calendar_id.as_str()) {
+            return if self.all_day {
+                settings.event_color()
+            } else {
+                settings.time_block_color()
+            };
+        }
+        settings
+            .calendar_colors
+            .get(&self.calendar_id)
+            .map_or(self.color, |color| color.0)
     }
 
     /// Source used for calendar visibility and overlap ordering.
@@ -1088,37 +1091,6 @@ fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
     settings.task_color(calendar_id).unwrap_or(colors::TASK)
 }
 
-/// Gives a Google Tasks event its list's color and an app-calendar event the
-/// per-kind color from settings, leaving every other calendar's events alone.
-fn recolor_event(event: &mut Event, settings: &CalendarSettings) {
-    if event.details.sleep.is_some() {
-        event.color = settings.sleep_color();
-    } else if event.calendar_id.starts_with(ids::TASK_LIST) && !event.is_calendar_task() {
-        event.color = task_color(settings, &event.calendar_id);
-    } else if event.is_calendar_task() {
-        // A task's calendar block, on the TimeSlay calendar.
-        event.color = settings.task_event_color();
-    } else if event.details.habit {
-        // A habit's own Google color wins; otherwise use the habit color.
-        event.color = event
-            .details
-            .color_id
-            .as_deref()
-            .and_then(colors::event)
-            .unwrap_or_else(|| settings.habit_color());
-    } else if settings.app_calendar.as_deref() == Some(event.calendar_id.as_str())
-        && event.details.color_id.is_none()
-    {
-        if event.all_day {
-            // A plain all-day event on the TimeSlay calendar.
-            event.color = settings.event_color();
-        } else {
-            // A plain timed event on the TimeSlay calendar is a time block.
-            event.color = settings.time_block_color();
-        }
-    }
-}
-
 /// Everything the calendar view and its settings pane need.
 pub struct Store {
     pub connection: Connection,
@@ -1139,8 +1111,6 @@ pub struct Store {
     /// `boot` and a reconnect do: a store built by hand must not read or
     /// rewrite the cache the user's own days live in.
     day_cache: Option<PathBuf>,
-    /// Preferences used to recolor days restored from disk before display.
-    color_settings: Option<CalendarSettings>,
     /// The hour the calendar day ends, used to decide which day an event
     /// belongs to when reading from or writing to the month cache on disk.
     day_end_hour: u32,
@@ -1214,7 +1184,6 @@ impl Store {
             cache: HashMap::new(),
             visible_days: Vec::new(),
             day_cache: None,
-            color_settings: None,
             day_end_hour,
             day,
             last_sync: None,
@@ -1254,7 +1223,6 @@ impl Store {
             cache: HashMap::new(),
             visible_days: Vec::new(),
             day_cache: None,
-            color_settings: None,
             day_end_hour: 0,
             day: snapshot.day,
             last_sync: Some(snapshot.fetched_at),
@@ -1387,13 +1355,7 @@ impl Store {
 
     /// The day's events as an earlier run left them, if it left them.
     fn read_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
-        let mut events = day_cache::load(self.day_cache.as_ref()?, day, self.day_end_hour)?;
-        if let Some(settings) = &self.color_settings {
-            for event in &mut events {
-                recolor_event(event, settings);
-            }
-        }
-        Some(events)
+        day_cache::load(self.day_cache.as_ref()?, day, self.day_end_hour)
     }
 
     /// Writes one day out, so the run after this one paints it at once.
@@ -1497,31 +1459,15 @@ impl Store {
         event_enabled(&self.calendars, event, settings)
     }
 
-    /// Gives every Google Tasks list its saved color, and every event on the
-    /// app's TimeSlay calendar the color for its kind: a time block or a
-    /// scheduled task. Google hands all task lists back with the same blue, so
-    /// this keeps a customized list its own color across syncs. Every other
-    /// calendar's events are left exactly as Google returned them.
+    /// Gives every Google Tasks list its saved color. Google hands all task
+    /// lists back with the same blue, so this keeps a customized list its own
+    /// color across syncs. Event colors are resolved when they are drawn by
+    /// [`Event::display_color`], so no color is written into the events or the
+    /// cached snapshots here.
     pub fn apply_task_colors(&mut self, settings: &CalendarSettings) {
-        // Snapshots are cached with Google's colors, and old cache files may
-        // predate a preference change. Future disk reads need these settings
-        // too, even when no sync is available to correct their colors later.
-        self.color_settings = Some(settings.clone());
         for calendar in &mut self.calendars {
             if calendar.is_task_list() {
                 calendar.color = task_color(settings, &calendar.id);
-            }
-        }
-
-        for event in &mut self.events {
-            recolor_event(event, settings);
-        }
-
-        // The cached days are recolored too, so a day painted from the cache
-        // does not flash the old color before the sync lands.
-        for events in self.cache.values_mut() {
-            for event in events {
-                recolor_event(event, settings);
             }
         }
     }
@@ -1618,9 +1564,6 @@ impl Store {
     pub fn apply_series_refresh(&mut self, refresh: &series::Refresh) {
         let mut fresh = refresh.events.clone();
         for event in &mut fresh {
-            if let Some(settings) = &self.color_settings {
-                recolor_event(event, settings);
-            }
             if let Some(pending) = self.pending.get(&event.id) {
                 event.start = pending.start;
                 event.end = pending.end;
@@ -3854,7 +3797,7 @@ mod tests {
             .iter()
             .filter(|e| e.calendar_id == "tasks:list")
         {
-            assert_eq!(event.color, red);
+            assert_eq!(event.display_color(&settings), red);
         }
     }
 
@@ -3916,15 +3859,50 @@ mod tests {
         event.color = colors::event("4").unwrap();
         event.details.color_id = None;
         assert_eq!(event.display_color(&settings), colors::HABIT);
-        recolor_event(&mut event, &settings);
-        assert_eq!(event.color, colors::HABIT);
+        // The raw color stays as Google supplied it; only drawing follows
+        // settings.
+        assert_eq!(event.color, colors::event("4").unwrap());
         settings.set_habit_color(Some(colors::TASK));
         assert_eq!(event.display_color(&settings), colors::TASK);
         event.details.color_id = Some("4".into());
         // Even a stale cached rendered color cannot hide the Google override.
         assert_eq!(event.display_color(&settings), colors::event("4").unwrap());
-        recolor_event(&mut event, &settings);
-        assert_eq!(event.color, colors::event("4").unwrap());
+    }
+
+    #[test]
+    fn app_owned_colors_are_resolved_at_display_time() {
+        let mut settings = CalendarSettings {
+            app_calendar: Some("app".into()),
+            ..CalendarSettings::default()
+        };
+        // The color Google gives an event on the TimeSlay calendar. It is what
+        // an overlay reload puts back, and it must never be drawn for an
+        // app-owned item.
+        let calendar_red = colors::calendar("2").unwrap();
+
+        let mut task = sample_snapshot().events.remove(0);
+        task.calendar_id = "app".into();
+        task.id = "scheduled-task".into();
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 0,
+            metadata: Default::default(),
+        });
+        task.color = calendar_red;
+        assert!(task.is_calendar_task());
+        assert_eq!(task.display_color(&settings), settings.task_event_color());
+
+        let mut block = task.clone();
+        block.details.task_data = None;
+        block.all_day = false;
+        block.color = calendar_red;
+        assert_eq!(block.display_color(&settings), settings.time_block_color());
+
+        let mut all_day = block.clone();
+        all_day.all_day = true;
+        assert_eq!(all_day.display_color(&settings), settings.event_color());
+
+        settings.set_task_event_color(Some(colors::HABIT));
+        assert_eq!(task.display_color(&settings), colors::HABIT);
     }
 
     #[test]
@@ -4264,8 +4242,6 @@ mod tests {
         second.set_day(today, today);
         assert_eq!(second.events, parked, "the day should come back from disk");
     }
-
-    /// Startup and navigation recolor stale disk entries without a network fetch.
 
     /// The months on disk are trimmed by the same rule as the memory cache.
     #[test]

@@ -448,7 +448,7 @@ fn list_colors_and_visibility_are_independent_and_persist() {
                 .iter()
                 .find(|e| e.calendar_id == id)
                 .unwrap()
-                .color,
+                .display_color(&state.config.calendar),
             color
         );
         assert_eq!(

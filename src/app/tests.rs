@@ -548,7 +548,11 @@ fn picking_a_task_color_recolors_the_list_and_its_events() {
     assert!(state.save_queued);
     assert_eq!(state.calendar.calendars[2].color, red);
     assert_eq!(
-        state.calendar.event("deep").unwrap().color,
+        state
+            .calendar
+            .event("deep")
+            .unwrap()
+            .display_color(&state.config.calendar),
         red,
         "the task's own chip should follow the list color"
     );
@@ -560,7 +564,11 @@ fn picking_a_task_color_recolors_the_list_and_its_events() {
     );
     assert_eq!(state.config.calendar.task_color("tasks:list"), None);
     assert_eq!(
-        state.calendar.event("deep").unwrap().color,
+        state
+            .calendar
+            .event("deep")
+            .unwrap()
+            .display_color(&state.config.calendar),
         calendar::colors::TASK
     );
 }

@@ -2228,7 +2228,7 @@ fn time_block_modal(
     let mut button_close = close;
     let title = block.event.title.clone();
     let time = calendar::event_time_label(&block.event);
-    let accent = css_color(block.event.color);
+    let accent = css_color(block.event.display_color(&context.settings));
     let planned = block.planned_minutes as i64;
     let capacity = block.capacity_minutes.max(1);
     let pct = (planned as f32 / capacity as f32 * 100.0).clamp(0.0, 100.0);

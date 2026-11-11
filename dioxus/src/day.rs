@@ -619,14 +619,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
     let offset = settings.day_end_minutes();
     let (view_start, view_end) = view_bounds(day, offset);
 
-    let mut events = snapshot.events.clone();
-    for event in &mut events {
-        if event.calendar_id.starts_with(ids::TASK_LIST) && !event.is_calendar_task() {
-            event.color = settings
-                .task_color(&event.calendar_id)
-                .unwrap_or(calendar::colors::TASK);
-        }
-    }
+    let events = snapshot.events.clone();
 
     let source_order = source_order(snapshot, settings);
     let priority = |event: &Event| {
