@@ -255,7 +255,7 @@ pub fn submit(job: Job, event: Option<&Event>, calendar: &str, id: &str) -> Resu
         if crate::config::isolated() {
             send_in(&path, write, |_| Ok(None))?;
         } else {
-            worker(&path).send(Work::Write(write));
+            worker(&path).send(Work::Write(Box::new(write)));
         }
     }
     Ok(())
@@ -263,7 +263,7 @@ pub fn submit(job: Job, event: Option<&Event>, calendar: &str, id: &str) -> Resu
 
 /// What the worker thread is asked to do.
 enum Work {
-    Write(Write),
+    Write(Box<Write>),
     /// Bring time blocks back in step with Google once the writes are sent.
     Reconcile,
 }
@@ -299,7 +299,7 @@ fn worker(path: &Path) -> &'static Worker {
                             stale |= touches_blocks(&write.job, app.as_deref());
                             let entity = write.entity.clone();
                             super::series::take_noted();
-                            let result = send_in(&path, write, |job| {
+                            let result = send_in(&path, *write, |job| {
                                 let settings = crate::config::Config::load().calendar;
                                 execute(&GoogleClient::from_settings(&settings), &settings, job)
                             });
