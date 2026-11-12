@@ -72,11 +72,16 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev libxkbcommon-dev libwayland-dev \
             libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
             libasound2t64 libnss3 libgbm1
-      - run: cargo build --release --locked --bin timeparagon
+      - run: cargo build --release --locked --bin timeparagon --message-format=json-render-diagnostics > cargo-build.jsonl
       - name: Package binary
         run: |
           name="timeparagon-x86_64-linux-${GITHUB_REF_NAME}"
-          cef=$(ls -d target/release/build/cef-dll-sys-*/out/cef_linux_* | head -n 1)
+          # Cargo's internal build directory layout can change between versions.
+          # Use the runtime link path reported by cef-dll-sys for this build.
+          cef=$(jq -r '
+            select(.reason == "build-script-executed" and (.package_id | contains("#cef-dll-sys@")))
+            | .linked_paths[] | select(startswith("native=")) | ltrimstr("native=")
+          ' cargo-build.jsonl)
           [ -f "$cef/libcef.so" ] || { echo "::error::CEF runtime not found"; exit 1; }
           mkdir -p dist "pkg/$name/bin" "pkg/$name/lib/timeparagon/cef"
           # The binary loads CEF from ../lib/timeparagon/cef relative to itself.
