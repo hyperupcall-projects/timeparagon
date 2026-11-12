@@ -24,5 +24,13 @@ pub(super) fn update(state: &mut State, message: NotepadMessage) -> Task<Message
 
 			queue_save(state)
 		}
+		NotepadMessage::NotepadTab(tab) => {
+			state.notepad_tab = tab;
+			if tab == crate::notes::Tab::Edit {
+				iced::widget::operation::focus(crate::ui::notepad::input_id())
+			} else {
+				Task::none()
+			}
+		}
 	}
 }

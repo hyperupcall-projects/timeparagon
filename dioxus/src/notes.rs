@@ -302,7 +302,7 @@ pub fn candidates(
 	found
 }
 
-fn pastel_css(color: Pastel) -> String {
+pub(crate) fn pastel_css(color: Pastel) -> String {
 	let (red, green, blue) = color.rgb();
 	format!("background: rgb({red},{green},{blue}); color: #1f1f1f;")
 }
@@ -627,7 +627,7 @@ fn short_day(day: NaiveDate) -> String {
 /// The View tab. Nothing is ever put in the page as HTML, so whatever a note
 /// holds shows as text.
 #[component]
-fn NoteView(source: String) -> Element {
+pub(crate) fn NoteView(source: String) -> Element {
 	let blocks = markdown::parse(&source);
 	rsx! {
 		div { class: "note-view",

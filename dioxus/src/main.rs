@@ -1111,12 +1111,12 @@ fn App() -> Element {
 		}
 	});
 
-	let scratch_sheet = show_scratch().map(|start| {
+	let scratch_sheet = show_scratch().map(|page| {
 		rsx! {
 			scratch::ScratchSheet {
 				config,
 				day: selected_day,
-				start,
+				page,
 				on_close: move |()| show_scratch.set(None),
 			}
 		}
@@ -2676,12 +2676,27 @@ mod sheet_tests {
 	}
 
 	#[test]
-	fn the_lists_open_on_the_notepad_and_offer_the_other_pages() {
+	fn the_notepad_sheet_shows_only_the_notepad() {
 		fn app() -> Element {
 			let config = use_signal(Config::default);
 			rsx! { scratch::ScratchSheet { config, day: today(), on_close: |_| {} } }
 		}
-		assert_offers(&render(app), &[">Notepad<", ">Brain dump<", ">Projects<"]);
+		let html = render(app);
+		assert_offers(&html, &[">Notepad<", ">Edit<", ">View<", "Markdown"]);
+		for other in [">Brain dump<", ">Projects<"] {
+			assert!(!html.contains(other), "{other} is in {html}");
+		}
+	}
+
+	#[test]
+	fn brain_dump_and_projects_are_sheets_of_their_own() {
+		fn app() -> Element {
+			let config = use_signal(Config::default);
+			rsx! { scratch::ScratchSheet { config, day: today(), page: scratch::Page::Projects, on_close: |_| {} } }
+		}
+		let html = render(app);
+		assert_offers(&html, &[">Projects<"]);
+		assert!(!html.contains(">Notepad<"), "{html}");
 	}
 
 	fn render_list(app: fn() -> Element) -> String {

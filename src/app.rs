@@ -438,6 +438,8 @@ pub struct State {
 	/// a redraw; the config keeps the saved copy, and the two are reconciled
 	/// on every edit.
 	pub notepad: text_editor::Content<iced::Renderer>,
+	/// Whether the notepad shows its Markdown source or reads as rendered.
+	pub notepad_tab: crate::notes::Tab,
 
 	pub calendar: calendar::Store,
 	/// Visible empty days awaiting an in-flight calendar request.
@@ -510,6 +512,8 @@ pub enum NotepadMessage {
 	/// The text on the notepad was made bigger or smaller, by a number of
 	/// percentage points.
 	NotepadFontSizeChanged(i32),
+	/// The notepad switched between writing its Markdown and reading it.
+	NotepadTab(crate::notes::Tab),
 }
 
 /// Changes made on the Settings page.
@@ -974,6 +978,7 @@ impl State {
 			system_theme: iced::theme::Mode::None,
 			config,
 			notepad,
+			notepad_tab: crate::notes::Tab::default(),
 			notes: crate::notes::Store::default(),
 			people: crate::people::Store::default(),
 			calendar: calendar::Store::new(day_end_hour),

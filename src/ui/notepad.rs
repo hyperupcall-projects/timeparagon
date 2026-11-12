@@ -1,15 +1,17 @@
-//! The notepad: a page of free text that is kept between sessions.
+//! The notepad: a page of Markdown that is kept between sessions, written on
+//! its Edit tab and read on its View tab.
 //!
 //! The text belongs to the user, so it is written to the config file as it is
 //! typed. The size of it is the size of the text on this page and nothing
 //! else: the rest of the interface is left as it is drawn.
 
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{Space, button, column, container, row, text};
 use iced::{Element, Fill, Length};
 
 use crate::app::NotepadMessage;
 use crate::app::{Message, State};
 use crate::config;
+use crate::notes::Tab;
 
 use super::layout::Metrics;
 
@@ -26,14 +28,42 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	// scale is applied here rather than to the whole interface.
 	let size = metrics.label() * TEXT_FACTOR * state.config.notepad.font_scale();
 
-	// The editor keeps the text while it is being typed, so what is drawn is
-	// what the user has already written rather than what was last saved.
-	let editor = crate::ui::controls::text_editor(&state.notepad)
-		.id(input_id())
-		.placeholder("Write anything. It is kept between sessions.")
-		.on_action(|v0| Message::Notepad(NotepadMessage::NotepadEdited(v0)))
-		.size(size)
-		.height(Fill);
+	let page: Element<'a, Message> = match state.notepad_tab {
+		// The editor keeps the text while it is being typed, so what is drawn
+		// is what the user has already written rather than what was last saved.
+		Tab::Edit => crate::ui::controls::text_editor(&state.notepad)
+			.id(input_id())
+			.placeholder("Write anything in Markdown. It is kept between sessions.")
+			.on_action(|v0| Message::Notepad(NotepadMessage::NotepadEdited(v0)))
+			.size(size)
+			.height(Fill)
+			.into(),
+		Tab::View => container(
+			crate::ui::controls::scrollable(
+				container(super::notes::rendered(&state.config.notepad.text, size)).padding(
+					iced::Padding {
+						right: 14.0,
+						..iced::Padding::ZERO
+					},
+				),
+			)
+			.width(Fill)
+			.height(Fill),
+		)
+		.padding(10.0)
+		.width(Fill)
+		.height(Fill)
+		.style(super::notes::note_surface(
+			timeparagon_core::notes::Pastel::default(),
+		))
+		.into(),
+	};
+
+	let tab = |label: &'static str, which: Tab| {
+		button(text(label).size(metrics.label()))
+			.on_press(Message::Notepad(NotepadMessage::NotepadTab(which)))
+			.style(crate::ui::controls::nav(state.notepad_tab == which))
+	};
 
 	let controls = row![
 		super::controls::section_heading(
@@ -46,12 +76,18 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			metrics.label() + 4.0
 		),
 		text_size(state, metrics),
+		Space::new().width(Fill),
+		tab("Edit", Tab::Edit),
+		tab("View", Tab::View),
 	]
 	.spacing(metrics.spacing)
 	.align_y(iced::Center);
 
-	let mut body = column![controls, editor];
-	if let Some(links) = super::links::for_editor(&state.config.notepad.text, metrics.label()) {
+	let mut body = column![controls, page];
+	// The View tab has its links in the text, so the list is for editing.
+	if state.notepad_tab == Tab::Edit
+		&& let Some(links) = super::links::for_editor(&state.config.notepad.text, metrics.label())
+	{
 		body = body.push(
 			container(crate::ui::controls::scrollable(links).height(Length::Shrink))
 				.max_height(100.0),

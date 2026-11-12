@@ -1,4 +1,5 @@
-//! The notepad, brain dumps and projects, shared through database sync.
+//! The notepad, brain dumps and projects, shared through database sync. Each
+//! is a sheet of its own.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,6 +9,7 @@ use chrono::NaiveDate;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use timeparagon_core::config::{self, Config};
+use timeparagon_core::notes::Pastel;
 
 /// How long typing must pause before the file is written.
 const SAVE_AFTER: Duration = Duration::from_millis(800);
@@ -17,7 +19,8 @@ fn written(result: std::io::Result<()>, what: &str) -> Result<Config, String> {
 	Ok(Config::load())
 }
 
-/// The page the sheet opens on.
+/// The page a sheet shows. Each is a sheet of its own: the notepad behind the
+/// Note tab, and the others under More.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum Page {
 	#[default]
@@ -26,29 +29,29 @@ pub enum Page {
 	Projects,
 }
 
+impl Page {
+	fn title(self) -> &'static str {
+		match self {
+			Page::Notepad => "Notepad",
+			Page::BrainDump => "Brain dump",
+			Page::Projects => "Projects",
+		}
+	}
+}
+
 #[component]
 pub fn ScratchSheet(
 	config: Signal<Config>,
 	day: NaiveDate,
-	#[props(default)] start: Page,
+	#[props(default)] page: Page,
 	on_close: EventHandler<()>,
 ) -> Element {
-	let mut page = use_signal(move || start);
-	let tab = |label: &'static str, this: Page| {
-		rsx! {
-			button {
-				class: "nav-tab",
-				aria_pressed: (page() == this).to_string(),
-				onclick: move |_| page.set(this),
-				"{label}"
-			}
-		}
-	};
+	let title = page.title();
 	rsx! {
 		div { class: "modal-backdrop editor-backdrop",
-			div { class: "modal editor", role: "dialog", aria_label: "Lists",
+			div { class: "modal editor", role: "dialog", aria_label: "{title}",
 				div { class: "modal-head",
-					div { class: "modal-titles", h2 { class: "modal-title", "Lists" } }
+					div { class: "modal-titles", h2 { class: "modal-title", "{title}" } }
 					button {
 						class: "modal-close",
 						title: "Close",
@@ -56,13 +59,8 @@ pub fn ScratchSheet(
 						"×"
 					}
 				}
-				div { class: "sheet-tabs",
-					{tab("Notepad", Page::Notepad)}
-					{tab("Brain dump", Page::BrainDump)}
-					{tab("Projects", Page::Projects)}
-				}
 				div { class: "modal-body editor-body",
-					match page() {
+					match page {
 						Page::Notepad => rsx! { Notepad { config } },
 						Page::BrainDump => rsx! { BrainDump { key: "{day}", config, day } },
 						Page::Projects => rsx! { Projects { config } },
@@ -147,11 +145,39 @@ fn SavingText(
 	}
 }
 
+/// The notepad, written in Markdown on Edit and read on View. Leaving Edit
+/// blurs the text field, which saves it, so View reads the saved text.
 #[component]
 fn Notepad(config: Signal<Config>) -> Element {
-	let initial = config.peek().notepad.text.clone();
+	let mut viewing = use_signal(|| false);
+	let tab = move |label: &'static str, view: bool| {
+		rsx! {
+			button {
+				class: "nav-tab",
+				aria_pressed: (viewing() == view).to_string(),
+				onclick: move |_| viewing.set(view),
+				"{label}"
+			}
+		}
+	};
+	let surface = crate::notes::pastel_css(Pastel::default());
 	rsx! {
-		SavingText { config, page: TextPage::Notepad, initial, placeholder: "The notepad" }
+		div { class: "sheet-tabs",
+			{tab("Edit", false)}
+			{tab("View", true)}
+		}
+		if viewing() {
+			div { class: "note-surface", style: "{surface}",
+				crate::notes::NoteView { source: config.read().notepad.text.clone() }
+			}
+		} else {
+			SavingText {
+				config,
+				page: TextPage::Notepad,
+				initial: config.peek().notepad.text.clone(),
+				placeholder: "Write anything in Markdown",
+			}
+		}
 	}
 }
 

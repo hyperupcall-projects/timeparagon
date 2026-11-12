@@ -64,7 +64,7 @@ To use all features, a bit of setup is required:
 - Slack account & Slack app
 	- Recommended for adding Slack messages into the inbox.
 - Browser extension
-	- Recommended for adding Website URLs to the inbox
+	- Recommended for adding website URLs to the inbox
 - [Zoom for Google Workspace](https://workspace.google.com/u/0/marketplace/app/zoom_for_google_workspace/364750910244).
 	- Highly recommended if you use Zoom.
 	- Creating Zoom meetings with API generally not possible, so it opens calendar link in default browser, to be created with Zoom Google Workspace extension

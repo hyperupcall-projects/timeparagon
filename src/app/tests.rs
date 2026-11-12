@@ -306,6 +306,35 @@ fn the_notepad_keeps_what_was_written() {
 }
 
 #[test]
+fn the_notepad_reads_its_markdown_on_the_view_tab() {
+	let mut state = State::blank();
+	state.set_notepad("# Groceries\n\n- **milk**");
+	assert_eq!(state.notepad_tab, crate::notes::Tab::Edit);
+
+	let _ = update(
+		&mut state,
+		Message::Notepad(NotepadMessage::NotepadTab(crate::notes::Tab::View)),
+	);
+	assert_eq!(state.notepad_tab, crate::notes::Tab::View);
+
+	let size = iced::Size::new(900.0, 700.0);
+	let metrics = crate::ui::layout::Metrics::of(size);
+	let mut ui = iced_test::Simulator::with_settings(
+		iced_test::core::Settings::default(),
+		iced::widget::container(crate::ui::notepad::view(&state, &metrics))
+			.width(size.width)
+			.height(size.height),
+	);
+	// Rich text has no selector, but a list item's marker does.
+	ui.find("•").unwrap();
+	ui.click("Edit").unwrap();
+	assert!(ui.into_messages().any(|message| matches!(
+		message,
+		Message::Notepad(NotepadMessage::NotepadTab(crate::notes::Tab::Edit))
+	)));
+}
+
+#[test]
 fn the_notepad_opens_on_what_was_written_last_time() {
 	let mut config = Config::default();
 	config.notepad.text = "remember the milk".to_owned();
