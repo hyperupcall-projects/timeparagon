@@ -489,14 +489,14 @@ pub struct DayModel {
 /// The tasks that want attention, counted the way the desktop's day view does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DaySummary {
-	pub overdue: usize,
+	pub unfinished: usize,
 	pub inbox: usize,
 	pub unslotted: usize,
 }
 
 impl DaySummary {
 	pub fn needs_attention(self) -> bool {
-		self.overdue > 0 || self.inbox > 0 || self.unslotted > 0
+		self.unfinished > 0 || self.inbox > 0 || self.unslotted > 0
 	}
 }
 
@@ -713,7 +713,9 @@ fn day_summary(snapshot: &Snapshot, events: &[Event], settings: &CalendarSetting
 		.count();
 
 	DaySummary {
-		overdue: tasks().filter(|task| tb::past_due(task, now)).count(),
+		unfinished: tasks()
+			.filter(|task| tb::unfinished(task, now, settings.day_start_hour()))
+			.count(),
 		inbox: tasks()
 			.filter(|task| untriaged_in(task, settings, &snapshot.calendars))
 			.count(),
@@ -1745,7 +1747,7 @@ mod tests {
 	}
 
 	#[test]
-	fn the_summary_counts_tasks_past_due_and_without_a_slot() {
+	fn the_summary_counts_unfinished_tasks_and_those_without_a_slot() {
 		let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
 		let slotted = task("a", "Write", Some("blocks/b1"), 1, 45, false);
 		let unslotted = task("b", "Review", None, 2, 30, false);
@@ -1772,8 +1774,9 @@ mod tests {
 
 		let summary = build_model(&snapshot, &settings()).summary;
 
-		// Only the explicit deadline is overdue; planning dates are independent.
-		assert_eq!(summary.overdue, 1);
+		// The fixture day has gone by, so its two open tasks are unfinished,
+		// as is the one past its deadline. The finished one is not.
+		assert_eq!(summary.unfinished, 3);
 		assert_eq!(summary.inbox, 0);
 		// The date-only open task still needs a slot on the fixture day.
 		assert_eq!(summary.unslotted, 1);
@@ -1781,7 +1784,7 @@ mod tests {
 	}
 
 	#[test]
-	fn the_summary_separates_today_unslotted_tasks_from_overdue_tasks() {
+	fn the_summary_separates_today_unslotted_tasks_from_unfinished_tasks() {
 		let today = timeparagon_core::clock::now().date_naive();
 		let mut open = task("open", "Open", None, 1, 30, false);
 		open.start = calendar::at_clock(today, 0, 0);
@@ -1812,7 +1815,7 @@ mod tests {
 		let summary = day_summary(&snapshot, &snapshot.events, &settings());
 
 		assert_eq!(summary.unslotted, 1);
-		assert_eq!(summary.overdue, 1);
+		assert_eq!(summary.unfinished, 1);
 	}
 
 	#[test]

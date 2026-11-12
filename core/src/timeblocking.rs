@@ -218,6 +218,37 @@ pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
 			.is_some_and(|deadline| deadline.is_past(now.naive_local()))
 }
 
+/// Whether a task, from Google Tasks or on the calendar, is unfinished: not
+/// completed or ignored, and either past its deadline or planned for a day
+/// before the current one. Habits planned as tasks have their own tracking,
+/// so they are left out.
+pub fn unfinished(
+	event: &Event,
+	now: chrono::DateTime<chrono::Local>,
+	day_start_hour: u32,
+) -> bool {
+	if !event.is_task()
+		|| event.completed
+		|| metadata(event).ignored
+		|| metadata(event).habit_id.is_some()
+	{
+		return false;
+	}
+	if past_due(event, now) {
+		return true;
+	}
+	let date = event.start.date_naive();
+	if date == UNDATED {
+		return false;
+	}
+	let day = if event.all_day {
+		date
+	} else {
+		calendar::day_at(event.start, day_start_hour)
+	};
+	day < calendar::day_at(now, day_start_hour)
+}
+
 /// An active date-only task still awaiting a slot on `day`.
 /// Past-due tasks belong in Overdue, even if they have no slot yet.
 pub fn unslotted_on(

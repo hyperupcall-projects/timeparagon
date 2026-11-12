@@ -2922,7 +2922,7 @@ fn a_compact_habit_checkbox_captures_the_click_inside_the_event_button() {
 }
 
 #[test]
-fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
+fn day_unslotted_count_matches_today_and_keeps_unfinished_separate() {
 	let mut state = State::blank();
 	let today = crate::clock::now().date_naive();
 	let mut task = calendar::sample_snapshot().events.remove(0);
@@ -2967,14 +2967,17 @@ fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
 	state.calendar.day = today;
 	state.calendar.events = vec![task, overdue, done, blocked];
 	assert_eq!(crate::inbox::today_tasks(&state).len(), 1);
-	assert_eq!(crate::inbox::overdue_tasks(&state).len(), 1);
+	assert_eq!(crate::inbox::unfinished_tasks(&state).len(), 1);
 	let metrics = Metrics::of(Size::new(900.0, 700.0));
 	let mut ui = iced_test::Simulator::with_size(
 		iced_test::core::Settings::default(),
 		Size::new(900.0, 700.0),
 		header::all_day_row_on(&state, &metrics, today, false).unwrap(),
 	);
-	assert!(ui.find("1 overdue.  0 in inbox.  1 not slotted in").is_ok());
+	assert!(
+		ui.find("1 unfinished.  0 in inbox.  1 not slotted in")
+			.is_ok()
+	);
 }
 
 #[test]

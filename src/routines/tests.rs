@@ -87,11 +87,12 @@ fn the_refresh_goes_through_each_list_once_in_order() {
 		.iter()
 		.map(|card| (card.key.as_str(), card.section))
 		.collect();
-	// The overdue inbox task is only asked about once, as overdue.
+	// Past a deadline or left from an earlier day, each is asked about once,
+	// as unfinished.
 	assert_eq!(
 		cards,
 		[
-			("100", Section::Overdue),
+			("100", Section::Unfinished),
 			("101", Section::Unfinished),
 			("102", Section::Inbox),
 			("103", Section::Today),

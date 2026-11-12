@@ -71,7 +71,7 @@ Of course, there's also week, 2-week, and month views:
 		- From the browser extension, when on a web page
 		- From the Slack app, for a specific message
 	- Inbox section for new tasks that have yet to be triaged.
-	- Overdue section for uncompleted past tasks that need to be reprioritized or rescheduled.
+	- Unfinished section for uncompleted, past tasks that need to be reprioritized or rescheduled.
 	- Today section for current-day tasks without a due time.
 	- Segmented backlog section for deferring tasks to next week, next month, and so on.
 	- Schedule tasks:
@@ -93,7 +93,7 @@ Of course, there's also week, 2-week, and month views:
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
 - **Routines:** guided rituals, one step at a time ([details](./docs/routines.md)).
 	- Daily plan: choose the day's tasks, size them against your free time, timebox them, and set a highlight.
-	- Daily refresh: go through overdue, unfinished, inbox and today's tasks card by card, and schedule, park, triage or close each one.
+	- Daily refresh: go through unfinished, the inbox and today's tasks card by card, and schedule, park, triage or close each one.
 	- Daily, weekly and monthly reflections with the period's highlights and statistics: tasks done, focus time, meetings, habits, ratings.
 	- Weekly and monthly plans with objectives, carried over when they are not met.
 - **Track and direct your life:**

@@ -8,7 +8,7 @@ own screen and the rest of the app in sheets over it:
   notes directory chosen on each device.
 - Search and filters for the day.
 - **Do**, **Plan** (Day, Multi-day, Month or Schedule), **Tasks**
-  with its **Overdue**, **Inbox**, **Today** and **Backlog** lists, **Note**,
+  with its **Unfinished**, **Inbox**, **Today** and **Backlog** lists, **Note**,
   **More** and **Settings**.
 - Joining meetings and answering invitations.
 - The notepad, brain dumps and projects, shared through Turso.
@@ -211,7 +211,7 @@ period named on it, and its ▾ chooses Day, Multi-day or Month. Planning
 shows a day schedule, two or three schedules side by side, or the full month.
 The compact date strip expands from one week to the whole month. Selecting a
 date changes the schedules below it. In Month, tapping a date opens its day;
-the Month button above the schedule returns to the full month. **Tasks** shows the Overdue, Inbox, Today and Backlog
+the Month button above the schedule returns to the full month. **Tasks** shows the Unfinished, Inbox, Today and Backlog
 lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside

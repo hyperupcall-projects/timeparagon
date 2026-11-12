@@ -1,4 +1,4 @@
-//! Planning periods and the lists under Tasks: Overdue, Inbox, Today and
+//! Planning periods and the lists under Tasks: Unfinished, Inbox, Today and
 //! Backlog. The lists follow the same rules as the desktop's,
 //! so a task shows in the same list on both.
 
@@ -62,7 +62,7 @@ impl TaskTab {
 
 	pub fn label(self) -> &'static str {
 		match self {
-			Self::Overdue => "Overdue",
+			Self::Overdue => "Unfinished",
 			Self::Inbox => "Inbox",
 			Self::Today => "Today",
 			Self::Backlog => "Backlog",
@@ -98,15 +98,16 @@ pub fn today_tasks<'a>(
 	tasks
 }
 
-/// Open tasks on any list whose planned time or deadline has passed.
-pub fn overdue_tasks<'a>(
+/// Open tasks on any list or the calendar that are past their deadline or
+/// planned for an earlier day. See [`tb::unfinished`].
+pub fn unfinished_tasks<'a>(
 	events: &'a [Event],
 	settings: &CalendarSettings,
 	now: DateTime<Local>,
 ) -> Vec<&'a Event> {
 	let mut tasks: Vec<_> = events
 		.iter()
-		.filter(|event| tb::past_due(event, now))
+		.filter(|event| tb::unfinished(event, now, settings.day_start_hour()))
 		.collect();
 	sort_tasks(&mut tasks, settings.overdue_sort);
 	tasks
@@ -284,9 +285,9 @@ pub fn TaskList(
 	let now = timeparagon_core::clock::now();
 	let (heading, subtitle, tasks): (String, &str, Vec<&Event>) = match tab {
 		TaskTab::Overdue => (
-			"Overdue".to_owned(),
-			"Incomplete tasks with a past scheduled time or deadline. This should be empty! Move tasks that you plan to do in inbox, schedule them for later, or move them to the backlog.",
-			overdue_tasks(&events, &settings, now),
+			"Unfinished".to_owned(),
+			"Tasks on any list or the calendar that are past their deadline or planned for an earlier day, and not done. This should be empty! Move tasks that you plan to do in inbox, schedule them for later, or move them to the backlog.",
+			unfinished_tasks(&events, &settings, now),
 		),
 		TaskTab::Inbox => (
 			"Inbox".to_owned(),
@@ -324,7 +325,7 @@ pub fn TaskList(
 	};
 	let count = tasks.len();
 	let empty = match tab {
-		TaskTab::Overdue => "Nothing overdue",
+		TaskTab::Overdue => "Nothing unfinished",
 		TaskTab::Inbox => "Nothing to triage",
 		_ => "No tasks left to slot in today",
 	};
@@ -886,7 +887,7 @@ mod tests {
 			["Waiting"]
 		);
 		assert_eq!(titles(today_tasks(&events, &settings, now)), ["Planned"]);
-		assert_eq!(titles(overdue_tasks(&events, &settings, now)), ["Late"]);
+		assert_eq!(titles(unfinished_tasks(&events, &settings, now)), ["Late"]);
 		assert_eq!(
 			titles(backlog_tasks(&events, &settings, &calendars)),
 			["Parked"]

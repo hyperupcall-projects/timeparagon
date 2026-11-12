@@ -238,13 +238,13 @@ pub(super) fn all_day_row_on<'a>(
 
 	let mut content = column![].spacing(4.0).width(Fill);
 	if !weekly {
-		let overdue = crate::inbox::overdue_tasks(state).len();
+		let unfinished = crate::inbox::unfinished_tasks(state).len();
 		let inbox = crate::inbox::tasks(state).len() + state.inbox.invitations.len();
 		let mut summary = text(format!(
-			"{overdue} overdue.  {inbox} in inbox.  {unslotted} not slotted in"
+			"{unfinished} unfinished.  {inbox} in inbox.  {unslotted} not slotted in"
 		))
 		.size(metrics.label());
-		if overdue > 0 || inbox > 0 || unslotted > 0 {
+		if unfinished > 0 || inbox > 0 || unslotted > 0 {
 			summary = summary
 				.font(Font {
 					weight: Weight::Bold,

@@ -965,7 +965,7 @@ fn review<'a>(state: &'a State, flow: &'a Flow, metrics: &Metrics) -> Element<'a
 	let mut sorting = column![heading("Waiting to be sorted", Some(waiting), metrics)].spacing(4);
 	if waiting == 0 {
 		sorting = sorting.push(muted(
-			"All clear: nothing overdue, unfinished or in the inbox.",
+			"All clear: nothing unfinished or in the inbox.",
 			metrics,
 		));
 	} else {
@@ -1461,13 +1461,12 @@ fn refresh_start<'a>(state: &'a State, flow: &'a Flow, metrics: &Metrics) -> Ele
 		),
 		metrics,
 	));
-	if lists
-		.iter()
-		.any(|(section, tasks)| *section == Section::Overdue && !tasks.is_empty())
-	{
+	if lists.iter().any(|(section, tasks)| {
+		*section == Section::Unfinished && tasks.iter().any(|task| tb::overdue(task))
+	}) {
 		page = page.push(
 			column![
-				text("When an overdue task gets a new day, its passed deadline:")
+				text("When a task past its deadline gets a new day, the deadline:")
 					.size(metrics.label() - 1.0),
 				chips(
 					DeadlinePolicy::ALL
@@ -1684,7 +1683,7 @@ fn triage<'a>(state: &'a State, flow: &'a Flow, metrics: &Metrics) -> Element<'a
 			true,
 			metrics,
 		)),
-		Section::Overdue | Section::Unfinished => {}
+		Section::Unfinished => {}
 	}
 	let close = vec![
 		chip("Done ✓", decide(Decision::Done), false, metrics),

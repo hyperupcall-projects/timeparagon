@@ -1,7 +1,7 @@
 //! TimeParagon's Dioxus app.
 //!
 //! Do is the day's calendar, Plan shows a day, multiple days or month,
-//! Tasks holds the Overdue, Inbox, Today and Backlog lists,
+//! Tasks holds the Unfinished, Inbox, Today and Backlog lists,
 //! Note opens the notepad, More the other pages, and
 //! Settings the settings. Tapping an item opens a sheet that edits it; a time
 //! block first lists its assigned tasks.
@@ -1770,7 +1770,7 @@ enum Page {
 	Do,
 	/// The period being planned.
 	Plan,
-	/// Overdue, Inbox, Today and Backlog.
+	/// Unfinished, Inbox, Today and Backlog.
 	Tasks,
 	Habits,
 }
@@ -2082,7 +2082,7 @@ fn timeline(
 		section { id: "calendar-pane", class: "timeline-pane", aria_label: "Schedule",
 			div { class: "day-overview",
 				p { class: "{summary_class}",
-					"{summary.overdue} overdue. \u{a0}{summary.inbox} in inbox. \u{a0}{summary.unslotted} not slotted in"
+					"{summary.unfinished} unfinished. \u{a0}{summary.inbox} in inbox. \u{a0}{summary.unslotted} not slotted in"
 				}
 				for event in &model.all_day {
 					{all_day_chip(event, settings, &model.calendars, editing)}
@@ -2745,7 +2745,12 @@ mod sheet_tests {
 	fn each_task_list_has_the_desktops_heading_and_empty_note() {
 		assert_offers(
 			&render_list(|| list_app(TaskTab::Overdue)),
-			&["Overdue", "Sort by", "Manual order", "Nothing overdue"],
+			&[
+				"Unfinished",
+				"Sort by",
+				"Manual order",
+				"Nothing unfinished",
+			],
 		);
 		assert_offers(
 			&render_list(|| list_app(TaskTab::Inbox)),

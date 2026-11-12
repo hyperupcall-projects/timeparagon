@@ -79,9 +79,7 @@ impl Routine {
 	pub fn blurb(self) -> &'static str {
 		match self {
 			Self::DailyPlan => "Choose today's tasks, size them up and set a highlight",
-			Self::DailyRefresh => {
-				"Go through overdue, unfinished, inbox and today's tasks one by one"
-			}
+			Self::DailyRefresh => "Go through unfinished, inbox and today's tasks one by one",
 			Self::DailyReflection => "See what you did, deal with what's left and reflect",
 			Self::WeeklyPlan => "Set the week's objectives and spread the work over its days",
 			Self::WeeklyReflection => "Review the week's highlights, numbers and objectives",
@@ -283,9 +281,8 @@ impl Step {
 /// The task lists the daily refresh goes through, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {
-	/// Past their deadline.
-	Overdue,
-	/// Planned for a day that has gone by, and not done.
+	/// Not done, and past their deadline or planned for a day that has gone
+	/// by. See [`tb::unfinished`].
 	Unfinished,
 	Inbox,
 	/// Planned for today without a time slot.
@@ -293,11 +290,10 @@ pub enum Section {
 }
 
 impl Section {
-	pub const ALL: [Self; 4] = [Self::Overdue, Self::Unfinished, Self::Inbox, Self::Today];
+	pub const ALL: [Self; 3] = [Self::Unfinished, Self::Inbox, Self::Today];
 
 	pub fn label(self) -> &'static str {
 		match self {
-			Self::Overdue => "Overdue",
 			Self::Unfinished => "Unfinished",
 			Self::Inbox => "Inbox",
 			Self::Today => "Today",
@@ -306,8 +302,7 @@ impl Section {
 
 	pub fn about(self) -> &'static str {
 		match self {
-			Self::Overdue => "Past their deadline",
-			Self::Unfinished => "Planned for an earlier day and not done",
+			Self::Unfinished => "Past their deadline or planned for an earlier day, and not done",
 			Self::Inbox => "Waiting to be triaged",
 			Self::Today => "Planned for today without a time",
 		}
@@ -678,8 +673,9 @@ pub fn done_on(state: &State, day: NaiveDate) -> Vec<&Event> {
 		.collect()
 }
 
-/// Open tasks planned for a day before `today` whose deadline, if any, has
-/// not passed. Those past it are overdue instead.
+/// Open tasks, from Google Tasks or on the calendar, planned for a day before
+/// `today` or past their deadline. With `today` the current day, these are
+/// the tasks [`tb::unfinished`] picks out.
 pub fn unfinished(state: &State, today: NaiveDate) -> Vec<&Event> {
 	let hour = hour(state);
 	let now = crate::clock::now();
@@ -690,8 +686,8 @@ pub fn unfinished(state: &State, today: NaiveDate) -> Vec<&Event> {
 		.filter(|event| {
 			countable(event)
 				&& tb::task_status(event) == TaskStatus::Active
-				&& task_day(event, hour).is_some_and(|day| day < today)
-				&& !tb::past_due(event, now)
+				&& (task_day(event, hour).is_some_and(|day| day < today)
+					|| tb::past_due(event, now))
 		})
 		.collect();
 	tasks.sort_by_cached_key(|task| (task.start, task.title.to_lowercase()));
@@ -733,11 +729,9 @@ pub fn backlog(state: &State, section: BacklogSection) -> Vec<&Event> {
 
 /// Open tasks in the daily refresh's lists, each once, in its first list.
 pub fn refresh_lists(state: &State) -> Vec<(Section, Vec<&Event>)> {
-	let today = today(state);
 	let mut seen = HashSet::new();
 	let lists = [
-		(Section::Overdue, crate::inbox::overdue_tasks(state)),
-		(Section::Unfinished, unfinished(state, today)),
+		(Section::Unfinished, unfinished(state, today(state))),
 		(Section::Inbox, crate::inbox::tasks(state)),
 		(Section::Today, crate::inbox::today_tasks(state)),
 	];

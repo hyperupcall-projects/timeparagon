@@ -307,8 +307,9 @@ placed on `local-calendar` until the app calendar is known.
 Google has no "ignored" state. An ignored task counts as completed in Google,
 and TimeParagon tells the two apart with the `ignored` flag.
 
-A task is **overdue** if it is neither completed nor ignored and was due
-before today. It is **inboxed** if it is still waiting to be organized.
+A task, in Google Tasks or on the calendar, is **unfinished** if it is
+neither completed nor ignored and is past its deadline or was planned for a
+day before today. It is **inboxed** if it is still waiting to be organized.
 
 ### Task metadata
 

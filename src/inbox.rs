@@ -209,17 +209,19 @@ pub fn today_tasks(state: &State) -> Vec<&Event> {
 	tasks
 }
 
-/// Incomplete tasks across all lists whose planned time or deadline has passed.
-pub fn overdue_tasks(state: &State) -> Vec<&Event> {
-	overdue_tasks_at(state, crate::clock::now())
+/// Unfinished tasks across every list and the calendar: open, and past their
+/// deadline or planned for an earlier day. See [`tb::unfinished`].
+pub fn unfinished_tasks(state: &State) -> Vec<&Event> {
+	unfinished_tasks_at(state, crate::clock::now())
 }
 
-fn overdue_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Event> {
+fn unfinished_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Event> {
+	let hour = state.config.calendar.day_start_hour();
 	let mut tasks: Vec<_> = state
 		.calendar
 		.events
 		.iter()
-		.filter(|event| tb::past_due(event, now))
+		.filter(|event| tb::unfinished(event, now, hour))
 		.collect();
 	sort_tasks(&mut tasks, state.config.calendar.overdue_sort);
 	tasks
@@ -1405,14 +1407,14 @@ mod tests {
 			["a", "b"]
 		);
 		assert!(
-			overdue_tasks(&state)
+			unfinished_tasks(&state)
 				.iter()
 				.any(|task| task.title == "overdue")
 		);
 	}
 
 	#[test]
-	fn overdue_requires_an_explicit_deadline_across_lists() {
+	fn unfinished_is_past_a_deadline_or_an_earlier_day_across_lists() {
 		let mut state = state();
 		let today = day("2026-10-30");
 		let now = calendar::at_clock(today, 12, 0);
@@ -1461,6 +1463,14 @@ mod tests {
 		let mut event = task("event", "calendar", today.pred_opt().unwrap());
 		event.id = "event".into();
 		event.calendar_id = "calendar".into();
+		// A task on the calendar rather than in Google Tasks.
+		let mut on_calendar = event.clone();
+		on_calendar.id = "on-calendar".into();
+		on_calendar.title = "on calendar".into();
+		on_calendar.details.task_data = Some(task_db::TaskData {
+			id: 102,
+			metadata: Default::default(),
+		});
 		state.calendar.events = vec![
 			task("yesterday", "projects", today.pred_opt().unwrap()),
 			task("today", "inbox", today),
@@ -1474,17 +1484,20 @@ mod tests {
 			done,
 			ignored,
 			event,
+			on_calendar,
 		];
 		assert_eq!(
-			overdue_tasks_at(&state, now)
+			unfinished_tasks_at(&state, now)
 				.iter()
 				.map(|t| t.title.as_str())
 				.collect::<Vec<_>>(),
-			["deadline"]
+			["deadline", "on calendar", "yesterday"]
 		);
-		// A planning date never becomes a deadline at midnight.
+		// Once the planning day is over, what was planned for it is unfinished.
+		let tomorrow = today.succ_opt().unwrap();
+		let hour = state.config.calendar.day_start_hour();
 		assert!(
-			!overdue_tasks_at(&state, calendar::at_clock(today.succ_opt().unwrap(), 0, 0))
+			unfinished_tasks_at(&state, calendar::at_clock(tomorrow, hour, 0))
 				.iter()
 				.any(|task| task.title == "today")
 		);

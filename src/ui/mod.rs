@@ -627,7 +627,7 @@ pub fn plan_view_label(state: &State) -> &'static str {
 }
 
 /// Task lists available beneath each planning period.
-pub const TASKS_LABELS: [&str; 4] = ["Overdue", "Inbox", "Today", "Backlog"];
+pub const TASKS_LABELS: [&str; 4] = ["Unfinished", "Inbox", "Today", "Backlog"];
 
 /// The destinations kept inside the More menu.
 pub const MORE_LABELS: [&str; 5] = ["Travel", "Habits", "Notes", "People", "Brain dump"];
@@ -835,7 +835,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 
 	let subtabs = row([
 		("Schedule", PlanTab::Schedule, Screen::Calendar),
-		("Overdue", PlanTab::Overdue, Screen::Overdue),
+		("Unfinished", PlanTab::Overdue, Screen::Overdue),
 		("Inbox", PlanTab::Inbox, Screen::Inbox),
 		("Today", PlanTab::Today, Screen::Today),
 		("Backlog", PlanTab::Backlog, Screen::Backlog),

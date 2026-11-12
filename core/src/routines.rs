@@ -171,7 +171,7 @@ pub struct Refresh {
 	pub recorded_at: DateTime<Utc>,
 	/// Tasks a decision was made about.
 	pub decided: u32,
-	/// Tasks left in Overdue, Unfinished, Inbox and Today when it finished.
+	/// Tasks left in Unfinished, Inbox and Today when it finished.
 	pub remaining: u32,
 }
 

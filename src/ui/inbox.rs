@@ -46,15 +46,15 @@ pub fn triaged<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 
 fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a, Message> {
 	let tasks = match list {
-		List::Overdue => inbox::overdue_tasks(state),
+		List::Overdue => inbox::unfinished_tasks(state),
 		List::Inbox => inbox::tasks(state),
 		List::Today => inbox::today_tasks(state),
 		List::Triaged => inbox::triaged_tasks(state),
 	};
 	let (heading, subtitle) = match list {
 		List::Overdue => (
-			"Overdue",
-			"Incomplete tasks with a past scheduled time or deadline. This should be empty! Move tasks that you plan to do in inbox, schcedule them for later, or move them to the backlog.",
+			"Unfinished",
+			"Tasks on any list or the calendar that are past their deadline or planned for an earlier day, and not done. This should be empty! Move tasks that you plan to do in inbox, schedule them for later, or move them to the backlog.",
 		),
 		List::Inbox => ("Inbox", "Tasks waiting to be triaged"),
 		List::Today => ("Today", "Tasks for today that still need a time slot"),
@@ -123,7 +123,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
 	if count == 0 {
 		body = body.push(
 			text(match list {
-				List::Overdue => "Nothing overdue",
+				List::Overdue => "Nothing unfinished",
 				List::Inbox => "Nothing to triage",
 				List::Today => "No tasks left to slot in today",
 				List::Triaged => "Nothing triaged yet",

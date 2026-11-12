@@ -723,7 +723,7 @@ fn plan_subtabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
 			let anchor = state.week_anchor;
 			let size = Size::new(width, 900.0);
 			for (label, tab, screen) in [
-				("Overdue", PlanTab::Overdue, Screen::Overdue),
+				("Unfinished", PlanTab::Overdue, Screen::Overdue),
 				("Inbox", PlanTab::Inbox, Screen::Inbox),
 				("Today", PlanTab::Today, Screen::Today),
 				("Backlog", PlanTab::Backlog, Screen::Backlog),
@@ -744,7 +744,7 @@ fn plan_subtabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
 				assert_eq!(state.week_anchor, anchor);
 				assert_eq!(state.calendar.day, date(16));
 				let mut panel = render_main(&state, size);
-				for label in ["Schedule", "Overdue", "Inbox", "Backlog"] {
+				for label in ["Schedule", "Unfinished", "Inbox", "Backlog"] {
 					assert!(panel.find(label).is_ok());
 				}
 				assert!(panel.find("Tasks").is_err());
@@ -768,7 +768,7 @@ fn plan_day_subtabs_keep_the_day_and_have_no_schedule() -> Result<(), Error> {
 		for (label, screen) in [
 			("Inbox", Screen::Inbox),
 			("Backlog", Screen::Backlog),
-			("Overdue", Screen::Overdue),
+			("Unfinished", Screen::Overdue),
 		] {
 			let mut panel = render_main(&state, size);
 			assert!(panel.find("Plan Day").is_ok());

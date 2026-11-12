@@ -31,7 +31,7 @@ on in the meantime.
 
 1. **Start fresh**: what you finished yesterday, yesterday's highlight and
    what you meant to start with today (from yesterday's reflection), this
-   week's objectives, and how many tasks are overdue, unfinished or in the
+   week's objectives, and how many tasks are unfinished or in the
    inbox. **Run the daily refresh first** sorts those out, then comes back to
    the plan.
 2. **Choose tasks**: the day's tasks, with **Tomorrow** and **Backlog** to take
@@ -58,8 +58,7 @@ order:
 
 | List | What is in it |
 | --- | --- |
-| Overdue | Past their deadline |
-| Unfinished | Planned for an earlier day and not done (their deadline, if any, has not passed) |
+| Unfinished | Not done, and past their deadline or planned for an earlier day, from Google Tasks or the calendar |
 | Inbox | Waiting to be triaged |
 | Today | Planned for today without a time |
 
@@ -73,8 +72,9 @@ A task in more than one list comes up once, in the first. For each one:
 - **Done ✓**, **Ignore** or **Delete…** (which asks once more).
 - **Skip** leaves it as it is.
 
-An overdue task stays overdue until its deadline is dealt with, so the
-overview asks what happens to a passed deadline when such a task is moved:
+A task past its deadline stays unfinished until the deadline is dealt with,
+so the overview asks what happens to a passed deadline when such a task is
+moved:
 **move it with the task** (to the new day, or cleared when the task is
 parked), **keep it**, or **clear it**.
 

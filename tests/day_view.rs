@@ -35,8 +35,10 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 			ui::view(&state),
 		);
 		assert!(
-			view.find(format!("0 overdue.  0 in inbox.  {count} not slotted in"))
-				.is_ok()
+			view.find(format!(
+				"0 unfinished.  0 in inbox.  {count} not slotted in"
+			))
+			.is_ok()
 		);
 		assert!(view.find("Team offsite").is_ok());
 		for index in 0..count {
@@ -53,7 +55,7 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 	);
 	assert!(week.find("Unslotted task 0").is_ok());
 	assert!(
-		week.find("0 overdue.  0 in inbox.  3 not slotted in")
+		week.find("0 unfinished.  0 in inbox.  3 not slotted in")
 			.is_err()
 	);
 	drop(week);
@@ -92,7 +94,7 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 		ui::view(&state),
 	);
 	assert!(
-		day.find("2 overdue.  1 in inbox.  3 not slotted in")
+		day.find("2 unfinished.  1 in inbox.  3 not slotted in")
 			.is_ok()
 	);
 }
@@ -115,7 +117,7 @@ fn range_views_keep_the_day_panel_visible_and_render_in_the_floating_host() {
 			ui::view(&state),
 		);
 		assert!(
-			day.find("0 overdue.  0 in inbox.  0 not slotted in")
+			day.find("0 unfinished.  0 in inbox.  0 not slotted in")
 				.is_ok()
 		);
 		assert!(day.find("Close view").is_err());
@@ -132,7 +134,7 @@ fn range_views_keep_the_day_panel_visible_and_render_in_the_floating_host() {
 		assert!(floating.find("Close view").is_err());
 		assert!(
 			floating
-				.find("0 overdue.  0 in inbox.  0 not slotted in")
+				.find("0 unfinished.  0 in inbox.  0 not slotted in")
 				.is_err()
 		);
 	}

@@ -88,7 +88,7 @@ In practice, this means that TimeParagon is a [super app](https://en.wikipedia.o
 
 ## Terminology
 
-- Overdue tasks are tasks not marked as "completed" or "ignored" that were due before the current day.
+- Unfinished tasks are tasks, in Google Tasks or on the calendar, not marked as "completed" or "ignored" that are past their deadline or were planned for a day before the current one.
 - Inboxed tasks are tasks that the user still needs to organize.
 
 ## Design Constraints
