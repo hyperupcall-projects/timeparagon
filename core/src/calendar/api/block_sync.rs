@@ -406,6 +406,87 @@ fn continuation_id(from: &str, block_series: &str, start: DateTime<Local>) -> St
     format!("ttc{}", &hex[..40])
 }
 
+/// Deletes the tasks repeating with the block series that `occurrence` (on
+/// `block_calendar`) belongs to, as far as deleting that occurrence with
+/// `scope` deletes the block: each task series entirely ("all"), from the
+/// occurrence's planning day on ("current and future"), or just that day.
+pub fn delete_followers(
+    token: &str,
+    settings: &CalendarSettings,
+    block_calendar: &str,
+    occurrence: &str,
+    scope: crate::calendar::SaveScope,
+) -> Result<(), GoogleError> {
+    use crate::calendar::SaveScope;
+    let Some(calendar) = settings.app_calendar.clone() else {
+        return Ok(());
+    };
+    // Only an occurrence of a series has tasks repeating with it.
+    let Some((series, start)) = parse_instance_id(occurrence) else {
+        return Ok(());
+    };
+    let name = format!("{block_calendar}/{series}");
+    let mut followers = Vec::new();
+    let mut page: Option<String> = None;
+    loop {
+        let mut url = format!(
+            "{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&singleEvents=false&maxResults=2500",
+            urlencoding::encode(&calendar)
+        );
+        if let Some(token) = &page {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencoding::encode(token));
+        }
+        let list: serde_json::Value = get(&url, token)?;
+        for item in list["items"].as_array().into_iter().flatten() {
+            let repeats = item["recurrence"]
+                .as_array()
+                .is_some_and(|lines| !lines.is_empty());
+            if item["status"].as_str() == Some("cancelled") || !repeats {
+                continue;
+            }
+            let follows = crate::calendar::calendar_tasks::read_data(&item["extendedProperties"])
+                .is_ok_and(|data| data.metadata.block_series.as_deref() == Some(name.as_str()));
+            if follows && let Some(id) = item["id"].as_str() {
+                followers.push(id.to_owned());
+            }
+        }
+        page = list["nextPageToken"].as_str().map(str::to_owned);
+        if page.is_none() {
+            break;
+        }
+    }
+    let hour = settings.day_start_hour();
+    let day = planning_day(start, hour);
+    let mut remote = GoogleRemote::new(token.to_owned(), settings, &calendar);
+    for follower in followers {
+        let target = if scope == SaveScope::All {
+            follower.clone()
+        } else {
+            let from = crate::calendar::at_clock(day, hour.min(23), 0);
+            match remote.first_occurrence(&calendar, &follower, from)? {
+                Some(next)
+                    if scope == SaveScope::CurrentAndFuture
+                        || planning_day(crate::timeblocking::original_start(&next), hour)
+                            == day =>
+                {
+                    next.id
+                }
+                _ => continue,
+            }
+        };
+        delete_event_scope(token, &calendar, &target, scope, false).or_else(|error| {
+            if matches!(error.status, Some(404 | 410)) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
+        super::super::series::note(&calendar, &follower, vec![calendar.clone()]);
+    }
+    Ok(())
+}
+
 /// Which block series a task series follows, and what Google says of it.
 fn followed(remote: &mut GoogleRemote<'_>, calendar: &str, series: &str) -> String {
     let Ok(Some(task)) = remote.series(calendar, series) else {

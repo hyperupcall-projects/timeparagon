@@ -157,10 +157,18 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
     let title = if is_task {
         text("Are you sure you want to delete this task?").size(metrics.label() + 1.0)
     } else {
-        text(match state.calendar.pending_delete_scope {
-            calendar::SaveScope::Current => "Delete this event?",
-            calendar::SaveScope::CurrentAndFuture => "Delete this and future events?",
-            calendar::SaveScope::All => "Delete all events in this series?",
+        let with_tasks = state.calendar.pending_delete_with_tasks;
+        text(match (state.calendar.pending_delete_scope, with_tasks) {
+            (calendar::SaveScope::Current, false) => "Delete this event?",
+            (calendar::SaveScope::Current, true) => "Delete this event and its planned tasks?",
+            (calendar::SaveScope::CurrentAndFuture, false) => "Delete this and future events?",
+            (calendar::SaveScope::CurrentAndFuture, true) => {
+                "Delete this and future events, including planned tasks?"
+            }
+            (calendar::SaveScope::All, false) => "Delete all events in this series?",
+            (calendar::SaveScope::All, true) => {
+                "Delete all events in this series, including planned tasks?"
+            }
         })
         .size(metrics.label() + 1.0)
     };
@@ -216,9 +224,15 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
                     }
                 })
                 .size(metrics.label()),
-                notify,
-                buttons
             ]
+            .push(
+                (!is_task && state.calendar.pending_delete_with_tasks).then(|| {
+                    text("The tasks and habits planned in them are deleted too.")
+                        .size(metrics.label())
+                }),
+            )
+            .push(notify)
+            .push(buttons)
             .spacing(metrics.spacing),
         )
         .padding(metrics.padding)

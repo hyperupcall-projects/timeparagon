@@ -185,6 +185,48 @@ pub fn in_block(task: &Event, block: &Event, day_start_hour: u32) -> bool {
             == planning_day(original_start(block), day_start_hour)
 }
 
+/// Whether `task`, a one-off, is in an occurrence that deleting `block` with
+/// `scope` removes: `block` itself, and for a recurring block, every
+/// occurrence of its series ("all") or those from its day on ("current and
+/// future").
+///
+/// A task placed in a series this one continues counts only from `block`'s
+/// day on, since that series' earlier occurrences are not deleted with it.
+pub fn deleted_with(
+    task: &Event,
+    block: &Event,
+    scope: calendar::SaveScope,
+    day_start_hour: u32,
+) -> bool {
+    if in_block(task, block, day_start_hour) {
+        return true;
+    }
+    if scope == calendar::SaveScope::Current || !task.is_task() || is_follower(task) {
+        return false;
+    }
+    let Some(series) = block.details.recurring_event_id.as_deref() else {
+        return false;
+    };
+    let Some(key) = metadata(task).block else {
+        return false;
+    };
+    let Some((calendar_id, id)) = key.rsplit_once('/') else {
+        return false;
+    };
+    let Some((placed_series, start)) = parse_instance_id(id) else {
+        return false;
+    };
+    if calendar_id != block.calendar_id {
+        return false;
+    }
+    if scope == calendar::SaveScope::All && placed_series == series {
+        return true;
+    }
+    lineage(block).contains(&format!("{calendar_id}/{placed_series}"))
+        && planning_day(start, day_start_hour)
+            >= planning_day(original_start(block), day_start_hour)
+}
+
 /// Whether `a` and `b` are the same item, even under different IDs.
 ///
 /// Google names an occurrence after its series and original start, so
@@ -376,6 +418,46 @@ mod tests {
         let mut listed = one_off.clone();
         listed.calendar_id = format!("{}list", crate::calendar::ids::TASK_LIST);
         assert!(!can_repeat_with(&listed, &block, 0));
+    }
+
+    #[test]
+    fn deleting_a_block_takes_the_one_offs_in_the_occurrences_it_deletes() {
+        use calendar::SaveScope::{All, Current, CurrentAndFuture};
+        let clicked = occurrence("block", 9, 9);
+        let placed = |block: &Event| {
+            task(Metadata {
+                block: Some(block_key(block)),
+                ..Default::default()
+            })
+        };
+        let today = placed(&clicked);
+        let earlier = placed(&occurrence("block", 8, 9));
+        let later = placed(&occurrence("block", 10, 9));
+        let elsewhere = placed(&occurrence("other", 10, 9));
+        for scope in [Current, CurrentAndFuture, All] {
+            assert!(deleted_with(&today, &clicked, scope, 0));
+            assert!(!deleted_with(&elsewhere, &clicked, scope, 0));
+        }
+        assert!(!deleted_with(&later, &clicked, Current, 0));
+        assert!(deleted_with(&later, &clicked, CurrentAndFuture, 0));
+        assert!(!deleted_with(&earlier, &clicked, CurrentAndFuture, 0));
+        assert!(deleted_with(&earlier, &clicked, All, 0));
+        // A series this one was split from keeps its own earlier days.
+        let mut split = occurrence("later", 9, 11);
+        split.details.split_from = vec!["app/block".into()];
+        assert!(deleted_with(&later, &split, All, 0));
+        assert!(!deleted_with(&earlier, &split, All, 0));
+        // A task repeating with the block is its own series, deleted apart.
+        let mut follower = placed(&clicked);
+        follower.details.recurring_event_id = Some("taskseries".into());
+        follower
+            .details
+            .task_data
+            .as_mut()
+            .unwrap()
+            .metadata
+            .block_series = Some("app/block".into());
+        assert!(!deleted_with(&follower, &occurrence("block", 8, 9), All, 0));
     }
 
     #[test]

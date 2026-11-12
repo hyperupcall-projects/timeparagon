@@ -660,34 +660,47 @@ pub(super) fn event_scope_control<'a>(
             draft.save_menu_open
         }
     });
-    let choices = column![
-        button(
-            text(if deleting {
-                "Delete current and future events"
-            } else {
-                "Save current and future events"
-            })
-            .size(metrics.label())
+    let choice = |label: &'static str, message: Message| {
+        button(text(label).size(metrics.label()).width(Fill))
             .width(Fill)
-        )
-        .width(Fill)
-        .padding(10)
-        .on_press(scoped(calendar::SaveScope::CurrentAndFuture))
-        .style(super::super::controls::secondary),
-        button(
-            text(if deleting {
-                "Delete all events"
-            } else {
-                "Save all events"
-            })
-            .size(metrics.label())
-            .width(Fill)
-        )
-        .width(Fill)
-        .padding(10)
-        .on_press(scoped(calendar::SaveScope::All))
-        .style(super::super::controls::secondary),
-    ]
+            .padding(10)
+            .on_press(message)
+            .style(super::super::controls::secondary)
+    };
+    // A time block can take the tasks and habits planned in it along.
+    let with_tasks = deleting && crate::timeblocking::is_block(event, &state.config.calendar);
+    let with_tasks_choice = |label, scope| {
+        with_tasks.then(|| {
+            choice(
+                label,
+                Message::Event(EventMessage::EventDeleteWithTasks(event.id.clone(), scope)),
+            )
+        })
+    };
+    let choices = column![choice(
+        if deleting {
+            "Delete current and future events"
+        } else {
+            "Save current and future events"
+        },
+        scoped(calendar::SaveScope::CurrentAndFuture),
+    )]
+    .push(with_tasks_choice(
+        "Delete current and future events including planned tasks",
+        calendar::SaveScope::CurrentAndFuture,
+    ))
+    .push(choice(
+        if deleting {
+            "Delete all events"
+        } else {
+            "Save all events"
+        },
+        scoped(calendar::SaveScope::All),
+    ))
+    .push(with_tasks_choice(
+        "Delete all events including planned tasks",
+        calendar::SaveScope::All,
+    ))
     .spacing(4);
     let menu = container(choices)
         .padding(6)

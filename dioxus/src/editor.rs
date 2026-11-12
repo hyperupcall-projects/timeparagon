@@ -787,7 +787,9 @@ fn EventEditor(
     let mut attempt = use_signal(|| 0u32);
     let mut save_menu = use_signal(|| false);
     let mut delete_menu = use_signal(|| false);
-    let mut pending_delete = use_signal(|| None::<SaveScope>);
+    // The scope being confirmed, and whether a time block's planned tasks
+    // and habits go with it.
+    let mut pending_delete = use_signal(|| None::<(SaveScope, bool)>);
     let mut pending_time_scope = use_signal(|| false);
     let mut completing = use_signal(|| false);
 
@@ -856,7 +858,7 @@ fn EventEditor(
         });
     });
 
-    let delete = use_callback(move |scope: SaveScope| {
+    let delete = use_callback(move |(scope, with_tasks): (SaveScope, bool)| {
         if busy() {
             return;
         }
@@ -865,7 +867,11 @@ fn EventEditor(
         error.set(None);
         spawn(async move {
             let result = worker(move || {
-                calendar::delete_event_scope(&source.calendar_id, &source.id, scope, false)
+                if with_tasks {
+                    calendar::delete_block_with_tasks(&source, scope, false)
+                } else {
+                    calendar::delete_event_scope(&source.calendar_id, &source.id, scope, false)
+                }
             })
             .await;
             busy.set(false);
@@ -960,6 +966,8 @@ fn EventEditor(
     .cloned();
     let title = source_event.title.clone();
     let series = source_event.is_recurring();
+    // A time block can take the tasks and habits planned in it along.
+    let block = tb::is_block(&source_event, &context.settings);
     let anchor = values.start.date_naive();
     let organizer = source_event.details.organizer.clone();
     let attendees = source_event.details.attendees.clone();
@@ -984,13 +992,16 @@ fn EventEditor(
                 }
                 button { class: "btn editor-wide", onclick: move |_| pending_time_scope.set(false), "Cancel" }
             }
-        } else if let Some(scope) = pending_delete() {
+        } else if let Some((scope, with_tasks)) = pending_delete() {
             div { class: "editor-confirm", role: "alert",
                 p {
-                    match scope {
-                        SaveScope::Current => "Delete this event?",
-                        SaveScope::CurrentAndFuture => "Delete this and future events?",
-                        SaveScope::All => "Delete all events in this series?",
+                    match (scope, with_tasks) {
+                        (SaveScope::Current, false) => "Delete this event?",
+                        (SaveScope::Current, true) => "Delete this event and its planned tasks?",
+                        (SaveScope::CurrentAndFuture, false) => "Delete this and future events?",
+                        (SaveScope::CurrentAndFuture, true) => "Delete this and future events, including planned tasks?",
+                        (SaveScope::All, false) => "Delete all events in this series?",
+                        (SaveScope::All, true) => "Delete all events in this series, including planned tasks?",
                     }
                 }
                 p { class: "hint",
@@ -998,6 +1009,9 @@ fn EventEditor(
                         SaveScope::Current => "This removes the event from Google Calendar.",
                         SaveScope::CurrentAndFuture => "This removes this event and future events in its series from Google Calendar.",
                         SaveScope::All => "This removes every event in this series from Google Calendar.",
+                    }
+                    if with_tasks {
+                        " The tasks and habits planned in them are deleted too."
                     }
                 }
                 div { class: "editor-row",
@@ -1010,7 +1024,7 @@ fn EventEditor(
                     button {
                         class: "btn danger editor-grow",
                         disabled: is_busy,
-                        onclick: move |_| delete.call(scope),
+                        onclick: move |_| delete.call((scope, with_tasks)),
                         "Delete"
                     }
                 }
@@ -1053,7 +1067,7 @@ fn EventEditor(
                             delete_menu.toggle();
                             save_menu.set(false);
                         } else {
-                            pending_delete.set(Some(SaveScope::Current));
+                            pending_delete.set(Some((SaveScope::Current, false)));
                         }
                     },
                     "Delete"
@@ -1077,18 +1091,23 @@ fn EventEditor(
             }
             if delete_menu() {
                 div { class: "editor-choices",
-                    for (label, scope) in [
-                        ("Delete current event", SaveScope::Current),
-                        ("Delete current and future events", SaveScope::CurrentAndFuture),
-                        ("Delete all events", SaveScope::All),
-                    ] {
+                    for (label, scope, with_tasks) in [
+                        ("Delete current event", SaveScope::Current, false),
+                        ("Delete current and future events", SaveScope::CurrentAndFuture, false),
+                        ("Delete current and future events including planned tasks", SaveScope::CurrentAndFuture, true),
+                        ("Delete all events", SaveScope::All, false),
+                        ("Delete all events including planned tasks", SaveScope::All, true),
+                    ]
+                    .into_iter()
+                    .filter(|(_, _, with_tasks)| !with_tasks || block)
+                    {
                         button {
                             key: "{label}",
                             class: "btn editor-wide",
                             disabled: is_busy,
                             onclick: move |_| {
                                 delete_menu.set(false);
-                                pending_delete.set(Some(scope));
+                                pending_delete.set(Some((scope, with_tasks)));
                             },
                             "{label}"
                         }

@@ -473,10 +473,12 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
         }
 
         request @ (EventMessage::EventDeleteRequested(_)
-        | EventMessage::EventDeleteScoped(_, _)) => {
-            let (id, scope) = match request {
-                EventMessage::EventDeleteScoped(id, scope) => (id, scope),
-                EventMessage::EventDeleteRequested(id) => (id, calendar::SaveScope::Current),
+        | EventMessage::EventDeleteScoped(_, _)
+        | EventMessage::EventDeleteWithTasks(_, _)) => {
+            let (id, scope, with_tasks) = match request {
+                EventMessage::EventDeleteScoped(id, scope) => (id, scope, false),
+                EventMessage::EventDeleteWithTasks(id, scope) => (id, scope, true),
+                EventMessage::EventDeleteRequested(id) => (id, calendar::SaveScope::Current, false),
                 _ => unreachable!(),
             };
             // Only calendar events can be deleted this way; Google Tasks live
@@ -495,6 +497,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             }
             state.calendar.pending_delete_scope = scope;
             state.calendar.pending_delete_notify = true;
+            state.calendar.pending_delete_with_tasks = with_tasks;
             state.calendar.pending_delete = Some(id);
             Task::none()
         }
@@ -522,10 +525,15 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
                 && !attendance.guests.is_empty();
 
             let request_id = id.clone();
+            let block = state
+                .calendar
+                .pending_delete_with_tasks
+                .then(|| event.clone());
             state.calendar.error = None;
 
-            blocking::run(move || {
-                calendar::delete_event_scope(&calendar_id, &request_id, scope, notify)
+            blocking::run(move || match block {
+                Some(block) => calendar::delete_block_with_tasks(&block, scope, notify),
+                None => calendar::delete_event_scope(&calendar_id, &request_id, scope, notify),
             })
             .map(move |result| Message::Event(EventMessage::EventDeleted(id.clone(), result)))
         }

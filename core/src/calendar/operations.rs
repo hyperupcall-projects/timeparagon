@@ -73,6 +73,10 @@ pub enum Job {
         id: String,
         scope: SaveScope,
         notify: bool,
+        /// The block as shown, when the tasks planned in the occurrences
+        /// deleted go too rather than being taken out of the block.
+        #[serde(default)]
+        with_tasks: Option<Box<Event>>,
     },
     DeleteTask {
         task: Event,
@@ -440,13 +444,23 @@ fn record_in(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     let mut writes = vec![record_tx(&tx, job.clone(), event, calendar, id)?];
-    if let Job::Delete { calendar, id, .. } = &job {
+    if let Job::Delete {
+        calendar,
+        id,
+        scope,
+        with_tasks,
+        ..
+    } = &job
+    {
         // Removing a container releases its children; deleting the container
         // and recording all child edits is one local transaction. Which tasks
         // are its one-offs is decided as everywhere else, so one placed
         // before its series was retimed still counts. Tasks repeating with
         // it are not released: the reconciler deletes that day of them.
-        let block = deleted_block(calendar, id);
+        let block = with_tasks
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| deleted_block(calendar, id));
         let hour = crate::config::Config::load().calendar.day_start_hour();
         let children = {
             let mut q = tx
@@ -460,8 +474,29 @@ fn record_in(
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
+        if with_tasks.is_some() {
+            // The one-offs in every occurrence deleted go with them. Tasks
+            // repeating with the block are their own series, which sending
+            // the delete ends (see `send::delete_followers`).
+            for task in children.iter().filter(|child| {
+                !crate::timeblocking::is_follower(child)
+                    && crate::timeblocking::membership::deleted_with(child, &block, *scope, hour)
+            }) {
+                writes.push(record_tx(
+                    &tx,
+                    Job::DeleteTask {
+                        task: task.clone(),
+                        calendar: None,
+                    },
+                    None,
+                    &task.calendar_id,
+                    &task.id,
+                )?);
+            }
+        }
         for original in children.into_iter().filter(|child| {
-            !crate::timeblocking::is_follower(child)
+            with_tasks.is_none()
+                && !crate::timeblocking::is_follower(child)
                 && crate::timeblocking::in_block(child, &block, hour)
         }) {
             let mut released = original.clone();
@@ -1168,7 +1203,13 @@ fn execute(
             id,
             scope,
             notify,
-        } => send::delete_event_scope(client, &calendar, &id, scope, notify)?,
+            with_tasks,
+        } => {
+            send::delete_event_scope(client, &calendar, &id, scope, notify)?;
+            if with_tasks.is_some() {
+                send::delete_followers(client, s, &calendar, &id, scope)?;
+            }
+        }
         Job::DeleteTask { mut task, calendar } => {
             let mut db = task_db::open()?;
             let data = db.import(&task)?;
@@ -1367,6 +1408,7 @@ fn detach(
             id: task.id.clone(),
             scope: SaveScope::Current,
             notify: false,
+            with_tasks: None,
         },
         None,
         &task.calendar_id,
@@ -1864,6 +1906,7 @@ mod tests {
                 id: a.id.clone(),
                 scope: SaveScope::Current,
                 notify: false,
+                with_tasks: None,
             },
             None,
             &a.calendar_id,
@@ -2327,6 +2370,7 @@ mod tests {
             id: block.id.clone(),
             scope: SaveScope::Current,
             notify: false,
+            with_tasks: None,
         };
         database.connection().execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON google_entities WHEN instr(NEW.id,'task:child')>0 BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
         assert!(record_in(&path, delete.clone(), None, &block.calendar_id, &block.id).is_err());
@@ -2345,6 +2389,78 @@ mod tests {
         assert!(restored[0].details.sending);
         assert!(crate::timeblocking::metadata(&restored[0]).block.is_none());
         assert_eq!(restored[0].start.date_naive(), block.start.date_naive());
+    }
+
+    #[test]
+    fn deleting_a_block_with_its_tasks_deletes_the_one_offs_in_what_it_deletes() {
+        let day = |d| NaiveDate::from_ymd_opt(2030, 11, d).unwrap();
+        let stamp = |d| {
+            at_clock(day(d), 9, 0)
+                .with_timezone(&Utc)
+                .format("%Y%m%dT%H%M%SZ")
+                .to_string()
+        };
+        let template = super::super::sample_snapshot().events.remove(0);
+        let mut block = template.clone();
+        block.id = format!("blockseries_{}", stamp(5));
+        block.calendar_id = "app".into();
+        block.start = at_clock(day(5), 9, 0);
+        block.end = block.start + chrono::Duration::hours(1);
+        block.details.recurring_event_id = Some("blockseries".into());
+        block.details.original_start = Some(block.start);
+        // Deletes the occurrence on the 5th with `scope`, with one-offs
+        // planned on the 4th, the 5th and the 6th, and returns the one-offs
+        // deleted and those still shown.
+        let run = |scope| {
+            let (_dir, path) = db();
+            let mut database = task_db::Database::open(&path).unwrap();
+            let children: Vec<Event> = [4, 5, 6]
+                .into_iter()
+                .map(|d| {
+                    let mut child = template.clone();
+                    child.id = format!("task:child{d}");
+                    child.calendar_id = "tasks:list".into();
+                    let mut data = database.import(&child).unwrap();
+                    data.metadata.block = Some(format!("app/blockseries_{}", stamp(d)));
+                    child.details.task_data = Some(data);
+                    child
+                })
+                .collect();
+            cache_tasks_in(&path, &children, true).unwrap();
+            let delete = Job::Delete {
+                calendar: "app".into(),
+                id: block.id.clone(),
+                scope,
+                notify: false,
+                with_tasks: Some(Box::new(block.clone())),
+            };
+            let writes = record_in(&path, delete, None, "app", &block.id).unwrap();
+            assert!(
+                writes
+                    .iter()
+                    .all(|write| !write.label.starts_with("Edit task Unassign")),
+                "nothing is taken out of the block instead"
+            );
+            let deleted: Vec<String> = writes
+                .iter()
+                .filter_map(|write| match &write.job {
+                    Job::DeleteTask { task, .. } => Some(task.id.clone()),
+                    _ => None,
+                })
+                .collect();
+            let mut shown = children;
+            overlay(&path, &mut shown, None).unwrap();
+            let shown: Vec<String> = shown.into_iter().map(|e| e.id).collect();
+            (deleted, shown)
+        };
+        let (deleted, shown) = run(SaveScope::CurrentAndFuture);
+        assert_eq!(deleted, ["task:child5", "task:child6"]);
+        assert_eq!(shown, ["task:child4"]);
+        let (deleted, shown) = run(SaveScope::All);
+        assert_eq!(deleted, ["task:child4", "task:child5", "task:child6"]);
+        assert!(shown.is_empty());
+        let (deleted, _) = run(SaveScope::Current);
+        assert_eq!(deleted, ["task:child5"]);
     }
 
     #[test]
@@ -2372,6 +2488,7 @@ mod tests {
             id: retimed.clone(),
             scope: SaveScope::Current,
             notify: false,
+            with_tasks: None,
         };
         let writes = record_in(&path, delete, None, "app", &retimed).unwrap();
         assert_eq!(writes.len(), 2, "the one-off is released");
@@ -2532,6 +2649,7 @@ mod tests {
                 id: event.id.clone(),
                 scope: SaveScope::Current,
                 notify: false,
+                with_tasks: None,
             },
             None,
             &event.calendar_id,

@@ -1150,6 +1150,9 @@ pub struct Store {
     pub pending_delete_scope: SaveScope,
     /// Whether confirming that delete emails the event's guests.
     pub pending_delete_notify: bool,
+    /// Whether that delete takes the tasks and habits planned in the time
+    /// block's deleted occurrences with it.
+    pub pending_delete_with_tasks: bool,
     /// A dragged item awaiting recurrence scope or guest notification choices.
     pub pending_move: Option<PendingMove>,
 }
@@ -1202,6 +1205,7 @@ impl Store {
             pending_delete: None,
             pending_delete_scope: SaveScope::Current,
             pending_delete_notify: true,
+            pending_delete_with_tasks: false,
             pending_move: None,
         }
     }
@@ -1243,6 +1247,7 @@ impl Store {
             pending_delete: None,
             pending_delete_scope: SaveScope::Current,
             pending_delete_notify: true,
+            pending_delete_with_tasks: false,
             pending_move: None,
         }
     }
@@ -2845,10 +2850,32 @@ pub fn delete_event_scope(
             id: event_id.into(),
             scope,
             notify,
+            with_tasks: None,
         },
         None,
         calendar_id,
         event_id,
+    )
+}
+
+/// Deletes a time block with `scope`, and the tasks and habits planned in
+/// the occurrences it deletes rather than taking them out of the block.
+pub fn delete_block_with_tasks(
+    block: &Event,
+    scope: SaveScope,
+    notify: bool,
+) -> Result<(), String> {
+    operations::submit(
+        operations::Job::Delete {
+            calendar: block.calendar_id.clone(),
+            id: block.id.clone(),
+            scope,
+            notify,
+            with_tasks: Some(Box::new(block.clone())),
+        },
+        None,
+        &block.calendar_id,
+        &block.id,
     )
 }
 
@@ -3130,6 +3157,20 @@ pub(crate) mod send {
             Err(error) if error.status == Some(404) => Ok(()),
             Err(error) => Err(describe_event_write_error(error)),
         }
+    }
+
+    /// Deletes the tasks repeating with a block as far as deleting its
+    /// occurrence `event_id` with `scope` deletes the block.
+    pub fn delete_followers(
+        client: &GoogleClient,
+        settings: &CalendarSettings,
+        calendar_id: &str,
+        event_id: &str,
+        scope: SaveScope,
+    ) -> Result<(), GoogleError> {
+        let token = client.access_token()?;
+        api::block_sync::delete_followers(&token, settings, calendar_id, event_id, scope)
+            .map_err(describe_event_write_error)
     }
 }
 

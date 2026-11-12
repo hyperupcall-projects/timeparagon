@@ -261,6 +261,97 @@ fn event_footer_and_delete_menu_keep_their_layout() {
 }
 
 #[test]
+fn a_repeating_time_block_can_be_deleted_with_its_planned_tasks() {
+    let mut state = State::blank();
+    state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+    let event = state
+        .calendar
+        .events
+        .iter_mut()
+        .find(|e| e.id == "standup")
+        .unwrap();
+    event.details.recurring_event_id = Some("series".into());
+    let calendar_id = event.calendar_id.clone();
+    state.calendar.open_event = Some("standup".into());
+    state.calendar.edit_draft = Some(calendar::EditDraft::from_event(
+        state.calendar.event("standup").unwrap(),
+    ));
+    let _ = crate::app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditDeleteMenuToggled),
+    );
+    let metrics = Metrics::of(Size::new(360.0, 800.0));
+    let labels = [
+        "Delete current and future events including planned tasks",
+        "Delete all events including planned tasks",
+    ];
+    // Only a time block, an event on the app's calendar, has planned tasks.
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        details_pane(&state, &metrics),
+    );
+    assert!(ui.find("Delete all events").is_ok());
+    for label in labels {
+        assert!(ui.find(label).is_err());
+    }
+    drop(ui);
+    state.config.calendar.app_calendar = Some(calendar_id);
+    for (label, scope) in labels.into_iter().zip([
+        calendar::SaveScope::CurrentAndFuture,
+        calendar::SaveScope::All,
+    ]) {
+        let mut ui = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            details_pane(&state, &metrics),
+        );
+        let plain = ui
+            .find(label.trim_end_matches(" including planned tasks"))
+            .unwrap()
+            .bounds();
+        assert!(ui.find(label).unwrap().bounds().y > plain.y);
+        ui.click(label).unwrap();
+        let message = ui.into_messages().next().unwrap();
+        assert!(matches!(
+            &message,
+            Message::Event(EventMessage::EventDeleteWithTasks(id, s)) if id == "standup" && *s == scope
+        ));
+        let _ = crate::app::update(&mut state, message);
+        assert!(state.calendar.pending_delete_with_tasks);
+        assert_eq!(state.calendar.pending_delete_scope, scope);
+        let mut confirmation = iced_test::Simulator::with_size(
+            Default::default(),
+            metrics.size,
+            delete_confirmation(&state, &metrics),
+        );
+        assert!(
+            confirmation
+                .find("The tasks and habits planned in them are deleted too.")
+                .is_ok()
+        );
+        drop(confirmation);
+        let _ = crate::app::update(
+            &mut state,
+            Message::Event(EventMessage::EventDeleteCancelled),
+        );
+        let _ = crate::app::update(
+            &mut state,
+            Message::EventEdit(EventEditMessage::EventEditDeleteMenuToggled),
+        );
+    }
+    // A plain delete does not carry the choice over.
+    let _ = crate::app::update(
+        &mut state,
+        Message::Event(EventMessage::EventDeleteScoped(
+            "standup".into(),
+            calendar::SaveScope::All,
+        )),
+    );
+    assert!(!state.calendar.pending_delete_with_tasks);
+}
+
+#[test]
 fn save_split_button_keeps_the_arrow_target_separate_and_opens_scoped_actions() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());

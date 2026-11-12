@@ -43,6 +43,7 @@ fn default_storage_is_temporary() {
             id: "task:a".into(),
             scope: calendar::SaveScope::Current,
             notify: false,
+            with_tasks: None,
         },
         None,
         "tasks:inbox",

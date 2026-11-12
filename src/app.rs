@@ -784,6 +784,9 @@ pub enum EventMessage {
     EventMoveCancelled,
     EventDeleteRequested(String),
     EventDeleteScoped(String, calendar::SaveScope),
+    /// Delete a time block's occurrences with this scope, and the tasks and
+    /// habits planned in them.
+    EventDeleteWithTasks(String, calendar::SaveScope),
     /// The user confirmed the deletion prompt.
     EventDeleteConfirmed(String),
     /// The user dismissed the deletion prompt without deleting.
