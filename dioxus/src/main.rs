@@ -92,7 +92,14 @@ fn window_background() -> (u8, u8, u8, u8) {
 fn main() {
 	prepare_android_storage();
 	timeparagon_core::database_sync::start();
-	dioxus::launch(App);
+	// Dioxus disables the context menu by default in release builds by injecting
+	// a document-wide `contextmenu` handler that calls `preventDefault()`. On
+	// Android the long-press text-selection and paste UI *is* the context menu,
+	// so that would leave the OAuth client ID and secret fields with no way to
+	// paste. Keep the context menu so those fields work.
+	dioxus::LaunchBuilder::new()
+		.with_cfg(dioxus::mobile::Config::new().with_disable_context_menu(false))
+		.launch(App);
 }
 
 /// Point the shared data layer at the app's private internal storage.
