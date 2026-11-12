@@ -242,9 +242,10 @@ fn refresh() -> bool {
 		return true;
 	}
 	let today = day::today(&config.calendar);
-	let Ok(snapshot) = day::load_day(today, &config.calendar) else {
+	let Ok(mut snapshot) = day::load_day(today, &config.calendar) else {
 		return false;
 	};
+	crate::habits::name_events(&mut snapshot.events);
 	let model = day::build_model(&snapshot, &config.calendar);
 	let travel = day::travel_boxes(&model, &config.travel, config.appearance.distance_unit);
 	write(&model, &travel, &config.calendar, snapshot.fetched_at);

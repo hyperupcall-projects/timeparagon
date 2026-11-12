@@ -3029,7 +3029,9 @@ mod tests {
 		);
 		act(&mut state, Action::Open("h".into()));
 		let mut ui = page(&state);
-		assert!(ui.find("Morning run").is_ok());
+		assert!(ui.find("Run").is_ok());
+		assert!(ui.find("Morning run").is_err());
+		assert_eq!(state.habits.events_of("h")[0].title, "Run");
 		assert!(ui.find("Add event").is_ok());
 		assert!(ui.find("Disconnect").is_ok());
 		drop(ui);

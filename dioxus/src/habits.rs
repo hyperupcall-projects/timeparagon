@@ -101,6 +101,15 @@ pub fn for_tests(habits: Vec<Habit>) -> Saved {
 	}
 }
 
+/// Resolve occurrence titles from the current library rather than Google's
+/// copy, which may have been created before the habit was renamed.
+pub fn name_events(events: &mut [Event]) {
+	let saved = read(timeparagon_core::task_db::path());
+	for event in events {
+		saved.library.name_event(event);
+	}
+}
+
 /// Completing or reopening a habit event in its editor counts as doing the
 /// habit that day, or undoes it, as it does on the desktop.
 pub fn record_completion(event: &Event) {
@@ -1341,14 +1350,16 @@ fn events_card(
             series.schedule,
             time_format::range(series.start, series.end, time_format)
         );
-        let event = series.event.clone();
+        let mut event = series.event.clone();
+        event.title.clone_from(&habit.name);
+        let name = habit.name.clone();
         let settings = settings.clone();
         let unlink = series.clone();
         rsx! {
             div { key: "{series.id}", class: "habit-event",
                 div { class: "habit-event-line",
                     span { class: "day-dot", style: "background: {dot};" }
-                    span { class: "habit-event-title", "{series.title}" }
+                    span { class: "habit-event-title", "{name}" }
                     button { class: "btn small", disabled: busy, onclick: move |_| on_open_event.call(event.clone()), "Edit" }
                     button { class: "btn small", disabled: busy,
                         onclick: move |_| link(ctx, settings.clone(), unlink.clone(), None),
@@ -1613,7 +1624,11 @@ fn save_form(ctx: Ctx) {
 		result
 	};
 	match result {
-		Ok(id) => ui.write().open(id),
+		Ok(id) => {
+			ui.write().open(id);
+			let mut revision = ctx.revision;
+			revision += 1;
+		}
 		Err(error) => {
 			if let Page::Form(form) = &mut ui.write().page {
 				form.error = Some(error);

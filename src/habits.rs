@@ -545,6 +545,20 @@ pub(crate) fn write_for_test(state: &State, path: &std::path::Path) {
 	write(path, &state.habits.library).unwrap();
 }
 
+/// Keep cached days and the open editor in step with the habit library.
+pub(crate) fn name_events(state: &mut State) {
+	state.calendar.apply_habit_names(&state.habits.library);
+	for series in &mut state.habits.series {
+		if let Some(habit) = series
+			.habit_id
+			.as_deref()
+			.and_then(|id| state.habits.library.habit(id))
+		{
+			series.title.clone_from(&habit.name);
+		}
+	}
+}
+
 pub(crate) fn persist(state: &mut State) -> Task<Message> {
 	let Some(path) = state.habits.path.clone() else {
 		return Task::none();

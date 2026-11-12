@@ -547,6 +547,10 @@ fn Main() -> Element {
 		eprintln!("Could not load local edits: {error}");
 	}
 
+	if let Some(snapshot) = &mut snapshot {
+		habits::name_events(&mut snapshot.events);
+	}
+
 	let model = snapshot
 		.as_ref()
 		.map(|snapshot| day::build_model(snapshot, &settings));

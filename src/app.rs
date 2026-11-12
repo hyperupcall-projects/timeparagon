@@ -1438,6 +1438,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 	} else {
 		Task::none()
 	};
+	if !ticking {
+		crate::habits::name_events(state);
+	}
 	let activities = state.current_activities();
 	state.activity.observe(activities, Instant::now());
 	Task::batch([task, routine, editor, travel, fetch])

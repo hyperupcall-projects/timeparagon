@@ -53,6 +53,16 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			Task::none()
 		}
 		EventEditMessage::EventEditTitleChanged(title) => {
+			if state
+				.calendar
+				.open_event
+				.as_deref()
+				.and_then(|id| state.calendar.event(id))
+				.and_then(|event| state.habits.habit_of(event))
+				.is_some()
+			{
+				return Task::none();
+			}
 			if let Some(draft) = state.calendar.edit_draft.as_mut() {
 				draft.title = title;
 			}

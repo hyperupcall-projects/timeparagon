@@ -119,7 +119,19 @@ pub fn event_editor<'a>(
 	}
 	let label = |name: &'static str| crate::ui::controls::field_label(name, metrics.label());
 
-	let title: Element<'a, Message> = if draft.editing_title {
+	let title: Element<'a, Message> = if let Some(habit) = state
+		.habits
+		.habit_of(event)
+		.and_then(|id| state.habits.library.habit(id))
+	{
+		text(&habit.name)
+			.size(metrics.label() + 6.0)
+			.font(Font {
+				weight: Weight::Bold,
+				..Font::DEFAULT
+			})
+			.into()
+	} else if draft.editing_title {
 		column![
 			crate::ui::controls::text_input("Title", &draft.title)
 				.id(iced::widget::Id::new("event-title"))
