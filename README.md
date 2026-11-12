@@ -1,8 +1,8 @@
 # TimeParagon
 
-Easily manage your life using a single app. It is designed to minimize friction and maximize your time spent in flow state.
+Easily manage and track your life with a single app. It is designed to minimize friction and improve life satisfaction.
 
-I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's a 150,000 SLOC vibe-coded monstrosity.
+I really love this app. If you're interested in using it, it requires a [bit of setup](./docs/index.md) and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's a 150,000 SLOC vibe-coded monstrosity.
 
 ## Tour
 
