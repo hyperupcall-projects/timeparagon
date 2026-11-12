@@ -134,6 +134,8 @@ pub enum Screen {
 	/// Tasks that have been triaged but not yet scheduled.
 	Triaged,
 	Backlog,
+	/// Guided rituals to plan, refresh and reflect on the day, week and month.
+	Routines,
 	Life,
 	/// The places events happen at, and the trips between them.
 	Travel,
@@ -443,6 +445,8 @@ pub struct State {
 	pub timeblocking: crate::timeblocking::Workspace,
 	/// The Brain dump screen and the page open in its editor.
 	pub brain_dump: crate::brain_dump::Workspace,
+	/// The Routines screen and the routine in progress.
+	pub routines: crate::routines::Workspace,
 	/// The Habits tab: the habit masters and the rule editor.
 	pub habits: crate::habits::Store,
 	pub notes: crate::notes::Store,
@@ -461,6 +465,7 @@ pub enum Message {
 	Picker(crate::ui::controls::Action),
 	TimeBlocking(crate::timeblocking::Action),
 	BrainDump(crate::brain_dump::Action),
+	Routines(crate::routines::Action),
 	Inbox(crate::inbox::Action),
 	Accounts(crate::integrations::accounts::Action),
 	People(crate::people::Action),
@@ -975,6 +980,7 @@ impl State {
 			calendar_fetch_pending: Vec::new(),
 			timeblocking: crate::timeblocking::Workspace::default(),
 			brain_dump: crate::brain_dump::Workspace::default(),
+			routines: crate::routines::Workspace::default(),
 			habits: crate::habits::Store::default(),
 			inbox: crate::inbox::Inbox::default(),
 			accounts: crate::integrations::accounts::Accounts::load(),
@@ -1116,10 +1122,20 @@ impl State {
 	pub fn day_plan_active(&self) -> bool {
 		!self.task_creation_window
 			&& self.view == CalendarView::Day
-			&& matches!(
+			&& (matches!(
 				self.screen,
 				Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
-			)
+			) || self.routine_timeboxing())
+	}
+
+	/// The daily plan's timebox step, which shows the day beside the panel
+	/// so its tasks can be dragged onto it.
+	pub fn routine_timeboxing(&self) -> bool {
+		self.screen == Screen::Routines
+			&& self.routines.flow.as_ref().is_some_and(|flow| {
+				flow.routine == crate::routines::Routine::DailyPlan
+					&& flow.current() == crate::routines::Step::Timebox
+			})
 	}
 
 	pub fn calendar_dates(&self) -> Vec<chrono::NaiveDate> {
@@ -1377,6 +1393,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 	);
 	state.habits.roll_over();
 	let task = dispatch(state, message);
+	// Task changes a routine queued go out one at a time, as each save
+	// before them finishes.
+	let routine = crate::routines::pump(state);
+	crate::routines::sync_editors(state);
 	let draft = state.calendar.draft.as_ref();
 	let edit = state.calendar.edit_draft.as_ref();
 	for (editor, value) in [
@@ -1415,7 +1435,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 	};
 	let activities = state.current_activities();
 	state.activity.observe(activities, Instant::now());
-	Task::batch([task, editor, travel, fetch])
+	Task::batch([task, routine, editor, travel, fetch])
 }
 
 /// Keep the floating range view/editor separate from panel geometry and reservation.
@@ -1531,6 +1551,7 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
 	matches!(
 		screen,
 		Screen::Calendar
+			| Screen::Routines
 			| Screen::Backlog
 			| Screen::Overdue
 			| Screen::Inbox
@@ -1540,10 +1561,11 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
 	)
 }
 
-fn dispatch(state: &mut State, message: Message) -> Task<Message> {
+pub(crate) fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 	match message {
 		Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
 		Message::BrainDump(action) => crate::brain_dump::update(state, action),
+		Message::Routines(action) => crate::routines::update(state, action),
 		Message::Inbox(action) => {
 			let task = crate::inbox::update(state, action);
 			if state.task_creation_window && state.inbox.draft.is_none() {
@@ -1903,6 +1925,48 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 	}
 }
 
+/// Keys on the Routines screen. Escape steps back out; while the daily
+/// refresh shows a task, single letters decide it. Keys typed into a field
+/// never get here.
+fn routine_key(state: &State, key: Key) -> Option<Message> {
+	use crate::routines::{Action, Decision, Step};
+	use keyboard::key::Named;
+	let routine = |action| Some(Message::Routines(action));
+	if key == Key::Named(Named::Escape) {
+		return if state.calendar.open_event.is_some() {
+			Some(Message::Event(EventMessage::EventClosed))
+		} else if state.routines.confirm_delete.is_some() {
+			routine(Action::CancelDelete)
+		} else if state.routines.flow.is_some() {
+			routine(Action::Close)
+		} else {
+			Some(Message::Navigation(NavigationMessage::ScreenSelected(
+				Screen::Calendar,
+			)))
+		};
+	}
+	let flow = state.routines.flow.as_ref()?;
+	if flow.current() != Step::Triage || state.routines.confirm_delete.is_some() {
+		return None;
+	}
+	let today = crate::routines::today(state);
+	match key.as_ref() {
+		Key::Character("t") => routine(Action::Decide(Decision::Day(today))),
+		Key::Character("m") => routine(Action::Decide(Decision::Day(
+			today + chrono::Duration::days(1),
+		))),
+		Key::Character("b") => routine(Action::Decide(Decision::Backlog(
+			timeblocking::BacklogSection::Someday,
+		))),
+		Key::Character("d") => routine(Action::Decide(Decision::Done)),
+		Key::Character("s") | Key::Named(Named::ArrowRight) => {
+			routine(Action::Decide(Decision::Skip))
+		}
+		Key::Named(Named::ArrowLeft) => routine(Action::Back),
+		_ => None,
+	}
+}
+
 /// What a key press means, if anything.
 ///
 /// Kept apart from the task it turns into, so that what a key does can be
@@ -2151,6 +2215,11 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 			}
 			_ => None,
 		};
+	}
+
+	// Routines are written in, so they keep to their own keys.
+	if state.screen == Screen::Routines {
+		return routine_key(state, key);
 	}
 
 	// The notepad is for writing, so the shortcuts are left off while it is on

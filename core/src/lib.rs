@@ -26,6 +26,7 @@ pub mod people;
 pub mod places;
 pub mod recurrence;
 pub mod reminders;
+pub mod routines;
 pub mod secrets;
 pub mod settings;
 pub mod shared_data;

@@ -28,7 +28,7 @@ use super::schema::{
 pub(crate) type Rows = BTreeMap<(&'static str, String), Map<String, Value>>;
 
 /// Whole sections kept as shared documents rather than in these tables.
-pub(crate) const DOCUMENT_SECTIONS: [&str; 3] = ["brain_dump", "projects", "task_work"];
+pub(crate) const DOCUMENT_SECTIONS: [&str; 4] = ["brain_dump", "projects", "task_work", "routines"];
 
 /// Sections that describe this device rather than the person using it: its
 /// files and folders, the sync server it talks to, its screen and windows,

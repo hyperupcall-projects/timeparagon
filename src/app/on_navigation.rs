@@ -89,7 +89,12 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
 	let tasks_screen = |screen| {
 		matches!(
 			screen,
-			Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
+			Screen::Overdue
+				| Screen::Inbox
+				| Screen::Today
+				| Screen::Triaged
+				| Screen::Backlog
+				| Screen::Routines
 		)
 	};
 	if screen != state.screen && (tasks_screen(screen) || tasks_screen(state.screen)) {

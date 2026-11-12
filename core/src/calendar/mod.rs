@@ -1696,6 +1696,20 @@ impl Store {
 		}
 	}
 
+	/// The events of `day` from memory, or from the copy an earlier run left
+	/// on disk, without loading them into the view. `None` when the day has
+	/// never been fetched. Reading the disk copy is a database read, so this
+	/// belongs in an update rather than in a view.
+	pub fn events_for_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
+		if day == self.day {
+			return Some(self.events.clone());
+		}
+		if let Some(events) = self.cache.get(&day) {
+			return Some(events.clone());
+		}
+		self.read_day(day)
+	}
+
 	/// Shared backlog tasks and off-day linked blocks do not establish that
 	/// this day's calendar data has been loaded.
 	pub fn has_calendar_events_on(&self, day: NaiveDate) -> bool {

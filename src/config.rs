@@ -68,6 +68,13 @@ pub struct Config {
 	/// page is written.
 	#[serde(default, skip_serializing_if = "crate::brain_dump::Dumps::is_empty")]
 	pub brain_dump: crate::brain_dump::Dumps,
+	/// What the routines wrote down for each day, week and month. Left out of
+	/// the file until the first one is written.
+	#[serde(
+		default,
+		skip_serializing_if = "timeparagon_core::routines::Routines::is_empty"
+	)]
+	pub routines: timeparagon_core::routines::Routines,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
