@@ -361,6 +361,15 @@ pub enum Action {
     /// A task row in the calendar, independent of the selected sidebar tab.
     DropCalendarTask(String),
     DropDay,
+    /// Drop between two rows of a day's list. `after` names the row the gap
+    /// follows (none for the top of the list), so the preview can show there.
+    /// `start` is when the task would then begin: right after the timed row
+    /// above, or ending as the timed row below starts. With no timed row on
+    /// either side it goes on the day as a whole, as by [`Action::DropDay`].
+    DropAt {
+        after: Option<String>,
+        start: Option<DateTime<Local>>,
+    },
     /// Insert before/after a board card, or at the end of an empty/day column.
     DropWeekList {
         target: Option<String>,
@@ -987,6 +996,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
             return Task::batch([open, due, schedule]);
         }
         Action::DropWeekList { target, after } => return drop_week_list(state, target, after),
+        Action::DropAt { start, .. } => {
+            return update(state, start.map_or(Action::DropDay, Action::DropTime));
+        }
         Action::DropTime(start) => {
             let Some(id) = take_drag(state) else {
                 return Task::none();

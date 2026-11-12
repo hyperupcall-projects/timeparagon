@@ -156,6 +156,7 @@ fn is_drop(message: &Message) -> bool {
         Message::TimeBlocking(action) => matches!(
             action,
             crate::timeblocking::Action::DropDay
+                | crate::timeblocking::Action::DropAt { .. }
                 | crate::timeblocking::Action::DropWeekList { .. }
                 | crate::timeblocking::Action::DropTime(_)
                 | crate::timeblocking::Action::DropBlock(_)
@@ -801,5 +802,176 @@ mod tests {
         let (again, again_after, _) =
             crate::ui::drop_preview::week_list(&state, day).expect("a board preview");
         assert_eq!((again, again_after), (target, after));
+    }
+
+    /// Two timed meetings on `day`, 10–11 and 14–15, to drop between.
+    fn with_meetings(state: &mut State, day: chrono::NaiveDate) {
+        let mut snapshot = state.calendar.cached_snapshot().unwrap();
+        let template = calendar::sample_snapshot().events[0].clone();
+        for (id, title, hour) in [
+            ("morning", "Morning meeting", 10),
+            ("afternoon", "Afternoon meeting", 14),
+        ] {
+            let mut event = template.clone();
+            event.id = id.into();
+            event.title = title.into();
+            event.all_day = false;
+            event.start = calendar::at_clock(day, hour, 0);
+            event.end = event.start + chrono::Duration::hours(1);
+            snapshot.events.push(event);
+        }
+        let days = state.calendar_dates();
+        state.calendar.apply_week_snapshot(snapshot, &days);
+    }
+
+    fn row_bounds(state: &State, label: &str) -> Rectangle {
+        let mut ui = Simulator::with_size(
+            Settings::default(),
+            state.editor_window_size,
+            super::super::editor_window(state),
+        );
+        ui.find(label)
+            .unwrap_or_else(|_| panic!("no {label:?}"))
+            .bounds()
+    }
+
+    fn dropped_at(
+        message: &Message,
+    ) -> Option<(
+        chrono::NaiveDate,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Local>>,
+    )> {
+        let Message::Task(TaskMessage::TaskDragDropped(_, Some(message))) = message else {
+            return None;
+        };
+        let Message::Calendar(CalendarMessage::WeekDayAction(day, message)) = &**message else {
+            return None;
+        };
+        let Message::TimeBlocking(Action::DropAt { after, start }) = &**message else {
+            return None;
+        };
+        Some((*day, after.clone(), *start))
+    }
+
+    #[test]
+    fn two_week_drop_between_rows_starts_when_the_row_above_ends() {
+        let mut state = state(Screen::Inbox, false);
+        state.view = crate::app::CalendarView::TwoWeek;
+        let day = state.calendar_dates()[3];
+        with_meetings(&mut state, day);
+        start_drag(&mut state);
+        let clock = |hour| {
+            calendar::time_format::clock(
+                calendar::at_clock(day, hour, 0),
+                state.config.appearance.time_format,
+            )
+        };
+        let label = format!("{} Morning meeting", clock(10));
+        let bounds = row_bounds(&state, &label);
+        // The bottom half of the morning meeting: just after it.
+        let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.8);
+        hover_at(&mut state, point);
+        assert!(
+            matches!(&state.timeblocking.drop_hover, Some(hover)
+                if matches!(&hover.action, Action::DropAt { after: Some(after), start: Some(start) }
+                    if after == "morning" && *start == calendar::at_clock(day, 11, 0))),
+            "{:?}",
+            state.timeblocking.drop_hover
+        );
+        // The preview row sits in the gap and holds it.
+        hover_at(&mut state, point);
+        let message = drop_at(&mut state, point);
+        assert_eq!(
+            dropped_at(&message),
+            Some((
+                day,
+                Some("morning".into()),
+                Some(calendar::at_clock(day, 11, 0))
+            )),
+            "{message:?}"
+        );
+    }
+
+    #[test]
+    fn month_drop_above_the_first_timed_row_ends_as_it_starts() {
+        let mut state = state(Screen::Inbox, true);
+        let day =
+            calendar::month_grid(state.week_anchor, state.config.calendar.first_day_of_week)[10];
+        with_meetings(&mut state, day);
+        start_drag(&mut state);
+        let label = format!(
+            "{} Morning meeting",
+            calendar::time_format::clock(
+                calendar::at_clock(day, 10, 0),
+                state.config.appearance.time_format,
+            )
+        );
+        let bounds = row_bounds(&state, &label);
+        let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.2);
+        let message = drop_at(&mut state, point);
+        let task = state.calendar.event("task:drag").unwrap();
+        let minutes = match timeblocking::metadata(task).minutes {
+            0 => 30,
+            minutes => i64::from(minutes),
+        };
+        assert_eq!(
+            dropped_at(&message),
+            Some((
+                day,
+                None,
+                Some(calendar::at_clock(day, 10, 0) - chrono::Duration::minutes(minutes))
+            )),
+            "{message:?}"
+        );
+    }
+
+    #[test]
+    fn schedule_takes_drops_between_rows_and_on_the_whole_day() {
+        let mut state = state(Screen::Inbox, false);
+        state.view = crate::app::CalendarView::Schedule;
+        let day = state.calendar_dates()[1];
+        with_meetings(&mut state, day);
+        start_drag(&mut state);
+        let bounds = row_bounds(&state, "Afternoon meeting");
+        let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.8);
+        hover_at(&mut state, point);
+        assert!(
+            matches!(&state.timeblocking.drop_hover, Some(hover)
+                if hover.day == Some(day)
+                    && matches!(&hover.action, Action::DropAt { after: Some(after), start: Some(start) }
+                        if after == "afternoon" && *start == calendar::at_clock(day, 15, 0))),
+            "{:?}",
+            state.timeblocking.drop_hover
+        );
+        // Building the view with the preview in it works.
+        let _ = row_bounds(&state, "Afternoon meeting");
+        let message = drop_at(&mut state, point);
+        assert_eq!(
+            dropped_at(&message),
+            Some((
+                day,
+                Some("afternoon".into()),
+                Some(calendar::at_clock(day, 15, 0))
+            )),
+            "{message:?}"
+        );
+
+        // The date beside the rows takes the task for the day as a whole.
+        let mut state = self::state(Screen::Inbox, false);
+        state.view = crate::app::CalendarView::Schedule;
+        with_meetings(&mut state, day);
+        start_drag(&mut state);
+        let date = row_bounds(
+            &state,
+            day.format("%b, %a").to_string().to_uppercase().as_str(),
+        );
+        let message = drop_at(&mut state, date.center());
+        assert!(
+            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+                if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(d, inner))
+                    if *d == day && matches!(&**inner, Message::TimeBlocking(Action::DropDay)))),
+            "{message:?}"
+        );
     }
 }

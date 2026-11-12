@@ -51,16 +51,8 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
             let deadlines = state
                 .calendar
                 .deadline_markers_on(day, &state.config.calendar);
-            let mut events = column![].spacing(3).width(Fill);
-            // The task in the air goes first, so it stays in sight in a full
-            // cell.
-            if let Some(task) = crate::ui::drop_preview::on_day(state, day) {
-                events = events.push(crate::ui::drop_preview::chip(
-                    state,
-                    &task,
-                    cell_metrics.label(),
-                ));
-            }
+            use crate::ui::drop_preview::{self, Slot};
+            let mut rows: Vec<(Option<Slot>, Element<'a, Message>)> = Vec::new();
             for event in state
                 .calendar
                 .all_day_events_on(day, &state.config.calendar)
@@ -77,10 +69,16 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 // than appearing in every date of a month.
                 if event.is_task() && !calendar::deadline::is_marker(event) {
                     if event.start.date_naive() == day {
-                        events = events.push(weekly_task_chip(state, event, &cell_metrics));
+                        rows.push((
+                            Some(Slot::of(event)),
+                            weekly_task_chip(state, event, &cell_metrics),
+                        ));
                     }
                 } else {
-                    events = events.push(all_day_chip(state, event, &cell_metrics));
+                    rows.push((
+                        Some(Slot::of(event)),
+                        all_day_chip(state, event, &cell_metrics),
+                    ));
                 }
             }
             for event in state.calendar.timed_events_on(day, &state.config.calendar) {
@@ -95,42 +93,18 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                     continue;
                 }
                 if state.habits.calendar_habit.is_some() {
-                    events = events.push(habit_occurrence(state, event, &cell_metrics));
+                    rows.push((
+                        Some(Slot::of(event)),
+                        habit_occurrence(state, event, &cell_metrics),
+                    ));
                     continue;
                 }
-                let hidden = state.calendar.search.hides_details(event);
-                let label = if hidden {
-                    PRIVATE_TITLE.to_owned()
-                } else {
-                    format!(
-                        "{} {}",
-                        calendar::time_format::clock(
-                            event.start,
-                            state.config.appearance.time_format
-                        ),
-                        event.title
-                    )
-                };
-                let color = if hidden {
-                    PRIVATE_COLOR
-                } else {
-                    event.display_color(&state.config.calendar)
-                };
-                events = events.push(crate::ui::controls::locked(
-                    button(event_label(state, event, label, cell_metrics.label()))
-                        .width(Fill)
-                        .padding([3, 4])
-                        .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
-                        .style(move |theme, status| {
-                            let mut style = crate::ui::controls::secondary(theme, status);
-                            style.border = iced::Border {
-                                color,
-                                width: 1.0,
-                                radius: crate::ui::controls::RADIUS_SMALL.into(),
-                            };
-                            style
-                        }),
-                    event.details.sending,
+                rows.push((
+                    Some(Slot::of(event)),
+                    crate::ui::controls::locked(
+                        timed_chip(state, event, &cell_metrics),
+                        event.details.sending,
+                    ),
                 ));
             }
             for marker in deadlines.iter().filter(|event| !event.all_day) {
@@ -149,14 +123,36 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                         marker.title
                     )
                 };
-                events = events.push(
+                rows.push((
+                    Some(Slot::of(marker)),
                     button(text(label).size(cell_metrics.label()))
                         .width(Fill)
                         .padding([3, 4])
                         .on_press(Message::Event(EventMessage::EventOpened(marker.id.clone())))
-                        .style(crate::ui::controls::secondary),
-                );
+                        .style(crate::ui::controls::secondary)
+                        .into(),
+                ));
             }
+            let mut events = column![].spacing(3).width(Fill);
+            // Dropped on the day as a whole, the task in the air goes first,
+            // so it stays in sight in a full cell.
+            if let Some(task) = drop_preview::on_day(state, day) {
+                events = events.push(drop_preview::chip(state, &task, cell_metrics.label()));
+            }
+            events = events.extend(drop_preview::day_list(
+                state,
+                day,
+                rows,
+                // The cell gives its messages their day.
+                |message| message,
+                |task| {
+                    if task.all_day {
+                        drop_preview::chip(state, task, cell_metrics.label())
+                    } else {
+                        drop_preview::outlined(timed_chip(state, task, &cell_metrics))
+                    }
+                },
+            ));
             if state.habits.calendar_habit.is_some()
                 && !state
                     .calendar
@@ -643,4 +639,38 @@ pub(crate) fn titled<'a>(
     .align_y(Alignment::Start)
     .width(Fill)
     .into()
+}
+
+/// A timed event in a month cell: its start time and title, edged in its
+/// color.
+fn timed_chip<'a>(state: &State, event: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    let hidden = state.calendar.search.hides_details(event);
+    let label = if hidden {
+        PRIVATE_TITLE.to_owned()
+    } else {
+        format!(
+            "{} {}",
+            calendar::time_format::clock(event.start, state.config.appearance.time_format),
+            event.title
+        )
+    };
+    let color = if hidden {
+        PRIVATE_COLOR
+    } else {
+        event.display_color(&state.config.calendar)
+    };
+    button(event_label(state, event, label, metrics.label()))
+        .width(Fill)
+        .padding([3, 4])
+        .on_press(Message::Event(EventMessage::EventOpened(event.id.clone())))
+        .style(move |theme, status| {
+            let mut style = crate::ui::controls::secondary(theme, status);
+            style.border = iced::Border {
+                color,
+                width: 1.0,
+                radius: crate::ui::controls::RADIUS_SMALL.into(),
+            };
+            style
+        })
+        .into()
 }
