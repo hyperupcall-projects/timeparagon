@@ -943,6 +943,16 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			};
 		}
 		Action::EditTitle => {
+			if state
+				.calendar
+				.open_event
+				.as_deref()
+				.and_then(|id| state.calendar.event(id))
+				.and_then(|event| state.habits.habit_of(event))
+				.is_some()
+			{
+				return Task::none();
+			}
 			state.timeblocking.editing_title = true;
 			return iced::widget::operation::focus(iced::widget::Id::new("task-title"));
 		}
@@ -1478,6 +1488,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		}
 		Action::SaveDescription(id, value) => (id, Change::Description(value)),
 		Action::SaveTitle(id) => {
+			if event(state, &id)
+				.and_then(|event| state.habits.habit_of(event))
+				.is_some()
+			{
+				return Task::none();
+			}
 			let title = state.timeblocking.title.trim().to_owned();
 			if title.is_empty() {
 				state.timeblocking.title_error = Some("A task needs a name".into());

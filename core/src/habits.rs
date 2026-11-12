@@ -1331,6 +1331,16 @@ impl Library {
 		self.habits.iter().find(|habit| habit.id == id)
 	}
 
+	/// Linked occurrences take their names from the library, including tasks
+	/// planned inside blocks. Missing links retain their last known title.
+	pub fn name_event(&self, event: &mut crate::calendar::Event) {
+		if let Some(habit) = event.linked_habit_id().and_then(|id| self.habit(id)) {
+			if event.title != habit.name {
+				event.title.clone_from(&habit.name);
+			}
+		}
+	}
+
 	pub fn habit_mut(&mut self, id: &str) -> Option<&mut Habit> {
 		self.habits.iter_mut().find(|habit| habit.id == id)
 	}

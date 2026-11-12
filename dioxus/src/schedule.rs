@@ -113,7 +113,11 @@ pub fn Planner(
 		.as_ref()
 		.and_then(|result| result.as_ref().ok())
 		.filter(|(requested, _)| *requested == dates)
-		.map(|(_, snapshot)| day::filter_snapshot(snapshot, &search, &settings));
+		.map(|(_, snapshot)| {
+			let mut snapshot = snapshot.clone();
+			crate::habits::name_events(&mut snapshot.events);
+			day::filter_snapshot(&snapshot, &search, &settings)
+		});
 	let error = loaded
 		.read()
 		.as_ref()

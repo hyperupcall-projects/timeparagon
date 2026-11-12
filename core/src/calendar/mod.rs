@@ -1498,6 +1498,31 @@ impl Store {
 		event_enabled(&self.calendars, event, settings)
 	}
 
+	/// Resolve display names again after a library edit or a calendar refresh.
+	pub fn apply_habit_names(&mut self, library: &crate::habits::Library) {
+		for event in self
+			.events
+			.iter_mut()
+			.chain(self.cache.values_mut().flatten())
+			.chain(self.detail_event.iter_mut())
+		{
+			library.name_event(event);
+		}
+		if let Some(draft) = &mut self.edit_draft {
+			if let Some(event) = self
+				.events
+				.iter()
+				.chain(self.detail_event.iter())
+				.find(|event| event.id == draft.id)
+			{
+				if let Some(habit) = event.linked_habit_id().and_then(|id| library.habit(id)) {
+					draft.title.clone_from(&habit.name);
+					draft.editing_title = false;
+				}
+			}
+		}
+	}
+
 	/// Gives every Google Tasks list its saved color. Google hands all task
 	/// lists back with the same blue, so this keeps a customized list its own
 	/// color across syncs. Event colors are resolved when they are drawn by
@@ -4064,6 +4089,53 @@ mod tests {
 
 		settings.set_task_event_color(Some(colors::HABIT));
 		assert_eq!(task.display_color(&settings, &[]), colors::HABIT);
+	}
+
+	#[test]
+	fn habit_names_follow_the_library_across_cached_days_and_stale_refreshes() {
+		let mut library = crate::habits::Library::default();
+		library
+			.habits
+			.push(crate::habits::Habit::new("read", "Read"));
+		let mut snapshot = sample_snapshot();
+		let mut occurrence = snapshot.events[1].clone();
+		occurrence.details.habit = true;
+		occurrence.details.habit_id = Some("read".into());
+		occurrence.title = "Stale Google title".into();
+		let mut planned = occurrence.clone();
+		planned.details = Details::default();
+		planned.details.task_data = Some(crate::task_db::TaskData {
+			id: 42,
+			metadata: crate::timeblocking::Metadata {
+				habit_id: Some("read".into()),
+				..Default::default()
+			},
+		});
+		planned.completed = true;
+		planned.details.recurring_event_id = Some("planned-series".into());
+		snapshot.events = vec![occurrence.clone(), planned.clone()];
+		let mut store = Store::with_snapshot(snapshot.clone());
+		store
+			.cache
+			.insert(snapshot.day.succ_opt().unwrap(), snapshot.events.clone());
+		library.habit_mut("read").unwrap().name = "Read a book 📖".into();
+		store.apply_habit_names(&library);
+		for event in store.events.iter().chain(store.cache.values().flatten()) {
+			assert_eq!(event.title, "Read a book 📖");
+		}
+		// A refresh with Google's old copied summary must not restore that name.
+		store.apply_snapshot(snapshot);
+		store.apply_habit_names(&library);
+		assert!(
+			store
+				.events
+				.iter()
+				.all(|event| event.title == "Read a book 📖")
+		);
+		let mut missing = occurrence;
+		missing.details.habit_id = Some("missing".into());
+		library.name_event(&mut missing);
+		assert_eq!(missing.title, "Stale Google title");
 	}
 
 	#[test]

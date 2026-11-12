@@ -256,6 +256,20 @@ pub(super) fn editable_title<'a>(
 	task: &'a Event,
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
+	if let Some(habit) = state
+		.habits
+		.habit_of(task)
+		.and_then(|id| state.habits.library.habit(id))
+	{
+		return text(&habit.name)
+			.size(metrics.label() + 6.0)
+			.font(iced::Font {
+				weight: iced::font::Weight::Bold,
+				..iced::Font::DEFAULT
+			})
+			.into();
+	}
+
 	let busy = state.timeblocking.busy.contains_task(&task.id)
 		|| (task.id == crate::inbox::DRAFT_ID
 			&& state.inbox.draft.as_ref().is_some_and(|d| d.saving));

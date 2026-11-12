@@ -842,6 +842,74 @@ fn a_habit_planned_in_a_block_opens_with_habit_details() {
 }
 
 #[test]
+fn renaming_a_habit_updates_its_occurrences_and_their_readonly_editors() {
+	let mut state = State::blank();
+	state
+		.habits
+		.library
+		.habits
+		.push(crate::habits::Habit::new("read", "Read"));
+	let mut snapshot = calendar::sample_snapshot();
+	let mut independent = snapshot
+		.events
+		.iter()
+		.find(|e| e.id == "standup")
+		.unwrap()
+		.clone();
+	independent.id = "independent".into();
+	independent.title = "Old copied title".into();
+	independent.details.habit = true;
+	independent.details.habit_id = Some("read".into());
+	let mut planned = independent.clone();
+	planned.id = "planned".into();
+	planned.details = Default::default();
+	planned.details.task_data = Some(crate::task_db::TaskData {
+		id: 42,
+		metadata: crate::timeblocking::Metadata {
+			habit_id: Some("read".into()),
+			..Default::default()
+		},
+	});
+	snapshot.events.extend([independent, planned]);
+	state.calendar = calendar::Store::with_snapshot(snapshot);
+	for id in ["independent", "planned"] {
+		let _ = crate::app::update(
+			&mut state,
+			Message::Event(EventMessage::EventOpened(id.into())),
+		);
+		assert_eq!(state.calendar.event(id).unwrap().title, "Read");
+		let mut form = crate::habits::Form::from_habit(state.habits.library.habit("read").unwrap());
+		form.name = format!("Read · {id}");
+		state.habits.form = Some(form);
+		let _ = crate::app::update(&mut state, Message::Habits(crate::habits::Action::SaveForm));
+		let name = format!("Read · {id}");
+		for occurrence in ["independent", "planned"] {
+			assert_eq!(state.calendar.event(occurrence).unwrap().title, name);
+		}
+		assert_eq!(state.calendar.edit_draft.as_ref().unwrap().title, name);
+		let _ = crate::app::update(&mut state, Message::Event(EventMessage::EventTitleEdit));
+		let _ = crate::app::update(
+			&mut state,
+			Message::EventEdit(EventEditMessage::EventEditTitleChanged("Wrong".into())),
+		);
+		assert!(!state.calendar.edit_draft.as_ref().unwrap().editing_title);
+		assert_eq!(state.calendar.edit_draft.as_ref().unwrap().title, name);
+		let metrics = Metrics::of(Size::new(440.0, 2200.0));
+		let mut ui = iced_test::Simulator::with_size(
+			Default::default(),
+			metrics.size,
+			details_pane(&state, &metrics),
+		);
+		ui.click(name.as_str()).unwrap();
+		assert!(
+			!ui.into_messages()
+				.any(|m| matches!(m, Message::Event(EventMessage::EventTitleEdit)))
+		);
+		state.habits.library.habit_mut("read").unwrap().name = "Read".into();
+	}
+}
+
+#[test]
 fn a_time_block_panel_only_plans_tasks() {
 	let mut state = State::blank();
 	state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());

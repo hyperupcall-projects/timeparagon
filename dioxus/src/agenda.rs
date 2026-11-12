@@ -80,7 +80,9 @@ pub fn AgendaDays(
 		None => rsx! { p { class: "hint", role: "status", "Loading…" } },
 		Some(Err(message)) => rsx! { p { class: "editor-error", role: "alert", "{message}" } },
 		Some(Ok((snapshot, dates))) => {
-			let mut days = day::agenda(snapshot, dates, &settings);
+			let mut snapshot = snapshot.clone();
+			crate::habits::name_events(&mut snapshot.events);
+			let mut days = day::agenda(&snapshot, dates, &settings);
 			for (_, rows) in &mut days {
 				rows.retain(|row| {
 					filter

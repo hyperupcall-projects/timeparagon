@@ -79,6 +79,8 @@ pub fn Editor(
 	} else {
 		event
 	};
+	let mut event = event;
+	crate::habits::name_events(std::slice::from_mut(&mut event));
 	if event.details.sleep.is_some() {
 		rsx! { SleepEditor { event, context, on_close, on_saved, on_config } }
 	} else if event.is_task() && !(event.is_calendar_task() && event.is_habit()) {
@@ -402,6 +404,7 @@ fn TaskEditor(
 					class: "client-input",
 					r#type: "text",
 					disabled: is_busy,
+					readonly: event.linked_habit_id().is_some(),
 					value: "{values.title}",
 					oninput: move |event| fields.write().title = event.value(),
 					onchange: move |_| {
@@ -822,7 +825,11 @@ fn EventEditor(
 			})
 			.await;
 			match result {
-				Ok((occurrence, loaded)) => {
+				Ok((mut occurrence, mut loaded)) => {
+					crate::habits::name_events(std::slice::from_mut(&mut occurrence));
+					if occurrence.linked_habit_id().is_some() {
+						loaded.title.clone_from(&occurrence.title);
+					}
 					original.set(occurrence);
 					draft.set(loaded);
 					error.set(None);
@@ -848,8 +855,12 @@ fn EventEditor(
 		pending_time_scope.set(false);
 		save_menu.set(false);
 		delete_menu.set(false);
-		let current = draft();
-		let source = original();
+		let mut current = draft();
+		let mut source = original();
+		crate::habits::name_events(std::slice::from_mut(&mut source));
+		if source.linked_habit_id().is_some() {
+			current.title.clone_from(&source.title);
+		}
 		let context = save_context.clone();
 		busy.set(true);
 		error.set(None);
@@ -978,8 +989,12 @@ fn EventEditor(
 		});
 	});
 
-	let source_event = original();
-	let values = draft();
+	let mut source_event = original();
+	crate::habits::name_events(std::slice::from_mut(&mut source_event));
+	let mut values = draft();
+	if source_event.linked_habit_id().is_some() {
+		values.title.clone_from(&source_event.title);
+	}
 	let is_busy = busy() || values.loading;
 	let habit = source_event.is_habit();
 	let assigned = tb::is_assigned(&source_event);
@@ -1169,6 +1184,7 @@ fn EventEditor(
 					class: "client-input",
 					r#type: "text",
 					disabled: is_busy,
+					readonly: event.linked_habit_id().is_some(),
 					value: "{values.title}",
 					oninput: move |event| draft.write().title = event.value(),
 				}
@@ -3144,8 +3160,20 @@ mod tests {
 				"Scheduled by its time block",
 			],
 		);
+		assert!(html.contains("readonly"));
 		assert!(!html.contains("End Time"));
 		assert!(!html.contains("Complete task"));
+	}
+
+	#[test]
+	fn a_linked_independent_habit_has_a_readonly_title() {
+		let mut habit = event("h1", "blocks", "Read");
+		habit.details.habit = true;
+		habit.details.habit_id = Some("read".into());
+		let html = render(habit);
+		assert_offers(&html, &[">Habit<", "readonly", "value=\"Read\""]);
+		let html = render(event("e1", "work", "Meeting"));
+		assert!(!html.contains("readonly"));
 	}
 
 	#[test]
