@@ -20,6 +20,7 @@ mod reminders;
 mod schedule;
 mod scratch;
 mod search;
+mod setup;
 mod sleep;
 mod style;
 #[cfg(any(target_os = "android", test))]
@@ -182,8 +183,21 @@ fn java_file_path(
 	Some(std::path::PathBuf::from(path))
 }
 
+/// Setup until it is finished, then the app itself.
 #[component]
 fn App() -> Element {
+	let mut finished = use_signal(|| setup::Progress::load().finished);
+	use_context_provider(|| setup::Finished(finished));
+	if finished() {
+		rsx! { Main {} }
+	} else {
+		rsx! { setup::SetupFlow { on_finish: move |_| finished.set(true) } }
+	}
+}
+
+#[component]
+fn Main() -> Element {
+	let setup::Finished(mut setup_finished) = use_context::<setup::Finished>();
 	// Local settings can change under the view when the iced app saves them.
 	let mut config = use_signal(day::load_config);
 	let settings = config.read().calendar.clone();
@@ -1417,6 +1431,16 @@ fn App() -> Element {
 									});
 								},
 								if full_sync_running() { "Starting full sync…" } else { "Full sync" }
+							}
+							button {
+								class: "btn",
+								r#type: "button",
+								onclick: move |_| {
+									setup::Progress::restart();
+									show_settings.set(false);
+									setup_finished.set(false);
+								},
+								"Run setup"
 							}
 						}
 						h3 { class: "settings-heading", "Google" }

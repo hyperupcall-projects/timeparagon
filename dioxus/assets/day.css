@@ -3331,3 +3331,105 @@ textarea {
     flex-direction: column;
     gap: 4px;
 }
+
+/* -------------------------------------------------------------------- setup */
+
+.setup-screen {
+    overflow-y: auto;
+    align-items: flex-start;
+}
+
+.setup-card {
+    margin: auto 0;
+}
+
+.setup-progress {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.setup-dot {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--hairline);
+}
+
+.setup-dot.done {
+    background: var(--accent);
+    opacity: 0.5;
+}
+
+.setup-dot.current {
+    background: var(--accent);
+}
+
+.setup-body {
+    margin-top: 4px;
+}
+
+.setup-body p,
+.setup-body ol {
+    margin: 0;
+}
+
+.setup-list {
+    padding-left: 20px;
+}
+
+.setup-list li + li {
+    margin-top: 4px;
+}
+
+.setup-ok {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.setup-actions {
+    align-items: center;
+}
+
+.link-button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.setup-syncing {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.setup-bar {
+    position: relative;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--hairline);
+}
+
+.setup-bar-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 35%;
+    border-radius: 2px;
+    background: var(--accent);
+    animation: setup-bar 1.4s ease-in-out infinite;
+}
+
+@keyframes setup-bar {
+    0% {
+        left: -35%;
+    }
+    100% {
+        left: 100%;
+    }
+}

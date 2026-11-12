@@ -1460,6 +1460,13 @@ fn save_google_client_at(database: &Path, client_id: &str, client_secret: &str) 
 	})
 }
 
+/// Stores the Mapbox access token, which is shared with every device.
+pub fn save_mapbox_token(token: &str) -> io::Result<()> {
+	update_at(&database()?, |config| {
+		config.travel.api_key = token.trim().to_owned();
+	})
+}
+
 /// Saves which sources are switched off.
 pub fn save_calendar_visibility(settings: &CalendarSettings) -> io::Result<()> {
 	save_calendar_visibility_at(&database()?, settings)

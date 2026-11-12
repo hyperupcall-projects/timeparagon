@@ -25,7 +25,7 @@ use std::{
 	fs, io,
 	path::Path,
 	sync::{
-		Mutex, OnceLock,
+		Condvar, Mutex, OnceLock,
 		atomic::{AtomicU64, Ordering},
 	},
 	time::Duration,
@@ -59,6 +59,10 @@ const TOMBSTONE_LIFETIME: i64 = 30 * 24 * 60 * 60;
 static STARTED: OnceLock<()> = OnceLock::new();
 static STATUS: Mutex<String> = Mutex::new(String::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// How many sync cycles have finished, and the server the last one used.
+static SYNCED: Mutex<(u64, String)> = Mutex::new((0, String::new()));
+/// Woken whenever [`SYNCED`] changes.
+static SYNCED_CHANGED: Condvar = Condvar::new();
 /// What sync did, at the level a person cares about, newest last.
 static LOG: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -798,6 +802,103 @@ pub fn start() {
 		}
 	});
 }
+fn note_synced(url: &str) {
+	if let Ok(mut synced) = SYNCED.lock() {
+		synced.0 += 1;
+		url.clone_into(&mut synced.1);
+		SYNCED_CHANGED.notify_all();
+	}
+}
+
+/// How many sync cycles have finished so far. Read it before saving a new
+/// URL, and give it to [`wait_for_sync`].
+pub fn synced_cycles() -> u64 {
+	SYNCED.lock().map(|synced| synced.0).unwrap_or_default()
+}
+
+/// Waits until a sync cycle with the server at `url` finishes, after the
+/// first `after` cycles: that is, until everything on the server has been
+/// received and applied here. Blocking. Fails with the latest status if
+/// that takes longer than `timeout`.
+pub fn wait_for_sync(url: &str, after: u64, timeout: Duration) -> Result<(), String> {
+	let url = url.trim();
+	let synced = SYNCED
+		.lock()
+		.map_err(|_| "Database sync is unavailable".to_owned())?;
+	let (_synced, waited) = SYNCED_CHANGED
+		.wait_timeout_while(synced, timeout, |(cycles, last)| {
+			*cycles <= after || last != url
+		})
+		.map_err(|_| "Database sync is unavailable".to_owned())?;
+	if waited.timed_out() {
+		return Err(format!(
+			"Still not synced after {} seconds. {}",
+			timeout.as_secs(),
+			status()
+		));
+	}
+	Ok(())
+}
+
+/// Connects to the sync server at `url` the way sync does, with a scratch
+/// replica that is thrown away afterwards, so the real one is never touched.
+/// Blocking: it runs on a thread of its own and waits up to 30 seconds.
+pub fn test_connection(url: &str) -> Result<(), String> {
+	let url = url.trim().to_owned();
+	if url.is_empty() {
+		return Err("Enter the sync server URL first".into());
+	}
+	crate::config::validate_database_sync_url(&url)?;
+	let parent = crate::task_db::path()
+		.and_then(|path| path.parent().map(Path::to_path_buf))
+		.ok_or("No data directory to test the connection from")?;
+	let scratch = parent.join(format!(
+		"turso-test-{}-{}",
+		std::process::id(),
+		chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+	));
+	let worker_scratch = scratch.clone();
+	let result = std::thread::Builder::new()
+		.name("timeparagon-sync-test".into())
+		.spawn(move || -> io::Result<()> {
+			fs::create_dir_all(&worker_scratch)?;
+			crate::fsutil::make_private(&worker_scratch)?;
+			let replica_path = worker_scratch.join("replica.db");
+			let _ = rustls::crypto::ring::default_provider().install_default();
+			let runtime = tokio::runtime::Builder::new_current_thread()
+				.enable_all()
+				.build()?;
+			runtime.block_on(async {
+				let attempt = async {
+					let replica = turso::sync::Builder::new_remote(
+						replica_path
+							.to_str()
+							.ok_or_else(|| other("invalid database path"))?,
+					)
+					.with_remote_url(&url)
+					.build()
+					.await
+					.map_err(other)?;
+					let conn = replica.connect().await.map_err(other)?;
+					let mut rows = conn.query("SELECT 1", ()).await.map_err(other)?;
+					rows.next().await.map_err(other)?;
+					drop(rows);
+					replica.pull().await.map_err(other)?;
+					Ok::<_, io::Error>(())
+				};
+				tokio::time::timeout(Duration::from_secs(30), attempt)
+					.await
+					.map_err(|_| other("timed out after 30 seconds"))?
+			})
+		})
+		.map_err(|error| format!("Could not start the connection test: {error}"))?
+		.join()
+		.map_err(|_| "The connection test stopped unexpectedly".to_owned())
+		.and_then(|result| result.map_err(|error| error.to_string()));
+	let _ = fs::remove_dir_all(&scratch);
+	result.map_err(|error| format!("Could not connect: {error}"))
+}
+
 fn run() {
 	let Some(path) = crate::task_db::path() else {
 		set_status("Database sync: no data directory".into());
@@ -998,6 +1099,7 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
 				if set_status("Database synced".into()) {
 					log_activity("Connected to database sync".into());
 				}
+				note_synced(url);
 			}
 			Ok(Err(e)) => {
 				set_failure(format!("Database sync offline; edits saved locally: {e}"));
@@ -1011,6 +1113,45 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn waiting_for_sync_ends_only_with_a_new_cycle_on_the_same_server() {
+		let after = synced_cycles();
+		note_synced("https://old.example");
+		let error = wait_for_sync("https://new.example", after, Duration::from_millis(50));
+		assert!(error.unwrap_err().starts_with("Still not synced"));
+		let waiter = std::thread::spawn(move || {
+			wait_for_sync(" https://new.example ", after, Duration::from_secs(10))
+		});
+		std::thread::sleep(Duration::from_millis(50));
+		note_synced("https://new.example");
+		assert_eq!(waiter.join().unwrap(), Ok(()));
+	}
+
+	#[test]
+	fn testing_a_connection_fails_cleanly_and_leaves_no_scratch_replica() {
+		assert!(test_connection("  ").is_err());
+		assert!(test_connection("ftp://example.com").is_err());
+		// Nothing listens on port 1, so this is refused at once.
+		let error = test_connection("http://127.0.0.1:1").unwrap_err();
+		assert!(error.starts_with("Could not connect"), "{error}");
+		let parent = crate::task_db::path().unwrap();
+		let leftovers = fs::read_dir(parent.parent().unwrap())
+			.map(|entries| {
+				entries
+					.flatten()
+					.filter(|entry| {
+						entry
+							.file_name()
+							.to_string_lossy()
+							.starts_with("turso-test-")
+					})
+					.count()
+			})
+			.unwrap_or(0);
+		assert_eq!(leftovers, 0);
+	}
+
 	fn db() -> (tempfile::TempDir, std::path::PathBuf) {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("test.sqlite3");

@@ -27,7 +27,7 @@ CI automatically publishes both the native and Android app when versions are pus
 
 ## Setup
 
-To use all features, a bit of setup is required:
+To use all features, a bit of setup is required. See [Setup](./setup.md) for step-by-step instructions; the Android app also walks through it on first start.
 
 - [Google Cloud Account](https://cloud.google.com)
 	- Required for syncing calendar, tasks, and contact data.

@@ -202,7 +202,12 @@ impl NotesStore {
 
 /// Folder setup is device-local; sync the chosen folders to share Markdown.
 #[component]
-pub fn NotesSettings(config: Signal<timeparagon_core::config::Config>) -> Element {
+pub fn NotesSettings(
+	config: Signal<timeparagon_core::config::Config>,
+	/// Off where the page around it already says this is about notes.
+	#[props(default = true)]
+	heading: bool,
+) -> Element {
 	let store = use_context::<NotesStore>();
 	let mut input = use_signal(|| timeparagon_core::config::NotesSettings::load().directory);
 	let mut problem = use_signal(|| None::<String>);
@@ -236,7 +241,7 @@ pub fn NotesSettings(config: Signal<timeparagon_core::config::Config>) -> Elemen
 	#[cfg(not(target_os = "android"))]
 	let picker: Element = rsx! {};
 	rsx! {
-		h3 { class: "settings-heading", "Notes" }
+		if heading { h3 { class: "settings-heading", "Notes" } }
 		label { r#for: "settings-notes-folder", "Notes folder" }
 		input {
 			id: "settings-notes-folder", class: "client-input", value: "{input}",
