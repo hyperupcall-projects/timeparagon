@@ -416,6 +416,38 @@ fn a_one_off_block_lays_out_its_tasks_and_deleting_it_frees_them() {
 }
 
 #[test]
+fn a_one_off_stays_in_its_block_once_the_block_starts_repeating() {
+    let mut google = FakeGoogle::default();
+    let single = google.add_block(at(12, 14, 0), 60);
+    let block = google.singles[0].clone();
+    let task = google.add_one_off(&block, "A", 1, 20);
+    settle(&mut google, 0);
+    google.make_repeating(&single, DAILY);
+    let fixes = settle(&mut google, 0);
+    assert!(fixes.is_empty(), "{fixes:#?}");
+    let (first, last) = window();
+    let events = google.listing(CALENDAR, first, last).unwrap().events;
+    let task = google.single(&task);
+    let holder = block_of(task, events.iter().filter(|e| !e.is_task()), 0).expect("in a block");
+    assert_eq!(
+        holder.details.recurring_event_id.as_deref(),
+        Some(single.as_str())
+    );
+    assert_eq!(holder.start, at(12, 14, 0));
+    // Only that day: it does not repeat with the block.
+    assert!(!is_follower(task));
+    let next = google.occurrence_on(&single, day(13));
+    assert!(tasks_in(&next, &events, 0).is_empty());
+    // Deleting that first occurrence on its own frees the task.
+    google.delete_occurrence(&single, day(12));
+    let fixes = settle(&mut google, 0);
+    assert!(
+        fixes.iter().any(|fix| matches!(fix, Fix::Release { .. })),
+        "{fixes:#?}"
+    );
+}
+
+#[test]
 fn the_past_is_left_alone() {
     let mut google = FakeGoogle::default();
     let block = google.add_block_series(at(2, 9, 0), 60, DAILY);

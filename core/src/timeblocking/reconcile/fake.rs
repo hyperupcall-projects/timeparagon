@@ -381,6 +381,28 @@ impl FakeGoogle {
         exception.end = Some(start + length);
     }
 
+    /// Make a single block repeat, as Google does: the event becomes a
+    /// series with the same ID and start.
+    pub fn make_repeating(&mut self, id: &str, rule: &str) {
+        let at = self.singles.iter().position(|e| e.id == id).expect("block");
+        let single = self.singles.remove(at);
+        self.series.push(FakeSeries {
+            master: Series {
+                calendar: single.calendar_id,
+                id: single.id,
+                recurrence: vec![format!("RRULE:{rule}")],
+                start: single.start,
+                end: single.end,
+                all_day: single.all_day,
+                split_from: Vec::new(),
+                task: None,
+            },
+            title: single.title,
+            cancelled: false,
+            exceptions: BTreeMap::new(),
+        });
+    }
+
     /// Delete one occurrence.
     pub fn delete_occurrence(&mut self, series: &str, day: NaiveDate) {
         self.exception_on(series, day).cancelled = true;

@@ -171,18 +171,43 @@ pub fn in_block(task: &Event, block: &Event, day_start_hour: u32) -> bool {
         return true;
     }
     // The occurrence's ID has changed since the task was put in it: its
-    // series was retimed or split. Match the same series on the same day.
-    let Some((calendar_id, id)) = key.rsplit_once('/') else {
+    // series was retimed or split, or the block has started repeating since.
+    // Match the same series on the same day.
+    let Some((calendar_id, series, day)) = placement(task, &key, day_start_hour) else {
         return false;
     };
-    let Some((series, start)) = parse_instance_id(id) else {
-        return false;
-    };
-    let name = format!("{calendar_id}/{series}");
     block.calendar_id == calendar_id
-        && lineage(block).contains(&name)
-        && planning_day(start, day_start_hour)
-            == planning_day(original_start(block), day_start_hour)
+        && lineage(block).contains(&format!("{calendar_id}/{series}"))
+        && day == planning_day(original_start(block), day_start_hour)
+}
+
+/// Where a one-off's stored key `key` puts it: the block's calendar, the
+/// series (or single event) it names, and the planning day.
+///
+/// A key naming one occurrence of a series has the day in its ID. A key
+/// naming a single event is also the series that event becomes when it is
+/// made to repeat, which keeps the event's ID and start; the task stays in
+/// that first occurrence, on the task's own day.
+fn placement<'a>(
+    task: &Event,
+    key: &'a str,
+    day_start_hour: u32,
+) -> Option<(&'a str, &'a str, NaiveDate)> {
+    let (calendar_id, id) = key.rsplit_once('/')?;
+    Some(match parse_instance_id(id) {
+        Some((series, start)) => (calendar_id, series, planning_day(start, day_start_hour)),
+        None => (calendar_id, id, task_day(task, day_start_hour)),
+    })
+}
+
+/// The planning day a one-off task is on. An all-day task (one put in a
+/// block from a day's list keeps its date) is on its date.
+pub fn task_day(task: &Event, day_start_hour: u32) -> NaiveDate {
+    if task.all_day {
+        task.start.date_naive()
+    } else {
+        planning_day(original_start(task), day_start_hour)
+    }
 }
 
 /// Whether `task`, a one-off, is in an occurrence that deleting `block` with
@@ -210,10 +235,7 @@ pub fn deleted_with(
     let Some(key) = metadata(task).block else {
         return false;
     };
-    let Some((calendar_id, id)) = key.rsplit_once('/') else {
-        return false;
-    };
-    let Some((placed_series, start)) = parse_instance_id(id) else {
+    let Some((calendar_id, placed_series, day)) = placement(task, &key, day_start_hour) else {
         return false;
     };
     if calendar_id != block.calendar_id {
@@ -223,8 +245,7 @@ pub fn deleted_with(
         return true;
     }
     lineage(block).contains(&format!("{calendar_id}/{placed_series}"))
-        && planning_day(start, day_start_hour)
-            >= planning_day(original_start(block), day_start_hour)
+        && day >= planning_day(original_start(block), day_start_hour)
 }
 
 /// Whether `a` and `b` are the same item, even under different IDs.
@@ -518,6 +539,41 @@ mod tests {
         // The exact match wins when two blocks could take it.
         let events = [retimed.clone(), placed.clone()];
         assert_eq!(block_of(&task, &events, 0).unwrap().id, placed.id);
+    }
+
+    #[test]
+    fn a_one_off_stays_in_the_first_occurrence_once_its_block_starts_repeating() {
+        // Put in a single block "block" on the 9th at 9am.
+        let task = task(Metadata {
+            block: Some("app/block".into()),
+            ..Default::default()
+        });
+        // The block now repeats daily; Google renames it per occurrence.
+        let first = occurrence("block", 9, 9);
+        assert!(in_block(&task, &first, 0));
+        assert!(!in_block(&task, &occurrence("block", 10, 9), 0));
+        assert!(!in_block(&task, &occurrence("other", 9, 9), 0));
+        // Retimed or split later, it is still that day's occurrence.
+        assert!(in_block(&task, &occurrence("block", 9, 11), 0));
+        let mut split = occurrence("later", 9, 11);
+        split.details.split_from = vec!["app/block".into()];
+        assert!(in_block(&task, &split, 0));
+        // An all-day task put in it from the day's list is on its date.
+        let mut listed = task.clone();
+        listed.all_day = true;
+        listed.start = calendar::at_clock(day(9), 0, 0);
+        assert!(in_block(&listed, &first, 4));
+        // Deleting the series from a later day takes it only for "all".
+        use calendar::SaveScope::{All, CurrentAndFuture};
+        let later = occurrence("block", 11, 9);
+        assert!(deleted_with(&task, &later, All, 0));
+        assert!(!deleted_with(&task, &later, CurrentAndFuture, 0));
+        assert!(deleted_with(
+            &task,
+            &occurrence("block", 8, 9),
+            CurrentAndFuture,
+            0
+        ));
     }
 
     #[test]

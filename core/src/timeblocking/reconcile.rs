@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 use super::membership::{
-    block_of, is_follower, layout, original_start, planning_day, series_lineage, tasks_in,
+    block_of, is_follower, layout, original_start, planning_day, series_lineage, task_day, tasks_in,
 };
 use super::metadata;
 use crate::calendar::{self, Event};
@@ -770,7 +770,16 @@ fn occurrence_fixes(
         let Some((cal, id)) = key.rsplit_once('/') else {
             continue;
         };
-        if cal == calendar && !remote.exists(cal, id)? {
+        // A key naming a block that has started repeating since stands for
+        // its first occurrence, which may have been deleted on its own.
+        let day = task_day(task, day_start_hour);
+        let skipped = || {
+            listing
+                .cancelled
+                .iter()
+                .any(|(series, start)| series == id && planning_day(*start, day_start_hour) == day)
+        };
+        if cal == calendar && (skipped() || !remote.exists(cal, id)?) {
             fixes.push(Fix::Release {
                 task: Box::new(task.clone()),
             });
