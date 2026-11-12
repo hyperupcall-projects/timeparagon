@@ -426,13 +426,15 @@ fn a_single_time_block_with_planned_tasks_offers_deleting_them_too() {
             .is_ok()
     );
     drop(confirmation);
-    // The planned tasks leave the view with the block, not after a refresh.
+    // The block and its planned tasks stay in view, locked by the local
+    // edits, until Google confirms the delete; then they leave together.
     let _ = crate::app::update(
         &mut state,
         Message::Event(EventMessage::EventDeleted("standup".into(), Ok(()))),
     );
-    assert!(state.calendar.event("standup").is_none());
-    assert!(state.calendar.event("task:planned").is_none());
+    assert!(state.calendar.event("standup").is_some());
+    assert!(state.calendar.event("task:planned").is_some());
+    assert!(state.calendar.open_event.is_none());
 }
 
 #[test]
@@ -465,7 +467,8 @@ fn a_plain_block_delete_leaves_its_planned_tasks_in_view() {
     ] {
         let _ = crate::app::update(&mut state, Message::Event(message));
     }
-    assert!(state.calendar.event("standup").is_none());
+    // The block stays until Google confirms the delete.
+    assert!(state.calendar.event("standup").is_some());
     assert!(state.calendar.event("task:planned").is_some());
 }
 

@@ -135,6 +135,174 @@ struct Write {
     /// The cached task record it replaced, restored if Google refuses it:
     /// the record's ID and its JSON before (`None` when there was none).
     previous_task: Option<(String, Option<String>)>,
+    /// Told Google's answer, for a caller waiting on it (see [`submit_and_wait`]).
+    done: Option<mpsc::Sender<Result<(), String>>>,
+}
+
+/// What a delete on its way to Google takes away besides the item it names,
+/// so everything it deletes is shown deleting (locked, as an edit on its way
+/// is) and leaves together once Google confirms it. Kept per
+/// `google_entities` row in the local-only document [`DELETES`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum Deleting {
+    /// An event deleted with `scope`: with "this and following" or "all",
+    /// the other occurrences of its series that go too. `block` is the block
+    /// as shown when the tasks planned in the occurrences deleted go too.
+    Event {
+        scope: SaveScope,
+        block: Option<Box<Event>>,
+    },
+    /// A task, which can also show on the list it was moved from.
+    Task,
+}
+
+/// The `documents` key holding each pending delete's [`Deleting`], by
+/// `google_entities` row. Not shared with other devices.
+const DELETES: &str = "google_deletes";
+
+/// How long after Google confirmed a delete the other items it took along
+/// are still kept out of view. A fetch made since shows them gone anyway;
+/// this only covers the moment before one has.
+const DELETE_SETTLING: chrono::Duration = chrono::Duration::minutes(2);
+
+impl Deleting {
+    fn of(job: &Job) -> Option<Self> {
+        match job {
+            Job::Delete {
+                scope, with_tasks, ..
+            } => Some(Self::Event {
+                scope: *scope,
+                block: with_tasks.clone(),
+            }),
+            Job::DeleteTask { .. } => Some(Self::Task),
+            _ => None,
+        }
+    }
+
+    /// Whether deleting the item `id` on `calendar` this way also deletes
+    /// `event`, another item.
+    fn takes(&self, calendar: &str, id: &str, event: &Event, day_start_hour: u32) -> bool {
+        match self {
+            Self::Task => event.id == id,
+            Self::Event { scope, block } => {
+                let target = block
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_else(|| deleted_block(calendar, id));
+                occurrence_deleted(event, &target, *scope)
+                    || (block.is_some()
+                        && task_deleted_with(event, &target, *scope, day_start_hour))
+            }
+        }
+    }
+}
+
+/// Whether deleting `target` with `scope` deletes `event` as another
+/// occurrence of its series, as [`api::delete_event_scope`] does.
+fn occurrence_deleted(event: &Event, target: &Event, scope: SaveScope) -> bool {
+    if scope == SaveScope::Current || event.calendar_id != target.calendar_id {
+        return false;
+    }
+    // Something that is not an occurrence, such as a habit's series deleted
+    // by its master, goes whole.
+    let (series, from) = match &target.details.recurring_event_id {
+        Some(series) => (
+            series.as_str(),
+            (scope == SaveScope::CurrentAndFuture)
+                .then(|| crate::timeblocking::membership::original_start(target)),
+        ),
+        None => (target.id.as_str(), None),
+    };
+    let on_series =
+        event.details.recurring_event_id.as_deref() == Some(series) || event.id == series;
+    on_series
+        && from.is_none_or(|from| crate::timeblocking::membership::original_start(event) >= from)
+}
+
+/// Whether deleting the block `block` with `scope`, tasks included, deletes
+/// the task `event`: a one-off in an occurrence deleted, or an occurrence of
+/// a task repeating with the block on a day deleted (see
+/// `send::delete_followers`).
+fn task_deleted_with(event: &Event, block: &Event, scope: SaveScope, day_start_hour: u32) -> bool {
+    use crate::timeblocking::membership::{deleted_with, original_start, planning_day};
+    if !event.is_task() {
+        return false;
+    }
+    if !crate::timeblocking::is_follower(event) {
+        return deleted_with(event, block, scope, day_start_hour);
+    }
+    let Some(series) = &block.details.recurring_event_id else {
+        return false;
+    };
+    let name = format!("{}/{series}", block.calendar_id);
+    if crate::timeblocking::metadata(event).block_series.as_deref() != Some(name.as_str()) {
+        return false;
+    }
+    let day = |e: &Event| planning_day(original_start(e), day_start_hour);
+    match scope {
+        SaveScope::All => true,
+        SaveScope::CurrentAndFuture => day(event) >= day(block),
+        SaveScope::Current => day(event) == day(block),
+    }
+}
+
+/// Every pending delete's [`Deleting`], by `google_entities` row.
+fn read_deletes(tx: &rusqlite::Connection) -> Result<HashMap<String, Deleting>, String> {
+    let json: Option<String> = tx
+        .query_row("SELECT value FROM documents WHERE key=?1", [DELETES], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+    // An unreadable record only costs the other items' deleting look.
+    Ok(json
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default())
+}
+
+/// Records how the write to row `entity` deletes (`None`: it does not), and
+/// forgets the records of rows that are gone or long confirmed.
+fn write_delete(
+    tx: &rusqlite::Connection,
+    entity: &str,
+    deleting: Option<Deleting>,
+) -> Result<(), String> {
+    let mut deletes = read_deletes(tx)?;
+    let had = !deletes.is_empty();
+    match deleting {
+        Some(deleting) => {
+            deletes.insert(entity.to_owned(), deleting);
+        }
+        None => {
+            deletes.remove(entity);
+        }
+    }
+    if deletes.is_empty() && !had {
+        return Ok(());
+    }
+    let settled = (crate::clock::utc_now() - DELETE_SETTLING).to_rfc3339();
+    let mut live = HashMap::new();
+    for (key, deleting) in deletes {
+        let current = tx
+            .query_row(
+                "SELECT 1 FROM google_entities WHERE id=?1 AND event IS NULL AND (sending_since IS NOT NULL OR acknowledged_at > ?2)",
+                params![key, settled],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        if current || key == entity {
+            live.insert(key, deleting);
+        }
+    }
+    let json = serde_json::to_string(&live).map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![DELETES, json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// One write the log mentions: being sent, saved, or refused.
@@ -253,13 +421,36 @@ fn key(calendar: &str, id: &str) -> String {
 pub fn submit(job: Job, event: Option<&Event>, calendar: &str, id: &str) -> Result<(), String> {
     let path = task_db::path().ok_or("Cannot locate database")?;
     let writes = record_in(&path, job, event, calendar, id)?;
+    dispatch(&path, writes)
+}
+
+/// [`submit`], then waits for Google's answer to the write itself (not to
+/// the edits it brings along), for a caller with nothing to show until then.
+/// Blocking: call it from a worker thread.
+pub fn submit_and_wait(
+    job: Job,
+    event: Option<&Event>,
+    calendar: &str,
+    id: &str,
+) -> Result<(), String> {
+    let path = task_db::path().ok_or("Cannot locate database")?;
+    let mut writes = record_in(&path, job, event, calendar, id)?;
+    let (sender, answer) = mpsc::channel();
+    writes[0].done = Some(sender);
+    dispatch(&path, writes)?;
+    answer
+        .recv()
+        .map_err(|_| "The Google worker stopped before answering".to_owned())?
+}
+
+fn dispatch(path: &Path, writes: Vec<Write>) -> Result<(), String> {
     for write in writes {
         log_write(format!("Saving to Google: {}", write.label), false);
         // Test runs keep everything local: nothing may reach Google.
         if crate::config::isolated() {
-            send_in(&path, write, |_| Ok(None))?;
+            send_in(path, write, |_| Ok(None))?;
         } else {
-            worker(&path).send(Work::Write(Box::new(write)));
+            worker(path).send(Work::Write(Box::new(write)));
         }
     }
     Ok(())
@@ -676,9 +867,8 @@ fn record_tx(
             "INSERT INTO google_entities(id,event,acknowledged_at,observed_at,sending_since) VALUES(?1,?2,NULL,NULL,?3) ON CONFLICT(id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL,sending_since=excluded.sending_since",
             params![entity, saved, crate::clock::utc_now().to_rfc3339()],
         )?;
-        if event.is_none() {
-            tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])?;
-        }
+        // A deleted task stays in the cache, so it shows as being deleted
+        // until Google confirms it (see `finish`).
         if let Some(event) = event {
             if event.is_task() {
                 tx.execute(
@@ -700,11 +890,13 @@ fn record_tx(
         Ok(())
     })()
     .map_err(|e| e.to_string())?;
+    write_delete(tx, &entity, Deleting::of(&job))?;
     Ok(Write {
         entity,
         label,
         job,
         previous_task: touches_task.then(|| (record_id.to_owned(), previous_task)),
+        done: None,
     })
 }
 /// What [`overlay`] applies, read from the database in one go so the reading
@@ -731,6 +923,8 @@ struct OverlayEntity {
     sending: bool,
     /// A fetch begun after Google confirmed the write has shown the item.
     observed: bool,
+    /// For a delete, what else it deletes.
+    deleting: Option<Deleting>,
 }
 
 /// Reads the local snapshots of edited items and the ID map.
@@ -763,6 +957,7 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
         }
     }
     let mut entities = Vec::new();
+    let mut deletes = read_deletes(tx)?;
     {
         let mut q = tx
             .prepare(
@@ -791,6 +986,7 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
             let Some((calendar, id)) = key.split_once('\n') else {
                 continue;
             };
+            let deleting = deletes.remove(&key).filter(|_| json.is_none());
             entities.push(OverlayEntity {
                 calendar: calendar.to_owned(),
                 id: id.to_owned(),
@@ -801,6 +997,7 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
                 acknowledged_at: ack.and_then(|ack| DateTime::parse_from_rfc3339(&ack).ok()),
                 sending: sending_since.is_some(),
                 observed,
+                deleting,
             });
         }
     }
@@ -896,28 +1093,72 @@ impl Overlay {
         let mut entities: Vec<&OverlayEntity> = self.entities.iter().filter(applies).collect();
         entities.sort_by_key(|entity| (!entity.observed, entity.sending));
         let hour = self.day_start_hour;
+        let by_id = |entity: &OverlayEntity, e: &Event| {
+            e.id == entity.id
+                && (e.calendar_id == entity.calendar
+                    || entity
+                        .event
+                        .as_ref()
+                        .is_some_and(|saved| saved.calendar_id == e.calendar_id)
+                    || remapped.contains(&(
+                        entity.calendar.clone(),
+                        e.calendar_id.clone(),
+                        e.id.clone(),
+                    )))
+        };
+        // Whether the delete `entity` takes `e` along besides its own item.
+        let takes = |entity: &OverlayEntity, e: &Event| {
+            entity
+                .deleting
+                .as_ref()
+                .is_some_and(|deleting| deleting.takes(&entity.calendar, &entity.id, e, hour))
+        };
+        // Being locked is the overlay's to say: an item it no longer covers
+        // (its write answered or given up on) is unlocked.
+        for event in events.iter_mut() {
+            event.details.sending = false;
+        }
+        let now = crate::clock::now();
+        let mut deleting = Vec::new();
+        let mut deleted = Vec::new();
         for entity in entities {
+            if entity.event.is_none() {
+                // A delete on its way leaves the item showing, locked, until
+                // Google answers, as an edit on its way is shown.
+                if entity.sending {
+                    deleting.push(entity);
+                    continue;
+                }
+                if entity
+                    .acknowledged_at
+                    .is_some_and(|ack| now - ack.with_timezone(&Local) < DELETE_SETTLING)
+                {
+                    deleted.push(entity);
+                }
+            }
             events.retain(|e| {
-                let by_id = e.id == entity.id
-                    && (e.calendar_id == entity.calendar
-                        || entity
-                            .event
-                            .as_ref()
-                            .is_some_and(|saved| saved.calendar_id == e.calendar_id)
-                        || remapped.contains(&(
-                            entity.calendar.clone(),
-                            e.calendar_id.clone(),
-                            e.id.clone(),
-                        )));
                 let same = entity.event.as_ref().is_some_and(|saved| {
                     crate::timeblocking::membership::same_item(saved, e, hour)
                 });
-                !by_id && !same
+                !by_id(entity, e) && !same
             });
             if let Some(event) = &entity.event {
                 let mut event = event.clone();
                 event.details.sending = entity.sending;
                 events.push(event);
+            }
+        }
+        // Once every edit is in place, so none of them brings back an item a
+        // delete takes along: what a confirmed delete took leaves with it,
+        // and what one on its way takes is locked with it.
+        for entity in deleted {
+            events.retain(|e| !takes(entity, e));
+        }
+        for entity in deleting {
+            for e in events.iter_mut() {
+                if by_id(entity, e) || takes(entity, e) {
+                    e.details.sending = true;
+                }
             }
         }
     }
@@ -988,7 +1229,9 @@ fn send_in(
         label,
         job,
         previous_task,
+        done,
     } = write;
+    let deletes = matches!(job, Job::Delete { .. } | Job::DeleteTask { .. });
     let task = match &job {
         Job::TaskEdit { task, .. } | Job::Status { task, .. } => Some(task.id.clone()),
         Job::CreateTask { task, .. } => Some(task.id.clone()),
@@ -1005,10 +1248,19 @@ fn send_in(
             result
         });
     let last = end(path, &entity);
-    let recorded = finish(path, &entity, &outcome, last, previous_task);
+    let recorded = finish(path, &entity, &outcome, last, deletes, previous_task);
     match &outcome {
         Ok(_) => log_write(format!("Saved to Google: {label}"), false),
         Err(error) => log_write(format!("Could not save to Google: {label}: {error}"), true),
+    }
+    if let Some(done) = done {
+        let answer = match (&outcome, &recorded) {
+            (Err(error), _) => Err(error.to_string()),
+            (Ok(_), Err(error)) => Err(error.clone()),
+            (Ok(_), Ok(())) => Ok(()),
+        };
+        // The caller may have stopped waiting; nothing is lost.
+        let _ = done.send(answer);
     }
     recorded
 }
@@ -1018,6 +1270,7 @@ fn finish(
     entity: &str,
     outcome: &Result<Mapping, google::GoogleError>,
     last: bool,
+    deletes: bool,
     previous_task: Option<(String, Option<String>)>,
 ) -> Result<(), String> {
     let mut db = task_db::Database::open(path)?;
@@ -1029,6 +1282,11 @@ fn finish(
         Ok(mapping) => {
             if let Some((local, remote, calendar)) = mapping {
                 tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local,remote,calendar]).map_err(|e|e.to_string())?;
+            }
+            // A deleted task leaves the cache once Google has deleted it.
+            if deletes && let Some((id, _)) = &previous_task {
+                tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
+                    .map_err(|e| e.to_string())?;
             }
             // A later write for the same item is still on its way, and its
             // wanted state is the one to keep showing, locked.
@@ -1907,7 +2165,7 @@ mod tests {
     #[test]
     fn edits_and_deletions_preserve_matching_ids_on_other_calendars() {
         let (_dir, path) = db();
-        let (a, _) = edit(&path, "calendar A edit");
+        let (a, a_edit) = edit(&path, "calendar A edit");
         let mut b = a.clone();
         b.calendar_id = "other-calendar".into();
         b.title = "calendar B edit".into();
@@ -1918,7 +2176,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(events.contains(&a));
         assert!(events.contains(&b));
-        record_in(
+        let mut writes = record_in(
             &path,
             Job::Delete {
                 calendar: a.calendar_id.clone(),
@@ -1933,6 +2191,10 @@ mod tests {
         )
         .unwrap();
         let mut events = events;
+        overlay(&path, &mut events, None).unwrap();
+        assert_eq!(settled(events.clone()).len(), 2);
+        send_in(&path, a_edit, |_| Ok(None)).unwrap();
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
         overlay(&path, &mut events, None).unwrap();
         assert_eq!(settled(events), [b]);
     }
@@ -2451,11 +2713,12 @@ mod tests {
         assert!(writes[1].label.starts_with("Edit task Unassign"));
         let mut restored = vec![block.clone(), child];
         overlay(&path, &mut restored, None).unwrap();
-        assert_eq!(restored.len(), 1);
-        assert!(restored[0].all_day);
-        assert!(restored[0].details.sending);
-        assert!(crate::timeblocking::metadata(&restored[0]).block.is_none());
-        assert_eq!(restored[0].start.date_naive(), block.start.date_naive());
+        assert_eq!(restored.len(), 2);
+        assert!(restored.iter().all(|e| e.details.sending));
+        let released = restored.iter().find(|e| e.id == "task:child").unwrap();
+        assert!(released.all_day);
+        assert!(crate::timeblocking::metadata(released).block.is_none());
+        assert_eq!(released.start.date_naive(), block.start.date_naive());
     }
 
     #[test]
@@ -2517,6 +2780,20 @@ mod tests {
                 .collect();
             let mut shown = children;
             overlay(&path, &mut shown, None).unwrap();
+            let (all, locked) = shown_and_locked(&shown);
+            assert_eq!(all.len(), 3, "nothing leaves before Google confirms");
+            assert_eq!(locked, deleted, "what goes is locked until then");
+            // Once Google has the block's delete, its tasks go with it, even
+            // before their own deletes are answered.
+            let mut writes = writes.into_iter();
+            send_in(&path, writes.next().unwrap(), |_| Ok(None)).unwrap();
+            let mut early = shown.clone();
+            overlay(&path, &mut early, None).unwrap();
+            for write in writes {
+                send_in(&path, write, |_| Ok(None)).unwrap();
+            }
+            overlay(&path, &mut shown, None).unwrap();
+            assert_eq!(early, shown);
             let shown: Vec<String> = shown.into_iter().map(|e| e.id).collect();
             (deleted, shown)
         };
@@ -2528,6 +2805,63 @@ mod tests {
         assert!(shown.is_empty());
         let (deleted, _) = run(SaveScope::Current);
         assert_eq!(deleted, ["task:child5"]);
+    }
+
+    #[test]
+    fn deleting_a_block_with_its_tasks_locks_the_tasks_repeating_with_it() {
+        let day = |d| NaiveDate::from_ymd_opt(2030, 11, d).unwrap();
+        let occurrence = |series: &str, d| {
+            let mut event = super::super::sample_snapshot().events.remove(0);
+            event.calendar_id = "app".into();
+            event.all_day = false;
+            event.start = at_clock(day(d), 9, 0);
+            event.end = event.start + chrono::Duration::hours(1);
+            event.details.recurring_event_id = Some(series.into());
+            event.details.original_start = Some(event.start);
+            event.id = format!(
+                "{series}_{}",
+                event.start.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+            );
+            event
+        };
+        let block = occurrence("blockseries", 5);
+        let followers: Vec<Event> = [4, 5, 6]
+            .into_iter()
+            .map(|d| {
+                let mut task = occurrence("followseries", d);
+                task.details.task_data = Some(task_db::TaskData {
+                    id: 7,
+                    metadata: crate::timeblocking::Metadata {
+                        block_series: Some("app/blockseries".into()),
+                        ..Default::default()
+                    },
+                });
+                task
+            })
+            .collect();
+        assert!(followers.iter().all(crate::timeblocking::is_follower));
+        let locked = |scope| {
+            let (_dir, path) = db();
+            let delete = Job::Delete {
+                calendar: "app".into(),
+                id: block.id.clone(),
+                scope,
+                notify: false,
+                with_tasks: Some(Box::new(block.clone())),
+            };
+            record_in(&path, delete, None, "app", &block.id).unwrap();
+            let mut shown = followers.clone();
+            overlay(&path, &mut shown, None).unwrap();
+            assert_eq!(shown.len(), 3);
+            shown
+                .iter()
+                .filter(|e| e.details.sending)
+                .map(|e| e.start.date_naive())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(locked(SaveScope::Current), [day(5)]);
+        assert_eq!(locked(SaveScope::CurrentAndFuture), [day(5), day(6)]);
+        assert_eq!(locked(SaveScope::All), [day(4), day(5), day(6)]);
     }
 
     #[test]
@@ -2572,7 +2906,7 @@ mod tests {
         // A stale fetch finishes after an edit has already committed.
         let mut edited = task.clone();
         edited.title = "new local title".into();
-        record_in(
+        let status = record_in(
             &path,
             Job::Status {
                 task: task.clone(),
@@ -2588,7 +2922,7 @@ mod tests {
         let restored = restored.iter().find(|e| e.id == task.id).unwrap();
         assert_eq!(restored.title, edited.title);
         assert!(!restored.all_day);
-        record_in(
+        let writes = record_in(
             &path,
             Job::DeleteTask {
                 task: task.clone(),
@@ -2599,6 +2933,19 @@ mod tests {
             &task.id,
         )
         .unwrap();
+        // Until Google confirms the delete, the task shows, locked.
+        cache_tasks_in(&path, &[task.clone()], true).unwrap();
+        let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+        assert!(
+            restored
+                .iter()
+                .any(|e| e.id == task.id && e.details.sending)
+        );
+        for write in status.into_iter().chain(writes) {
+            send_in(&path, write, |_| Ok(None)).unwrap();
+        }
+        let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+        assert!(!restored.iter().any(|e| e.id == task.id));
         cache_tasks_in(&path, &[task.clone()], true).unwrap();
         let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
         assert!(!restored.iter().any(|e| e.id == task.id));
@@ -2705,27 +3052,159 @@ mod tests {
         assert!(edit_task(occurrence(5, None), &settings, join, 0).is_err());
     }
 
+    fn delete_job(event: &Event, scope: SaveScope) -> Job {
+        Job::Delete {
+            calendar: event.calendar_id.clone(),
+            id: event.id.clone(),
+            scope,
+            notify: false,
+            with_tasks: None,
+        }
+    }
+    /// The IDs shown, and of those the ones shown locked.
+    fn shown_and_locked(events: &[Event]) -> (Vec<&str>, Vec<&str>) {
+        let ids = |locked: bool| {
+            events
+                .iter()
+                .filter(|e| !locked || e.details.sending)
+                .map(|e| e.id.as_str())
+                .collect()
+        };
+        (ids(false), ids(true))
+    }
     #[test]
-    fn deletion_hides_the_item_while_it_is_sent() {
+    fn a_deletion_shows_the_item_locked_until_google_confirms_it() {
         let (_dir, path) = db();
-        let (event, _) = edit(&path, "delete me");
-        record_in(
-            &path,
-            Job::Delete {
-                calendar: event.calendar_id.clone(),
-                id: event.id.clone(),
-                scope: SaveScope::Current,
-                notify: false,
-                with_tasks: None,
-            },
-            None,
-            &event.calendar_id,
-            &event.id,
-        )
-        .unwrap();
+        let event = super::super::sample_snapshot().events.remove(0);
+        let delete = delete_job(&event, SaveScope::Current);
+        let mut writes = record_in(&path, delete, None, &event.calendar_id, &event.id).unwrap();
+        let mut fetched = vec![event.clone()];
+        overlay(&path, &mut fetched, None).unwrap();
+        assert_eq!(fetched.len(), 1);
+        assert!(fetched[0].details.sending);
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        overlay(&path, &mut fetched, None).unwrap();
+        assert!(fetched.is_empty());
         let mut fetched = vec![event];
         overlay(&path, &mut fetched, None).unwrap();
         assert!(fetched.is_empty());
+    }
+    #[test]
+    fn a_refused_deletion_unlocks_the_item() {
+        let (_dir, path) = db();
+        let event = super::super::sample_snapshot().events.remove(0);
+        let delete = delete_job(&event, SaveScope::Current);
+        let mut writes = record_in(&path, delete, None, &event.calendar_id, &event.id).unwrap();
+        let mut shown = vec![event.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert!(shown[0].details.sending);
+        send_in(&path, writes.remove(0), |_| {
+            Err(google::GoogleError::from_status(
+                "Google Calendar",
+                500,
+                "Server Error",
+            ))
+        })
+        .unwrap();
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(shown, [event]);
+    }
+    #[test]
+    fn deleting_part_of_a_series_locks_every_occurrence_it_deletes() {
+        let occurrences = |series: &str| -> Vec<Event> {
+            (0..3)
+                .map(|day| {
+                    let mut event = occurrence_at(series, 9, 0);
+                    event.start += chrono::Duration::days(day);
+                    event.end += chrono::Duration::days(day);
+                    event.details.original_start = Some(event.start);
+                    event.id = format!(
+                        "{series}_{}",
+                        event.start.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+                    );
+                    event
+                })
+                .collect()
+        };
+        // Deletes the middle occurrence with `scope`, alongside an unrelated
+        // series, and returns what is shown and locked while it is sent,
+        // then what is shown once Google confirms it.
+        let run = |scope| {
+            let (_dir, path) = db();
+            let series = occurrences("series");
+            let mut shown: Vec<Event> =
+                series.iter().cloned().chain(occurrences("other")).collect();
+            let middle = &series[1];
+            let mut writes = record_in(
+                &path,
+                delete_job(middle, scope),
+                None,
+                &middle.calendar_id,
+                &middle.id,
+            )
+            .unwrap();
+            overlay(&path, &mut shown, None).unwrap();
+            let (all, locked) = shown_and_locked(&shown);
+            assert_eq!(all.len(), 6, "nothing leaves before Google confirms");
+            let locked: Vec<String> = locked.into_iter().map(str::to_owned).collect();
+            send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+            overlay(&path, &mut shown, None).unwrap();
+            let (left, still_locked) = shown_and_locked(&shown);
+            assert!(still_locked.is_empty());
+            let left: Vec<String> = left.into_iter().map(str::to_owned).collect();
+            (series, locked, left)
+        };
+        let ids = |events: &[Event]| events.iter().map(|e| e.id.clone()).collect::<Vec<_>>();
+        let (series, locked, left) = run(SaveScope::Current);
+        assert_eq!(locked, [series[1].id.clone()]);
+        assert_eq!(left.len(), 5);
+        let (series, locked, left) = run(SaveScope::CurrentAndFuture);
+        assert_eq!(locked, ids(&series[1..]));
+        assert_eq!(left.len(), 4);
+        assert!(left.contains(&series[0].id));
+        let (series, locked, left) = run(SaveScope::All);
+        assert_eq!(locked, ids(&series));
+        assert!(left.iter().all(|id| id.starts_with("other_")));
+    }
+    #[test]
+    fn deleting_a_series_by_its_master_locks_its_occurrences() {
+        let (_dir, path) = db();
+        let occurrence = occurrence_at("habit", 9, 0);
+        let mut master = occurrence.clone();
+        master.id = "habit".into();
+        master.details.recurring_event_id = None;
+        let other = occurrence_at("other", 9, 0);
+        let mut shown = vec![occurrence.clone(), other.clone()];
+        record_in(
+            &path,
+            delete_job(&master, SaveScope::All),
+            None,
+            &master.calendar_id,
+            &master.id,
+        )
+        .unwrap();
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(shown_and_locked(&shown).1, [occurrence.id.as_str()]);
+    }
+    #[test]
+    fn a_deleted_task_is_locked_wherever_it_shows() {
+        let (_dir, path) = db();
+        let mut task = super::super::sample_snapshot().events.remove(0);
+        task.id = "task:gone".into();
+        task.calendar_id = "tasks:list".into();
+        let mut stale = task.clone();
+        stale.calendar_id = "tasks:old-list".into();
+        let job = Job::DeleteTask {
+            task: task.clone(),
+            calendar: None,
+        };
+        let mut writes = record_in(&path, job, None, &task.calendar_id, &task.id).unwrap();
+        let mut shown = vec![task, stale];
+        overlay(&path, &mut shown, None).unwrap();
+        assert!(shown.iter().all(|e| e.details.sending));
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        overlay(&path, &mut shown, None).unwrap();
+        assert!(shown.is_empty());
     }
     #[test]
     fn task_id_changes_are_resolved_through_multiple_moves() {

@@ -164,7 +164,9 @@ fn deleting_an_open_block_closes_its_editor_only_on_success() {
             Message::Event(EventMessage::EventDeleted("standup".into(), Ok(()))),
         ));
         assert!(matches!(result.as_slice(), [Geometry::Close(id)] if *id == editor));
-        assert!(state.calendar.event("standup").is_none());
+        // The block stays in view, locked by the local edits, until Google
+        // confirms the delete.
+        assert!(state.calendar.event("standup").is_some());
         assert!(state.timeblocking.block.is_none());
         assert!(state.editor_window.is_none());
     }

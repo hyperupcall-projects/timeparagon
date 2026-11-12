@@ -108,10 +108,10 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
                     .task_work
                     .stop(&timeblocking::task_key(task), crate::clock::utc_now());
             }
-            // The task is gone on Google's side. Drop every chip that was
-            // showing it, including a stale copy on the list it was moved
-            // from and the calendar block that held its time.
-            state.calendar.forget_task(&id);
+            // The delete is on its way to Google. Every chip showing the task,
+            // including a stale copy on the list it was moved from, stays,
+            // locked like an edit on its way, until Google confirms; the
+            // local edits read here say so (see `Overlay::apply`).
             let save = queue_save(state);
             Task::batch([save, refresh_week_after_write(state)])
         }

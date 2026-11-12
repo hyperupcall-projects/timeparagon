@@ -1210,6 +1210,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
                     tasks.push(update(state, Action::Saved(key, Err(error))));
                 }
             }
+            // Shows at once what is still on its way, such as occurrences
+            // being deleted.
+            tasks.push(crate::local_poll::refresh_overlay(state));
             // Also reconciles a partially successful cross-service write.
             tasks.push(Task::done(Message::Calendar(
                 CalendarMessage::CalendarSyncRequested,
@@ -2155,7 +2158,8 @@ fn stop_repeating(state: &mut State, id: &str) -> Task<Message> {
         return Task::none();
     };
     let scope = calendar::SaveScope::CurrentAndFuture;
-    forget_occurrences(state, &task.calendar_id, &task.id, scope);
+    // The occurrences deleted stay in view, locked, until Google confirms
+    // (see `Overlay::apply`), as for any other delete.
     state.timeblocking.revision += 1;
     state.timeblocking.busy.insert(task.id.clone());
     let key = BusyKey::from(task.id.clone());
@@ -2655,12 +2659,14 @@ mod tests {
     }
 
     #[test]
-    fn stopping_a_repeating_task_drops_this_and_later_occurrences() {
+    fn stopping_a_repeating_task_deletes_this_and_later_occurrences() {
         let mut state = following_state();
         let _ = update(&mut state, Action::StopRepeating("deep".into()));
         assert!(state.timeblocking.busy.contains_task("deep"));
-        assert!(state.calendar.event("deep").is_none());
-        assert!(state.calendar.event("deep_next").is_none());
+        // They stay in view, locked by the local edits, until Google
+        // confirms the delete.
+        assert!(state.calendar.event("deep").is_some());
+        assert!(state.calendar.event("deep_next").is_some());
         // Only a task repeating with a block can be stopped this way.
         let mut state = recurring_state();
         let _ = update(&mut state, Action::StopRepeating("deep".into()));

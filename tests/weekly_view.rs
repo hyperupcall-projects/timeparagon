@@ -349,8 +349,10 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
         &mut state,
         Message::Task(TaskMessage::TaskDeleted("task:thursday".into(), Ok(()))),
     );
+    // The task stays, locked by the local edits, until Google confirms the
+    // delete.
     assert!(
-        !state
+        state
             .calendar
             .events_on(date(14))
             .iter()

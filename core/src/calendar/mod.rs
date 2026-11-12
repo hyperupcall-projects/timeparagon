@@ -2511,9 +2511,22 @@ pub fn create_habit(
     })
 }
 
-/// Deletes a habit master and every occurrence in its series.
+/// Deletes a habit master and every occurrence in its series, returning once
+/// Google has answered, so the habit can stay on show as deleting until then.
+/// Blocking: call it from a worker thread.
 pub fn delete_habit(calendar_id: &str, event_id: &str) -> Result<(), String> {
-    delete_event_scope(calendar_id, event_id, SaveScope::All, false)
+    operations::submit_and_wait(
+        operations::Job::Delete {
+            calendar: calendar_id.into(),
+            id: event_id.into(),
+            scope: SaveScope::All,
+            notify: false,
+            with_tasks: None,
+        },
+        None,
+        calendar_id,
+        event_id,
+    )
 }
 
 pub fn disconnect() {

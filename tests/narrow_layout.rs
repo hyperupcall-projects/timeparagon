@@ -1727,7 +1727,9 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
         &mut state,
         Message::Task(TaskMessage::TaskDeleted("task:planned".into(), Ok(()))),
     );
-    assert!(state.calendar.event("task:planned").is_none());
+    // The task stays in view, locked by the local edits, until Google
+    // confirms the delete.
+    assert!(state.calendar.event("task:planned").is_some());
     assert!(state.calendar.event("standup").is_some());
     assert!(state.timeblocking.busy.is_empty());
     assert!(!state.config.task_work.running(&key));

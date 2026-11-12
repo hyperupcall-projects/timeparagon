@@ -1267,7 +1267,16 @@ fn delete(state: &mut State, id: String) -> Task<Message> {
     let delete_events = state.habits.delete_events;
     let client = calendar::GoogleClient::from_settings(&state.config.calendar);
     state.habits.busy = true;
+    // The habit, and the events going with it, show as being deleted until
+    // Google answers, rather than behind the dialog.
+    state.habits.confirm_delete = None;
     state.habits.writing.insert(id.clone());
+    if delete_events {
+        state
+            .habits
+            .writing
+            .extend(events.iter().map(|(_, series)| series.clone()));
+    }
     state.habits.error = None;
     let result_id = id.clone();
     blocking::run(move || {
