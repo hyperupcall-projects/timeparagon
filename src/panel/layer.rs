@@ -45,6 +45,9 @@ struct Panel {
 	app: State,
 	id: Option<window::Id>,
 	width: u32,
+	/// A throwaway surface stretched across the screen to learn its width,
+	/// which Wayland does not otherwise tell a client.
+	probe: Option<window::Id>,
 	opening: BTreeMap<window::Id, oneshot::Sender<window::Id>>,
 	commands: Option<std::sync::mpsc::Receiver<PopoverCommand>>,
 	created: Option<
@@ -197,6 +200,34 @@ fn editor_window_margin(panel: &Panel) -> (i32, i32, i32, i32) {
 		Side::Left => (top, 0, inset, offset),
 		Side::Right => (top, offset, inset, 0),
 	}
+}
+
+/// Opens [`Panel::probe`]: one pixel tall, on the panel's output, beneath
+/// everything and ignoring other surfaces' reserved space, so the width the
+/// compositor gives it is the whole screen's.
+fn measure_screen(panel: &mut Panel) -> Task<Message> {
+	if panel.probe.is_some() {
+		return Task::none();
+	}
+	let id = window::Id::unique();
+	panel.probe = Some(id);
+	layer(
+		id,
+		LayerAction::NewLayerShell {
+			id,
+			settings: NewLayerShellSettings {
+				size: Some((0, 1)),
+				layer: Layer::Background,
+				anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+				exclusive_zone: Some(-1),
+				margin: Some((0, 0, 0, 0)),
+				keyboard_interactivity: KeyboardInteractivity::None,
+				output_option: OutputOption::LastOutput,
+				events_transparent: true,
+				namespace: Some("timeparagon-measure".to_owned()),
+			},
+		},
+	)
 }
 
 fn exclusive_zone(views: &ViewSettings, width: u32) -> i32 {
@@ -369,6 +400,14 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 		Message::App(message) | Message::Runtime(Action::Output(message)) => {
 			update_app(panel, message)
 		}
+		Message::Opened(id, size) if panel.probe == Some(id) => {
+			panel.probe = None;
+			if size.width.is_finite() && size.width > 0.0 {
+				panel.app.monitor_size =
+					Some(iced::Size::new(size.width, panel.app.main_size.height));
+			}
+			layer(id, LayerAction::RemoveWindow)
+		}
 		Message::Opened(id, size) => {
 			if panel.app.task_creation_window {
 				log::debug!("dock task editor configured: {size:?}");
@@ -391,6 +430,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 						panel.width,
 					)),
 				)
+				.chain(measure_screen(panel))
 			} else {
 				Task::none()
 			}
@@ -502,12 +542,18 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 						panel.width,
 					)),
 				);
+				// The overlay starts where the panel ends, so it moves with it.
+				let follow = panel
+					.app
+					.editor_window
+					.map(|id| layer(id, LayerAction::MarginChange(editor_window_margin(panel))))
+					.unwrap_or_else(Task::none);
 				// Release the old work area before shrinking the surface.
 				// When growing, establish the larger surface before reserving it.
 				if panel.width < previous_width {
-					reserve.chain(resize)
+					reserve.chain(resize).chain(follow)
 				} else {
-					resize.chain(reserve)
+					resize.chain(reserve).chain(follow)
 				}
 			}
 			WindowAction::GetMonitorSize(_, sender) => {
@@ -560,6 +606,7 @@ fn boot_surface(popover: bool) -> (Panel, Task<Message>) {
 			app,
 			id: None,
 			width: 0,
+			probe: None,
 			opening: BTreeMap::new(),
 			commands: None,
 			created: None,
@@ -569,6 +616,9 @@ fn boot_surface(popover: bool) -> (Panel, Task<Message>) {
 }
 
 fn view(panel: &Panel, id: window::Id) -> Element<'_, Message> {
+	if panel.probe == Some(id) {
+		return iced::widget::Space::new().into();
+	}
 	crate::ui::controls::arrow_when_idle(app::view(&panel.app, id).map(Message::App))
 }
 
@@ -678,6 +728,7 @@ mod tests {
 			app,
 			id: Some(id),
 			width: 216,
+			probe: None,
 			opening: BTreeMap::new(),
 			commands: None,
 			created: None,
@@ -978,7 +1029,18 @@ mod tests {
 		));
 		assert_eq!(panel.width, 190);
 		assert!(
-			matches!(messages.as_slice(), [Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::ExclusiveZoneChange(190)))] if *target == id)
+			matches!(messages.as_slice(), [Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::ExclusiveZoneChange(190))), Message::Layer(LayerShellCustomActionWithId(None, LayerAction::NewLayerShell { .. }))] if *target == id)
+		);
+		// The screen-wide probe reports the screen's width, then goes away.
+		let probe = panel.probe.unwrap();
+		let messages = outputs(update(
+			&mut panel,
+			Message::Opened(probe, iced::Size::new(2560.0, 1.0)),
+		));
+		assert_eq!(panel.app.monitor_size.map(|size| size.width), Some(2560.0));
+		assert!(panel.probe.is_none());
+		assert!(
+			matches!(messages.as_slice(), [Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::RemoveWindow))] if *target == probe)
 		);
 		panel.app.panel_expected_close = true;
 		let _ = update_app(

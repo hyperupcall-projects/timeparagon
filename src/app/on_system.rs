@@ -271,7 +271,11 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				return Task::none();
 			}
 
-			state.monitor_size = size;
+			// Wayland never answers, but the panel measures the screen
+			// itself, so a missing answer must not forget that.
+			if size.is_some() {
+				state.monitor_size = size;
+			}
 			if state.task_creation_window {
 				return Task::none();
 			}
@@ -310,7 +314,9 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 			if state.main_window != Some(id) || !state.range_view_active() {
 				return Task::none();
 			}
-			state.monitor_size = size;
+			if size.is_some() {
+				state.monitor_size = size;
+			}
 			Task::none()
 		}
 		SystemMessage::WindowResized(id, size) => {

@@ -190,6 +190,16 @@ pub struct ViewSettings {
 	pub time_block_width: f32,
 	/// Width of the shared event/habit/task details pane.
 	pub detail_width: f32,
+	/// Width of the day calendar shown beside the panel while planning.
+	/// None follows the panel's own width.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub plan_calendar_width: Option<f32>,
+	/// Width of the habit page opened beside the Habits list.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub habit_width: Option<f32>,
+	/// Width of the area, goal or project page opened beside the Life tab.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub life_width: Option<f32>,
 	/// Visible inset from the side panel's screen edge, top and bottom.
 	pub margin: f32,
 	/// Radius of the application's visible outer corners, in logical pixels.
@@ -313,6 +323,9 @@ impl Default for ViewSettings {
 			calendar_month_width: None,
 			time_block_width: 400.0,
 			detail_width: 360.0,
+			plan_calendar_width: None,
+			habit_width: None,
+			life_width: None,
 			margin: 8.0,
 			border_radius: 4.0,
 			dock_border_radius: 0.0,
@@ -371,6 +384,18 @@ impl ViewSettings {
 
 	pub fn detail_width(&self) -> f32 {
 		Self::width(self.detail_width, 360.0)
+	}
+
+	pub fn plan_calendar_width(&self, fallback: f32) -> f32 {
+		Self::width(self.plan_calendar_width.unwrap_or(fallback), fallback)
+	}
+
+	pub fn habit_width(&self, fallback: f32) -> f32 {
+		Self::width(self.habit_width.unwrap_or(fallback), fallback)
+	}
+
+	pub fn life_width(&self, fallback: f32) -> f32 {
+		Self::width(self.life_width.unwrap_or(fallback), fallback)
 	}
 
 	pub fn margin(&self) -> f32 {

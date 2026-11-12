@@ -29,6 +29,8 @@ mod on_notepad;
 mod on_settings;
 mod on_system;
 mod on_task;
+mod pane_resize;
+pub use pane_resize::{Pane, PaneResize, ResizeEdge};
 #[cfg(test)]
 mod tests;
 
@@ -422,6 +424,8 @@ pub struct State {
 	/// Floating range view or details editor, independent of the day panel.
 	pub editor_window: Option<window::Id>,
 	pub(crate) editor_window_size: Size,
+	/// A panel or overlay edge being dragged.
+	pub(crate) pane_resize: Option<PaneResize>,
 
 	/// Set while a config write is already queued, so a slider drag does not
 	/// schedule one save per pixel.
@@ -536,6 +540,11 @@ pub enum SettingsMessage {
 	CalendarMonthWidthChanged(f32),
 	TimeBlockWidthChanged(f32),
 	DetailWidthChanged(f32),
+	/// An edge was grabbed, this far from the screen edge its window hugs.
+	PaneResizeStarted(ResizeEdge, f32),
+	/// The grabbed edge was dragged this far from that screen edge.
+	PaneResizeMoved(f32),
+	PaneResizeEnded,
 	ScreenMarginChanged(f32),
 	DockReserveSpaceToggled(bool),
 	PanelReserveSpaceToggled(bool),
@@ -973,6 +982,7 @@ impl State {
 			details_pane_open: false,
 			editor_window: None,
 			editor_window_size: Size::ZERO,
+			pane_resize: None,
 			save_queued: false,
 			disk_config: config.clone(),
 			config_error: None,
@@ -1450,48 +1460,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
 /// Keep the floating range view/editor separate from panel geometry and reservation.
 fn reconcile_editor_window(state: &mut State) -> Task<Message> {
-	let visible =
-		state.floating_editors() && state.main_window.is_some() && !state.panel_expected_close;
-	let width = if visible && state.people_panel_open() {
-		state.config.views.detail_width()
-	} else if visible && state.life_panel_open() {
-		ui::life::PANEL_WIDTH
-	} else if visible && state.habit_panel_open() {
-		ui::habits::PANEL_WIDTH
-			+ if state.calendar.open_event.is_some() {
-				state.config.views.detail_width()
-			} else {
-				0.0
-			}
-	} else if state.range_view_active()
-		&& state.main_window.is_some()
-		&& !state.panel_expected_close
-	{
-		state.weekly_window_width()
-	} else if visible {
-		(if state.day_plan_active() {
-			state.calendar_width()
-		} else {
-			0.0
-		}) + (if state.timeblocking.block.is_some() {
-			state.config.views.time_block_width()
-		} else {
-			0.0
-		}) + if state.details_pane_open {
-			state.config.views.detail_width()
-		} else {
-			0.0
-		}
-	} else {
-		0.0
-	};
-	// The map opens in this window even when nothing else would have it open,
-	// as when Home is chosen from the settings.
-	let width = if width == 0.0 && state.map_in_editor_window() {
-		state.config.views.detail_width()
-	} else {
-		width
-	};
+	let width = state.overlay_width();
 	if width == 0.0 {
 		return state
 			.editor_window

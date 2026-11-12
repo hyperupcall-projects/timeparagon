@@ -24,6 +24,7 @@ pub mod notes;
 pub mod people;
 pub mod recurrence;
 pub mod reminders;
+mod resize_handle;
 mod rounded_clip;
 pub mod routines;
 pub mod settings;
@@ -39,7 +40,9 @@ mod weekly_task_list;
 use iced::widget::{Space, button, column, container, mouse_area, responsive, row, text, tooltip};
 use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
 
-use crate::app::{CalendarMessage, CalendarView, NavigationMessage, PlanTab, SystemMessage};
+use crate::app::{
+	CalendarMessage, CalendarView, NavigationMessage, Pane, PlanTab, ResizeEdge, SystemMessage,
+};
 use crate::app::{Message, Screen, State};
 
 use layout::Metrics;
@@ -78,7 +81,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 		// Checked before the range views for the same reason. An event opened
 		// from the habit's page goes beside it.
 		if state.habit_panel_open() {
-			let width = habits::PANEL_WIDTH.min(size.width);
+			let width = state.pane_width(Pane::Habit).min(size.width);
 			let metrics = Metrics::of(Size::new(width, size.height));
 			let mut panes = row![container(habits::panel(state, &metrics)).width(width)];
 			if state.calendar.open_event.is_some() {
@@ -143,8 +146,13 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 				.into();
 		}
 		let mut panes = row![];
+		let plan_width = if state.day_plan_active() {
+			state.pane_width(Pane::PlanCalendar)
+		} else {
+			0.0
+		};
 		if state.day_plan_active() {
-			let width = state.calendar_width().min(size.width);
+			let width = plan_width.min(size.width);
 			let metrics = Metrics::of(Size::new(width, size.height));
 			panes = panes.push(container(calendar::view(state, &metrics)).width(width));
 		}
@@ -162,15 +170,11 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 			} else {
 				0.0
 			};
-			let width = state.config.views.detail_width().min(
-				(size.width
-					- block - if state.day_plan_active() {
-					state.calendar_width()
-				} else {
-					0.0
-				})
-				.max(1.0),
-			);
+			let width = state
+				.config
+				.views
+				.detail_width()
+				.min((size.width - block - plan_width).max(1.0));
 			let metrics = Metrics::of(Size::new(width, size.height));
 			panes = panes.push(container(calendar::details_pane(state, &metrics)).width(width));
 		}
@@ -186,7 +190,14 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 			.style(controls::surface)
 			.into()
 	});
-	task_drop::host(window_frame(state, content.into(), "editor-body"))
+	let framed = window_frame(state, content.into(), "editor-body");
+	let Some(sidebar) = &state.sidebar else {
+		return task_drop::host(framed);
+	};
+	task_drop::host(iced::widget::stack![
+		framed,
+		resize_handle::far_edge_layer(ResizeEdge::Overlay, sidebar.side)
+	])
 }
 
 /// Add task dialogs belong to the main sidebar even while a planning window
@@ -464,13 +475,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
 			"application-body"
 		},
 	);
-	if state.sidebar.is_some() {
+	if let Some(sidebar) = &state.sidebar {
 		let margin = state.screen_margin();
-		container(body)
-			.padding(margin)
-			.width(Fill)
-			.height(Fill)
-			.into()
+		let framed = container(body).padding(margin).width(Fill).height(Fill);
+		// The handle straddles the panel's inner edge, without spilling past
+		// the window when the margin is too thin to hold half of it.
+		let edge = margin + state.calendar_width();
+		let from_anchor =
+			(edge - resize_handle::WIDTH / 2.0).min(edge + margin - resize_handle::WIDTH);
+		iced::widget::stack![
+			framed,
+			resize_handle::layer(state.panel_edge(), sidebar.side, from_anchor)
+		]
+		.into()
 	} else {
 		body
 	}

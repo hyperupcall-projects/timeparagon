@@ -174,6 +174,11 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			);
 			queue_save(state)
 		}
+		SettingsMessage::PaneResizeStarted(edge, position) => {
+			pane_resize::started(state, edge, position)
+		}
+		SettingsMessage::PaneResizeMoved(position) => pane_resize::moved(state, position),
+		SettingsMessage::PaneResizeEnded => pane_resize::ended(state),
 		SettingsMessage::ScreenMarginChanged(margin) => {
 			state.view_layout_input = None;
 			if !margin.is_finite() {
