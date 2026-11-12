@@ -152,7 +152,7 @@ The shortcuts are owned by `timeparagon daemon`, a small process that does
 nothing but register the keys through KDE's KGlobalAccel and show, hide or
 reshape the panel and the dock. There are two actions:
 
-- **Toggle Visibility** (`Meta+U` by default) hides TimeParagon completely, as
+- **Toggle Visibility** (`Meta+F` by default) hides TimeParagon completely, as
   the panel or as the dock. Pressed again, it brings back the same shape as it
   was: the panel keeps running while hidden, so its tab, open panes and width
   are all as you left them.
@@ -178,7 +178,7 @@ Its settings are this device's `panel.*` settings, kept in the database:
 | --- | --- | --- |
 | `panel.side` | `"left"` | Which edge to anchor the panel to: `"left"` or `"right"` |
 | `panel.width` | `200` | Panel width in logical pixels; set by resizing the panel. Height always fills the screen |
-| `panel.toggle_visibility` | `["Meta+U"]` | Global shortcuts, as `Modifier+Key`. Any number per action |
+| `panel.toggle_visibility` | `["Meta+F"]` | Global shortcuts, as `Modifier+Key`. Any number per action |
 | `panel.toggle_shape` | `["Meta+Shift+U"]` | |
 | `panel.toggle_reservation` | `[]` | |
 

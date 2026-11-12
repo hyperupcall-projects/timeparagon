@@ -972,7 +972,7 @@ mod tests {
 		let config: Config = toml::from_str("[panel]\nside = \"right\"\nwidth = 240").unwrap();
 		assert_eq!(config.panel.side, crate::panel::Side::Right);
 		assert_eq!(config.panel.width, 240);
-		assert_eq!(config.panel.toggle_visibility, ["Meta+U"]);
+		assert_eq!(config.panel.toggle_visibility, ["Meta+F"]);
 
 		let restored: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
 		assert_eq!(restored.panel, config.panel);

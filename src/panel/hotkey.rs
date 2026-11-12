@@ -171,7 +171,7 @@ pub fn validate(spec: &str) -> Result<()> {
 	parse_shortcut(spec).map(drop)
 }
 
-/// Whether two spellings are the same key combination, e.g. `Meta+U` and
+/// Whether two spellings are the same key combination, e.g. `Meta+F` and
 /// `super + u`.
 pub fn same_shortcut(a: &str, b: &str) -> bool {
 	matches!((parse_shortcut(a), parse_shortcut(b)), (Ok(a), Ok(b)) if a == b)
@@ -381,7 +381,7 @@ mod tests {
 
 	#[test]
 	fn meta_u_parses_to_the_expected_combined_code() {
-		assert_eq!(parse_shortcut("Meta+U").unwrap(), 0x1000_0055);
+		assert_eq!(parse_shortcut("Meta+F").unwrap(), 0x1000_0055);
 	}
 
 	#[test]
@@ -425,9 +425,9 @@ mod tests {
 
 	#[test]
 	fn spellings_of_one_combination_are_the_same_shortcut() {
-		assert!(same_shortcut("Meta+U", " super + u "));
-		assert!(!same_shortcut("Meta+U", "Meta+J"));
-		assert!(!same_shortcut("Meta+U", "nonsense"));
+		assert!(same_shortcut("Meta+F", " super + u "));
+		assert!(!same_shortcut("Meta+F", "Meta+J"));
+		assert!(!same_shortcut("Meta+F", "nonsense"));
 	}
 
 	#[test]
@@ -445,10 +445,10 @@ mod tests {
 			"Meta",
 			"Meta+",
 			"Ctrl++T",
-			"Meta+U+T",
+			"Meta+F+T",
 			"U",
 			"Space",
-			"Meta+Unknown",
+			"Meta+Fnknown",
 		] {
 			assert!(parse_shortcut(spec).is_err(), "{spec:?} should be rejected");
 		}

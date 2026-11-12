@@ -334,7 +334,7 @@ fn a_bad_or_repeated_shortcut_is_refused_without_touching_the_desktop() {
 		assert!(!editor.busy, "{input:?} was sent to the desktop");
 		assert!(matches!(editor.result, Some(Err(_))), "{input:?}");
 	}
-	assert_eq!(state.config.panel.toggle_visibility, ["Meta+U"]);
+	assert_eq!(state.config.panel.toggle_visibility, ["Meta+F"]);
 }
 
 #[test]

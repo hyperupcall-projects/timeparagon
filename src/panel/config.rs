@@ -84,7 +84,7 @@ pub struct PanelConfig {
 	/// Strip width in logical pixels. Height always fills the screen.
 	pub width: u32,
 	/// Global shortcuts for [`Action::ToggleVisibility`], each in
-	/// `Modifier+Key` form, e.g. `"Meta+U"`. Any of them triggers the action.
+	/// `Modifier+Key` form, e.g. `"Meta+F"`. Any of them triggers the action.
 	pub toggle_visibility: Vec<String>,
 	/// Global shortcuts for [`Action::ToggleShape`].
 	pub toggle_shape: Vec<String>,
@@ -96,7 +96,7 @@ impl Default for PanelConfig {
 		Self {
 			side: Side::Left,
 			width: 200,
-			toggle_visibility: vec!["Meta+U".to_owned()],
+			toggle_visibility: vec!["Meta+F".to_owned()],
 			toggle_shape: vec!["Meta+Shift+U".to_owned()],
 			toggle_reservation: Vec::new(),
 		}
@@ -137,7 +137,7 @@ mod tests {
 
 		assert_eq!(config.side, Side::Left);
 		assert_eq!(config.width, 200);
-		assert_eq!(config.toggle_visibility, ["Meta+U"]);
+		assert_eq!(config.toggle_visibility, ["Meta+F"]);
 		assert_eq!(config.toggle_shape, ["Meta+Shift+U"]);
 	}
 
@@ -147,7 +147,7 @@ mod tests {
 
 		assert_eq!(config.width, 240);
 		assert_eq!(config.side, Side::Left);
-		assert_eq!(config.toggle_visibility, ["Meta+U"]);
+		assert_eq!(config.toggle_visibility, ["Meta+F"]);
 	}
 
 	#[test]

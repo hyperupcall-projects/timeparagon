@@ -746,7 +746,7 @@ fn shortcut_action<'a>(
 	}
 
 	let mut input =
-		crate::ui::controls::text_input("e.g. Meta+U", &editor.input).size(metrics.label());
+		crate::ui::controls::text_input("e.g. Meta+F", &editor.input).size(metrics.label());
 	let mut add = crate::ui::controls::action_button(
 		text(if editor.busy {
 			"Applying…"
