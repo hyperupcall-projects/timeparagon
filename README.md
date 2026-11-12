@@ -91,6 +91,11 @@ Of course, there's also week, 2-week, and month views:
 	- Allow connecting habit to specific objectives like weight loss (TODO).
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
+- **Routines:** guided rituals, one step at a time ([details](./docs/routines.md)).
+	- Daily plan: choose the day's tasks, size them against your free time, timebox them, and set a highlight.
+	- Daily refresh: go through overdue, unfinished, inbox and today's tasks card by card, and schedule, park, triage or close each one.
+	- Daily, weekly and monthly reflections with the period's highlights and statistics: tasks done, focus time, meetings, habits, ratings.
+	- Weekly and monthly plans with objectives, carried over when they are not met.
 - **Track and direct your life:**
 	- Organize goals, objectives, and projects under a life area, each with a Markdown vision.
 	- **Set goals:**

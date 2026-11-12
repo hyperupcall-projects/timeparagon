@@ -254,6 +254,7 @@ empty value, so callers can refuse to save over data they could not read.
 | `shared.brain_dump` | ✅ | `brain_dump::Dumps` | Brain dump | `{"entries": [{"date","text"}]}` |
 | `shared.projects` | ✅ | `config::ProjectsSettings` | Life / projects | `{"items": [Project], "areas": [LifeArea]}` |
 | `shared.task_work` | ✅ | `task_work::WorkLog` (desktop) | Time-block focus mode | `{"sessions": [...], "distractions": [...]}` |
+| `shared.routines` | ✅ | `routines::Routines` | Routines (desktop) | `{"entries": [Entry]}`, one per day, week or month. [Details](./data-model.md#routines) |
 | `shared_data_modified_ms` | — | integer as text | `shared_data::store` | When a `shared.*` document last changed, in ms since the epoch |
 | `contacts` | — | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
 | `routes` | — | `Vec<travel::Stored>` | Desktop travel | Cached Mapbox trip times: `[{from,to,mode,seconds,meters}]` |
@@ -655,7 +656,7 @@ is indexed (`timeparagon_sync_edits_clock`), since every trigger reads its maxim
 ```sql
 CREATE TRIGGER timeparagon_sync_update AFTER UPDATE ON documents
   WHEN NEW.key IN ('habits','alarms','shared.notepad','shared.brain_dump',
-                   'shared.projects','shared.task_work')
+                   'shared.projects','shared.task_work','shared.routines')
    AND (OLD.value IS NOT NEW.value)
    AND (SELECT projecting FROM timeparagon_sync_control WHERE singleton=1) = 0
 BEGIN
@@ -667,7 +668,9 @@ END;
 
 `timeparagon_sync_insert` (with `before = NULL`) and `timeparagon_sync_delete`
 (with `after = NULL`) follow the same pattern. Enrollment drops and recreates
-any old trigger that still mentions `shared.todos`.
+any trigger whose list of keys is not the current one: an old one that still
+mentions `shared.todos`, or one from before a document was shared (such as
+`shared.routines`), so the new document is journaled from then on.
 
 Rows received from the server are inserted with `uploaded = 1`. If an incoming
 ID already exists with different contents, it is a collision: sync stops and
@@ -803,7 +806,8 @@ replacement:
 
 This is why every list item in a shared document carries one of those identity
 fields: habits and sections have `id`, alarms have `id`, projects and life areas
-have `id`, brain dump entries have `date`, work sessions have `started_at`, and
+have `id`, brain dump entries have `date`, routine entries, objectives and
+highlights have `id`, daily refreshes have `recorded_at`, work sessions have `started_at`, and
 distractions have `recorded_at`.
 
 ---

@@ -85,6 +85,7 @@ and every row of the synced [settings tables](#settings):
 | `shared.brain_dump` | [Brain dump](#notepad-and-brain-dump) pages |
 | `shared.projects` | [Projects, life areas, goals, objectives](#life-areas-goals-objectives-and-projects) |
 | `shared.task_work` | [Work sessions and distractions](#work-sessions-distractions-and-pomodoro) |
+| `shared.routines` | [Routines](#routines): plans and reflections per day, week and month |
 
 The `shared.` prefix does not mean "synced". It marks the documents that the
 apps' `Config` holds as sections (once part of `config.toml`), which
@@ -716,6 +717,51 @@ on the device.
 
 ---
 
+## Routines
+
+What the [routines](./routines.md) write down. Stored as the
+`shared.routines` document (shared), type `routines::Routines`: one entry per
+day, week or month, created the first time something is written for it and
+removed again when everything in it is cleared.
+
+```json
+{"entries": [
+  {"id": "day:2026-11-12",
+   "intention": "Send the proposal", "intention_met": true,
+   "planned_at": "2026-11-12T08:42:00Z",
+   "planned_tasks": ["2875093487120931", "2875093487120944"],
+   "planned_minutes": 150,
+   "answers": {"went_well": "…", "tomorrow": "…"},
+   "rating": 4,
+   "highlights": [{"id": "2875093487120931", "title": "Send the proposal"}],
+   "reflected_at": "2026-11-12T21:10:00Z",
+   "refreshes": [{"recorded_at": "2026-11-12T13:05:00Z", "decided": 9, "remaining": 2}]},
+  {"id": "week:2026-11-09",
+   "intention": "Get the launch over the line",
+   "objectives": [{"id": 1733113926321, "text": "Launch the beta", "done": true}]},
+  {"id": "month:2026-11", "objectives": []}
+]}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `day:YYYY-MM-DD`, `week:YYYY-MM-DD` (the week's first day, per `calendar.first_day_of_week`) or `month:YYYY-MM` |
+| `intention` | The plan's focus. For a day, its highlight: the one thing that would make it a good day |
+| `intention_met` | Answered in the day's reflection |
+| `objectives` | Week and month plans. `id` is random, `done` is set in the reflection |
+| `planned_at`, `planned_tasks`, `planned_minutes` | When the plan was finished and, for a day, the task keys committed to and their estimates |
+| `answers` | Reflection answers by prompt id (`went_well`, `got_in_the_way`, `learned`, `tomorrow` for a day; `wins`, `challenges`, `learned` or `goals`, `change` for a week or month) |
+| `rating` | 1 (rough) to 5 (great) |
+| `highlights` | Finished tasks picked out in a reflection, by task key, with the title kept |
+| `reflected_at` | When the reflection was finished |
+| `refreshes` | Each pass of the daily refresh: how many tasks got a decision and how many were left in its lists |
+
+Empty fields are left out. Tasks themselves are never stored here: the
+routines change them through the usual [task edits](#task-edits), and their
+figures are worked out from the tasks, events, work sessions and habits.
+
+---
+
 ## Work sessions, distractions and pomodoro
 
 Recorded in time-block focus mode. Stored as the `shared.task_work` document
@@ -874,7 +920,7 @@ setup and the timer running on it. Another device would be broken by them.
 | Reminders per kind; `reminders.enabled`, `reminders.use_calendar_reminders` | `reminders`; `settings` | ✅ |
 | `alarm.*`: the default alarm profile | `settings` | ✅ |
 | `appearance.*`: theme, time format, distance unit | `settings` | ✅ |
-| Projects, notepad text, brain dump, work sessions | their [documents](#what-is-shared-between-devices) | ✅ |
+| Projects, notepad text, brain dump, work sessions, routines | their [documents](#what-is-shared-between-devices) | ✅ |
 | `database_sync.url`. Empty disables sync | `device_settings` | — |
 | `notes.directory` | `device_settings` | — |
 | `window.*`, `views.*`, `panel.*`: sizes, dock and panel geometry, borders, animation, shortcuts | `device_settings` | — |

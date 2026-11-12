@@ -34,13 +34,14 @@ use std::{
 const TABLE: &str = "timeparagon_revisions_v1";
 /// The documents shared between devices. The rows of the synced settings
 /// tables are too (see [`rows`]); everything else stays local.
-const SHARED_KEYS: [&str; 6] = [
+const SHARED_KEYS: [&str; 7] = [
 	"habits",
 	"alarms",
 	"shared.notepad",
 	"shared.brain_dump",
 	"shared.projects",
 	"shared.task_work",
+	"shared.routines",
 ];
 /// Edits per document left unfolded, for recovery and so a fresh save always
 /// has recent history to merge against.
@@ -140,6 +141,7 @@ fn describe_edits(edits: &[&Edit]) -> String {
 			"shared.brain_dump" => "brain dump",
 			"shared.projects" => "project",
 			"shared.task_work" => "task work",
+			"shared.routines" => "routine",
 			document => rows::parse(document).map_or("data", |(table, _)| table.noun),
 		};
 		if !kinds.contains(&kind) {
@@ -274,8 +276,9 @@ pub fn enroll(path: &Path) -> io::Result<()> {
 		),
 		("delete", "DELETE", "1", "OLD.key", "OLD.value", "NULL"),
 	] {
-		// Older installations journaled the retired scratchpad. Replace their
-		// triggers so it stays local even when an older process writes it.
+		// Older installations journaled the retired scratchpad, or did not
+		// journal a document shared since. Replace their triggers so the
+		// list they carry is always the current one.
 		let trigger = format!("timeparagon_sync_{name}");
 		let existing: Option<String> = tx
 			.query_row(
@@ -285,7 +288,7 @@ pub fn enroll(path: &Path) -> io::Result<()> {
 			)
 			.optional()
 			.map_err(other)?;
-		if existing.is_some_and(|sql| sql.contains("'shared.todos'")) {
+		if existing.is_some_and(|sql| !sql.contains(&format!("IN ({shared})"))) {
 			tx.execute_batch(&format!("DROP TRIGGER {trigger};"))
 				.map_err(other)?;
 		}
@@ -1098,6 +1101,45 @@ mod tests {
 			.unwrap()
 			.unwrap();
 		assert_eq!(text["text"], "still syncing");
+	}
+	#[test]
+	fn a_document_shared_after_the_triggers_were_made_is_journaled_once_enrolled_again() {
+		let (_directory, path) = db();
+		let db = open(&path).unwrap();
+		// An installation from before routines were shared.
+		for name in ["insert", "update", "delete"] {
+			let trigger = format!("timeparagon_sync_{name}");
+			let sql: String = db
+				.query_row(
+					"SELECT sql FROM sqlite_master WHERE name=?1",
+					[&trigger],
+					|r| r.get(0),
+				)
+				.unwrap();
+			assert!(sql.contains(",'shared.routines'"));
+			db.execute_batch(&format!("DROP TRIGGER {trigger};"))
+				.unwrap();
+			db.execute_batch(&sql.replace(",'shared.routines'", ""))
+				.unwrap();
+		}
+		let journaled = |db: &Connection| -> i64 {
+			db.query_row(
+				"SELECT COUNT(*) FROM timeparagon_sync_edits WHERE document='shared.routines'",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap()
+		};
+		db.execute("INSERT INTO documents VALUES('shared.routines','{}')", [])
+			.unwrap();
+		assert_eq!(journaled(&db), 0, "the old triggers do not know it");
+		enroll(&path).unwrap();
+		db.execute(
+			"UPDATE documents SET value='{\"entries\":[]}' WHERE key='shared.routines'",
+			[],
+		)
+		.unwrap();
+		assert_eq!(journaled(&db), 1);
 	}
 	#[test]
 	fn alarms_merge_offline_additions_edits_and_deletions_between_devices() {

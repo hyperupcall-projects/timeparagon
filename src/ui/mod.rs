@@ -25,6 +25,7 @@ pub mod people;
 pub mod recurrence;
 pub mod reminders;
 mod rounded_clip;
+pub mod routines;
 pub mod settings;
 pub mod source_icon;
 mod task_drag;
@@ -328,6 +329,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 			(Screen::Today, _) => inbox::today(state, &main_metrics),
 			(Screen::Triaged, _) => inbox::triaged(state, &main_metrics),
 			(Screen::Backlog, _) => timeblocking::backlog(state, &main_metrics),
+			(Screen::Routines, _) => routines::view(state, &main_metrics),
 			(Screen::Life, _) => life::view(state, &metrics),
 			(Screen::Travel, _) => travel::view(state, &main_metrics),
 			(Screen::Habits, _) => habits::view(state, &main_metrics),
@@ -583,14 +585,24 @@ fn drag_ghost<'a>(
 		.into()
 }
 
-/// The six main navigation items.
-const TAB_COUNT: usize = 6;
-const TAB_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Life", "Note", "More", "Settings"];
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Life", "Note", "More", "Set"];
-const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
-	["Do", "Plan 2 Weeks", "Life", "Note", "More", "Settings"];
+/// The seven main navigation items.
+const TAB_COUNT: usize = 7;
+const TAB_LABELS: [&str; TAB_COUNT] = [
+	"Do", "Plan Day", "Routines", "Life", "Note", "More", "Settings",
+];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] =
+	["Do", "Plan Day", "Rtn", "Life", "Note", "More", "Set"];
+const TAB_WIDEST_LABELS: [&str; TAB_COUNT] = [
+	"Do",
+	"Plan 2 Weeks",
+	"Routines",
+	"Life",
+	"Note",
+	"More",
+	"Settings",
+];
 const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-	["Do", "Plan 2 Weeks", "Life", "Note", "More", "Set"];
+	["Do", "Plan 2 Weeks", "Rtn", "Life", "Note", "More", "Set"];
 
 /// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
@@ -663,8 +675,8 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 			.iter()
 			.map(|label| label.chars().count())
 			.sum::<usize>();
-		// Six tabs, three within-group gaps, and gaps on both sides of each spacer.
-		let fixed = 14.0 * pad + 3.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 7.0;
+		// Seven tabs, four within-group gaps, and gaps on both sides of each spacer.
+		let fixed = 16.0 * pad + 4.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 7.0;
 		((available - fixed) / ((chars + 1) as f32 * TAB_GLYPH_WIDTH)).min(max_size)
 	};
 	let full = size_for(&TAB_WIDEST_LABELS);
@@ -686,7 +698,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Do/Plan, then Projects, then Note/More/Settings.
+/// Do/Plan/Routines, then Life, then Note/More/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
 /// Planning destinations show their submenus beneath the main row.
@@ -744,29 +756,36 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		.align_y(Center),
 	)
 	.style(view_button_style(plan_active));
-	let life = tab(
+	let routines = tab(
 		labels[2],
+		state.screen == Screen::Routines,
+		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Routines)),
+		metrics,
+		fit,
+	);
+	let life = tab(
+		labels[3],
 		state.screen == Screen::Life,
 		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
 		metrics,
 		fit,
 	);
 	let note = tab(
-		labels[3],
+		labels[4],
 		state.screen == Screen::Notepad,
 		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad)),
 		metrics,
 		fit,
 	);
 	let more = tab(
-		labels[4],
+		labels[5],
 		more_active,
 		Message::Navigation(NavigationMessage::MoreMenuToggled),
 		metrics,
 		fit,
 	);
 	let settings = tab(
-		labels[5],
+		labels[6],
 		state.screen == Screen::Settings,
 		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings)),
 		metrics,
@@ -776,7 +795,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 	let group_gap = (fit.gap * 2.0).max(4.0);
 	let bar = container(
 		row![
-			row![view, plan].spacing(fit.gap),
+			row![view, plan, routines].spacing(fit.gap),
 			Space::new().width(Fill),
 			life,
 			Space::new().width(Fill),

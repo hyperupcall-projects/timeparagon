@@ -10,6 +10,7 @@ use iced_test::core::Settings;
 
 use timeparagon::app::{self, Message, Screen, State};
 use timeparagon::config::Config;
+use timeparagon::routines::Routine;
 use timeparagon::theme::Catalog;
 
 /// The widths the layout is designed around.
@@ -189,7 +190,176 @@ fn main() {
 		);
 	}
 
+	// The routines, with a day's worth of tasks, meetings and work to show.
+	for theme in ["Light", "Dark"] {
+		for width in [260.0, 420.0] {
+			let size = Size::new(width, 1100.0);
+			let steps: [(&str, Routine, usize); 8] = [
+				("routines-overview", Routine::DailyPlan, usize::MAX),
+				("routines-plan-review", Routine::DailyPlan, 0),
+				("routines-plan-choose", Routine::DailyPlan, 1),
+				("routines-plan-estimate", Routine::DailyPlan, 2),
+				("routines-refresh-card", Routine::DailyRefresh, 1),
+				("routines-reflection", Routine::DailyReflection, 0),
+				("routines-week-report", Routine::WeeklyReflection, 0),
+				("routines-week-schedule", Routine::WeeklyPlan, 2),
+			];
+			for (name, routine, step) in steps {
+				count += shoot(directory, theme, size, name, |state| {
+					routine_sample(state);
+					if step == usize::MAX {
+						return;
+					}
+					let _ = app::update(
+						state,
+						Message::Routines(timeparagon::routines::Action::Start(routine)),
+					);
+					let action = if routine == Routine::DailyRefresh {
+						timeparagon::routines::Action::Next
+					} else {
+						timeparagon::routines::Action::Step(step)
+					};
+					let _ = app::update(state, Message::Routines(action));
+				});
+			}
+		}
+	}
+
 	println!("wrote {count} screenshots to {}", directory.display());
+}
+
+/// Today's tasks, meetings, a time block, some work done and what the
+/// routines wrote down, all relative to today so the figures fill in.
+fn routine_sample(state: &mut State) {
+	use chrono::Duration;
+	use timeparagon::calendar::{self, Event};
+	use timeparagon::routines::{Objective, Period, Scale};
+	use timeparagon::timeblocking as tb;
+
+	state.screen = Screen::Routines;
+	state.config.calendar.inbox_list = Some("tasks:inbox".into());
+	state.config.calendar.app_calendar = Some("app".into());
+	let today = timeparagon::routines::today(state);
+	let yesterday = today - Duration::days(1);
+	let work = state
+		.config
+		.projects
+		.items
+		.iter()
+		.find(|p| p.name == "Work")
+		.map(|p| p.id);
+	let task = |id: i64, title: &str, list: &str, day: Option<chrono::NaiveDate>, minutes: u32| {
+		let start = calendar::at_clock(day.unwrap_or(tb::UNDATED), 0, 0);
+		Event {
+			id: format!("task:{id}"),
+			calendar_id: format!("tasks:{list}"),
+			title: title.into(),
+			start,
+			end: start + Duration::days(1),
+			all_day: true,
+			color: calendar::colors::TASK,
+			completed: false,
+			details: calendar::Details {
+				task_data: Some(timeparagon::task_db::TaskData {
+					id,
+					metadata: tb::Metadata {
+						minutes,
+						projects: work.filter(|_| list == "work").into_iter().collect(),
+						..Default::default()
+					},
+				}),
+				..Default::default()
+			},
+		}
+	};
+	let event = |id: &str, calendar: &str, title: &str, from: u32, to: u32| Event {
+		id: id.into(),
+		calendar_id: calendar.into(),
+		title: title.into(),
+		start: calendar::at_clock(today, from, 0),
+		end: calendar::at_clock(today, to, 0),
+		all_day: false,
+		color: calendar::colors::TASK,
+		completed: false,
+		details: Default::default(),
+	};
+	let mut overdue = task(110, "Submit the expense report", "work", None, 20);
+	overdue
+		.details
+		.task_data
+		.as_mut()
+		.unwrap()
+		.metadata
+		.deadline = Some(calendar::deadline::Deadline {
+		date: yesterday,
+		time: None,
+	});
+	let mut finished = task(111, "Review the launch checklist", "work", Some(today), 45);
+	finished.completed = true;
+	let mut parked = task(112, "Plan the team offsite", "backlog", None, 60);
+	parked
+		.details
+		.task_data
+		.as_mut()
+		.unwrap()
+		.metadata
+		.backlog_section = tb::BacklogSection::NextWeekOrTwo;
+	state.calendar.events = vec![
+		event("standup", "work", "Standup", 9, 10),
+		event("block", "app", "Deep work", 10, 12),
+		event("review", "work", "Design review", 14, 15),
+		task(100, "Write the quarterly update", "work", Some(today), 90),
+		task(
+			101,
+			"Reply to Sam about the contract",
+			"work",
+			Some(today),
+			15,
+		),
+		task(102, "Book the dentist", "personal", Some(today), 0),
+		task(103, "Fix the flaky sync test", "work", Some(yesterday), 60),
+		task(104, "Read the onboarding doc", "inbox", None, 0),
+		task(105, "Look into the billing alert", "inbox", None, 30),
+		overdue,
+		finished,
+		parked,
+	];
+	let at = |hour: u32| calendar::at_clock(today, hour, 0).with_timezone(&chrono::Utc);
+	state.config.task_work.sessions = vec![timeparagon::task_work::Session {
+		task_key: "111".into(),
+		task_title: "Review the launch checklist".into(),
+		block_key: None,
+		started_at: at(10),
+		stopped_at: Some(at(11)),
+	}];
+	let first_day = state.config.calendar.first_day_of_week;
+	let week = Period::of(Scale::Week, today, first_day);
+	let entry = state.config.routines.entry_mut(week);
+	entry.intention = "Get the launch over the line".into();
+	for (id, text) in [
+		(1, "Launch the beta"),
+		(2, "Hire a designer"),
+		(3, "Run three times"),
+	] {
+		entry.objectives.push(Objective {
+			id,
+			text: text.into(),
+			done: id == 3,
+		});
+	}
+	let entry = state.config.routines.entry_mut(Period::day(yesterday));
+	entry.intention = "Finish the slides".into();
+	entry.intention_met = Some(true);
+	entry.rating = Some(4);
+	entry.answers.insert(
+		"tomorrow".into(),
+		"The quarterly update, first thing".into(),
+	);
+	state
+		.config
+		.routines
+		.entry_mut(Period::day(today))
+		.intention = "Write the quarterly update".into();
 }
 
 /// Renders one state and writes it out.

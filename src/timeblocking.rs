@@ -293,6 +293,10 @@ pub enum Action {
 	Estimate(String),
 	Date(String),
 	SaveEstimate(String),
+	/// Give this task an estimate in minutes, without the estimate popup.
+	SetEstimate(String, u32),
+	/// Set or clear this task's deadline, without the deadline field.
+	SetDeadline(String, Option<calendar::deadline::Deadline>),
 	Backlog(String),
 	BacklogPicker(String),
 	MoveToBacklog(String, BacklogSection),
@@ -1330,6 +1334,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}
 			(id, Change::Estimate(minutes))
 		}
+		Action::SetEstimate(id, minutes) => {
+			if minutes == 0 || minutes > 10080 {
+				return Task::none();
+			}
+			(id, Change::Estimate(minutes))
+		}
+		Action::SetDeadline(id, deadline) => (id, Change::Deadline(deadline)),
 		Action::BacklogPicker(id) => {
 			if !state.timeblocking.busy.is_empty()
 				|| !event(state, &id).is_some_and(|task| task.is_task())
@@ -1997,7 +2008,7 @@ fn new_todo_event(
 
 /// Why a task cannot be triaged yet, from the Inbox's required-field settings,
 /// or `None` when it is ready to leave the Inbox.
-fn triage_error(state: &State, id: &str) -> Option<String> {
+pub(crate) fn triage_error(state: &State, id: &str) -> Option<String> {
 	let task = event(state, id).filter(|event| event.is_task())?;
 	task_edit::triage_error(task, &state.config.calendar.triage)
 }

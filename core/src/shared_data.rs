@@ -1,4 +1,4 @@
-//! The notepad's text, brain dumps, projects and work sessions: data the
+//! The notepad's text, brain dumps, projects, work sessions and routines: data the
 //! user writes, kept as documents in the local database and shared between
 //! devices through Turso by [`crate::database_sync`].
 //!
@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use crate::task_db::Database;
 
 /// The sections, by their names in the settings tree.
-pub const SECTIONS: [&str; 4] = ["notepad", "brain_dump", "projects", "task_work"];
+pub const SECTIONS: [&str; 5] = ["notepad", "brain_dump", "projects", "task_work", "routines"];
 
 /// The time the shared data last changed, as milliseconds since the epoch.
 const MODIFIED: &str = "shared_data_modified_ms";
