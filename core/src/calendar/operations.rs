@@ -1536,6 +1536,24 @@ fn observed<'a>(
     events
         .iter()
         .find(|e| crate::timeblocking::membership::same_item(old, e, day_start_hour))
+        .or_else(|| {
+            events
+                .iter()
+                .find(|e| first_occurrence(old, e, day_start_hour))
+        })
+}
+
+/// Whether `event` is the occurrence a series' master `master` is shown as:
+/// a write that made something a series is seen again as occurrences, none
+/// of which has the master's ID.
+fn first_occurrence(master: &Event, event: &Event, day_start_hour: u32) -> bool {
+    use crate::timeblocking::membership::{original_start, planning_day};
+    master.details.recurring_event_id.is_none()
+        && !master.details.recurrence.is_empty()
+        && event.calendar_id == master.calendar_id
+        && event.details.recurring_event_id.as_deref() == Some(master.id.as_str())
+        && planning_day(original_start(event), day_start_hour)
+            == planning_day(master.start, day_start_hour)
 }
 
 /// Advance acknowledged projections only from a fetch that began after the
@@ -2282,6 +2300,54 @@ mod tests {
         let mut shown = vec![before.clone()];
         overlay(&path, &mut shown, None).unwrap();
         assert_eq!(settled(shown), [sending]);
+    }
+
+    // A write that made something a series (a task joining a block's series,
+    // say) is seen again only as occurrences, none with the item's own ID.
+    // The row takes the first of them rather than hiding the item until the
+    // next sync.
+    #[test]
+    fn a_write_that_made_a_series_is_observed_as_its_first_occurrence() {
+        let (_dir, path) = db();
+        let mut one_off = super::super::sample_snapshot().events.remove(0);
+        one_off.id = "series".into();
+        let mut master = one_off.clone();
+        master.details.recurrence = vec!["RRULE:FREQ=DAILY".into()];
+        let mut writes = record_in(
+            &path,
+            edit_job(&master),
+            Some(&master),
+            &master.calendar_id,
+            &master.id,
+        )
+        .unwrap();
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        let occurrence = |id: &str, days: i64| {
+            let mut event = one_off.clone();
+            event.id = id.into();
+            event.start += chrono::Duration::days(days);
+            event.end += chrono::Duration::days(days);
+            event.details.recurring_event_id = Some("series".into());
+            event.details.original_start = Some(event.start);
+            event
+        };
+        let first = occurrence("series_1", 0);
+        let next = occurrence("series_2", 1);
+        let day = master.start.date_naive();
+        let fetched = crate::clock::now() + chrono::Duration::seconds(1);
+        observe_range(
+            &path,
+            &[first.clone(), next],
+            day,
+            day + chrono::Duration::days(1),
+            fetched,
+            0,
+        )
+        .unwrap();
+        // What was shown before, the one-off, gives way to the occurrence.
+        let mut shown = vec![one_off];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), [first]);
     }
 
     #[test]

@@ -853,6 +853,11 @@ pub fn insert_habit(
     };
     let created: EventEntry = serde_json::from_str(&response)
         .map_err(|error| format!("Google Calendar habit response: {error}"))?;
+    // As for any new series: only its first occurrence is shown until Google
+    // is asked for the rest (see `insert_event`).
+    if !created.recurrence.is_empty() && !created.id.is_empty() {
+        super::series::note(&calendar_id, &created.id, vec![calendar_id.clone()]);
+    }
     parse_habit(created, &calendar_id)
         .ok_or_else(|| "Google Calendar did not return the new habit".to_owned())
 }
@@ -2203,6 +2208,11 @@ pub fn insert_event(
             .to_owned()
             .into());
     }
+    // The overlay only shows the new series' first occurrence, and the sync
+    // asked for when saving may have reached Google before this did.
+    if !recurrence.is_empty() {
+        super::series::note(calendar_id, &created.id, vec![calendar_id.to_owned()]);
+    }
     let details = details_of(&created);
     Ok(Inserted {
         id: created.id,
@@ -2264,7 +2274,16 @@ pub fn delete_event_scope(
     let instance_url = format!("{base}/{}", urlencoding::encode(event_id));
     let instance: serde_json::Value = get(&instance_url, access_token)?;
     let Some(series_id) = instance["recurringEventId"].as_str() else {
-        return delete_event(event_id);
+        delete_event(event_id)?;
+        // A series deleted by its master (a habit's events) takes every
+        // occurrence with it, not only the one the overlay knows about.
+        if instance["recurrence"]
+            .as_array()
+            .is_some_and(|lines| !lines.is_empty())
+        {
+            super::series::note(calendar_id, event_id, vec![calendar_id.to_owned()]);
+        }
+        return Ok(());
     };
     let deleted_series = || -> Result<(), GoogleError> {
         match delete_event(series_id) {
@@ -3648,5 +3667,123 @@ mod tests {
             .map(|entry| entry.id)
             .collect();
         assert_eq!(ids, ["waiting", "series", "lone_1"]);
+    }
+
+    /// The series noted by `body`, which runs with Google answered by
+    /// `answer` (method, URL, body).
+    fn noted_by(
+        answer: impl FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)> + 'static,
+        body: impl FnOnce(),
+    ) -> Vec<(String, String)> {
+        super::super::series::take_noted();
+        super::with_transport(Box::new(answer), body);
+        super::super::series::take_noted()
+            .into_iter()
+            .map(|series| (series.calendar, series.id))
+            .collect()
+    }
+
+    /// Echoes a created event back with `id`.
+    fn created(
+        id: &'static str,
+    ) -> impl FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)> {
+        move |_, _, body| {
+            let mut event: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+            event["id"] = id.into();
+            Ok(event.to_string())
+        }
+    }
+
+    // The sync asked for when saving can reach Google before the new series
+    // does, so its other occurrences are fetched once Google has it.
+    #[test]
+    fn a_new_series_is_noted_for_refresh_but_a_one_off_is_not() {
+        let start = chrono::Local::now();
+        let insert = |recurrence: &[String]| {
+            super::insert_event(
+                "token",
+                "cal",
+                "Title",
+                "",
+                None,
+                start,
+                start + chrono::Duration::hours(1),
+                recurrence,
+                &[],
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        };
+        let series = vec!["RRULE:FREQ=DAILY".to_owned()];
+        assert_eq!(
+            noted_by(created("new-series"), || insert(&series)),
+            [("cal".to_owned(), "new-series".to_owned())]
+        );
+        assert!(noted_by(created("one-off"), || insert(&[])).is_empty());
+    }
+
+    #[test]
+    fn a_new_habit_series_is_noted_for_refresh() {
+        let start = chrono::Local::now();
+        let body = super::habit_body(
+            "Stretch",
+            "",
+            start,
+            start + chrono::Duration::minutes(10),
+            &["RRULE:FREQ=DAILY".to_owned()],
+            None,
+        );
+        assert_eq!(
+            noted_by(created("habit"), || {
+                super::insert_habit("token", Some("cal"), &body).unwrap();
+            }),
+            [("cal".to_owned(), "habit".to_owned())]
+        );
+    }
+
+    #[test]
+    fn deleting_a_series_by_its_master_is_noted_for_refresh() {
+        let answer = |method: &str, _: &str, _: Option<&str>| {
+            Ok(match method {
+                "GET" => serde_json::json!({"id": "habit", "recurrence": ["RRULE:FREQ=DAILY"]})
+                    .to_string(),
+                _ => String::new(),
+            })
+        };
+        assert_eq!(
+            noted_by(answer, || {
+                super::delete_event_scope(
+                    "token",
+                    "cal",
+                    "habit",
+                    super::super::SaveScope::All,
+                    false,
+                )
+                .unwrap();
+            }),
+            [("cal".to_owned(), "habit".to_owned())]
+        );
+        // A one-off deleted the same way changes nothing else.
+        let one_off = |method: &str, _: &str, _: Option<&str>| {
+            Ok(match method {
+                "GET" => serde_json::json!({"id": "lone"}).to_string(),
+                _ => String::new(),
+            })
+        };
+        assert!(
+            noted_by(one_off, || {
+                super::delete_event_scope(
+                    "token",
+                    "cal",
+                    "lone",
+                    super::super::SaveScope::All,
+                    false,
+                )
+                .unwrap();
+            })
+            .is_empty()
+        );
     }
 }

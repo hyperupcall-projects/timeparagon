@@ -8,6 +8,12 @@ use crate::{
 use chrono::{Duration, Local, TimeZone};
 use serde_json::{Value, json};
 
+/// A calendar task that is a series' master, so a write to it changes every
+/// occurrence.
+fn is_series(task: &Event) -> bool {
+    task.details.recurring_event_id.is_none() && !task.details.recurrence.is_empty()
+}
+
 pub fn event_url(event: &Event) -> String {
     format!(
         "{}/{}/events/{}",
@@ -217,6 +223,15 @@ pub fn persist(
         if original.task_ref().is_some() {
             remove(token, &crate::task_edit::task_url(original)?)?;
         }
+        // A task that is, or has just stopped being, a series of its own
+        // (joining a block's series, say) changed on other days too.
+        if is_series(saved) || (original.id == saved.id && is_series(original)) {
+            super::series::note(
+                &saved.calendar_id,
+                &saved.id,
+                vec![saved.calendar_id.clone()],
+            );
+        }
     } else {
         let list = match saved.calendar_id.as_str() {
             "tasks:local-triaged" => scheduled::find_or_create(
@@ -260,6 +275,13 @@ pub fn persist(
             saved.calendar_id = ids::calendar_id(&list);
             if original.task_ref().is_none() {
                 remove(token, &event_url(original))?;
+                if is_series(original) {
+                    super::series::note(
+                        &original.calendar_id,
+                        &original.id,
+                        vec![original.calendar_id.clone()],
+                    );
+                }
             } else {
                 remove(token, &crate::task_edit::task_url(original)?)?;
             }
@@ -415,6 +437,37 @@ mod tests {
             saved.id
         );
     }
+    // Joining a block's series (or leaving a repeat behind) changes the task
+    // on other days, which the sync asked for when saving may not show yet.
+    #[test]
+    fn a_task_that_becomes_or_stops_being_a_series_is_noted_for_refresh() {
+        let start =
+            super::super::at_clock(chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap(), 9, 0);
+        let one_off = apply(
+            task(),
+            &settings(),
+            &Change::Time(start, start + Duration::minutes(45)),
+            0,
+        )
+        .unwrap();
+        let mut series = one_off.clone();
+        series.details.recurrence = vec!["RRULE:FREQ=DAILY".into()];
+        let noted = |original: &Event, saved: &Event| {
+            super::super::series::take_noted();
+            let mut saved = saved.clone();
+            api::with_transport(Box::new(|_, _, _| Ok("{}".into())), || {
+                persist("token", original, &mut saved, &settings()).unwrap()
+            });
+            super::super::series::take_noted()
+                .into_iter()
+                .map(|series| series.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(noted(&one_off, &series), [series.id.clone()]);
+        assert_eq!(noted(&series, &one_off), [series.id.clone()]);
+        assert!(noted(&one_off, &one_off).is_empty());
+    }
+
     #[test]
     fn timed_tasks_write_native_recurrence_and_plain_notes() {
         let start =
