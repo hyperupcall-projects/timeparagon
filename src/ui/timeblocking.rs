@@ -434,6 +434,9 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 		super::description::preview(&task.id, &task.details.description.clone(), metrics)
 	};
 	let mut information = column![description].spacing(metrics.spacing);
+	if task.is_habit() {
+		information = information.push(habit_link(state, task, metrics));
+	}
 	if task.id != crate::inbox::DRAFT_ID {
 		if let Some(target) = crate::notes::target_of(state, task) {
 			information = information.push(super::notes::section(state, target, metrics));
@@ -516,6 +519,34 @@ pub fn scheduled_by_block<'a>(
 		),
 		None => super::controls::owned_elsewhere(note, content, metrics.label()),
 	}
+}
+
+/// The habit behind a planned item, with its usual daily tracking dialog.
+pub(super) fn habit_link<'a>(
+	state: &'a State,
+	task: &Event,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let Some(habit) = state
+		.habits
+		.habit_of(task)
+		.and_then(|id| state.habits.library.habit(id))
+	else {
+		return iced::widget::Space::new().into();
+	};
+	column![
+		field_label("Habit", metrics),
+		text(&habit.name).size(metrics.label()),
+		button(text("Record habit").size(metrics.label()))
+			.style(super::controls::secondary)
+			.on_press(Message::Habits(crate::habits::Action::OpenDay(
+				habit.id.clone(),
+				task.start.date_naive(),
+			))),
+	]
+	.spacing(6)
+	.width(Fill)
+	.into()
 }
 
 fn organization_fields<'a>(
@@ -934,7 +965,13 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
 	}
 	for (label, action) in [
 		(
-			if status == tb::TaskStatus::Completed {
+			if task.is_habit() {
+				if status == tb::TaskStatus::Completed {
+					"Mark as not done"
+				} else {
+					"Mark as done"
+				}
+			} else if status == tb::TaskStatus::Completed {
 				"Uncomplete task"
 			} else {
 				"Complete task"
@@ -958,7 +995,13 @@ pub fn task_actions<'a>(state: &State, task: &Event, metrics: &Metrics) -> Eleme
 			"Delete task",
 			Message::Task(TaskMessage::TaskDeleteRequested(task.id.clone())),
 		),
-	] {
+	]
+	.into_iter()
+	.take(if task.is_habit() && task.is_calendar_task() {
+		1
+	} else {
+		usize::MAX
+	}) {
 		let mut action_button = button(text(label).size(metrics.label()).center().width(Fill))
 			.width(Fill)
 			.style(

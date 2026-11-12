@@ -473,12 +473,7 @@ impl Store {
 	pub fn habit_of<'a>(&'a self, event: &'a calendar::Event) -> Option<&'a str> {
 		if event.is_task() {
 			return event
-				.details
-				.task_data
-				.as_ref()?
-				.metadata
-				.habit_id
-				.as_deref()
+				.linked_habit_id()
 				.filter(|id| self.library.habit(id).is_some());
 		}
 		let series_id = event
@@ -522,7 +517,7 @@ impl Store {
 		let Some(id) = self.calendar_habit.as_deref() else {
 			return true;
 		};
-		event.details.habit && self.habit_of(event) == Some(id)
+		event.is_habit() && self.habit_of(event) == Some(id)
 	}
 
 	/// Restore a habit explicitly linked by a calendar series on another device.

@@ -264,7 +264,7 @@ pub fn NotesSettings(
 /// What a note connects to for this event. Habit events have none here: a note
 /// attaches to the habit itself, and the habits on the phone are its own.
 pub fn target_of(event: &Event, settings: &CalendarSettings) -> Option<Link> {
-	if event.details.sleep.is_some() || event.details.habit {
+	if event.details.sleep.is_some() || event.is_habit() {
 		return None;
 	}
 	let kind = if event.is_task() {

@@ -537,7 +537,7 @@ pub fn target_of(state: &State, event: &Event) -> Option<Link> {
 	if event.details.sleep.is_some() {
 		return None;
 	}
-	if event.details.habit {
+	if event.is_habit() {
 		let id = state.habits.habit_of(event)?;
 		return Some(habit_link(id, state.habits.library.habit(id)?.name.clone()));
 	}
@@ -612,7 +612,7 @@ pub fn candidates(state: &State) -> Vec<Link> {
 		let day = center + chrono::Duration::days(offset);
 		for event in state.calendar.events_on(day) {
 			// A habit's events are offered as the habit, above.
-			if !event.details.habit
+			if !event.is_habit()
 				&& let Some(link) = target_of(state, event)
 			{
 				found.push(link);
@@ -789,6 +789,15 @@ mod tests {
 		assert_eq!(one.kind, LinkKind::Habit);
 		assert_eq!(one.id, "h1");
 		assert!(one.same_target(&two));
+		let mut planned = event("planned", "Read in block");
+		planned.details.task_data = Some(crate::task_db::TaskData {
+			id: 42,
+			metadata: crate::timeblocking::Metadata {
+				habit_id: Some("h1".into()),
+				..Default::default()
+			},
+		});
+		assert!(one.same_target(&target_of(&state, &planned).unwrap()));
 
 		let id = state.notes.library.create("Reading list", vec![one]);
 		let shown = state.notes.library.linked(&two);

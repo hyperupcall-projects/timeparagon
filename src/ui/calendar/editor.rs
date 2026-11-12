@@ -147,8 +147,8 @@ pub fn event_editor<'a>(
 	// Habits and time blocks are always timed, so only a plain event can be
 	// switched to whole days.
 	let can_be_all_day =
-		!event.details.habit && !crate::timeblocking::is_block(event, &state.config.calendar);
-	let mut start = column![label(if event.details.habit {
+		!event.is_habit() && !crate::timeblocking::is_block(event, &state.config.calendar);
+	let mut start = column![label(if event.is_habit() {
 		"Start day"
 	} else if draft.all_day {
 		"Start Date"
@@ -209,7 +209,7 @@ pub fn event_editor<'a>(
 		))
 	};
 	let mut scheduling = column![start].spacing(metrics.spacing).width(Fill);
-	if !event.details.habit {
+	if !event.is_habit() {
 		// An all-day end date is the last day covered, not Google's
 		// exclusive end.
 		let mut end = column![
@@ -249,7 +249,7 @@ pub fn event_editor<'a>(
 		false,
 		|v| Message::EventEdit(EventEditMessage::EventEditRecurrence(v)),
 	));
-	if event.is_calendar_task() {
+	if event.is_calendar_task() && !event.is_habit() {
 		scheduling = scheduling.push(
 			column![
 				label("Deadline"),
@@ -306,7 +306,7 @@ pub fn event_editor<'a>(
 	organization = organization.push(event_projects(state, &draft.projects, metrics, |v| {
 		Message::EventEdit(EventEditMessage::EventEditProjects(v))
 	}));
-	if event.details.habit {
+	if event.is_habit() {
 		organization = organization.push(event_habit_picker(state, event, metrics));
 	} else {
 		let mut labels = column![label("Labels")].spacing(6).width(Fill);
@@ -1078,6 +1078,9 @@ fn event_habit_picker<'a>(
 	event: &Event,
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
+	if event.is_task() {
+		return super::super::timeblocking::habit_link(state, event, metrics);
+	}
 	let new = event.id == crate::habits::NEW_HABIT_ID;
 	let mut options = vec![HabitChoice {
 		id: None,

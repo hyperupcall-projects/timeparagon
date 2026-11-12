@@ -134,7 +134,7 @@ impl Event {
 		if let Some(color) = self.details.color_id.as_deref().and_then(colors::event) {
 			return color;
 		}
-		if self.details.habit {
+		if self.is_habit() {
 			return settings.habit_color();
 		}
 		if self.is_calendar_task() {
@@ -175,6 +175,25 @@ impl Event {
 			|| self.calendar_id.starts_with(ids::TASK_LIST)
 	}
 
+	/// The library habit represented by an event or a planned task.
+	pub fn linked_habit_id(&self) -> Option<&str> {
+		if self.is_task() {
+			self.details
+				.task_data
+				.as_ref()?
+				.metadata
+				.habit_id
+				.as_deref()
+		} else {
+			self.details.habit_id.as_deref()
+		}
+	}
+
+	/// Habit identity is independent of the task used to schedule it.
+	pub fn is_habit(&self) -> bool {
+		self.details.habit || self.linked_habit_id().is_some()
+	}
+
 	pub fn is_calendar_task(&self) -> bool {
 		self.is_task()
 			&& !self.id.starts_with(ids::TASK)
@@ -200,7 +219,7 @@ impl Event {
 	pub fn kind(&self, settings: &CalendarSettings, calendars: &[Calendar]) -> EventKind {
 		if self.details.sleep.is_some() {
 			EventKind::Sleep
-		} else if self.details.habit {
+		} else if self.is_habit() {
 			EventKind::Habit
 		} else if self.is_calendar_task() {
 			EventKind::ScheduledTask
@@ -4020,6 +4039,37 @@ mod tests {
 
 		settings.set_task_event_color(Some(colors::HABIT));
 		assert_eq!(task.display_color(&settings, &[]), colors::HABIT);
+	}
+
+	#[test]
+	fn a_planned_habit_keeps_its_identity_and_storage_type() {
+		let settings = CalendarSettings::default();
+		let mut planned = sample_snapshot().events.remove(0);
+		planned.details = Details::default();
+		planned.details.task_data = Some(crate::task_db::TaskData {
+			id: 42,
+			metadata: crate::timeblocking::Metadata {
+				habit_id: Some("read".into()),
+				..Default::default()
+			},
+		});
+		assert!(planned.is_calendar_task());
+		assert!(planned.is_habit());
+		assert_eq!(planned.linked_habit_id(), Some("read"));
+		assert_eq!(planned.kind(&settings, &[]), EventKind::Habit);
+		assert_eq!(
+			planned.display_color(&settings, &[]),
+			settings.habit_color()
+		);
+		planned
+			.details
+			.task_data
+			.as_mut()
+			.unwrap()
+			.metadata
+			.habit_id = None;
+		assert!(!planned.is_habit());
+		assert_eq!(planned.kind(&settings, &[]), EventKind::ScheduledTask);
 	}
 
 	#[test]

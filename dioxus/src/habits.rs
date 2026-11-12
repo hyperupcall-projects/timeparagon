@@ -109,7 +109,7 @@ pub fn record_completion(event: &Event) {
 		return;
 	}
 	let library = &saved.library;
-	let Some(id) = event.details.habit_id.clone().filter(|id| {
+	let Some(id) = event.linked_habit_id().map(str::to_owned).filter(|id| {
 		library
 			.habit(id)
 			.is_some_and(|habit| habit.kind == Kind::Yes)
@@ -118,7 +118,11 @@ pub fn record_completion(event: &Event) {
 	};
 	let day = event.start.date_naive();
 	if let Some(habit) = saved.library.habit_mut(&id) {
-		if event.completed {
+		if event.completed
+			&& (!event.is_task()
+				|| timeparagon_core::timeblocking::task_status(event)
+					== timeparagon_core::timeblocking::TaskStatus::Completed)
+		{
 			habit.add_rep(day);
 		} else {
 			habit.remove_rep(day);

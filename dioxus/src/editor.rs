@@ -81,7 +81,7 @@ pub fn Editor(
 	};
 	if event.details.sleep.is_some() {
 		rsx! { SleepEditor { event, context, on_close, on_saved, on_config } }
-	} else if event.is_task() {
+	} else if event.is_task() && !(event.is_calendar_task() && event.is_habit()) {
 		rsx! { TaskEditor { event, context, on_close, on_saved, on_config } }
 	} else {
 		rsx! { EventEditor { event, context, on_close, on_saved, on_config } }
@@ -322,6 +322,7 @@ fn TaskEditor(
 			busy.set(false);
 			match result {
 				Ok(saved) => {
+					crate::habits::record_completion(&saved);
 					task.set(saved);
 					on_saved.call(());
 					if closing() {
@@ -683,7 +684,9 @@ fn TaskEditor(
 							tb::TaskStatus::Completed
 						});
 					},
-					if status == tb::TaskStatus::Completed { "Uncomplete task" } else { "Complete task" }
+					if current.is_habit() {
+						if status == tb::TaskStatus::Completed { "Mark as not done" } else { "Mark as done" }
+					} else if status == tb::TaskStatus::Completed { "Uncomplete task" } else { "Complete task" }
 				}
 				button {
 					class: "btn editor-wide",
@@ -932,10 +935,25 @@ fn EventEditor(
 		error.set(None);
 		spawn(async move {
 			let written = updated.clone();
-			let result = worker(move || calendar::set_habit_completed(&written)).await;
+			let result = worker(move || {
+				if written.is_task() {
+					calendar::set_linked_task_status(
+						&written,
+						if written.completed {
+							tb::TaskStatus::Completed
+						} else {
+							tb::TaskStatus::Active
+						},
+					)
+				} else {
+					calendar::set_habit_completed(&written)?;
+					Ok(written)
+				}
+			})
+			.await;
 			completing.set(false);
 			match result {
-				Ok(()) => {
+				Ok(updated) => {
 					crate::habits::record_completion(&updated);
 					original.set(updated);
 					on_saved.call(());
@@ -954,7 +972,8 @@ fn EventEditor(
 	let source_event = original();
 	let values = draft();
 	let is_busy = busy() || values.loading;
-	let habit = source_event.details.habit;
+	let habit = source_event.is_habit();
+	let assigned = tb::is_assigned(&source_event);
 	let source = day::source_label(&source_event, &context);
 	let color = css_color(source_event.display_color(&context.settings, &context.calendars));
 	let place = places::place_of(
@@ -1146,13 +1165,16 @@ fn EventEditor(
 				}
 			}
 			FormSection { title: "Scheduling",
+				if assigned {
+					p { class: "hint", "Scheduled by its time block. Change it from the time block." }
+				}
 				Field { label: if habit { "Start day" } else { "Start Time" },
 					div { class: "editor-row",
 						input {
 							class: "client-input",
 							r#type: "date",
 							aria_label: "Start date",
-							disabled: is_busy,
+							disabled: is_busy || assigned,
 							value: "{values.date_text}",
 							oninput: move |event| set_start_date(&mut draft.write(), event.value(), habit),
 						}
@@ -1160,7 +1182,7 @@ fn EventEditor(
 							class: "client-input",
 							r#type: "time",
 							aria_label: "Start time",
-							disabled: is_busy,
+							disabled: is_busy || assigned,
 							value: "{values.start_text}",
 							oninput: move |event| set_start_time(&mut draft.write(), event.value(), habit),
 						}
@@ -1173,7 +1195,7 @@ fn EventEditor(
 								class: "client-input",
 								r#type: "date",
 								aria_label: "End date",
-								disabled: is_busy,
+								disabled: is_busy || assigned,
 								value: "{values.end_date_text}",
 								oninput: move |event| draft.write().set_end_date_text(event.value()),
 							}
@@ -1181,7 +1203,7 @@ fn EventEditor(
 								class: "client-input",
 								r#type: "time",
 								aria_label: "End time",
-								disabled: is_busy,
+								disabled: is_busy || assigned,
 								value: "{values.end_text}",
 								oninput: move |event| {
 									let mut draft = draft.write();
@@ -1196,7 +1218,7 @@ fn EventEditor(
 					rule: values.rule.clone(),
 					anchor,
 					first_day: context.settings.first_day_of_week,
-					busy: is_busy,
+					busy: is_busy || assigned,
 					on_action: move |action: recurrence::Action| {
 						let mut draft = draft.write();
 						draft.recurrence_changed = true;
@@ -1206,7 +1228,7 @@ fn EventEditor(
 				}
 				NotificationsEditor {
 					options: values.options.clone(),
-					busy: is_busy,
+					busy: is_busy || assigned,
 					on_action: move |action| draft.write().options.update(action),
 				}
 			}
@@ -3083,6 +3105,34 @@ mod tests {
 			],
 		);
 		assert!(!html.contains("End Time"));
+	}
+
+	#[test]
+	fn a_planned_habit_uses_the_habit_editor() {
+		let mut planned = task();
+		planned.id = "planned-read".into();
+		planned.calendar_id = "blocks".into();
+		planned
+			.details
+			.task_data
+			.as_mut()
+			.unwrap()
+			.metadata
+			.habit_id = Some("read".into());
+		planned.details.task_data.as_mut().unwrap().metadata.block = Some("blocks/b".into());
+		let html = render(planned);
+		assert_offers(
+			&html,
+			&[
+				">Habit<",
+				"Start day",
+				"Mark as done",
+				"Repeat",
+				"Scheduled by its time block",
+			],
+		);
+		assert!(!html.contains("End Time"));
+		assert!(!html.contains("Complete task"));
 	}
 
 	#[test]

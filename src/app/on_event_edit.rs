@@ -70,7 +70,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 				.open_event
 				.as_deref()
 				.and_then(|id| state.calendar.event(id))
-				.is_some_and(|event| event.details.habit);
+				.is_some_and(|event| event.is_habit());
 			if let Some(draft) = state.calendar.edit_draft.as_mut() {
 				let duration = draft.end - draft.start;
 				draft.set_date_text(text);
@@ -94,7 +94,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 				.open_event
 				.as_deref()
 				.and_then(|id| state.calendar.event(id))
-				.is_some_and(|event| event.details.habit);
+				.is_some_and(|event| event.is_habit());
 			if let Some(draft) = state.calendar.edit_draft.as_mut() {
 				let duration = draft.end - draft.start;
 				draft.set_start_text(text);

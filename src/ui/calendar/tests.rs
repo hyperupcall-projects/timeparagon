@@ -779,6 +779,69 @@ fn habit_details_show_start_day_repeat_projects_and_location() {
 }
 
 #[test]
+fn a_habit_planned_in_a_block_opens_with_habit_details() {
+	for focus in [false, true] {
+		let mut state = State::blank();
+		state.config.calendar.app_calendar = Some("work".into());
+		state
+			.habits
+			.library
+			.habits
+			.push(crate::habits::Habit::new("read", "Read a book"));
+		let mut snapshot = calendar::sample_snapshot();
+		let mut planned = snapshot
+			.events
+			.iter()
+			.find(|e| e.id == "standup")
+			.unwrap()
+			.clone();
+		planned.id = "planned-read".into();
+		planned.title = "Read a book".into();
+		planned.details = Default::default();
+		planned.details.task_data = Some(crate::task_db::TaskData {
+			id: 42,
+			metadata: crate::timeblocking::Metadata {
+				habit_id: Some("read".into()),
+				block: Some("work/standup".into()),
+				minutes: 30,
+				..Default::default()
+			},
+		});
+		snapshot.events.push(planned);
+		state.calendar = calendar::Store::with_snapshot(snapshot);
+		if focus {
+			state.timeblocking.focus = Some("standup".into());
+		}
+		let _ = crate::app::update(
+			&mut state,
+			Message::Event(EventMessage::EventOpened("planned-read".into())),
+		);
+		let metrics = Metrics::of(Size::new(440.0, 2200.0));
+		let mut ui = iced_test::Simulator::with_size(
+			Default::default(),
+			metrics.size,
+			details_pane(&state, &metrics),
+		);
+		for label in [
+			"Habit",
+			"Start day",
+			"Repeat",
+			"Record habit",
+			"Mark as done",
+		] {
+			assert!(ui.find(label).is_ok(), "{label}, focus={focus}");
+		}
+		assert!(ui.find("End Time").is_err());
+		assert!(ui.find("Ignore Task").is_err());
+		assert!(ui.find("Deadline").is_err());
+		ui.click("Record habit").unwrap();
+		assert!(ui.into_messages().any(
+			|m| matches!(m, Message::Habits(crate::habits::Action::OpenDay(id, _)) if id == "read")
+		));
+	}
+}
+
+#[test]
 fn a_time_block_panel_only_plans_tasks() {
 	let mut state = State::blank();
 	state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());

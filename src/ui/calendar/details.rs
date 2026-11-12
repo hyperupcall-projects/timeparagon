@@ -100,7 +100,12 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 	// the room it needs, however long the description above it runs; the
 	// buttons come first in the budget, so they can never be squeezed out.
 	let button_height = metrics.button.max(40.0);
-	let button_count = buttons.len() + if event.is_task() { 3 } else { 0 };
+	let button_count = buttons.len()
+		+ if event.is_task() && !(event.is_calendar_task() && event.is_habit()) {
+			3
+		} else {
+			0
+		};
 	let reserved = button_height * button_count as f32
 		+ metrics.spacing * button_count.saturating_sub(1) as f32;
 	let scroll_max =

@@ -135,7 +135,7 @@ pub(super) fn day_canvas<'a>(
 					|| (event.is_task() && !state.timeblocking.busy.is_empty())
 					|| state.habits.completing.contains(&event.id),
 				time_block,
-				habit: (event.details.habit && !hidden)
+				habit: (event.is_habit() && !hidden)
 					.then(|| state.habits.habit_of(event))
 					.flatten()
 					.map(|id| (id.to_owned(), event.start.date_naive())),
