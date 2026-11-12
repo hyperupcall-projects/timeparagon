@@ -26,6 +26,10 @@ const OVERLAY: &str = "google.overlay";
 /// Bumped by changes to any settings table (see [`crate::settings`]).
 const SETTINGS: &str = "settings";
 
+/// Bumped by changes to the stored nights of sleep, including those database
+/// sync brings from another device (see `calendar::sleep::store`).
+const SLEEP: &str = "sleep";
+
 /// The counters a poll compares against what it last applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Counters {
@@ -35,22 +39,46 @@ pub struct Counters {
     /// Moves whenever anything the apps' `Config` holds changes: a settings
     /// table, or one of the shared documents laid into it.
     pub config: i64,
+    /// Moves whenever a stored night of sleep changes.
+    pub sleep: i64,
+}
+
+const CREATE: &str = "CREATE TABLE IF NOT EXISTS timeslay_change_counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);";
+
+/// A trigger body that adds one to the counter `name` (an SQL expression).
+fn bump(name: &str) -> String {
+    // Neither UPSERT nor `OR IGNORE` can be relied on in a trigger body: the
+    // outer statement's conflict policy replaces the trigger's own, so the
+    // row is created with an explicit existence check instead.
+    format!(
+        "INSERT INTO timeslay_change_counters SELECT {name},0 WHERE NOT EXISTS (SELECT 1 FROM timeslay_change_counters WHERE name={name}); \
+         UPDATE timeslay_change_counters SET value=value+1 WHERE name={name};"
+    )
+}
+
+/// Makes every insert, update and delete on `table` bump `counter`.
+fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
+    for operation in ["INSERT", "UPDATE", "DELETE"] {
+        db.execute_batch(&format!(
+            "CREATE TRIGGER IF NOT EXISTS timeslay_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",
+            op = operation.to_ascii_lowercase(),
+            body = bump(&format!("'{counter}'")),
+        ))?;
+    }
+    Ok(())
+}
+
+/// The triggers on the synced data tables, which are created outside the
+/// versioned schema (see `settings::schema::create_data`), so these are too.
+/// Idempotent, and expects the tables to exist.
+pub(crate) fn install_data(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(CREATE)?;
+    watch(db, crate::settings::schema::SLEEP_NIGHTS.name, SLEEP)
 }
 
 /// Creates the counter table and the triggers that maintain it. Idempotent.
 pub(crate) fn install(db: &Connection) -> rusqlite::Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS timeslay_change_counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);",
-    )?;
-    // Neither UPSERT nor `OR IGNORE` can be relied on in a trigger body: the
-    // outer statement's conflict policy replaces the trigger's own, so the
-    // row is created with an explicit existence check instead.
-    let bump = |name: &str| {
-        format!(
-            "INSERT INTO timeslay_change_counters SELECT {name},0 WHERE NOT EXISTS (SELECT 1 FROM timeslay_change_counters WHERE name={name}); \
-             UPDATE timeslay_change_counters SET value=value+1 WHERE name={name};"
-        )
-    };
+    db.execute_batch(CREATE)?;
     for (operation, key) in [
         ("INSERT", "NEW.key"),
         ("UPDATE", "NEW.key"),
@@ -68,13 +96,7 @@ pub(crate) fn install(db: &Connection) -> rusqlite::Result<()> {
         .into_iter()
         .chain(settings)
     {
-        for operation in ["INSERT", "UPDATE", "DELETE"] {
-            db.execute_batch(&format!(
-                "CREATE TRIGGER IF NOT EXISTS timeslay_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",
-                op = operation.to_ascii_lowercase(),
-                body = bump(&format!("'{counter}'")),
-            ))?;
-        }
+        watch(db, table, counter)?;
     }
     Ok(())
 }
@@ -106,6 +128,7 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
         habits: value(&document(crate::task_db::keys::HABITS))?,
         overlay: value(OVERLAY)?,
         config,
+        sleep: value(SLEEP)?,
     })
 }
 
@@ -169,6 +192,29 @@ mod tests {
             text: "milk".into(),
         };
         crate::shared_data::save_section(&path, "notepad", &notepad).unwrap();
-        assert!(reader.read().unwrap().config > after_setting.config);
+        let after_notepad = reader.read().unwrap();
+        assert!(after_notepad.config > after_setting.config);
+        assert_eq!(after_notepad.sleep, after_setting.sleep);
+
+        // Stored nights, written here or brought by sync, move only theirs.
+        let mut database = crate::task_db::Database::open(&path).unwrap();
+        crate::settings::schema::create_data(database.connection()).unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO sleep_nights VALUES('app','n','2030-11-04','a','b','{}')",
+                [],
+            )
+            .unwrap();
+        let after_night = reader.read().unwrap();
+        assert!(after_night.sleep > after_notepad.sleep);
+        assert_eq!(
+            (after_night.config, after_night.overlay, after_night.habits),
+            (
+                after_notepad.config,
+                after_notepad.overlay,
+                after_notepad.habits
+            )
+        );
     }
 }

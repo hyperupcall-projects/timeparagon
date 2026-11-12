@@ -208,13 +208,52 @@ pub(crate) const CREATE: &str = "
     CREATE TABLE IF NOT EXISTS travel_routes (from_place INTEGER NOT NULL, to_place INTEGER NOT NULL, mode TEXT NOT NULL, seconds INTEGER NOT NULL, meters INTEGER NOT NULL, PRIMARY KEY (from_place, to_place, mode));
     CREATE TABLE IF NOT EXISTS reminders (category TEXT PRIMARY KEY, enabled INTEGER NOT NULL, minutes_before INTEGER NOT NULL, sound TEXT NOT NULL);";
 
+/// Nights of sleep as Google Calendar last had them (see
+/// `calendar::sleep::store`). Replicated so another device shows them before
+/// its own Google sync. `event` is plain text, not merged field by field:
+/// each copy is a whole Google event, and the newest one wins.
+pub(crate) const SLEEP_NIGHTS: Table = Table {
+    name: "sleep_nights",
+    key: &["calendar_id", "id"],
+    columns: &[
+        column("calendar_id", Text),
+        column("id", Text),
+        column("wake_date", Text),
+        column("start_at", Text),
+        column("end_at", Text),
+        column("event", Text),
+    ],
+    synced: true,
+    noun: "sleep",
+};
+
+/// Synced tables of app data rather than preferences: database sync
+/// replicates their rows like the settings tables', but they are not part of
+/// `Config`, so nothing that reads or saves settings looks at them.
+pub(crate) const DATA_TABLES: [&Table; 1] = [&SLEEP_NIGHTS];
+
+/// Creates [`DATA_TABLES`]. Idempotent, and run on first use and whenever
+/// database sync starts, so no schema version change was needed to add them.
+pub(crate) const CREATE_DATA: &str = "
+    CREATE TABLE IF NOT EXISTS sleep_nights (calendar_id TEXT NOT NULL, id TEXT NOT NULL, wake_date TEXT NOT NULL, start_at TEXT NOT NULL, end_at TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY (calendar_id, id));";
+
+/// Creates [`DATA_TABLES`] and the change counters' triggers on them.
+/// Idempotent and cheap once done.
+pub(crate) fn create_data(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(CREATE_DATA)?;
+    crate::local_changes::install_data(db)
+}
+
 pub(crate) fn table(name: &str) -> Option<&'static Table> {
     TABLES.into_iter().find(|table| table.name == name)
 }
 
 /// The tables whose rows database sync replicates.
 pub(crate) fn synced() -> impl Iterator<Item = &'static Table> {
-    TABLES.into_iter().filter(|table| table.synced)
+    TABLES
+        .into_iter()
+        .chain(DATA_TABLES)
+        .filter(|table| table.synced)
 }
 
 fn invalid(error: impl std::fmt::Display) -> rusqlite::Error {
@@ -474,7 +513,8 @@ mod tests {
     fn the_descriptions_match_the_tables_created() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(CREATE).unwrap();
-        for table in TABLES {
+        db.execute_batch(CREATE_DATA).unwrap();
+        for table in TABLES.into_iter().chain(DATA_TABLES) {
             let columns: Vec<(String, i64)> = db
                 .prepare(&format!(
                     "SELECT name, pk FROM pragma_table_info('{}') ORDER BY cid",

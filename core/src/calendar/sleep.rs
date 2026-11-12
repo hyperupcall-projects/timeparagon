@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use super::{Event, Snapshot, api, scheduled, time_format};
 use crate::config::CalendarSettings;
 
+pub(super) mod store;
+
 pub const SOURCE_ID: &str = "timeslay:sleep";
 pub const NEW_ID: &str = "new-sleep";
 pub const COLOR: Color = Color::from_rgb(0.48, 0.50, 0.53);
@@ -382,6 +384,100 @@ fn get(token: &str, calendar_id: &str, day: NaiveDate) -> Result<Option<Event>, 
         .map(|value| api::parse_sleep(value, calendar_id))
         .transpose()
 }
+/// The span a planning pass needs nights for: from two days before `today`
+/// (a night waking today starts the evening before) to two days past the
+/// rolling four-week horizon.
+fn nights_window(today: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
+    let at = |offset| super::at_clock(today + Duration::days(offset), 0, 0).with_timezone(&Utc);
+    (at(-2), at(30))
+}
+
+/// Every night on the app calendar overlapping `from..to`, in one paged list
+/// request instead of one lookup per day.
+fn fetch_nights(
+    token: &str,
+    calendar_id: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<Event>, String> {
+    let mut nights = Vec::new();
+    let mut page: Option<String> = None;
+    loop {
+        let url = format!(
+            "{}?privateExtendedProperty=ttKind%3Dsleep&showDeleted=false&maxResults=250&timeMin={}&timeMax={}{}",
+            collection(calendar_id),
+            urlencoding::encode(&from.to_rfc3339()),
+            urlencoding::encode(&to.to_rfc3339()),
+            page.as_ref()
+                .map(|p| format!("&pageToken={}", urlencoding::encode(p)))
+                .unwrap_or_default()
+        );
+        let value = scheduled::request("GET", &url, token, None).map_err(|e| e.message)?;
+        for item in value["items"].as_array().into_iter().flatten() {
+            // Skip anything unreadable rather than failing the whole night list.
+            if let Ok(event) = api::parse_sleep(item.clone(), calendar_id)
+                && event.details.sleep.is_some()
+            {
+                nights.push(event);
+            }
+        }
+        page = value["nextPageToken"].as_str().map(str::to_owned);
+        if page.is_none() {
+            return Ok(nights);
+        }
+    }
+}
+
+/// The nights stored for `first..=last` (as Google last had them, from this
+/// device or another one through database sync), with this device's unsent
+/// edits on top. For showing nights again when
+/// [`Counters::sleep`](crate::local_changes::Counters) moves.
+pub fn stored_nights(
+    path: &std::path::Path,
+    first: NaiveDate,
+    last: NaiveDate,
+) -> Result<Vec<Event>, String> {
+    let around = |day: NaiveDate| super::at_clock(day, 0, 0).to_utc();
+    let mut nights = {
+        let mut database = crate::task_db::Database::open(path)?;
+        store::overlapping(
+            database.connection(),
+            around(first - Duration::days(1)),
+            around(last + Duration::days(2)),
+        )
+    };
+    super::operations::overlay(path, &mut nights, None)?;
+    // The overlay can add pending events of any kind; only nights are wanted.
+    nights.retain(|night| night.details.sleep.is_some());
+    Ok(nights)
+}
+
+/// Puts stored nights into `day`'s events, each replacing any older copy of
+/// the same night, keeping only what falls on the day.
+pub fn merge_stored(events: &mut Vec<Event>, nights: &[Event], day: NaiveDate, day_end_hour: u32) {
+    store::merge(nights.iter().cloned(), events);
+    events.retain(|event| super::event_on_day(event, day, day_end_hour));
+}
+
+/// Records a night as Google now has it in the local store.
+fn remember(event: &Event) {
+    if let Some(path) = crate::task_db::path()
+        && let Err(error) = store::put(&path, event)
+    {
+        log::warn!("could not store sleep: {error}");
+    }
+}
+
+/// Drops a deleted event from the stored nights. Anything that is not a
+/// night matches nothing, so every deletion can call this.
+pub(crate) fn forget(calendar_id: &str, id: &str) {
+    if let Some(path) = crate::task_db::path()
+        && let Err(error) = store::remove(&path, calendar_id, id)
+    {
+        log::warn!("could not forget stored sleep: {error}");
+    }
+}
+
 fn write(token: &str, event: &Event, new: bool) -> Result<Event, GoogleError> {
     let mut body = body(event)?;
     let url = if new {
@@ -402,6 +498,7 @@ fn write(token: &str, event: &Event, new: bool) -> Result<Event, GoogleError> {
                     event.details.sleep.as_ref().unwrap().wake_date,
                 )? {
                     return if event.details.sleep.as_ref().unwrap().automatic {
+                        remember(&existing);
                         Ok(existing)
                     } else {
                         let mut event = event.clone();
@@ -414,7 +511,9 @@ fn write(token: &str, event: &Event, new: bool) -> Result<Event, GoogleError> {
             }
             Err(error) => return Err(error.into()),
         };
-    Ok(api::parse_sleep(value, &event.calendar_id)?)
+    let saved = api::parse_sleep(value, &event.calendar_id)?;
+    remember(&saved);
+    Ok(saved)
 }
 
 /// Reconcile the weekly schedule for today and four weeks ahead, then return
@@ -431,15 +530,36 @@ pub fn sync(
         .succ_opt()
         .ok_or("Invalid calendar date")?;
     let token = super::GoogleClient::from_settings(settings).access_token()?;
-    let mut snapshot = api::fetch_range(
-        &token,
-        &settings.disabled,
-        anchor,
-        first.pred_opt().unwrap_or(first),
-        last,
-        0,
-        settings.app_calendar.as_deref(),
-    )?;
+    let now = crate::clock::now();
+    let window = nights_window(now.date_naive());
+    // The nights are listed alongside the calendar fetch whenever the app
+    // calendar is already known, so planning adds no round trip of its own.
+    let (snapshot, listed) = std::thread::scope(|scope| {
+        let listing = settings.app_calendar.as_deref().map(|id| {
+            let token = &token;
+            (
+                id,
+                scope.spawn(move || fetch_nights(token, id, window.0, window.1)),
+            )
+        });
+        let snapshot = api::fetch_range(
+            &token,
+            &settings.disabled,
+            anchor,
+            first.pred_opt().unwrap_or(first),
+            last,
+            0,
+            settings.app_calendar.as_deref(),
+        );
+        let listed = listing.map(|(id, worker)| {
+            let nights = worker
+                .join()
+                .unwrap_or_else(|_| Err("Sleep worker failed".into()));
+            (id.to_owned(), nights)
+        });
+        (snapshot, listed)
+    });
+    let mut snapshot = snapshot?;
     let calendar_id = settings
         .app_calendar
         .as_ref()
@@ -453,26 +573,27 @@ pub fn sync(
                 .map(|c| c.id.clone())
         });
     if let Some(calendar_id) = calendar_id {
-        let now = crate::clock::now();
-        for day in planning_dates(now.date_naive()) {
-            let mut schedule = settings.sleep_schedule;
-            schedule[day.weekday().num_days_from_monday() as usize] = times_for(settings, day);
-            if let Err(error) = reconcile(
+        let nights = match listed {
+            Some((id, nights)) if id == calendar_id => nights,
+            _ => fetch_nights(&token, &calendar_id, window.0, window.1),
+        };
+        let planned = nights.and_then(|nights| {
+            plan_nights(
+                settings,
                 &token,
                 &calendar_id,
                 &mut snapshot.events,
-                day,
-                &schedule,
+                nights,
+                window,
                 now,
-            ) {
-                let notice = format!("Could not update Sleep: {error}");
-                snapshot.notice = Some(match snapshot.notice.take() {
-                    Some(old) => format!("{old}\n{notice}"),
-                    None => notice,
-                });
-                // A permission/network failure should not repeat for every day.
-                break;
-            }
+            )
+        });
+        if let Err(error) = planned {
+            let notice = format!("Could not update Sleep: {error}");
+            snapshot.notice = Some(match snapshot.notice.take() {
+                Some(old) => format!("{old}\n{notice}"),
+                None => notice,
+            });
         }
     }
     snapshot.events.retain(|event| {
@@ -483,23 +604,45 @@ pub fn sync(
     Ok(snapshot)
 }
 
-fn reconcile(
+/// Stores the nights Google listed for `window`, then brings today and the
+/// next four weeks in line with the schedule. Planning looks nights up in
+/// that list, never with a request per day.
+fn plan_nights(
+    settings: &CalendarSettings,
     token: &str,
     calendar_id: &str,
     events: &mut Vec<Event>,
-    day: NaiveDate,
-    schedule: &[Times; 7],
+    nights: Vec<Event>,
+    window: (DateTime<Utc>, DateTime<Utc>),
     now: DateTime<Local>,
 ) -> Result<(), String> {
-    reconcile_with(
-        calendar_id,
-        events,
-        day,
-        schedule,
-        now,
-        |day| get(token, calendar_id, day),
-        |event, new| write(token, event, new).map_err(String::from),
-    )
+    // Google is the source of truth: what it listed replaces the window. The
+    // calendar fetch's own copies are not stored, as they carry unsent edits.
+    if let Some(path) = crate::task_db::path()
+        && let Err(error) = store::replace(&path, calendar_id, window.0, window.1, &nights)
+    {
+        log::warn!("could not store sleep: {error}");
+    }
+    for day in planning_dates(now.date_naive()) {
+        let mut schedule = settings.sleep_schedule;
+        schedule[day.weekday().num_days_from_monday() as usize] = times_for(settings, day);
+        // A permission/network failure stops here rather than repeating per day.
+        reconcile_with(
+            calendar_id,
+            events,
+            day,
+            &schedule,
+            now,
+            |day| {
+                Ok(nights
+                    .iter()
+                    .find(|e| e.details.sleep.as_ref().is_some_and(|s| s.wake_date == day))
+                    .cloned())
+            },
+            |event, new| write(token, event, new).map_err(String::from),
+        )?;
+    }
+    Ok(())
 }
 
 fn reconcile_with(
@@ -980,6 +1123,117 @@ mod tests {
             Some(at(2) + Duration::minutes(10))
         );
         assert_eq!(nearest_clock("nope", anchor), None);
+    }
+
+    #[test]
+    fn planning_lists_nights_once_and_keeps_the_database_in_step_with_google() {
+        use std::{cell::RefCell, rc::Rc};
+        let calendar = "planning-store-test";
+        let settings = CalendarSettings::default();
+        let now = at(12);
+        let window = nights_window(date());
+        let night_on = |offset| {
+            let day = date() + Duration::days(offset);
+            let (start, end) = plan(day, &settings.sleep_schedule);
+            let mut night = night();
+            night.id = event_id(day);
+            night.calendar_id = calendar.into();
+            (night.start, night.end) = (start, end);
+            night.details.sleep = Some(Record::planned(day));
+            night.details.description = description(&night);
+            let mut value = body(&night).unwrap();
+            value["id"] = json!(night.id);
+            value
+        };
+        let stored = || {
+            let path = crate::task_db::path().unwrap();
+            let mut database = crate::task_db::Database::open(&path).unwrap();
+            let mut ids: Vec<_> = store::overlapping(database.connection(), window.0, window.1)
+                .into_iter()
+                .filter(|n| n.calendar_id == calendar)
+                .map(|n| n.id)
+                .collect();
+            ids.sort();
+            ids
+        };
+        let requests = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
+        // Google lists `listed` across two pages; writes echo their body.
+        let sync = |listed: Vec<Value>| {
+            let seen = requests.clone();
+            let (first, second) = listed.split_at(listed.len() / 2);
+            let (first, second) = (first.to_vec(), second.to_vec());
+            api::with_transport(
+                Box::new(move |method, url, body| {
+                    seen.borrow_mut().push((method.into(), url.into()));
+                    Ok(match (method, url.contains("pageToken=next")) {
+                        ("GET", false) => json!({"items": first, "nextPageToken": "next"}),
+                        ("GET", true) => json!({"items": second}),
+                        _ => serde_json::from_str(body.unwrap()).unwrap(),
+                    }
+                    .to_string())
+                }),
+                || {
+                    let nights = fetch_nights("token", calendar, window.0, window.1)?;
+                    plan_nights(
+                        &settings,
+                        "token",
+                        calendar,
+                        &mut vec![],
+                        nights,
+                        window,
+                        now,
+                    )
+                },
+            )
+        };
+        let writes = |method: &str| {
+            requests
+                .borrow()
+                .iter()
+                .filter(|(m, _)| m == method)
+                .count()
+        };
+
+        // Every planned night exists except the last, which is created.
+        sync((0..28).map(night_on).collect()).unwrap();
+        let made = requests.take();
+        let lists: Vec<_> = made.iter().filter(|(m, _)| m == "GET").collect();
+        assert_eq!(lists.len(), 2, "{made:?}");
+        assert!(
+            lists[0]
+                .1
+                .contains("privateExtendedProperty=ttKind%3Dsleep")
+        );
+        assert!(lists[0].1.contains("timeMin=") && lists[0].1.contains("timeMax="));
+        assert!(!made.iter().any(|(_, url)| url.contains("ttSleepDate")));
+        assert_eq!(made.iter().filter(|(m, _)| m == "POST").count(), 1);
+        assert_eq!(made.iter().filter(|(m, _)| m == "PATCH").count(), 0);
+        let all: Vec<_> = {
+            let mut ids: Vec<_> = (0..=28)
+                .map(|offset| event_id(date() + Duration::days(offset)))
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(stored(), all);
+
+        // A deleted event leaves the database.
+        forget(calendar, &event_id(date() + Duration::days(28)));
+        assert_eq!(stored().len(), 28);
+
+        // Google wins: a night deleted there goes from the database, and is
+        // planned again along with the one deleted here.
+        let gone = event_id(date() + Duration::days(5));
+        sync(
+            (0..28)
+                .filter(|&offset| offset != 5)
+                .map(night_on)
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(writes("POST"), 2);
+        assert!(stored().contains(&gone));
+        assert_eq!(stored(), all);
     }
 
     #[test]

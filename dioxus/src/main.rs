@@ -239,6 +239,9 @@ fn App() -> Element {
     // Bumped when the local edits change (a write was answered, say), so the
     // day is drawn again with its items unlocked.
     let mut local_edits = use_signal(|| 0u64);
+    // Nights of the days in memory as the database has them, reread whenever
+    // one changes there, as when another device's night arrives by sync.
+    let mut stored_nights = use_signal(Vec::<calendar::Event>::new);
     let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
     let search_state = use_signal(Search::default);
     // A note's connection or an agenda row, waiting for its day to load.
@@ -390,6 +393,20 @@ fn App() -> Element {
             if moved(|c| c.overlay) {
                 local_edits.set(local_edits() + 1);
             }
+            if moved(|c| c.sleep)
+                && let Some(path) = timeslay_core::task_db::path()
+            {
+                let days = cached_days.peek().loaded_days();
+                if let (Some(&first), Some(&last)) = (days.first(), days.last()) {
+                    match calendar::sleep::stored_nights(&path, first, last) {
+                        Ok(nights) => {
+                            cached_days.write().apply_stored_nights(&nights);
+                            stored_nights.set(nights);
+                        }
+                        Err(error) => eprintln!("Could not load stored sleep: {error}"),
+                    }
+                }
+            }
             if moved(|c| c.alarms) {
                 reminders::republish(&config.peek());
             }
@@ -489,6 +506,16 @@ fn App() -> Element {
     // Drawn again whenever the local edits change, so an item unlocks as soon
     // as Google accepts its change.
     let _ = local_edits();
+    if let Some(snapshot) = &mut snapshot {
+        let day = snapshot.day;
+        let day_end_hour = config.read().calendar.day_start_hour();
+        calendar::sleep::merge_stored(
+            &mut snapshot.events,
+            &stored_nights.read(),
+            day,
+            day_end_hour,
+        );
+    }
     if let (Some(snapshot), Some(path)) = (&mut snapshot, timeslay_core::task_db::path())
         && let Err(error) =
             calendar::operations::overlay(&path, &mut snapshot.events, Some(snapshot.fetched_at))

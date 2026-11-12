@@ -114,6 +114,7 @@ impl Database {
         tx.execute_batch(crate::settings::schema::CREATE)
             .map_err(|e| e.to_string())?;
         crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
+        crate::settings::schema::create_data(&tx).map_err(|e| e.to_string())?;
         Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
 

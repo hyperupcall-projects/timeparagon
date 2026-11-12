@@ -1518,6 +1518,19 @@ impl Store {
         }
     }
 
+    /// Shows nights reread from the database (see [`sleep::stored_nights`])
+    /// on every day in memory, so a night changed on another device appears
+    /// without waiting for this one's next Google sync.
+    pub fn apply_stored_nights(&mut self, nights: &[Event]) {
+        if self.day_cache.is_none() {
+            return;
+        }
+        sleep::merge_stored(&mut self.events, nights, self.day, self.day_end_hour);
+        for (day, events) in &mut self.cache {
+            sleep::merge_stored(events, nights, *day, self.day_end_hour);
+        }
+    }
+
     pub fn apply_snapshot(&mut self, mut snapshot: Snapshot) {
         if let Some(path) = &self.day_cache
             && let Err(e) =

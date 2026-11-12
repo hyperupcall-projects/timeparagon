@@ -97,6 +97,7 @@ fn normalized(sql: &str) -> String {
 /// this build would create (a table that gained a column, say).
 pub(super) fn install(tx: &Connection) -> rusqlite::Result<()> {
     tx.execute_batch(schema::CREATE)?;
+    schema::create_data(tx)?;
     for table in schema::synced() {
         for (name, sql) in triggers(table) {
             let existing: Option<String> = tx

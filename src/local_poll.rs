@@ -32,6 +32,7 @@ pub struct Poll {
     overlay: Option<i64>,
     habits: Option<i64>,
     alarms: Option<i64>,
+    sleep: Option<i64>,
     /// The notes directory's [`timeslay_core::notes::fingerprint`].
     notes: Option<u64>,
     /// Read the local edits again even though their counter has not moved,
@@ -46,6 +47,8 @@ pub struct Polled {
     alarms: Option<Result<timeslay_core::alarms::Snapshot, String>>,
     alarms_before: Vec<crate::alarms::Alarm>,
     overlay: Option<Result<Overlay, String>>,
+    /// The stored nights of the days in memory, unsent edits applied.
+    nights: Option<Result<Vec<timeslay_core::calendar::Event>, String>>,
     habits: Option<Result<Option<timeslay_core::habits::Library>, String>>,
     /// The habits' and notes' local revisions when the read started.
     habits_revision: u64,
@@ -73,6 +76,11 @@ pub fn start(state: &mut State) -> Task<Message> {
         .map(PathBuf::from);
     let previous = (state.poll.overlay, state.poll.habits, state.poll.notes);
     let previous_alarms = state.poll.alarms;
+    let previous_sleep = state.poll.sleep;
+    // Nights on every day in memory, should another device have changed one.
+    let nights_path = overlay_path.clone();
+    let loaded = state.calendar.loaded_days();
+    let nights_range = loaded.first().copied().zip(loaded.last().copied());
     let alarms_before = state.alarms.items().to_vec();
     let force_overlay = std::mem::take(&mut state.poll.force_overlay);
     let habits_revision = state.habits.revision();
@@ -100,6 +108,12 @@ pub fn start(state: &mut State) -> Task<Message> {
             overlay: overlay_path
                 .filter(|_| force_overlay || moved(overlay, counters.overlay))
                 .map(|path| operations::load_overlay(&path)),
+            nights: nights_path
+                .zip(nights_range)
+                .filter(|_| moved(previous_sleep, counters.sleep))
+                .map(|(path, (first, last))| {
+                    timeslay_core::calendar::sleep::stored_nights(&path, first, last)
+                }),
             habits: habits_path
                 .filter(|_| moved(habits, counters.habits))
                 .map(|path| {
@@ -134,6 +148,7 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
         alarms,
         alarms_before,
         overlay,
+        nights,
         habits,
         habits_revision,
         notes_revision,
@@ -159,6 +174,20 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
             state.poll.overlay = Some(counters.overlay);
         }
         Some(Err(error)) => log::warn!("Could not load committed edits: {error}"),
+        None => {}
+    }
+
+    // A night changed in the database, perhaps by another device through
+    // database sync: show it now rather than at the next Google sync. The
+    // read carried the unsent edits of its moment; reading them again next
+    // tick puts back any made since.
+    match nights {
+        Some(Ok(nights)) => {
+            state.calendar.apply_stored_nights(&nights);
+            state.poll.sleep = Some(counters.sleep);
+            state.poll.force_overlay = true;
+        }
+        Some(Err(error)) => log::warn!("Could not load stored sleep: {error}"),
         None => {}
     }
 
@@ -240,6 +269,7 @@ mod tests {
             alarms: None,
             alarms_before: state.alarms.items().to_vec(),
             overlay: None,
+            nights: None,
             habits: Some(Ok(Some(habits))),
             habits_revision: revision,
             notes_revision: state.notes.revision(),

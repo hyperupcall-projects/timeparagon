@@ -1117,6 +1117,53 @@ mod tests {
     }
 
     #[test]
+    fn sleep_nights_replicate_between_devices_without_touching_settings() {
+        let (_a, desktop) = db();
+        let (_b, phone) = db();
+        let mut server = HashMap::new();
+        let night = |path: &Path| -> Option<(String, String)> {
+            open(path)
+                .unwrap()
+                .query_row(
+                    "SELECT end_at,event FROM sleep_nights WHERE calendar_id='app' AND id='n1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .unwrap()
+        };
+        let write = |path: &Path, sql: &str| open(path).unwrap().execute_batch(sql).unwrap();
+        write(
+            &desktop,
+            "INSERT INTO sleep_nights VALUES('app','n1','2030-11-04','2030-11-04T00:00:00Z','2030-11-04T08:00:00Z','{\"id\":\"n1\"}');",
+        );
+        send(&desktop, &mut server);
+        let remote: Vec<Edit> = server.values().cloned().collect();
+        assert!(apply(&phone, &remote, None, now()).unwrap().changed);
+        assert_eq!(
+            night(&phone),
+            Some(("2030-11-04T08:00:00Z".into(), "{\"id\":\"n1\"}".into()))
+        );
+        assert!(edits(&open(&phone).unwrap(), true).unwrap().is_empty());
+        // Nights are app data, not preferences: settings still load as before.
+        crate::settings::load::<crate::config::Config>(&phone, |_| {}).unwrap();
+
+        // A later change and a deletion follow.
+        write(
+            &phone,
+            "UPDATE sleep_nights SET end_at='2030-11-04T09:00:00Z' WHERE id='n1';",
+        );
+        send(&phone, &mut server);
+        let remote: Vec<Edit> = server.values().cloned().collect();
+        apply(&desktop, &remote, None, now()).unwrap();
+        assert_eq!(night(&desktop).unwrap().0, "2030-11-04T09:00:00Z");
+        write(&desktop, "DELETE FROM sleep_nights WHERE id='n1';");
+        send(&desktop, &mut server);
+        let remote: Vec<Edit> = server.values().cloned().collect();
+        apply(&phone, &remote, None, now()).unwrap();
+        assert_eq!(night(&phone), None);
+    }
+    #[test]
     fn settings_rows_merge_column_by_column_between_devices() {
         use crate::config::Config;
         use crate::settings::{load, update};

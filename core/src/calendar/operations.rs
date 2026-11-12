@@ -1206,6 +1206,7 @@ fn execute(
             with_tasks,
         } => {
             send::delete_event_scope(client, &calendar, &id, scope, notify)?;
+            super::sleep::forget(&calendar, &id);
             if with_tasks.is_some() {
                 send::delete_followers(client, s, &calendar, &id, scope)?;
             }

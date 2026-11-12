@@ -213,6 +213,16 @@ pub fn load(database: &Path, day: NaiveDate, day_end_hour: u32) -> Option<Vec<Ev
                     }
                 }
             }
+            // Nights come from their own table, kept in step with Google on
+            // every sync and write; unsent edits still win, just below.
+            let around =
+                |offset| super::at_clock(day + chrono::Duration::days(offset), 0, 0).to_utc();
+            super::sleep::store::merge_into(
+                database.connection(),
+                around(-1),
+                around(2),
+                &mut events,
+            );
             let _ = super::operations::overlay(database_path, &mut events, None);
             events.retain(|e| super::event_on_day(e, day, day_end_hour));
             Some(events)
