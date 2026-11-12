@@ -199,15 +199,25 @@ do
     fi
 done
 
-legacy_rule="TimeSlay Sidebar"
+# kwriteconfig6 cannot delete a whole group, so cut it out of kwinrulesrc.
+# (KWin has no "deleteRule" key: a group left in the file is still loaded as a
+# rule, even when it is missing from Order.)
 rules_file="$config_home/kwinrulesrc"
+kwin_rule_drop_group() {
+    [ -f "$rules_file" ] || return 0
+    if awk -v header="[$1]" '/^\[/ { skip = ($0 == header) } !skip' "$rules_file" > "$rules_file.new"; then
+        cat "$rules_file.new" > "$rules_file"
+    fi
+    rm -f "$rules_file.new"
+}
+
+legacy_rule="TimeSlay Sidebar"
 if command -v kwriteconfig6 >/dev/null 2>&1 && grep -qxF "[$legacy_rule]" "$rules_file" 2>/dev/null; then
     current=$(sed -n 's/^Order=//p' "$rules_file" | tail -n 1)
     remaining=$(printf '%s' "$current" | tr ',' '\n' | grep -vxF "$legacy_rule" | paste -sd, -)
+    kwin_rule_drop_group "$legacy_rule"
     kwriteconfig6 --file kwinrulesrc --group General --key Order "$remaining"
     kwriteconfig6 --file kwinrulesrc --group General --key rules "$remaining"
-    # KWin drops a rule whose group asks to be deleted on the next load.
-    kwriteconfig6 --file kwinrulesrc --group "$legacy_rule" --key deleteRule true
     say "Removed old KWin rule: $legacy_rule"
 fi
 
@@ -316,6 +326,8 @@ fi
 # already have are left alone.
 rule="TimeParagon Sidebar"
 if command -v kwriteconfig6 >/dev/null 2>&1; then
+    # Start from a clean group so keys from an older install do not linger.
+    kwin_rule_drop_group "$rule"
     for pair in \
         "Description=$rule" \
         "title=$rule" \
@@ -332,7 +344,6 @@ if command -v kwriteconfig6 >/dev/null 2>&1; then
         kwriteconfig6 --file kwinrulesrc --group "$rule" --key "${pair%%=*}" "${pair#*=}"
     done
 
-    rules_file="$config_home/kwinrulesrc"
     current=$(sed -n 's/^Order=//p' "$rules_file" 2>/dev/null | tail -n 1)
     case ",$current," in
         *",$rule,"*) ;;

@@ -61,7 +61,7 @@ To use all features, a bit of setup is required:
 	- Optional for translating voice and image input to text and extracting calendar/task metadata from text.
 	- Not generally recommended.
 	- Is generally free, but can pay for cloud service
-- Slack account && Slack app
+- Slack account & Slack app
 	- Recommended for adding Slack messages into the inbox.
 - Browser extension
 	- Recommended for adding Website URLs to the inbox

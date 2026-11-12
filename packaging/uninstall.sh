@@ -71,10 +71,16 @@ if command -v kwriteconfig6 >/dev/null 2>&1; then
     rules_file="$config_home/kwinrulesrc"
     current=$(sed -n 's/^Order=//p' "$rules_file" 2>/dev/null | tail -n 1)
     remaining=$(printf '%s' "$current" | tr ',' '\n' | grep -vxF "$rule" | paste -sd, -)
+    # kwriteconfig6 cannot delete a group, and KWin has no "deleteRule" key: a
+    # group left in the file is still loaded, so cut it out of the file.
+    if [ -f "$rules_file" ]; then
+        if awk -v header="[$rule]" '/^\[/ { skip = ($0 == header) } !skip' "$rules_file" > "$rules_file.new"; then
+            cat "$rules_file.new" > "$rules_file"
+        fi
+        rm -f "$rules_file.new"
+    fi
     kwriteconfig6 --file kwinrulesrc --group General --key Order "$remaining"
     kwriteconfig6 --file kwinrulesrc --group General --key rules "$remaining"
-    # KWin drops a rule whose group asks to be deleted on the next load.
-    kwriteconfig6 --file kwinrulesrc --group "$rule" --key deleteRule true
     if command -v qdbus6 >/dev/null 2>&1; then
         qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure >/dev/null 2>&1 || true
     fi

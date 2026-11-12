@@ -169,8 +169,28 @@ class InstallTest(unittest.TestCase):
         commands = self.log.read_text()
         self.assertIn("systemctl --user disable --now timeslay.service", commands)
         self.assertIn("pkill -x timeslay|time-slay", commands)
-        self.assertIn("kwriteconfig6 --file kwinrulesrc --group TimeSlay Sidebar --key deleteRule true", commands)
+        self.assertNotIn("[TimeSlay Sidebar]", (self.config / "kwinrulesrc").read_text())
         self.assertIn(f"webextension {self.prefix / 'bin/timeparagon'}", commands)
+
+    def test_kwin_rule_is_rewritten_cleanly(self):
+        """Stale keys in our rule group go away; other rules are untouched."""
+        rules = self.config / "kwinrulesrc"
+        rules.parent.mkdir(parents=True)
+        rules.write_text("[General]\nOrder=Other,TimeParagon Sidebar\n\n"
+                         "[Other]\ntitle=keep\n\n"
+                         "[TimeParagon Sidebar]\ndeleteRule=true\nstale=1\n\n"
+                         "[Tail]\ntitle=keep too\n")
+        self.run_script("install.sh", "--no-build")
+        text = rules.read_text()
+        self.assertNotIn("[TimeParagon Sidebar]", text)
+        self.assertNotIn("stale", text)
+        self.assertIn("[Other]\ntitle=keep", text)
+        self.assertIn("[Tail]\ntitle=keep too", text)
+        rules.write_text("[General]\nOrder=Other,TimeParagon Sidebar\n\n[TimeParagon Sidebar]\nstale=1\n\n[Other]\nx=1\n")
+        self.run_script("uninstall.sh")
+        text = rules.read_text()
+        self.assertNotIn("[TimeParagon Sidebar]", text)
+        self.assertIn("[Other]\nx=1", text)
 
     def test_existing_data_is_never_overwritten(self):
         (self.config / "timeslay").mkdir(parents=True)
