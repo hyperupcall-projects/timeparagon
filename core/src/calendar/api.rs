@@ -300,7 +300,7 @@ pub fn fetch_range(
         reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
             super::task_metadata::save(access_token, event, data)
         })?;
-        super::operations::observe_range(&path, &events, first, last, fetch_started)?;
+        super::operations::observe_range(&path, &events, first, last, fetch_started, day_end_hour)?;
     }
     super::operations::cache_tasks(&events, tasks_loaded)?;
     // Changes made elsewhere (Google's site, another device) may have left

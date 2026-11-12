@@ -585,6 +585,47 @@ fn record_tx(
     {
         entity = existing;
     }
+    // One row per item. A row recorded for this item under an ID Google has
+    // since renamed it from is the same item: this write takes that row over,
+    // and any others are dropped, so no older copy can be shown beside it.
+    if let Some(wanted) = event {
+        let hour = crate::config::CalendarSettings::stored_day_start_hour(tx);
+        let rows = {
+            let mut q = tx
+                .prepare("SELECT id,event FROM google_entities WHERE event IS NOT NULL")
+                .map_err(|e| e.to_string())?;
+            q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let mut same: Vec<String> = rows
+            .into_iter()
+            .filter(|(key, json)| {
+                *key != entity
+                    && serde_json::from_str::<Event>(json).is_ok_and(|saved| {
+                        crate::timeblocking::membership::same_item(&saved, wanted, hour)
+                    })
+            })
+            .map(|(key, _)| key)
+            .collect();
+        let own_row = tx
+            .query_row(
+                "SELECT 1 FROM google_entities WHERE id=?1",
+                [&entity],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        if !own_row && !same.is_empty() {
+            entity = same.remove(0);
+        }
+        for other in same {
+            tx.execute("DELETE FROM google_entities WHERE id=?1", [other])
+                .map_err(|e| e.to_string())?;
+        }
+    }
     let record_id = event.filter(|e| e.is_task()).map_or(id, |e| e.id.as_str());
     let previous_task = tx
         .query_row(
@@ -639,6 +680,9 @@ pub struct Overlay {
     /// ID the interface already knows it by.
     aliases: HashMap<(String, String), String>,
     entities: Vec<OverlayEntity>,
+    /// Decides which planning day an occurrence is on, and so which renamed
+    /// occurrence is the same item (see [`apply`](Self::apply)).
+    day_start_hour: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -650,6 +694,8 @@ struct OverlayEntity {
     acknowledged_at: Option<DateTime<chrono::FixedOffset>>,
     /// Its write is on its way to Google, so the item is shown locked.
     sending: bool,
+    /// A fetch begun after Google confirmed the write has shown the item.
+    observed: bool,
 }
 
 /// Reads the local snapshots of edited items and the ID map.
@@ -684,7 +730,9 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
     let mut entities = Vec::new();
     {
         let mut q = tx
-            .prepare("SELECT id,event,acknowledged_at,sending_since FROM google_entities")
+            .prepare(
+                "SELECT id,event,acknowledged_at,sending_since,observed_at IS NOT NULL FROM google_entities",
+            )
             .map_err(|e| e.to_string())?;
         let cutoff = stale_cutoff();
         for row in q
@@ -694,11 +742,12 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
                     r.get::<_, Option<String>>(3)?,
+                    r.get::<_, bool>(4)?,
                 ))
             })
             .map_err(|e| e.to_string())?
         {
-            let (key, json, ack, sending_since) = row.map_err(|e| e.to_string())?;
+            let (key, json, ack, sending_since, observed) = row.map_err(|e| e.to_string())?;
             // A write cut off long ago no longer counts: the item is unlocked
             // and shows what Google has.
             if sending_since.as_ref().is_some_and(|since| *since < cutoff) {
@@ -716,10 +765,15 @@ fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
                     .map_err(|e| e.to_string())?,
                 acknowledged_at: ack.and_then(|ack| DateTime::parse_from_rfc3339(&ack).ok()),
                 sending: sending_since.is_some(),
+                observed,
             });
         }
     }
-    Ok(Overlay { aliases, entities })
+    Ok(Overlay {
+        aliases,
+        entities,
+        day_start_hour: crate::config::CalendarSettings::stored_day_start_hour(tx),
+    })
 }
 
 impl Overlay {
@@ -758,7 +812,12 @@ impl Overlay {
     ///
     /// With `fetched_at`, the events came from a Google fetch started then,
     /// and an edit Google had confirmed before that is not applied over them:
-    /// the fetch already shows it, or something newer.
+    /// the fetch already shows it, or something newer. A confirmed edit is
+    /// still applied over a fetch that started before it was confirmed.
+    /// Without `fetched_at`, every row applies.
+    ///
+    /// Items are matched with [`same_item`](crate::timeblocking::membership::same_item),
+    /// so an occurrence Google renamed is replaced rather than shown twice.
     pub fn apply(&self, events: &mut Vec<Event>, fetched_at: Option<DateTime<Local>>) {
         let mut remapped = std::collections::HashSet::new();
         if !self.aliases.is_empty() {
@@ -791,15 +850,21 @@ impl Overlay {
                 }
             }
         }
-        for entity in &self.entities {
-            if let (Some(fetched), Some(ack)) = (fetched_at, entity.acknowledged_at)
-                && fetched > ack
-            {
-                continue;
-            }
+        let applies = |entity: &&OverlayEntity| match (fetched_at, entity.acknowledged_at) {
+            (Some(fetched), Some(ack)) => fetched <= ack,
+            _ => true,
+        };
+        // There is one row per item (see `record_tx`), but rows written
+        // before that held may still overlap. The most current goes last so
+        // it is the one left standing: an edit on its way, then one Google
+        // confirmed, then what a fetch showed.
+        let mut entities: Vec<&OverlayEntity> = self.entities.iter().filter(applies).collect();
+        entities.sort_by_key(|entity| (!entity.observed, entity.sending));
+        let hour = self.day_start_hour;
+        for entity in entities {
             events.retain(|e| {
-                e.id != entity.id
-                    || !(e.calendar_id == entity.calendar
+                let by_id = e.id == entity.id
+                    && (e.calendar_id == entity.calendar
                         || entity
                             .event
                             .as_ref()
@@ -808,7 +873,11 @@ impl Overlay {
                             entity.calendar.clone(),
                             e.calendar_id.clone(),
                             e.id.clone(),
-                        )))
+                        )));
+                let same = entity.event.as_ref().is_some_and(|saved| {
+                    crate::timeblocking::membership::same_item(saved, e, hour)
+                });
+                !by_id && !same
             });
             if let Some(event) = &entity.event {
                 let mut event = event.clone();
@@ -1399,6 +1468,33 @@ fn cache_tasks_in(path: &std::path::Path, events: &[Event], replace: bool) -> Re
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// What Google now holds for the item a `google_entities` row is about:
+/// the event with the row's ID or, when Google has renamed it, the same item
+/// under its new ID (see [`same_item`](crate::timeblocking::membership::same_item)).
+///
+/// Recording only that the old ID is gone would make the row delete the item
+/// from any fetch that began before the rename (which has the old ID and not
+/// the new one). The row carries the renamed item instead.
+fn observed<'a>(
+    calendar: &str,
+    id: &str,
+    old: Option<&Event>,
+    events: &'a [Event],
+    day_start_hour: u32,
+) -> Option<&'a Event> {
+    let calendar = old.map_or(calendar, |e| e.calendar_id.as_str());
+    if let Some(current) = events
+        .iter()
+        .find(|e| e.id == id && e.calendar_id == calendar)
+    {
+        return Some(current);
+    }
+    let old = old?;
+    events
+        .iter()
+        .find(|e| crate::timeblocking::membership::same_item(old, e, day_start_hour))
+}
+
 /// Advance acknowledged projections only from a fetch that began after the
 /// acknowledgement. Older concurrent fetches continue to see the newer row.
 pub(super) fn observe_range(
@@ -1407,6 +1503,7 @@ pub(super) fn observe_range(
     first: NaiveDate,
     last: NaiveDate,
     fetched: DateTime<Local>,
+    day_start_hour: u32,
 ) -> Result<(), String> {
     let mut db = task_db::Database::open(path)?;
     let tx = db
@@ -1438,9 +1535,7 @@ pub(super) fn observe_range(
             .map(|j| serde_json::from_str::<Event>(j))
             .transpose()
             .map_err(|e| e.to_string())?;
-        let current = events.iter().find(|e| {
-            e.id == id && e.calendar_id == old.as_ref().map_or(calendar, |e| &e.calendar_id)
-        });
+        let current = observed(calendar, id, old.as_ref(), events, day_start_hour);
         let covered = current.is_some()
             || old.as_ref().is_some_and(|e| {
                 e.is_task() || (e.start.date_naive() <= last && e.end.date_naive() >= first)
@@ -1461,57 +1556,71 @@ pub(super) fn observe_range(
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// [`observe_range`] for the one item `entity`, from a fetch of only some
-/// events between `first` and `last`: every other item may simply not have
-/// been asked for, so it is left alone.
-pub(super) fn observe_entity(
+/// [`observe_range`] for a fetch of some series' occurrences between `first`
+/// and `last`: the item `entity` and every item on those series (`on_series`).
+/// Items elsewhere may simply not have been asked for, so they are left alone.
+///
+/// Every row on the series is brought up to date, not only the write's own.
+/// A write to the whole series changes occurrences other edits were made to
+/// before, and their rows would otherwise go on showing them as they were.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn observe_series(
     path: &std::path::Path,
     entity: &str,
+    on_series: impl Fn(&Event) -> bool,
     events: &[Event],
     first: NaiveDate,
     last: NaiveDate,
     fetched: DateTime<Local>,
+    day_start_hour: u32,
 ) -> Result<(), String> {
     let mut db = task_db::Database::open(path)?;
     let tx = db
         .connection()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    let row = tx
-        .query_row(
-            "SELECT event,acknowledged_at FROM google_entities WHERE id=?1 AND acknowledged_at IS NOT NULL AND sending_since IS NULL",
-            [entity],
-            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let Some((json, ack)) = row else {
-        return Ok(());
+    let rows = {
+        let mut q = tx
+            .prepare("SELECT id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL AND sending_since IS NULL")
+            .map_err(|e| e.to_string())?;
+        q.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
     };
-    if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
-        return Ok(());
-    }
-    let Some((calendar, id)) = entity.split_once('\n') else {
-        return Ok(());
-    };
-    let old = json
-        .as_ref()
-        .map(|j| serde_json::from_str::<Event>(j))
-        .transpose()
-        .map_err(|e| e.to_string())?;
-    let current = events
-        .iter()
-        .find(|e| e.id == id && e.calendar_id == old.as_ref().map_or(calendar, |e| &e.calendar_id));
-    let covered = current.is_some()
-        || old
+    for (key, json, ack) in rows {
+        if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
+            continue;
+        }
+        let Some((calendar, id)) = key.split_once('\n') else {
+            continue;
+        };
+        let old = json
             .as_ref()
-            .is_some_and(|e| e.start.date_naive() <= last && e.end.date_naive() >= first);
-    if covered {
-        let json = current
-            .map(serde_json::to_string)
+            .map(|j| serde_json::from_str::<Event>(j))
             .transpose()
             .map_err(|e| e.to_string())?;
-        tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![entity,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+        if key != entity && !old.as_ref().is_some_and(&on_series) {
+            continue;
+        }
+        let current = observed(calendar, id, old.as_ref(), events, day_start_hour);
+        let covered = current.is_some()
+            || old
+                .as_ref()
+                .is_some_and(|e| e.start.date_naive() <= last && e.end.date_naive() >= first);
+        if covered {
+            let json = current
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![key,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+        }
     }
     tx.commit().map_err(|e| e.to_string())
 }
@@ -1691,7 +1800,7 @@ mod tests {
         overlay(&path, &mut fetched, None).unwrap();
         assert!(fetched.is_empty());
         let day = event.start.date_naive();
-        observe_range(&path, &[], day, day, crate::clock::now()).unwrap();
+        observe_range(&path, &[], day, day, crate::clock::now(), 0).unwrap();
         assert_eq!(entities(&path), 0);
     }
     #[test]
@@ -1721,6 +1830,7 @@ mod tests {
                 })
                 .collect(),
             entities: Vec::new(),
+            day_start_hour: 0,
         };
         assert_eq!(overlay.local_id("calendar", "c").as_deref(), Some("a"));
         assert_eq!(
@@ -1832,6 +1942,304 @@ mod tests {
         assert!(events.contains(&other));
     }
 
+    /// An occurrence of `series` first scheduled at `hour:minute` on 12 Nov,
+    /// named the way Google names it.
+    fn occurrence_at(series: &str, hour: u32, minute: u32) -> Event {
+        let mut event = super::super::sample_snapshot().events.remove(0);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        event.start = at_clock(day, hour, minute);
+        event.end = event.start + chrono::Duration::minutes(45);
+        event.all_day = false;
+        event.details.recurring_event_id = Some(series.into());
+        event.details.original_start = Some(event.start);
+        event.id = format!(
+            "{series}_{}",
+            event.start.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+        );
+        event
+    }
+
+    /// Moving every occurrence of a series renames them all on Google. The
+    /// moved occurrence must stay on screen throughout: it used to vanish
+    /// once Google confirmed, until the renamed occurrence arrived by
+    /// another route, which left a time block's tasks drawn on their own.
+    #[test]
+    fn an_occurrence_renamed_by_retiming_its_series_never_disappears() {
+        let (_dir, path) = db();
+        let before = occurrence_at("block", 20, 45);
+        let mut moved = before.clone();
+        moved.start += chrono::Duration::minutes(30);
+        moved.end += chrono::Duration::minutes(30);
+        let mut writes = record_in(
+            &path,
+            Job::Edit {
+                original: Box::new(before.clone()),
+                draft: EditDraft::from_event(&moved),
+                scope: SaveScope::All,
+                description: String::new(),
+                color: None,
+            },
+            Some(&moved),
+            &before.calendar_id,
+            &before.id,
+        )
+        .unwrap();
+        let entity = writes[0].entity.clone();
+        // A sync asked for when the move was saved starts before Google has it.
+        let stale_fetch = crate::clock::now() - chrono::Duration::seconds(1);
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        let renamed = occurrence_at("block", 21, 15);
+        assert_ne!(renamed.id, before.id);
+        let refreshed = crate::clock::now() + chrono::Duration::seconds(1);
+        let day = renamed.start.date_naive();
+        observe_series(
+            &path,
+            &entity,
+            |_| false,
+            std::slice::from_ref(&renamed),
+            day,
+            day,
+            refreshed,
+            0,
+        )
+        .unwrap();
+
+        // The interface still holds the moved occurrence under its old ID.
+        let mut shown = vec![moved.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), std::slice::from_ref(&renamed));
+        // The renamed occurrence already arrived: it is not doubled.
+        let mut shown = vec![moved.clone(), renamed.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), std::slice::from_ref(&renamed));
+        // The stale fetch lands: Google still had the old ID at the old time.
+        let mut shown = vec![before.clone()];
+        overlay(&path, &mut shown, Some(stale_fetch)).unwrap();
+        assert_eq!(settled(shown), std::slice::from_ref(&renamed));
+        // A fetch from after the rename shows it as it is.
+        let mut shown = vec![renamed.clone()];
+        overlay(
+            &path,
+            &mut shown,
+            Some(refreshed + chrono::Duration::seconds(1)),
+        )
+        .unwrap();
+        assert_eq!(shown, std::slice::from_ref(&renamed));
+
+        // A full sync from after the rename observes the row too, and keeps
+        // carrying the renamed occurrence for fetches still on their way.
+        observe_range(
+            &path,
+            std::slice::from_ref(&renamed),
+            day,
+            day,
+            refreshed + chrono::Duration::seconds(2),
+            0,
+        )
+        .unwrap();
+        let mut shown = vec![before.clone()];
+        overlay(&path, &mut shown, Some(stale_fetch)).unwrap();
+        assert_eq!(settled(shown), std::slice::from_ref(&renamed));
+
+        // Editing the renamed occurrence records a newer row for it, which
+        // the carried copy defers to rather than putting the old time back.
+        let mut edited = renamed.clone();
+        edited.title = "edited".into();
+        record_in(
+            &path,
+            edit_job(&edited),
+            Some(&edited),
+            &edited.calendar_id,
+            &edited.id,
+        )
+        .unwrap();
+        let mut shown = vec![before.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), [edited]);
+    }
+
+    /// Deleting an occurrence is not a rename: the next one of its series is
+    /// on another day and is never put in its place.
+    #[test]
+    fn a_deleted_occurrence_is_not_replaced_by_another_day() {
+        let (_dir, path) = db();
+        let gone = occurrence_at("block", 20, 45);
+        let mut next = gone.clone();
+        next.start += chrono::Duration::days(1);
+        next.end += chrono::Duration::days(1);
+        next.details.original_start = Some(next.start);
+        next.id = format!(
+            "block_{}",
+            next.start.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+        );
+        let mut writes = record_in(
+            &path,
+            edit_job(&gone),
+            Some(&gone),
+            &gone.calendar_id,
+            &gone.id,
+        )
+        .unwrap();
+        let entity = writes[0].entity.clone();
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        let fetched = crate::clock::now() + chrono::Duration::seconds(1);
+        let first = gone.start.date_naive();
+        observe_series(
+            &path,
+            &entity,
+            |_| false,
+            std::slice::from_ref(&next),
+            first,
+            next.start.date_naive(),
+            fetched,
+            0,
+        )
+        .unwrap();
+        let mut shown = vec![gone.clone(), next.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), [next]);
+    }
+
+    fn moved_by(event: &Event, minutes: i64) -> Event {
+        let mut moved = event.clone();
+        moved.start += chrono::Duration::minutes(minutes);
+        moved.end += chrono::Duration::minutes(minutes);
+        moved
+    }
+
+    fn rows(path: &Path) -> Vec<String> {
+        let mut db = task_db::Database::open(path).unwrap();
+        let mut q = db
+            .connection()
+            .prepare("SELECT id FROM google_entities")
+            .unwrap();
+        q.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// Moved again before any fetch has shown the first move, the block is
+    /// already shown under the ID Google renamed it to. The second move takes
+    /// over the first one's row: two rows would each put their own copy of
+    /// the block on screen, at two different times.
+    #[test]
+    fn a_renamed_occurrence_moved_again_keeps_one_row() {
+        let (_dir, path) = db();
+        let before = occurrence_at("block", 20, 45);
+        let first = moved_by(&before, 30);
+        let mut writes = record_in(
+            &path,
+            edit_job(&first),
+            Some(&first),
+            &before.calendar_id,
+            &before.id,
+        )
+        .unwrap();
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        let renamed = occurrence_at("block", 21, 15);
+        let second = moved_by(&renamed, -15);
+        record_in(
+            &path,
+            edit_job(&second),
+            Some(&second),
+            &renamed.calendar_id,
+            &renamed.id,
+        )
+        .unwrap();
+        assert_eq!(rows(&path).len(), 1);
+        let mut shown = vec![renamed.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), [second]);
+    }
+
+    /// A series-wide write made from one occurrence renames the occurrences
+    /// other edits were made to before. Their rows follow, or they would put
+    /// those occurrences back as they were beside the renamed ones.
+    #[test]
+    fn a_write_to_the_whole_series_brings_its_other_rows_up_to_date() {
+        let (_dir, path) = db();
+        let earlier = occurrence_at("block", 20, 45);
+        let mut retitled = earlier.clone();
+        retitled.title = "retitled".into();
+        let mut writes = record_in(
+            &path,
+            edit_job(&retitled),
+            Some(&retitled),
+            &earlier.calendar_id,
+            &earlier.id,
+        )
+        .unwrap();
+        send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+        let day = earlier.start.date_naive();
+        observe_range(
+            &path,
+            std::slice::from_ref(&retitled),
+            day,
+            day,
+            crate::clock::now() + chrono::Duration::seconds(1),
+            0,
+        )
+        .unwrap();
+        // Another occurrence moves the whole series half an hour later.
+        let mut renamed = occurrence_at("block", 21, 15);
+        renamed.title = "retitled".into();
+        let series = super::super::series::SeriesRef {
+            calendar: renamed.calendar_id.clone(),
+            id: "block".into(),
+            calendars: vec![renamed.calendar_id.clone()],
+        };
+        observe_series(
+            &path,
+            "another occurrence's row",
+            |event| {
+                event.calendar_id == series.calendar
+                    && event.details.recurring_event_id.as_deref() == Some(series.id.as_str())
+            },
+            std::slice::from_ref(&renamed),
+            day,
+            day,
+            crate::clock::now() + chrono::Duration::seconds(2),
+            0,
+        )
+        .unwrap();
+        let mut shown = vec![renamed.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), [renamed]);
+    }
+
+    /// Rows for one item written before there was one row per item: an item
+    /// is still shown once, as the write on its way to Google has it.
+    #[test]
+    fn overlapping_rows_show_their_item_once_as_the_newest_write_has_it() {
+        let (_dir, path) = db();
+        let before = occurrence_at("block", 20, 45);
+        let confirmed = moved_by(&before, 30);
+        let renamed = occurrence_at("block", 21, 15);
+        let sending = moved_by(&renamed, -15);
+        let mut db = task_db::Database::open(&path).unwrap();
+        for (event, ack, since) in [
+            (&confirmed, Some(crate::clock::now().to_rfc3339()), None),
+            (&sending, None, Some(crate::clock::utc_now().to_rfc3339())),
+        ] {
+            db.connection()
+                .execute(
+                    "INSERT INTO google_entities(id,event,acknowledged_at,sending_since) VALUES(?1,?2,?3,?4)",
+                    params![
+                        key(&event.calendar_id, &event.id),
+                        serde_json::to_string(event).unwrap(),
+                        ack,
+                        since
+                    ],
+                )
+                .unwrap();
+        }
+        drop(db);
+        let mut shown = vec![before.clone()];
+        overlay(&path, &mut shown, None).unwrap();
+        assert_eq!(settled(shown), [sending]);
+    }
+
     #[test]
     fn snapshots_google_has_since_confirmed_are_pruned_after_an_hour() {
         let (_dir, path) = db();
@@ -1840,7 +2248,7 @@ mod tests {
         assert_eq!(entities(&path), 1);
         let day = event.start.date_naive();
         let fetched = crate::clock::now() + chrono::Duration::seconds(1);
-        observe_range(&path, std::slice::from_ref(&event), day, day, fetched).unwrap();
+        observe_range(&path, std::slice::from_ref(&event), day, day, fetched, 0).unwrap();
         assert_eq!(
             entities(&path),
             1,
@@ -1853,6 +2261,7 @@ mod tests {
             day,
             day,
             fetched + chrono::Duration::minutes(30),
+            0,
         )
         .unwrap();
         assert_eq!(entities(&path), 1);
@@ -1862,6 +2271,7 @@ mod tests {
             day,
             day,
             fetched + chrono::Duration::hours(2),
+            0,
         )
         .unwrap();
         assert_eq!(entities(&path), 0);
@@ -2193,6 +2603,7 @@ mod tests {
             remote.start.date_naive(),
             remote.end.date_naive(),
             fetched,
+            0,
         )
         .unwrap();
         let mut old = vec![remote.clone()];

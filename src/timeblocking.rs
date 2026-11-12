@@ -2023,11 +2023,16 @@ fn refresh_block(state: &mut State, id: &str) -> Task<Message> {
         return Task::none();
     };
     let tasks: Vec<_> = assigned_all(state, &block).into_iter().cloned().collect();
-    if tasks.is_empty() {
+    // Tasks repeating with the block are moved after it by the reconciler
+    // (see `task_edit::reflow`); only the one-offs are written here.
+    let Some(first) = tasks
+        .iter()
+        .find(|task| !is_follower(task))
+        .map(|task| task.id.clone())
+    else {
         return Task::none();
-    }
+    };
     let settings = state.config.calendar.clone();
-    let first = tasks[0].id.clone();
     state.timeblocking.revision += 1;
     state.timeblocking.busy.insert(first.clone());
     blocking::run(move || reflow(&block, &tasks, &settings))
@@ -2312,7 +2317,7 @@ fn reflow(
     tasks: &[Event],
     settings: &CalendarSettings,
 ) -> Result<Vec<Event>, String> {
-    task_edit::reflow(block, tasks, settings, access)
+    task_edit::reflow(block, tasks, settings, false, access)
 }
 
 #[cfg(test)]

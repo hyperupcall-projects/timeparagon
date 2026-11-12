@@ -178,7 +178,7 @@ pub fn save_and_reflow(
         let key = block_key(b);
         old_block.as_ref() == Some(&key) || new_block.as_ref() == Some(&key)
     }) {
-        for event in reflow(block, &related, &settings, access)? {
+        for event in reflow(block, &related, &settings, true, access)? {
             if let Some(previous) = changed.iter_mut().find(|e| e.id == event.id) {
                 *previous = event;
             } else {
@@ -192,10 +192,17 @@ pub fn save_and_reflow(
 /// Lays a block's tasks end to end from its start, rewriting those that moved.
 /// The same layout the reconciler keeps Google to; see
 /// [`crate::timeblocking::layout`].
+///
+/// Without `followers`, tasks repeating with the block keep their place in
+/// the layout but are not rewritten: they are left to the reconciler. When
+/// the block's series itself moved, Google renames every occurrence of the
+/// tasks' series as the reconciler moves them after it, so a write to one of
+/// those occurrences by its old ID races that rename.
 pub fn reflow(
     block: &Event,
     tasks: &[Event],
     settings: &CalendarSettings,
+    followers: bool,
     access: Access,
 ) -> Result<Vec<Event>, String> {
     let tasks = crate::timeblocking::tasks_in(block, tasks, settings.day_start_hour());
@@ -204,7 +211,10 @@ pub fn reflow(
     let mut token = None;
     for (task, (start, end)) in tasks.into_iter().cloned().zip(slots) {
         // Completed blocks are history and are never shifted by later planning.
-        if !task.completed && (task.all_day || task.start != start || task.end != end) {
+        if !task.completed
+            && (followers || !crate::timeblocking::is_follower(&task))
+            && (task.all_day || task.start != start || task.end != end)
+        {
             let token = match &token {
                 Some(token) => token,
                 None => token.insert(access(settings)?),
@@ -407,5 +417,46 @@ mod tests {
         assert!(schedule_range("tomorrow", "09:00", "09:30").is_err());
         assert!(schedule_range("2026-10-26", "9am", "09:30").is_err());
         assert!(schedule_range("2026-10-26", "09:00", "").is_err());
+    }
+
+    /// When a block moves, the tasks repeating with it are left to the
+    /// reconciler, which moves them after the block's series: a write to one
+    /// of their occurrences here would race Google renaming it.
+    #[test]
+    fn moving_a_block_leaves_the_tasks_repeating_with_it_to_the_reconciler() {
+        fn no_google(_: &CalendarSettings) -> Result<String, GoogleError> {
+            panic!("nothing should be written")
+        }
+        let mut block = crate::calendar::sample_snapshot().events.remove(0);
+        block.id = "block_20261113T044500Z".into();
+        block.calendar_id = "app".into();
+        block.all_day = false;
+        block.details.recurring_event_id = Some("block".into());
+        block.details.task_data = None;
+        let mut task = block.clone();
+        task.id = "task_20261113T044500Z".into();
+        task.details.recurring_event_id = Some("task".into());
+        task.details.task_data = Some(crate::task_db::TaskData {
+            id: 1,
+            metadata: crate::timeblocking::Metadata {
+                block_series: Some("app/block".into()),
+                minutes: 15,
+                ..Default::default()
+            },
+        });
+        // The block has just moved half an hour later; its task has not.
+        block.start += chrono::Duration::minutes(30);
+        block.end += chrono::Duration::minutes(30);
+        let settings = CalendarSettings::default();
+        assert!(crate::timeblocking::is_follower(&task));
+        assert!(crate::timeblocking::in_block(&task, &block, 0));
+        let moved = reflow(
+            &block,
+            std::slice::from_ref(&task),
+            &settings,
+            false,
+            no_google,
+        );
+        assert_eq!(moved.unwrap(), []);
     }
 }

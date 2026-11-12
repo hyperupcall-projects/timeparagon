@@ -122,7 +122,10 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
 
     block.start += Duration::hours(2);
     block.end += Duration::hours(2);
-    task_edit::reflow(&block, &[restored], &settings, |_| Ok("offline".into())).unwrap();
+    task_edit::reflow(&block, &[restored], &settings, true, |_| {
+        Ok("offline".into())
+    })
+    .unwrap();
     let moved = reload().unwrap();
     assert_eq!(moved.start, block.start);
     assert_eq!(

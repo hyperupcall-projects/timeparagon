@@ -225,7 +225,16 @@ fn refresh_in(path: &Path, entity: &str, series: Vec<SeriesRef>) -> Result<(), S
         last,
         events: Vec::new(),
     };
-    operations::observe_entity(path, entity, &events, first, last, fetched_at)?;
+    operations::observe_series(
+        path,
+        entity,
+        |event| refresh.series.iter().any(|series| series.contains(event)),
+        &events,
+        first,
+        last,
+        fetched_at,
+        day_end_hour,
+    )?;
     // Other edits to the series still on their way to Google stay shown.
     operations::overlay(path, &mut events, Some(fetched_at))?;
     events.retain(|event| refresh.contains(event));

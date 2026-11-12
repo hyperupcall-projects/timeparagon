@@ -185,6 +185,31 @@ pub fn in_block(task: &Event, block: &Event, day_start_hour: u32) -> bool {
             == planning_day(original_start(block), day_start_hour)
 }
 
+/// Whether `a` and `b` are the same item, even under different IDs.
+///
+/// Google names an occurrence after its series and original start, so
+/// retiming a series renames every occurrence, and splitting one ("this and
+/// following") moves the rest to a new series. The occurrence is still the
+/// same item: the one of the same series, or of one continuing it, on the
+/// same planning day. Anything that merges what Google sent with what was
+/// edited here must match items this way, or one item shows twice (under
+/// both IDs) or not at all (its old ID removed and its new one unknown).
+pub fn same_item(a: &Event, b: &Event, day_start_hour: u32) -> bool {
+    if a.calendar_id != b.calendar_id || a.is_task() != b.is_task() {
+        return false;
+    }
+    if a.id == b.id {
+        return true;
+    }
+    if a.details.recurring_event_id.is_none() || b.details.recurring_event_id.is_none() {
+        return false;
+    }
+    let theirs = lineage(b);
+    lineage(a).iter().any(|series| theirs.contains(series))
+        && planning_day(original_start(a), day_start_hour)
+            == planning_day(original_start(b), day_start_hour)
+}
+
 /// The block `task` is in, among `events`. An exact key match wins over a
 /// block that only matches by series and day.
 pub fn block_of<'a>(

@@ -1459,7 +1459,14 @@ pub fn save_event(
         let mut moved = original.clone();
         moved.start = draft.start;
         moved.end = draft.end;
-        task_edit::reflow(&moved, &context.events, settings, task_edit::google_access)?;
+        // Tasks repeating with the block are moved after it by the reconciler.
+        task_edit::reflow(
+            &moved,
+            &context.events,
+            settings,
+            false,
+            task_edit::google_access,
+        )?;
     }
     Ok(())
 }

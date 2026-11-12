@@ -771,6 +771,26 @@ impl CalendarSettings {
         self.day_end_hour.min(Self::MAX_DAY_END_HOUR)
     }
 
+    /// [`Self::day_start_hour`] as saved in the settings of the database
+    /// `connection` is open on, read on its own by code already inside a
+    /// transaction there.
+    pub(crate) fn stored_day_start_hour(connection: &rusqlite::Connection) -> u32 {
+        use rusqlite::OptionalExtension;
+        let saved: Option<String> = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key='calendar.day_end_hour'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        let hour = saved
+            .and_then(|text| serde_json::from_str::<u32>(&text).ok())
+            .unwrap_or(Self::default().day_end_hour);
+        hour.min(Self::MAX_DAY_END_HOUR)
+    }
+
     pub fn set_calendar_enabled(&mut self, id: &str, enabled: bool) {
         if enabled {
             self.disabled.retain(|hidden| hidden != id);
