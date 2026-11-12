@@ -228,6 +228,7 @@ pub fn create_task(
 /// What the new event and time block forms hold.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewEvent {
+	pub color_input: String,
 	pub title: String,
 	pub description: String,
 	pub date: String,
@@ -277,12 +278,13 @@ impl NewEvent {
 
 /// Blocking: callers run this on a worker thread.
 pub fn create_event(new: &NewEvent, calendar_id: &str) -> Result<(), String> {
+	let color = calendar::colors::selection(&new.color_input)?;
 	let (start, end) = new.range()?;
 	calendar::create_event(
 		calendar_id,
 		new.title.trim(),
 		&new.description,
-		None,
+		color.as_deref(),
 		start,
 		end,
 		&[],
@@ -296,12 +298,13 @@ pub fn create_event(new: &NewEvent, calendar_id: &str) -> Result<(), String> {
 
 /// Blocking: callers run this on a worker thread.
 pub fn create_time_block(new: &NewEvent, settings: &CalendarSettings) -> Result<(), String> {
+	let color = calendar::colors::selection(&new.color_input)?;
 	let (start, end) = new.range()?;
 	calendar::create_time_block(
 		settings.app_calendar.as_deref(),
 		new.title.trim(),
 		&calendar::event_description(&new.description),
-		None,
+		color.as_deref(),
 		start,
 		end,
 		&[],
@@ -1141,6 +1144,7 @@ pub fn source_label(event: &Event, context: &EditContext) -> Source {
 /// A task's fields as they are being typed, before each one is saved.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskFields {
+	pub color_input: String,
 	pub title: String,
 	pub description: String,
 	pub estimate: String,
@@ -1155,6 +1159,10 @@ impl TaskFields {
 	pub fn new(task: &Event) -> Self {
 		let deadline = calendar::deadline::input_text(task);
 		Self {
+			color_input: tb::metadata(task)
+				.color
+				.or_else(|| task.details.color_id.clone())
+				.unwrap_or_default(),
 			title: task.title.clone(),
 			description: task.details.description.clone(),
 			estimate: tb::metadata(task).minutes.to_string(),
@@ -1309,7 +1317,7 @@ pub fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) 
 	let color = habit
 		.color_id
 		.as_deref()
-		.and_then(calendar::colors::event)
+		.and_then(calendar::colors::resolve)
 		.unwrap_or_else(|| settings.habit_color());
 	HabitRow {
 		title: habit.title.clone(),
@@ -1451,7 +1459,11 @@ pub fn save_event(
 			.habit_id
 			.as_deref()
 			.ok_or("Open a habit to add an event to it")?;
-		calendar::create_habit(draft, original.details.color_id.as_deref(), habit_id)?;
+		calendar::create_habit(
+			draft,
+			calendar::colors::selection(&draft.color_input)?.as_deref(),
+			habit_id,
+		)?;
 		return Ok(());
 	}
 	let labelled_block = tb::is_block(original, settings);
@@ -1460,6 +1472,7 @@ pub fn save_event(
 	} else {
 		draft.description.clone()
 	};
+	calendar::colors::selection(&draft.color_input)?;
 	let color_id = None;
 	calendar::save_event_scope(original, draft, scope, &description, color_id)?;
 
@@ -1646,6 +1659,7 @@ mod tests {
 	#[test]
 	fn a_new_event_needs_a_title_and_to_end_after_it_starts() {
 		let new = |title: &str, start: &str, end: &str| NewEvent {
+			color_input: String::new(),
 			title: title.to_owned(),
 			description: String::new(),
 			date: "2026-11-04".to_owned(),
@@ -1666,6 +1680,7 @@ mod tests {
 	#[test]
 	fn a_new_event_can_cover_whole_days_or_run_over_several() {
 		let new = |end_date: &str, all_day: bool| NewEvent {
+			color_input: String::new(),
 			title: "Trip".to_owned(),
 			description: String::new(),
 			date: "2026-11-04".to_owned(),

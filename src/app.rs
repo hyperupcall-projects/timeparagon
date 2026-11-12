@@ -815,6 +815,7 @@ pub enum EventMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum EventDraftMessage {
+	ColorChanged(String),
 	/// A click or drag on empty grid space asked for a new event. The popup
 	/// opens on the default calendar, spanning these times.
 	EventDraftStarted {
@@ -862,6 +863,7 @@ pub enum EventDraftMessage {
 /// The form for editing an event.
 #[derive(Debug, Clone)]
 pub enum EventEditMessage {
+	ColorChanged(String),
 	EventEditDeadlineChanged(String),
 	EventEditDeleteMenuToggled,
 	EventEditOptions(calendar::event_options::Action),

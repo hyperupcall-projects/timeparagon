@@ -104,6 +104,7 @@ pub fn CreateSheet(
 	let mut title = use_signal(String::new);
 	let mut on_day = use_signal(|| false);
 	let mut description = use_signal(String::new);
+	let mut color_input = use_signal(String::new);
 	let mut date = use_signal(|| day.to_string());
 	let mut end_date = use_signal(|| day.to_string());
 	let mut all_day = use_signal(|| false);
@@ -173,6 +174,7 @@ pub fn CreateSheet(
 		// A time block is always timed.
 		let chosen_all_day = kind() == Kind::Event && all_day();
 		let new = NewEvent {
+			color_input: color_input(),
 			title: title(),
 			description: description(),
 			date: date(),
@@ -190,7 +192,9 @@ pub fn CreateSheet(
 		spawn(async move {
 			let result = worker(move || match chosen {
 				Kind::Task => {
-					let task = day::quick_task(&text, today, &projects);
+					let mut task = day::quick_task(&text, today, &projects);
+					task.metadata.color =
+						timeparagon_core::calendar::colors::selection(&new.color_input)?;
 					day::create_task(task, due_day, &settings).map(|_| ())
 				}
 				Kind::Event if target.is_empty() => Err("Choose a calendar".to_owned()),
@@ -321,6 +325,12 @@ pub fn CreateSheet(
 									value: "{end}",
 									oninput: move |event| end.set(event.value()),
 								}
+							}
+						}
+						if kind() != Kind::Sleep {
+							crate::editor::ColorField { value: color_input(), busy: busy(),
+								on_input: move |v| color_input.set(v),
+								on_pick: move |v| color_input.set(v),
 							}
 						}
 						if kind() == Kind::Sleep {

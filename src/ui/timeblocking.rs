@@ -442,6 +442,31 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 			information = information.push(super::notes::section(state, target, metrics));
 		}
 	}
+	let busy = state.timeblocking.busy.contains_task(&task.id) || draft.is_some_and(|d| d.saving);
+	let color_input = state
+		.timeblocking
+		.color_input
+		.as_ref()
+		.filter(|(id, _)| id == &task.id)
+		.map(|(_, value)| value.as_str())
+		.or_else(|| {
+			task.details
+				.task_data
+				.as_ref()
+				.and_then(|d| d.metadata.color.as_deref())
+		})
+		.or(task.details.color_id.as_deref())
+		.unwrap_or("");
+	let mut body = column![].spacing(6);
+	if !busy {
+		body = body.push(crate::ui::calendar::item_color_picker(
+			color_input,
+			metrics,
+			move |v| msg(Action::ColorInput(task.id.clone(), v)),
+			move |v| msg(Action::SaveColor(task.id.clone(), v)),
+		));
+	}
+
 	column![
 		super::calendar::titled(state, task, title, metrics),
 		super::calendar::form_section(
@@ -461,7 +486,7 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 		super::calendar::form_section("Information", information, metrics),
 		super::calendar::form_section(
 			"Organization",
-			organization_fields(state, task, metrics),
+			column![body, organization_fields(state, task, metrics)].spacing(metrics.spacing),
 			metrics
 		),
 	]
@@ -1048,6 +1073,39 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		.padding(16)
 		.into();
 	};
+	let color_input = state
+		.timeblocking
+		.color_input
+		.as_ref()
+		.filter(|(id, _)| id == &block.id)
+		.map(|(_, v)| v.as_str())
+		.or_else(|| {
+			state
+				.calendar
+				.edit_draft
+				.as_ref()
+				.filter(|d| d.id == block.id)
+				.map(|d| d.color_input.as_str())
+		})
+		.or(block.details.color_id.as_deref())
+		.unwrap_or("");
+	let color_picker: Element<'a, Message> = if block.details.sending
+		|| state
+			.calendar
+			.edit_draft
+			.as_ref()
+			.is_some_and(|d| d.id == block.id && d.saving)
+	{
+		text("Saving color…").size(metrics.label()).into()
+	} else {
+		crate::ui::calendar::item_color_picker(
+			color_input,
+			metrics,
+			move |v| msg(Action::ColorInput(block.id.clone(), v)),
+			move |v| msg(Action::SaveColor(block.id.clone(), v)),
+		)
+	};
+
 	let tasks = tb::assigned(state, block);
 	let capacity = (block.end - block.start).num_minutes().max(0) as u32;
 	let block_id = block.id.clone();
@@ -1080,9 +1138,13 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		.size(metrics.label())
 		.style(text::secondary),
 		actions,
+		color_picker,
 		super::controls::section_heading("Planned Tasks", Some(tasks.len()), 16.0),
 	]
 	.spacing(10);
+	if let Some(error) = &state.calendar.error {
+		body = body.push(text(error).style(text::danger));
+	}
 	if tb::block_repeats(block) {
 		body = body.push(repeat_choice(state, metrics));
 	}

@@ -912,7 +912,7 @@ fn stored_events(
 				.details
 				.color_id
 				.as_deref()
-				.and_then(colors::event)
+				.and_then(colors::resolve)
 				.unwrap_or(calendar.color);
 			event
 		})

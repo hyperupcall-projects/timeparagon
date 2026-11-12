@@ -4,6 +4,14 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Message> {
 	match message {
+		EventEditMessage::ColorChanged(value) => {
+			if let Some(draft) = &mut state.calendar.edit_draft {
+				if !draft.saving {
+					draft.color_input = value;
+				}
+			}
+			Task::none()
+		}
 		EventEditMessage::EventEditDeadlineChanged(value) => {
 			if let Some(draft) = &mut state.calendar.edit_draft {
 				draft.deadline_text = value;
@@ -207,10 +215,13 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 					state.calendar.error = Some(error);
 					return Task::none();
 				}
-				let color_id = state
-					.calendar
-					.event(&draft.id)
-					.and_then(|event| event.details.color_id.clone());
+				let color_id = match calendar::colors::selection(&draft.color_input) {
+					Ok(choice) => choice,
+					Err(error) => {
+						state.calendar.error = Some(error);
+						return Task::none();
+					}
+				};
 				let (habit_id, created) = crate::habits::habit_for_new_event(state, &draft.title);
 				state.habits.busy = true;
 				state.habits.writing.insert(habit_id.clone());
@@ -231,7 +242,13 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			} else {
 				draft.description.clone()
 			};
-			let color_id = None;
+			let _color_choice = match calendar::colors::selection(&draft.color_input) {
+				Ok(choice) => choice,
+				Err(error) => {
+					state.calendar.error = Some(error);
+					return Task::none();
+				}
+			};
 			let Some(original) = state.calendar.event(&draft.id).cloned() else {
 				return Task::none();
 			};
@@ -244,7 +261,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 				draft.saving = true;
 			}
 			blocking::run(move || {
-				calendar::save_event_scope(&original, &draft, scope, &description, color_id)
+				calendar::save_event_scope(&original, &draft, scope, &description, None)
 			})
 			.map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
 		}

@@ -566,6 +566,15 @@ fn TaskEditor(
 				}
 			}
 			FormSection { title: "Organization",
+				ColorField { value: values.color_input.clone(), busy: is_busy,
+					on_input: move |v| fields.write().color_input = v,
+					on_pick: move |v: String| {
+						match calendar::colors::selection(&v) {
+							Ok(color) => apply.call(Change::Color(color)),
+							Err(message) => error.set(Some(message)),
+						}
+					},
+				}
 				ProjectsField {
 					selected: projects,
 					projects: context.projects.clone(),
@@ -1264,6 +1273,10 @@ fn EventEditor(
 				}
 			}
 			FormSection { title: "Organization",
+				ColorField { value: values.color_input.clone(), busy: is_busy,
+					on_input: move |v| draft.write().color_input = v,
+					on_pick: move |v| draft.write().color_input = v,
+				}
 				ProjectsField {
 					selected: values.projects.ids.clone(),
 					projects: context.projects.clone(),
@@ -3221,5 +3234,39 @@ mod tests {
 				"Save sleep",
 			],
 		);
+	}
+}
+
+#[component]
+pub(crate) fn ColorField(
+	value: String,
+	busy: bool,
+	on_input: EventHandler<String>,
+	on_pick: EventHandler<String>,
+) -> Element {
+	let custom = if value.starts_with('#') {
+		value.clone()
+	} else {
+		"#336699".to_owned()
+	};
+	rsx! {
+		Field { label: "Color",
+			div { style: "display:flex;gap:6px;flex-wrap:wrap",
+				for color in timeparagon_core::calendar::colors::palette() {
+					button {
+						r#type: "button", disabled: busy, aria_label: "Choose {css_color(color)}",
+						style: "background:{css_color(color)};color:{css_color(on_color(color))};width:28px;height:28px;border-radius:6px",
+						onclick: move |_| on_pick.call(timeparagon_core::calendar::colors::event_id(color).unwrap().to_owned()),
+						if timeparagon_core::calendar::colors::resolve(&value) == Some(color) { "✓" } else { " " }
+					}
+				}
+				input { r#type: "color", disabled: busy, aria_label: "Custom color", value: "{custom}",
+					oninput: move |event| on_input.call(event.value()),
+					onchange: move |event| on_pick.call(event.value()),
+				}
+				button { class: "btn", r#type: "button", disabled: busy, onclick: move |_| on_pick.call(String::new()), "Default" }
+			}
+			p { class: "hint", "Custom colors sync to Google Calendar on calendars you own." }
+		}
 	}
 }

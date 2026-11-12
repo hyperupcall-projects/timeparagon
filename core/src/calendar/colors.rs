@@ -226,3 +226,31 @@ mod tests {
 		assert_eq!(event_id(Color::from_rgb8(1, 2, 3)), None);
 	}
 }
+
+/// A palette ID or an opaque custom RGB color.
+pub fn resolve(value: &str) -> Option<Color> {
+	event(value).or_else(|| crate::hex::parse(value).ok())
+}
+
+/// Validate picker input before starting a write. Empty means calendar default.
+pub fn selection(input: &str) -> Result<Option<String>, String> {
+	let input = input.trim();
+	if input.is_empty() {
+		return Ok(None);
+	}
+	if event(input).is_some() {
+		return Ok(Some(input.to_owned()));
+	}
+	if !input.starts_with('#') || !matches!(input.len(), 4 | 7) {
+		return Err("Choose a Google color or enter a hex color such as #336699".into());
+	}
+	let color = crate::hex::parse(input).map_err(|e| e.to_string())?;
+	Ok(Some(crate::hex::HexColor(color).to_string()))
+}
+
+/// Add an explicit choice to a Calendar body; None leaves existing colors alone.
+pub(crate) fn write(body: &mut serde_json::Value, choice: Option<&str>) {
+	if let Some(choice) = choice {
+		body["colorId"] = choice.into();
+	}
+}

@@ -4,6 +4,14 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Message> {
 	match message {
+		EventDraftMessage::ColorChanged(value) => {
+			if let Some(draft) = &mut state.calendar.draft {
+				if !draft.saving {
+					draft.color_input = value;
+				}
+			}
+			Task::none()
+		}
 		EventDraftMessage::EventDraftMeeting(action) => {
 			let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) else {
 				return Task::none();
@@ -177,13 +185,19 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			let Some(draft) = state.calendar.draft.take() else {
 				return Task::none();
 			};
-			let color_id = None;
+			let color_choice = match calendar::colors::selection(&draft.color_input) {
+				Ok(choice) => choice,
+				Err(error) => {
+					state.calendar.error = Some(error);
+					return Task::none();
+				}
+			};
 			let habit = crate::habits::Draft::for_calendar_with_rule(
 				draft.start,
 				draft.end,
 				draft.title,
 				draft.description,
-				color_id,
+				color_choice,
 				draft.rule.clone(),
 			);
 			let task = crate::habits::open_new(state, habit);
@@ -284,7 +298,13 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			} else {
 				draft.description.clone()
 			};
-			let color_id = None;
+			let color_choice = match calendar::colors::selection(&draft.color_input) {
+				Ok(choice) => choice,
+				Err(error) => {
+					state.calendar.error = Some(error);
+					return Task::none();
+				}
+			};
 			let recurrence = match draft.recurrence_lines() {
 				Ok(lines) => lines,
 				Err(error) => {
@@ -307,7 +327,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 						known_app.as_deref(),
 						&draft.title,
 						&description,
-						color_id,
+						color_choice.as_deref(),
 						draft.start,
 						draft.end,
 						&draft.projects.ids,
@@ -317,7 +337,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 						&draft.calendar_id,
 						&draft.title,
 						&description,
-						color_id,
+						color_choice.as_deref(),
 						draft.start,
 						draft.end,
 						&recurrence,

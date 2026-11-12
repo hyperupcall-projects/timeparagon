@@ -250,6 +250,12 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 				}));
 		}
 		let organization = column![
+			item_color_picker(
+				&draft.color_input,
+				metrics,
+				|v| Message::EventDraft(EventDraftMessage::ColorChanged(v)),
+				|v| Message::EventDraft(EventDraftMessage::ColorChanged(v))
+			),
 			calendar,
 			event_projects(state, &draft.projects, metrics, |v| Message::EventDraft(
 				EventDraftMessage::EventDraftProjects(v)

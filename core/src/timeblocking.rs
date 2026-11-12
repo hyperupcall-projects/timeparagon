@@ -18,6 +18,8 @@ pub const UNDATED: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color: Option<String>,
 	/// Habit library entry represented by this planned task.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub habit_id: Option<String>,

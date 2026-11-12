@@ -71,7 +71,7 @@ impl Series {
 	pub fn color(&self, settings: &crate::config::CalendarSettings) -> Color {
 		self.color_id
 			.as_deref()
-			.and_then(colors::event)
+			.and_then(colors::resolve)
 			.unwrap_or_else(|| settings.habit_color())
 	}
 

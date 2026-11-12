@@ -151,6 +151,7 @@ pub struct Workspace {
 	pub estimate: String,
 	pub estimate_task: Option<String>,
 	pub estimate_error: Option<String>,
+	pub color_input: Option<(String, String)>,
 	/// The name being edited for the open task, before it is saved.
 	pub title: String,
 	pub editing_title: bool,
@@ -222,6 +223,8 @@ pub struct DropHover {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
+	ColorInput(String, String),
+	SaveColor(String, String),
 	/// Move the recurring item being confirmed into its block. `true` also
 	/// deletes the item's future occurrences.
 	MoveRecurring(bool),
@@ -1432,6 +1435,47 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.timeblocking.title_error = None;
 			return Task::none();
 		}
+		Action::ColorInput(id, value) => {
+			state.timeblocking.color_input = Some((id, value));
+			return Task::none();
+		}
+		Action::SaveColor(id, value) => {
+			let choice = match crate::calendar::colors::selection(&value) {
+				Ok(choice) => choice,
+				Err(error) => {
+					state.calendar.error = Some(error);
+					return Task::none();
+				}
+			};
+			state.timeblocking.color_input = None;
+			if let Some(block) = event(state, &id)
+				.filter(|e| is_block(e, &state.config.calendar))
+				.cloned()
+			{
+				if block.details.sending
+					|| state
+						.calendar
+						.edit_draft
+						.as_ref()
+						.is_some_and(|d| d.id == id && d.saving)
+				{
+					return Task::none();
+				}
+				let mut draft = state
+					.calendar
+					.edit_draft
+					.take()
+					.filter(|d| d.id == id)
+					.unwrap_or_else(|| calendar::EditDraft::from_event(&block));
+				draft.color_input = choice.unwrap_or_default();
+				state.calendar.edit_draft = Some(draft);
+				return crate::app::update(
+					state,
+					Message::EventEdit(crate::app::EventEditMessage::EventEditSaveRequested),
+				);
+			}
+			(id, Change::Color(choice))
+		}
 		Action::SaveDescription(id, value) => (id, Change::Description(value)),
 		Action::SaveTitle(id) => {
 			let title = state.timeblocking.title.trim().to_owned();
@@ -1642,6 +1686,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		};
 		let data = task.details.task_data.as_mut().unwrap();
 		match change {
+			Change::Color(v) => data.metadata.color = v,
 			Change::Estimate(v) => {
 				data.metadata.minutes = v;
 				state.timeblocking.estimate_task = None;
@@ -1685,6 +1730,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 	if matches!(
 		change,
 		Change::Description(_)
+			| Change::Color(_)
 			| Change::Projects(_)
 			| Change::Labels(_)
 			| Change::BacklogSection(_)

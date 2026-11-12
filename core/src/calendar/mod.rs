@@ -7,6 +7,7 @@ pub mod client;
 pub mod colors;
 pub(crate) mod day_cache;
 pub mod deadline;
+mod event_color;
 pub mod event_options;
 pub mod first_day;
 pub mod google;
@@ -129,9 +130,18 @@ impl Event {
 		if self.details.sleep.is_some() {
 			return settings.sleep_color();
 		}
+		if let Some(color) = self
+			.details
+			.task_data
+			.as_ref()
+			.and_then(|d| d.metadata.color.as_deref())
+			.and_then(colors::resolve)
+		{
+			return color;
+		}
 		// A color picked for this one event beats the color of its kind or
-		// calendar. Google Tasks have no such color, so their list's applies.
-		if let Some(color) = self.details.color_id.as_deref().and_then(colors::event) {
+		// calendar. Undated task choices are retained in their metadata.
+		if let Some(color) = self.details.color_id.as_deref().and_then(colors::resolve) {
 			return color;
 		}
 		if self.is_habit() {
@@ -424,6 +434,7 @@ pub enum DraftKind {
 /// throw away the last valid time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
+	pub color_input: String,
 	/// Video call, guests and their permissions.
 	pub meeting: meeting::Form,
 	/// The type chooser has handed this draft to the details pane.
@@ -465,6 +476,7 @@ impl Draft {
 	/// A draft on `calendar_id` spanning `start` to `end`.
 	pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
 		Self {
+			color_input: String::new(),
 			meeting: meeting::Form::default(),
 			options: Default::default(),
 			editor_open: false,
@@ -577,6 +589,8 @@ pub enum SaveScope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditDraft {
 	#[serde(default)]
+	pub color_input: String,
+	#[serde(default)]
 	pub deadline_text: String,
 	/// Video call, guests and their permissions.
 	pub meeting: meeting::Form,
@@ -631,6 +645,7 @@ impl EditDraft {
 	/// Build an edit draft from an existing event.
 	pub fn from_event(event: &Event) -> Self {
 		Self {
+			color_input: event.details.color_id.clone().unwrap_or_default(),
 			deadline_text: deadline::input_text(event),
 			meeting: meeting::Form::from_event(&event.details),
 			sleep: event.details.sleep.clone(),
@@ -1031,8 +1046,7 @@ pub struct Details {
 	/// one, and tasks repeating with the old series carry on with this one.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub split_from: Vec<String>,
-	/// Google's event `colorId`, or `None` when the event uses its calendar's
-	/// color.
+	/// A Google palette ID or custom #RRGGBB label color; None inherits the calendar.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub color_id: Option<String>,
 	/// A change to this item is on its way to Google. The interface shows it
@@ -2511,6 +2525,7 @@ pub fn create_habit(
 		completed: false,
 		details: Details {
 			description: draft.description.clone(),
+			color_id: color_id.map(str::to_owned),
 			habit: true,
 			recurrence: recurrence.clone(),
 			projects: draft.projects.ids.clone(),
@@ -2722,6 +2737,7 @@ pub fn create_event(
 		completed: false,
 		details: Details {
 			description: description.into(),
+			color_id: color_id.map(str::to_owned),
 			recurrence: recurrence.to_vec(),
 			projects: projects.to_vec(),
 			options: options.cloned().unwrap_or_default(),
@@ -2829,6 +2845,13 @@ pub fn save_event_scope(
 	description: &str,
 	color_id: Option<&str>,
 ) -> Result<api::Saved, String> {
+	let selected = colors::selection(&draft.color_input)?;
+	let color_id = if selected != original.details.color_id {
+		Some(selected.as_deref().unwrap_or(""))
+	} else {
+		color_id
+	};
+
 	let mut event = original.clone();
 	event.title = draft.title.clone();
 	event.calendar_id = draft.calendar_id.clone();
@@ -2836,10 +2859,12 @@ pub fn save_event_scope(
 	event.end = draft.end;
 	event.all_day = draft.all_day;
 	event.details.description = description.into();
+	event.details.color_id = colors::selection(&draft.color_input)?;
 	event.details.options = draft.options.clone();
 	event.details.projects = draft.projects.ids.clone();
 	event.details.labels = draft.labels.clone();
 	if let Some(data) = &mut event.details.task_data {
+		data.metadata.color = colors::selection(&draft.color_input)?;
 		data.metadata.deadline = draft.deadline()?;
 		data.metadata.projects = draft.projects.ids.clone();
 		data.metadata.labels = draft.labels.clone();

@@ -94,6 +94,7 @@ pub fn clean_label(input: &str) -> Result<String, &'static str> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Change {
+	Color(Option<String>),
 	Description(String),
 	Title(String),
 	Estimate(u32),

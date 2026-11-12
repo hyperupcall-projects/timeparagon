@@ -37,6 +37,13 @@ pub fn body(task: &Event) -> Result<Value, String> {
 			"ttLabels":serde_json::to_string(&task.details.labels).map_err(|e|e.to_string())?
 		}}
 	});
+	super::colors::write(
+		&mut body,
+		data.metadata
+			.color
+			.as_deref()
+			.or(task.details.color_id.as_deref()),
+	);
 	write_data(&mut body, data)?;
 	super::projects::write(&mut body, &task.details.projects)?;
 	task.details.options.write(&mut body)?;
@@ -82,6 +89,10 @@ pub fn apply(
 		reset_repeat_source(&mut data.metadata, change);
 	}
 	match change {
+		Change::Color(v) => {
+			data.metadata.color = Some(v.clone().unwrap_or_default());
+			task.details.color_id = data.metadata.color.clone();
+		}
 		Change::Title(v) => task.title = v.clone(),
 		Change::Description(v) => task.details.description = v.clone(),
 		Change::Estimate(v) => {
@@ -367,6 +378,36 @@ mod tests {
 		});
 		task
 	}
+	#[test]
+	fn task_colors_survive_scheduling_and_clear_explicitly() {
+		let settings = CalendarSettings::default();
+		let colored = apply(task(), &settings, &Change::Color(Some("#123456".into())), 0).unwrap();
+		// The same metadata is used in Google Tasks notes and Calendar events.
+		let scheduled = apply(
+			colored,
+			&settings,
+			&Change::Day(chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap()),
+			0,
+		)
+		.unwrap();
+		let written = body(&scheduled).unwrap();
+		assert_eq!(written["colorId"], "#123456");
+		assert_eq!(
+			read_data(&written["extendedProperties"])
+				.unwrap()
+				.metadata
+				.color
+				.as_deref(),
+			Some("#123456")
+		);
+		let cleared = apply(scheduled, &settings, &Change::Color(None), 0).unwrap();
+		assert_eq!(body(&cleared).unwrap()["colorId"], "");
+		assert_eq!(
+			cleared.display_color(&settings, &[]),
+			settings.task_event_color()
+		);
+	}
+
 	#[test]
 	fn a_patch_body_clears_the_other_time_form() {
 		// An all-day task put into a time block is PATCHed to a timed event;

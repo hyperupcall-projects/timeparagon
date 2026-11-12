@@ -299,7 +299,14 @@ pub fn event_editor<'a>(
 	]
 	.spacing(metrics.spacing)
 	.width(Fill);
-	let mut organization = column![].spacing(metrics.spacing).width(Fill);
+	let mut organization = column![item_color_picker(
+		&draft.color_input,
+		metrics,
+		|v| Message::EventEdit(EventEditMessage::ColorChanged(v)),
+		|v| Message::EventEdit(EventEditMessage::ColorChanged(v))
+	)]
+	.spacing(metrics.spacing)
+	.width(Fill);
 	if let Some(source) = source {
 		organization = organization.push(source);
 	}
@@ -1123,4 +1130,62 @@ fn event_habit_picker<'a>(
 	.spacing(6)
 	.width(Fill)
 	.into()
+}
+
+/// Google palette plus a custom RGB input, shared by item editors.
+pub(crate) fn item_color_picker<'a>(
+	input: &'a str,
+	metrics: &Metrics,
+	changed: impl Fn(String) -> Message + 'a,
+	picked: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message> {
+	let selected = calendar::colors::resolve(input);
+	let mut rows = column![].spacing(6);
+	for chunk in calendar::colors::palette().chunks(6) {
+		let swatches: Vec<Element<'a, Message>> = chunk
+			.iter()
+			.map(|&color| {
+				let id = calendar::colors::event_id(color).unwrap().to_owned();
+				button(
+					text(if selected == Some(color) { "✓" } else { " " })
+						.center()
+						.color(calendar::colors::on_color(color)),
+				)
+				.width(28)
+				.height(28)
+				.padding(0)
+				.style(move |_, _| button::Style {
+					background: Some(color.into()),
+					..Default::default()
+				})
+				.on_press(picked(id))
+				.into()
+			})
+			.collect();
+		rows = rows.push(row(swatches).spacing(6));
+	}
+	let custom = if input.starts_with('#') { input } else { "" };
+	let field = crate::ui::controls::text_input("#336699", custom)
+		.on_input(changed)
+		.on_submit(picked(input.to_owned()))
+		.size(metrics.label());
+	let error = calendar::colors::selection(input).err();
+	let mut body = column![
+		text("Color").size(metrics.label()),
+		rows,
+		row![
+			field,
+			crate::ui::controls::quiet_button("Apply").on_press(picked(input.to_owned()))
+		]
+		.spacing(6),
+		crate::ui::controls::quiet_button("Use default color").on_press(picked(String::new())),
+		text("Custom colors sync to Google Calendar on calendars you own.")
+			.size(metrics.label() - 2.0)
+			.style(text::secondary),
+	]
+	.spacing(6);
+	if let Some(error) = error {
+		body = body.push(text(error).size(metrics.label() - 1.0).style(text::danger));
+	}
+	body.into()
 }

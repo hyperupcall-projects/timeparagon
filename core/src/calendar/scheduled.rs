@@ -36,6 +36,19 @@ pub fn request(method: &str, url: &str, token: &str, body: Option<&Value>) -> Re
 			transport: false,
 		});
 	}
+	let prepared = body
+		.map(|body| super::event_color::prepare(url, token, body))
+		.transpose()
+		.map_err(|e| Error {
+			status: e.status,
+			message: e.to_string(),
+			transport: false,
+		})?;
+	let (url, body) = prepared
+		.as_ref()
+		.map(|(url, body)| (url.as_str(), Some(body)))
+		.unwrap_or((url, body));
+
 	#[cfg(test)]
 	if let Some(answer) = api::faked(method, url, body.map(|b| b.to_string()).as_deref()) {
 		return match answer {

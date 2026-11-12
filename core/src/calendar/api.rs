@@ -884,7 +884,7 @@ pub fn habit_body(
 	start: DateTime<Local>,
 	end: DateTime<Local>,
 	recurrence: &[String],
-	_color_id: Option<&str>,
+	color_id: Option<&str>,
 ) -> serde_json::Value {
 	let zone = iana_time_zone::get_timezone().ok();
 	let time = |when: DateTime<Local>| {
@@ -911,8 +911,7 @@ pub fn habit_body(
 			.map(|line| serde_json::Value::String(line.clone()))
 			.collect(),
 	);
-	// Leave Google color overrides untouched when updating a habit. New
-	// habits inherit the calendar color in Google and the habit color here.
+	colors::write(&mut body, color_id);
 	body
 }
 
@@ -936,7 +935,10 @@ fn parse_habit(entry: EventEntry, calendar_id: &str) -> Option<HabitEvent> {
 			.as_str()
 			.map(str::to_owned),
 		recurrence: entry.recurrence,
-		color_id: entry.color_id,
+		color_id: entry.extended_properties["private"]["ttColor"]
+			.as_str()
+			.map(str::to_owned)
+			.or(entry.color_id),
 	})
 }
 
@@ -1602,6 +1604,7 @@ fn patch_event_changes(
 	notify: bool,
 ) -> Result<(), GoogleError> {
 	let address = format!("{url}{}", super::meeting::write_query(changes, notify));
+	let (address, changes) = super::event_color::prepare(&address, access_token, changes)?;
 	let result = agent()
 		.request("PATCH", &address)
 		.set("Authorization", &format!("Bearer {access_token}"))
@@ -1695,7 +1698,7 @@ fn event_patch_body(
 		.into();
 	// Display defaults belong to TimeParagon. Omitting colorId also preserves
 	// any explicit Google color when editing an existing event.
-	let _ = color_id;
+	colors::write(&mut body, color_id);
 	if all_day {
 		body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
 		body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
@@ -1793,6 +1796,7 @@ pub fn save_event_scope(
 			.task_data
 			.clone()
 			.ok_or("Missing calendar task metadata")?;
+		data.metadata.color = colors::selection(&draft.color_input)?;
 		data.metadata.deadline = draft.deadline()?;
 		data.metadata.projects = draft.projects.ids.clone();
 		data.metadata.labels = draft.labels.clone();
@@ -2158,7 +2162,7 @@ pub fn insert_event(
 	super::projects::write(&mut body, projects)?;
 	// Display defaults belong to TimeParagon. Omitting colorId also preserves
 	// any explicit Google color when editing an existing event.
-	let _ = color_id;
+	colors::write(&mut body, color_id);
 	if !recurrence.is_empty() {
 		body["recurrence"] = serde_json::Value::Array(
 			recurrence
@@ -2492,13 +2496,14 @@ fn parse_event_in_range(
 	let color = entry
 		.color_id
 		.as_deref()
-		.and_then(colors::event)
+		.and_then(colors::resolve)
 		.unwrap_or(calendar.color);
 	let mut details = details_of(&entry);
 	if entry.extended_properties["private"]["ttKind"].as_str() == Some("task") {
 		details.task_data =
 			Some(super::calendar_tasks::read_data(&entry.extended_properties).ok()?);
 		if let Some(data) = &mut details.task_data {
+			data.metadata.color = details.color_id.clone();
 			data.metadata.projects = details.projects.clone();
 			data.metadata.labels = details.labels.clone();
 		}
@@ -2614,7 +2619,10 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
 		original_start: entry.original_start_time.as_ref().and_then(event_time),
 		recurrence: entry.recurrence.clone(),
 		split_from: split_from(&entry.extended_properties),
-		color_id: entry.color_id.clone(),
+		color_id: entry.extended_properties["private"]["ttColor"]
+			.as_str()
+			.map(str::to_owned)
+			.or_else(|| entry.color_id.clone()),
 	}
 }
 
@@ -2791,20 +2799,24 @@ pub fn get<T: serde::de::DeserializeOwned>(
 	url: &str,
 	access_token: &str,
 ) -> Result<T, GoogleError> {
+	let url = super::event_color::read_url(url);
 	#[cfg(test)]
-	if let Some(answer) = faked_google("GET", url, None) {
-		return serde_json::from_str(&answer?)
-			.map_err(|error| GoogleError::transport("Google Calendar response", error));
+	if let Some(answer) = faked_google("GET", &url, None) {
+		let mut value: serde_json::Value =
+			serde_json::from_str(&answer?).map_err(|e| e.to_string())?;
+		super::event_color::read(&url, access_token, &mut value)?;
+		return serde_json::from_value(value).map_err(|e| e.to_string().into());
 	}
 	let result = agent()
-		.get(url)
+		.get(&url)
 		.set("Authorization", &format!("Bearer {access_token}"))
 		.set("Accept", "application/json")
 		.call();
-
-	google::send("Google Calendar", result)?
+	let mut value: serde_json::Value = google::send("Google Calendar", result)?
 		.into_json()
-		.map_err(|error| GoogleError::transport("Google Calendar response", error))
+		.map_err(|e| GoogleError::transport("Google Calendar response", e))?;
+	super::event_color::read(&url, access_token, &mut value)?;
+	serde_json::from_value(value).map_err(|e| GoogleError::transport("Google Calendar response", e))
 }
 
 /// Sends a small JSON body to Google and discards the response.
@@ -2813,6 +2825,12 @@ pub fn get<T: serde::de::DeserializeOwned>(
 /// from Calendar or Tasks rather than from whichever call site happened to
 /// share this helper.
 pub fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), GoogleError> {
+	let value: serde_json::Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+	let (address, value) = super::event_color::prepare(url, access_token, &value)?;
+	let url = address.as_str();
+	let encoded = value.to_string();
+	let body = encoded.as_str();
+
 	#[cfg(test)]
 	if let Some(answer) = faked_google("PATCH", url, Some(body)) {
 		return answer.map(|_| ());
@@ -2853,6 +2871,12 @@ pub fn post(
 	body: &str,
 	context: &str,
 ) -> Result<String, GoogleError> {
+	let value: serde_json::Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+	let (address, value) = super::event_color::prepare(url, access_token, &value)?;
+	let url = address.as_str();
+	let encoded = value.to_string();
+	let body = encoded.as_str();
+
 	#[cfg(test)]
 	if let Some(answer) = faked_google("POST", url, Some(body)) {
 		return answer;
@@ -3040,7 +3064,7 @@ mod tests {
 	}
 
 	#[test]
-	fn queued_event_edits_neither_export_defaults_nor_clear_google_colors() {
+	fn queued_event_edits_export_explicit_colors_and_preserve_untouched_colors() {
 		let event = super::super::sample_snapshot().events.remove(0);
 		for color in [None, Some("5")] {
 			let body = event_patch_body(
@@ -3056,9 +3080,9 @@ mod tests {
 				None,
 			)
 			.unwrap();
-			assert!(
-				body.get("colorId").is_none(),
-				"edits preserve Google overrides"
+			assert_eq!(
+				body.get("colorId").and_then(serde_json::Value::as_str),
+				color
 			);
 		}
 	}
@@ -3606,7 +3630,7 @@ mod tests {
 			body["recurrence"],
 			serde_json::json!(["RRULE:FREQ=DAILY", "EXDATE:20261101T090000"])
 		);
-		assert!(body.get("colorId").is_none());
+		assert_eq!(body["colorId"], "3");
 
 		// A PATCH has to say the rule and color are gone; omitting them would
 		// leave Google's copy of the habit repeating.
