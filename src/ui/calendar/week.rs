@@ -27,24 +27,27 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
     let width = weekly_column_width(&state.config.calendar);
     let day_metrics = Metrics::of(Size::new(width, metrics.size.height));
     let now = crate::clock::now();
-    let all_day_height = if days.iter().any(|&day| {
-        if state
-            .calendar
-            .deadline_markers_on(day, &state.config.calendar)
-            .iter()
-            .any(|event| event.all_day)
-        {
-            return true;
-        }
-        state
-            .calendar
-            .all_day_events_on(day, &state.config.calendar)
-            .any(|event| {
-                state
-                    .calendar
-                    .search_shows(event, day, &state.config.calendar)
-            })
-    }) {
+    // While a task is in the air the all-day row is kept open, so dropping
+    // on a whole day has room and a preview there does not shift the grid.
+    let all_day_height = if state.timeblocking.dragging.is_some()
+        || days.iter().any(|&day| {
+            if state
+                .calendar
+                .deadline_markers_on(day, &state.config.calendar)
+                .iter()
+                .any(|event| event.all_day)
+            {
+                return true;
+            }
+            state
+                .calendar
+                .all_day_events_on(day, &state.config.calendar)
+                .any(|event| {
+                    state
+                        .calendar
+                        .search_shows(event, day, &state.config.calendar)
+                })
+        }) {
         (metrics.size.height * 0.13).clamp(35.0, 110.0)
     } else {
         0.0

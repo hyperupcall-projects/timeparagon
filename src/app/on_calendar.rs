@@ -180,6 +180,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
                             | crate::timeblocking::Action::NewWeekTask
                             | crate::timeblocking::Action::DropWeekList { .. }
                             | crate::timeblocking::Action::DropDay
+                            | crate::timeblocking::Action::DropAt { .. }
                             | crate::timeblocking::Action::DropTime(_)
                             | crate::timeblocking::Action::DropTask(_)
                             | crate::timeblocking::Action::DropCalendarTask(_)

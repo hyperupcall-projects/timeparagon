@@ -908,6 +908,8 @@ fn canvas_with_one_block() -> DayCanvas {
         can_create: true,
         selection: None,
         external_drag: false,
+        drop_preview: None,
+        drop_block: None,
         dragged_task: None,
     }
 }

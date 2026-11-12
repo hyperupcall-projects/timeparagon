@@ -140,7 +140,22 @@ fn day_cell<'a>(
     }
     body = body.push(date);
 
-    let mut items = day_items(state, day, metrics);
+    let mut items = crate::ui::drop_preview::day_list(
+        state,
+        day,
+        day_items(state, day, metrics),
+        // The cell gives its messages their day.
+        |message| message,
+        |task| preview_row(state, task, metrics),
+    );
+    // Dropped on the day as a whole, the task in the air goes first, so it
+    // stays in sight in a full cell.
+    if let Some(task) = crate::ui::drop_preview::on_day(state, day) {
+        items.insert(
+            0,
+            crate::ui::drop_preview::chip(state, &task, metrics.label()),
+        );
+    }
     let fit = rows_that_fit(cell.height, heading_height);
     if items.len() > fit {
         // The "N more" row takes the place of the last event that would fit.
@@ -201,8 +216,22 @@ fn day_cell<'a>(
     })
 }
 
+/// The task in the air as a row of a cell, where it would land.
+fn preview_row<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a, Message> {
+    if task.all_day {
+        crate::ui::drop_preview::chip(state, task, metrics.label())
+    } else {
+        crate::ui::drop_preview::outlined(timed_row(state, task, false, metrics))
+    }
+}
+
 /// A day's events in reading order: all-day ones first, then by start time.
-fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Element<'a, Message>> {
+/// Each row comes with the slot it fills, for dropping a task between rows.
+fn day_items<'a>(
+    state: &'a State,
+    day: NaiveDate,
+    metrics: &Metrics,
+) -> Vec<(Option<crate::ui::drop_preview::Slot>, Element<'a, Message>)> {
     let now = crate::clock::now();
     let day_start_hour = state.config.calendar.day_start_hour();
     let first_shown = state
@@ -229,15 +258,21 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         // appearing on every date.
         if event.is_task() && !calendar::deadline::is_marker(event) {
             if event.start.date_naive() == day {
-                items.push(crate::ui::controls::locked(
-                    task_row(state, event, metrics),
-                    event.details.sending,
+                items.push((
+                    Some(crate::ui::drop_preview::Slot::of(event)),
+                    crate::ui::controls::locked(
+                        task_row(state, event, metrics),
+                        event.details.sending,
+                    ),
                 ));
             }
         } else {
-            items.push(crate::ui::controls::locked(
-                all_day_row(state, event, event.end <= now, metrics),
-                event.details.sending,
+            items.push((
+                Some(crate::ui::drop_preview::Slot::of(event)),
+                crate::ui::controls::locked(
+                    all_day_row(state, event, event.end <= now, metrics),
+                    event.details.sending,
+                ),
             ));
         }
     }
@@ -256,9 +291,12 @@ fn day_items<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Vec<Ele
         // An event past midnight is listed where it starts, not on each day it
         // touches, unless the day it started on is out of view.
         if calendar::day_at(event.start, day_start_hour) == day || day == first_shown {
-            items.push(crate::ui::controls::locked(
-                timed_row(state, event, event.end <= now, metrics),
-                event.details.sending,
+            items.push((
+                Some(crate::ui::drop_preview::Slot::of(event)),
+                crate::ui::controls::locked(
+                    timed_row(state, event, event.end <= now, metrics),
+                    event.details.sending,
+                ),
             ));
         }
     }
@@ -417,9 +455,13 @@ fn more_popup<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Elemen
     .width(Fill)
     .on_press(Message::Calendar(CalendarMessage::CalendarDayOpened(day)))
     .style(button::text);
-    let items = column(day_items(state, day, metrics))
-        .spacing(ROW_GAP)
-        .width(Fill);
+    let items = column(
+        day_items(state, day, metrics)
+            .into_iter()
+            .map(|(_, row)| row),
+    )
+    .spacing(ROW_GAP)
+    .width(Fill);
     let list = Element::from(crate::ui::controls::scrollable(items)).map(move |message| {
         Message::Calendar(CalendarMessage::WeekDayAction(day, Box::new(message)))
     });

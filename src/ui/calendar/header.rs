@@ -212,16 +212,24 @@ pub(super) fn all_day_row_on<'a>(
             .calendar
             .search_shows(event, day, &state.config.calendar)
     });
-    let chips: Vec<Element<'a, Message>> = events
+    // The task in the air, shown first so it is in sight however full the
+    // day already is.
+    let preview = crate::ui::drop_preview::on_day(state, day)
+        .map(|task| crate::ui::drop_preview::chip(state, &task, metrics.label()));
+    let chips: Vec<Element<'a, Message>> = preview
         .into_iter()
-        .filter(|event| weekly || !event.is_task() || calendar::deadline::is_marker(event))
-        .map(|event| {
-            if event.is_task() && !calendar::deadline::is_marker(event) {
-                weekly_task_chip(state, event, metrics)
-            } else {
-                all_day_chip(state, event, metrics)
-            }
-        })
+        .chain(
+            events
+                .into_iter()
+                .filter(|event| weekly || !event.is_task() || calendar::deadline::is_marker(event))
+                .map(|event| {
+                    if event.is_task() && !calendar::deadline::is_marker(event) {
+                        weekly_task_chip(state, event, metrics)
+                    } else {
+                        all_day_chip(state, event, metrics)
+                    }
+                }),
+        )
         .collect();
 
     if weekly && chips.is_empty() {

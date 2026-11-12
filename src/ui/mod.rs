@@ -10,6 +10,7 @@ pub mod brain_dump;
 pub mod calendar;
 pub mod controls;
 mod description;
+mod drop_preview;
 pub mod flash;
 pub mod habits;
 mod habits_charts;
@@ -173,6 +174,9 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
         let metrics = Metrics::of(size);
         let mut layers = vec![panes.height(Fill).into()];
         push_editor_dialogs(&mut layers, state, &metrics);
+        if let Some((task, pointer)) = range_drag_ghost(state) {
+            layers.push(drag_ghost(state, task, &metrics, pointer, size));
+        }
         container(iced::widget::stack(layers))
             .width(Fill)
             .height(Fill)
@@ -535,6 +539,9 @@ fn window_frame<'a>(
 }
 
 fn range_drag_ghost(state: &State) -> Option<(&crate::calendar::Event, iced::Point)> {
+    if drop_preview::hides_ghost(state) {
+        return None;
+    }
     let task = state
         .calendar
         .event(state.timeblocking.dragging.as_deref()?)?;

@@ -302,24 +302,55 @@ fn day_column<'a>(
         }
     });
     let first = events.first().map(|e| e.id.clone());
+    // The task in the air, as it would be placed if let go now. It answers
+    // to the same drop as the place it shows, so moving over it keeps it put
+    // rather than sending it back and forth as the cards shift around it.
+    let preview = super::drop_preview::week_list(state, day);
+    let preview_at = preview.as_ref().map(|(target, after, _)| {
+        target
+            .as_ref()
+            .and_then(|target| events.iter().position(|event| &event.id == target))
+            .map_or(events.len(), |index| index + usize::from(*after))
+    });
+    let mut preview = preview.map(|(target, after, task)| {
+        drop_target(
+            container(card(state, &task, true)).padding([4, 0]),
+            state,
+            target,
+            Placement::Fixed(after),
+        )
+    });
     let mut cards = column![
         heading,
-        drop_target(container(add).padding([4, 0]), state, first, false)
+        drop_target(
+            container(add).padding([4, 0]),
+            state,
+            first,
+            Placement::Fixed(false)
+        )
     ]
     .width(Fill);
-    for event in events {
+    for (index, event) in events.iter().enumerate() {
+        if preview_at == Some(index)
+            && let Some(preview) = preview.take()
+        {
+            cards = cards.push(preview);
+        }
         cards = cards.push(drop_target(
-            container(card(state, event)).padding([4, 0]),
+            container(card(state, event, false)).padding([4, 0]),
             state,
             Some(event.id.clone()),
-            true,
+            Placement::Split,
         ));
+    }
+    if let Some(preview) = preview {
+        cards = cards.push(preview);
     }
     cards = cards.push(drop_target(
         Space::new().width(Fill).height(60),
         state,
         None,
-        false,
+        Placement::Fixed(false),
     ));
     let day_view = mouse_area(
         container(row![cards, Space::new().height(height)])
@@ -339,7 +370,9 @@ fn day_column<'a>(
     })
 }
 
-fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
+/// A board card. A `preview` card shows the task in the air where it would
+/// land, outlined, and is not itself draggable.
+fn card<'a>(state: &'a State, event: &CalendarEvent, preview: bool) -> Element<'a, Message> {
     if state.calendar.search.hides_details(event) {
         return container(text(calendar::search::PRIVATE_TITLE).size(13))
             .width(Fill)
@@ -529,6 +562,19 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
     ])
     .width(Fill)
     .style(card_style);
+    if preview {
+        return iced::widget::stack![
+            content,
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|theme: &Theme| container::Style {
+                    border: super::drop_preview::outline(theme),
+                    ..Default::default()
+                }),
+        ]
+        .into();
+    }
     let content = if task {
         super::task_drag::task_drag(content, &event.id, state.timeblocking.dragging.as_deref())
     } else {
@@ -537,28 +583,40 @@ fn card<'a>(state: &'a State, event: &CalendarEvent) -> Element<'a, Message> {
     super::controls::locked(content, event.details.sending)
 }
 
+/// Which side of its target card a drop on a [`DropTarget`] goes.
+#[derive(Clone, Copy)]
+enum Placement {
+    /// Before the card over its top half, after it over its bottom half.
+    Split,
+    /// Always after the card when `true`, always before it when `false`.
+    Fixed(bool),
+}
+
 fn drop_target<'a>(
     content: impl Into<Element<'a, Message>>,
     state: &State,
     target: Option<String>,
-    split: bool,
+    placement: Placement,
 ) -> Element<'a, Message> {
     Element::new(DropTarget {
         content: content.into(),
         active: state.timeblocking.dragging.is_some(),
         target,
-        split,
+        placement,
     })
 }
 struct DropTarget<'a> {
     content: Element<'a, Message>,
     active: bool,
     target: Option<String>,
-    split: bool,
+    placement: Placement,
 }
 impl DropTarget<'_> {
     fn after(&self, bounds: Rectangle, cursor: mouse::Cursor) -> bool {
-        self.split && cursor.position().is_some_and(|p| p.y >= bounds.center_y())
+        match self.placement {
+            Placement::Split => cursor.position().is_some_and(|p| p.y >= bounds.center_y()),
+            Placement::Fixed(after) => after,
+        }
     }
 }
 impl Widget<Message, Theme, Renderer> for DropTarget<'_> {
@@ -653,26 +711,6 @@ impl Widget<Message, Theme, Renderer> for DropTarget<'_> {
             cursor,
             viewport,
         );
-        if self.active && cursor.is_over(layout.bounds()) && cursor.is_over(*viewport) {
-            use iced::advanced::Renderer as _;
-            let b = layout.bounds();
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: Rectangle {
-                        x: b.x,
-                        y: if self.after(b, cursor) {
-                            b.y + b.height - 2.0
-                        } else {
-                            b.y
-                        },
-                        width: b.width,
-                        height: 2.0,
-                    },
-                    ..Default::default()
-                },
-                theme.extended_palette().primary.base.color,
-            );
-        }
     }
     fn mouse_interaction(
         &self,
