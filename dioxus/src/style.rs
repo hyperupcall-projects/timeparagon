@@ -171,6 +171,7 @@ fn fixed_variables() -> String {
         ("block-row-over", look::BLOCK_ROW_OVER),
         ("needle", colors::NEEDLE),
         ("gutter-text", colors::GUTTER_TEXT),
+        ("pending-border", look::PENDING_BORDER),
     ] {
         let _ = write!(css, "--{name}:{};", css_color(color));
     }

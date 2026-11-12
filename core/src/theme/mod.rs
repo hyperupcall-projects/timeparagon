@@ -170,6 +170,10 @@ pub const HOUR_LINE: Color = Color::from_rgba(
 /// The edge of an event, and of a travel box.
 pub const EVENT_EDGE: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.28);
 pub const TRAVEL_EDGE: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.45);
+/// The border around anything whose change is still on its way to the cloud
+/// (Google Calendar, Tasks, Contacts, …). A mid grey, so it reads as neither
+/// confirmed nor failed, on either canvas.
+pub const PENDING_BORDER: Color = Color::from_rgb8(0x80, 0x80, 0x80);
 /// An event chip's shadow.
 pub const EVENT_CHIP: Elevation = elevation(0.12, 1.0, 3.0);
 /// Two faint offset copies stand in for an event's shadow on the grid.

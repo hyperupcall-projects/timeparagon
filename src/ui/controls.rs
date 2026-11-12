@@ -656,9 +656,9 @@ pub fn summary_surface(theme: &Theme) -> container::Style {
 }
 
 /// The border drawn around anything whose change is still on its way to the
-/// cloud (Google Calendar, Tasks, Contacts, …). The Dioxus day view keeps the
-/// same value in `--pending-border` in `dioxus/assets/day.css`.
-pub const PENDING_BORDER: Color = Color::from_rgb8(0x3B, 0x82, 0xF6);
+/// cloud (Google Calendar, Tasks, Contacts, …). The Dioxus day view draws the
+/// same color, as `--pending-border`.
+pub use timeslay_core::theme::PENDING_BORDER;
 
 /// The font for text whose change is still on its way to the cloud: italic,
 /// so it reads as not yet final. Pair it with [`locked`], which adds the

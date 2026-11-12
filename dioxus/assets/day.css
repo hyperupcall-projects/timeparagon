@@ -3194,12 +3194,6 @@ textarea {
     }
 }
 
-/* A change on its way to Google: outlined in blue, italic, and locked until
-   Google answers. Keep in step with `PENDING_BORDER` in src/ui/controls.rs. */
-:root {
-  --pending-border: #3b82f6;
-}
-
 [data-sending="true"] {
   outline: 2px solid var(--pending-border);
   outline-offset: -2px;

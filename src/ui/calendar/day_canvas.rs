@@ -829,7 +829,7 @@ impl DayCanvas {
                     );
                 }
             }
-            // An unconfirmed write is outlined in blue with an italic label,
+            // An unconfirmed write is outlined in grey with an italic label,
             // so the block reads as not yet final until Google answers.
             frame.stroke(
                 &shape,
