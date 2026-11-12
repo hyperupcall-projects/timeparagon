@@ -250,6 +250,7 @@ fn App() -> Element {
     let note_opening = use_signal(|| None::<String>);
     use_context_provider(|| notes::NoteOpening(note_opening));
     let mut calendars_error = use_signal(|| None::<String>);
+    let mut full_sync_running = use_signal(|| false);
     let mut signed_in = use_signal(day::signed_in);
     let mut cached_days = use_signal(move || {
         let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
@@ -271,10 +272,12 @@ fn App() -> Element {
         let refresh = revision();
         let requested_day = *current_day.peek();
         let settings = config.peek().calendar.clone();
+        // Incremental sync is cheap, so opening the app always catches up.
         let initial_is_fresh = refresh == 0
+            && !settings.incremental_sync
             && !cached_days
                 .peek()
-                .sync_due(settings.sync_every(), timeslay_core::clock::now());
+                .sync_due(settings.refresh_every(), timeslay_core::clock::now());
         let cached = cached_days.peek().cached_snapshot();
         async move {
             if initial_is_fresh {
@@ -351,7 +354,7 @@ fn App() -> Element {
                     scrolled.set(false);
                 }
             }
-            if last_refresh.elapsed() >= config.peek().calendar.sync_every() {
+            if last_refresh.elapsed() >= config.peek().calendar.refresh_every() {
                 last_refresh = tokio::time::Instant::now();
                 revision.set(revision() + 1);
             }
@@ -1357,6 +1360,56 @@ fn App() -> Element {
                         notes::NotesSettings { config }
                         reminders::ReminderSection { config }
                         sleep::SleepSettings { config }
+                        h3 { class: "settings-heading", "Application" }
+                        label { class: "sheet-check",
+                            input {
+                                r#type: "checkbox",
+                                checked: config().calendar.incremental_sync,
+                                onchange: move |event: FormEvent| {
+                                    match day::set_incremental_sync(event.checked()) {
+                                        Ok(saved) => {
+                                            config.set(saved);
+                                            settings_error.set(None);
+                                        }
+                                        Err(error) => settings_error.set(Some(error)),
+                                    }
+                                },
+                            }
+                            " Incremental sync"
+                        }
+                        p { class: "hint",
+                            if config().calendar.incremental_sync {
+                                "Asks Google Calendar and Tasks only for what changed, every 2 minutes."
+                            } else {
+                                "Fetches everything in view on every sync."
+                            }
+                        }
+                        div { class: "state-actions",
+                            button {
+                                class: "btn",
+                                r#type: "button",
+                                disabled: full_sync_running(),
+                                onclick: move |_| {
+                                    full_sync_running.set(true);
+                                    spawn(async move {
+                                        let reset = tokio::task::spawn_blocking(calendar::forget_sync_state)
+                                            .await
+                                            .map_err(|error| error.to_string())
+                                            .and_then(|result| result);
+                                        full_sync_running.set(false);
+                                        match reset {
+                                            Ok(()) => {
+                                                settings_error.set(None);
+                                                revision.set(revision() + 1);
+                                            }
+                                            Err(error) => settings_error
+                                                .set(Some(format!("Could not start a full sync: {error}"))),
+                                        }
+                                    });
+                                },
+                                if full_sync_running() { "Starting full sync…" } else { "Full sync" }
+                            }
+                        }
                         h3 { class: "settings-heading", "Google" }
                         form {
                             class: "client-form settings-form",

@@ -2518,6 +2518,13 @@ pub fn disconnect() {
     oauth::clear_tokens();
 }
 
+/// Forgets everything incremental sync has stored (sync tokens, the copy of
+/// the events and tasks), so the next sync fetches everything again. Blocking:
+/// waits for a sync in progress.
+pub fn forget_sync_state() -> Result<(), String> {
+    api::incremental::reset()
+}
+
 /// Ticks a Google Task off, or puts it back.
 pub fn set_task_completed(
     calendar_id: &str,

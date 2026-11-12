@@ -14,6 +14,7 @@ use crate::config::CalendarSettings;
 use crate::hex;
 
 pub mod block_sync;
+pub mod incremental;
 
 /// Stands in for Google in tests: answers a request's method, URL and JSON
 /// body with the response body, or with an HTTP status and message.
@@ -106,6 +107,10 @@ struct EventList {
     items: Vec<EventEntry>,
     #[serde(default, rename = "nextPageToken")]
     next_page_token: Option<String>,
+    /// On the last page of a full listing or of a list of changes: where the
+    /// next incremental sync carries on from.
+    #[serde(default, rename = "nextSyncToken")]
+    next_sync_token: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -214,6 +219,11 @@ pub fn fetch_day(
     )
 }
 
+/// Every calendar, the events between `first` and `last`, and the tasks.
+///
+/// With incremental sync on (the default, see [`incremental`]) this asks
+/// Google only for what changed since the last sync and answers from the
+/// local copy. Otherwise every call fetches the whole range again.
 pub fn fetch_range(
     access_token: &str,
     disabled: &[String],
@@ -223,6 +233,16 @@ pub fn fetch_range(
     day_end_hour: u32,
     app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
+    if incremental::enabled() {
+        return incremental::fetch_range(
+            access_token,
+            day,
+            first,
+            last,
+            day_end_hour,
+            app_calendar,
+        );
+    }
     let fetch_started = crate::clock::now();
     let mut calendars = fetch_calendars(access_token)?;
     // Every event TimeSlay writes lives on one calendar. Find it by name, or
@@ -249,11 +269,6 @@ pub fn fetch_range(
         }
         Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
     })?;
-    let tasks_loaded = task_result.is_ok();
-    let (task_calendars, task_events, notice) = match task_result {
-        Ok(tasks) => tasks,
-        Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
-    };
     // Calendar owns every dated task; no cross-service mirror reconciliation.
     // Retain non-recurring tasks outside this window for task lists and block planning.
     if let Some(calendar) = calendars
@@ -295,6 +310,52 @@ pub fn fetch_range(
             }
         }
     }
+    finish(
+        access_token,
+        calendars,
+        events,
+        task_result,
+        Range {
+            day,
+            first,
+            last,
+            day_end_hour,
+            fetched_at: fetch_started,
+        },
+    )
+}
+
+/// The days a fetch was for, and when it began.
+struct Range {
+    day: NaiveDate,
+    first: NaiveDate,
+    last: NaiveDate,
+    day_end_hour: u32,
+    fetched_at: DateTime<Local>,
+}
+
+/// What every fetch does with Google's answer, however it got it: adds the
+/// tasks, lays the local edits over the result, records what Google now
+/// holds, and sorts it into a [`Snapshot`].
+fn finish(
+    access_token: &str,
+    mut calendars: Vec<Calendar>,
+    mut events: Vec<Event>,
+    task_result: Result<FetchedTasks, GoogleError>,
+    range: Range,
+) -> Result<Snapshot, String> {
+    let Range {
+        day,
+        first,
+        last,
+        day_end_hour,
+        fetched_at: fetch_started,
+    } = range;
+    let tasks_loaded = task_result.is_ok();
+    let (task_calendars, task_events, notice) = match task_result {
+        Ok(tasks) => tasks,
+        Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
+    };
     events.extend(task_events);
     if let Some(path) = crate::task_db::path() {
         reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
@@ -605,6 +666,7 @@ fn adopt_list(
 }
 
 fn forget_cached_task(task_id: &str) {
+    incremental::forget_task(task_id);
     let Ok(mut guard) = TASK_CACHE.lock() else {
         return;
     };
@@ -896,7 +958,7 @@ struct TaskPage {
     next_page_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 struct TaskEntry {
     #[serde(default)]
     updated: Option<DateTime<Utc>>,
@@ -1052,6 +1114,18 @@ fn fetch_task_items(
     app_calendar: Option<&str>,
 ) -> Result<Vec<Event>, GoogleError> {
     let tasks = cached_task_items(access_token, list_id)?;
+    task_events(access_token, tasks, calendar_id, color, app_calendar)
+}
+
+/// The chips for the tasks of one list, with their local metadata. A task
+/// with a due date is moved onto the calendar.
+fn task_events(
+    access_token: &str,
+    tasks: Vec<TaskEntry>,
+    calendar_id: &str,
+    color: Color,
+    app_calendar: Option<&str>,
+) -> Result<Vec<Event>, GoogleError> {
     let mut database = crate::task_db::open()?;
     let mut events = Vec::new();
     for task in tasks {

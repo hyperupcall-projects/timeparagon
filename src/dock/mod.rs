@@ -378,7 +378,7 @@ fn spawn_sync(
         .name("dock-sync".into())
         .spawn(move || {
             let hour = calendar.day_start_hour();
-            let every = Duration::from_secs(u64::from(calendar.sync_minutes.max(1)) * 60);
+            let every = calendar.refresh_every();
 
             loop {
                 let day = calendar::day_at(crate::clock::now(), hour);

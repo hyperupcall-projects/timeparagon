@@ -433,6 +433,13 @@ pub fn set_first_day_of_week(first_day: FirstDayOfWeek) -> Result<Config, String
     Ok(load_config())
 }
 
+/// Turns incremental sync on or off and returns the config as it now reads.
+pub fn set_incremental_sync(on: bool) -> Result<Config, String> {
+    timeslay_core::config::save_incremental_sync(on)
+        .map_err(|error| format!("Could not save the sync setting: {error}"))?;
+    Ok(load_config())
+}
+
 /// Switches one source on or off and returns the config as it now reads. This
 /// starts from the file, so it cannot undo a change made by another process.
 pub fn set_source_enabled(

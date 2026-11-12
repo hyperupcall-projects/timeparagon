@@ -333,6 +333,19 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
                 }
             })
         }
+        SettingsMessage::IncrementalSyncToggled(on) => {
+            state.config.calendar.incremental_sync = on;
+            queue_save(state)
+        }
+        SettingsMessage::FullSyncRequested => blocking::run(calendar::forget_sync_state)
+            .map(|result| Message::Settings(SettingsMessage::FullSyncReset(result))),
+        SettingsMessage::FullSyncReset(result) => match result {
+            Ok(()) => sync_calendar(state),
+            Err(error) => {
+                state.calendar.error = Some(format!("Could not start a full sync: {error}"));
+                Task::none()
+            }
+        },
         SettingsMessage::DockHourLinesToggled(on) => {
             state.config.views.dock_hour_lines = on;
             queue_save(state)

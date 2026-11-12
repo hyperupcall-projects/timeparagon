@@ -146,7 +146,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             integrations(state, metrics),
             metrics
         ),
-        section("Application", restart(metrics), metrics),
+        section("Application", application(state, metrics), metrics),
     ]
     .spacing(metrics.spacing)
     .padding(iced::Padding {
@@ -569,6 +569,33 @@ fn border_color_input<'a>(
         .on_submit(submitted);
 
     field(label, input.into(), metrics)
+}
+
+fn application<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+    let incremental = state.config.calendar.incremental_sync;
+    column![
+        switch(
+            "Incremental sync",
+            incremental,
+            |on| Message::Settings(SettingsMessage::IncrementalSyncToggled(on)),
+            metrics,
+        ),
+        text(if incremental {
+            "Asks Google Calendar and Tasks only for what changed, every 2 minutes."
+        } else {
+            "Fetches everything in view on every sync."
+        })
+        .size(metrics.label())
+        .style(text::secondary),
+        crate::ui::controls::action_button(
+            text("Full sync").size(metrics.label()).center().width(Fill),
+        )
+        .width(Fill)
+        .on_press(Message::Settings(SettingsMessage::FullSyncRequested)),
+        restart(metrics),
+    ]
+    .spacing(metrics.spacing)
+    .into()
 }
 
 fn restart<'a>(metrics: &Metrics) -> Element<'a, Message> {
