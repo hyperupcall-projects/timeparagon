@@ -180,6 +180,10 @@ pub struct Workspace {
     pub drag_pointer: Option<iced::Point>,
     /// The surface whose coordinates `drag_pointer` uses.
     pub drag_window: Option<iced::window::Id>,
+    /// What letting go of the task in the air would do right now, as found by
+    /// asking the plan view under the pointer. It drives the drop preview, so
+    /// the preview always agrees with where the task actually lands.
+    pub drop_hover: Option<DropHover>,
     pub busy: Busy,
     /// A task whose fields are being saved without closing its details pane.
     pub keep_open: Option<String>,
@@ -203,6 +207,15 @@ pub struct WeekListPlacement {
     pub day: NaiveDate,
     pub target: Option<String>,
     pub after: bool,
+}
+
+/// The drop a plan view would make if the task in the air were let go now.
+#[derive(Debug, Clone)]
+pub struct DropHover {
+    /// The day of the range view column or cell under the pointer. `None`
+    /// when the view under it is the single day being planned.
+    pub day: Option<NaiveDate>,
+    pub action: Action,
 }
 
 // Messages only live until the next update, so a large variant costs nothing lasting.
@@ -359,6 +372,7 @@ pub enum Action {
 }
 fn take_drag(state: &mut State) -> Option<String> {
     state.timeblocking.drag_pointer = None;
+    state.timeblocking.drop_hover = None;
     state.timeblocking.drag_window = None;
     state.timeblocking.dragging.take()
 }
@@ -1063,6 +1077,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
         }
         Action::Drag(id, position) => {
             state.timeblocking.drag_window = None;
+            state.timeblocking.drop_hover = None;
             state.timeblocking.dragging = Some(id);
             state.timeblocking.drag_pointer = Some(position);
             return Task::none();
@@ -1772,7 +1787,7 @@ fn drop_week_list(state: &mut State, target: Option<String>, after: bool) -> Tas
 
 /// Keep local clock time and elapsed duration when crossing days, including
 /// the small hours assigned to the previous planning day.
-fn week_drop_times(
+pub(crate) fn week_drop_times(
     task: &Event,
     day: NaiveDate,
     boundary: u32,

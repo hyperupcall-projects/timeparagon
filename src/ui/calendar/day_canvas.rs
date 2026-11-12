@@ -125,6 +125,11 @@ pub(super) struct DayCanvas {
     /// The task currently being dragged by an external row, so its own row on
     /// the grid can be left out while it is in the air.
     pub(super) dragged_task: Option<String>,
+    /// The task in the air as it would be placed on this day if let go now.
+    pub(super) drop_preview: Option<Block>,
+    /// The time block the task in the air would join if let go now, with the
+    /// label and estimate of the row it would add there.
+    pub(super) drop_block: Option<(String, String, u32)>,
 }
 
 /// A drag on empty grid space that is drawing out a new event.
@@ -686,6 +691,27 @@ impl canvas::Program<Message> for DayCanvas {
                     .color
                     .scale_alpha(0.10),
             );
+            if let Some((id, label, minutes)) = &self.drop_block
+                && let Some(block) = self.blocks.iter().find(|block| &block.id == id)
+            {
+                self.draw_block_drop(&mut overlay, theme, block, label, *minutes);
+            }
+            if let Some(preview) = &self.drop_preview {
+                self.draw_block(&mut overlay, preview);
+                let rect = self.block_rect(preview, bounds.width);
+                overlay.stroke(
+                    &Path::rounded_rectangle(
+                        Point::new(rect.x, rect.y),
+                        Size::new(rect.width, rect.height),
+                        EVENT_RADIUS.into(),
+                    ),
+                    Stroke {
+                        style: Style::Solid(theme.extended_palette().primary.strong.color),
+                        width: 2.0,
+                        ..Stroke::default()
+                    },
+                );
+            }
         }
         self.draw_needle(&mut overlay);
         self.draw_alarms(&mut overlay, cursor.position_in(bounds));
@@ -754,7 +780,74 @@ impl DayCanvas {
             if Some(index) == dragging {
                 continue;
             }
+            self.draw_block(frame, block);
+        }
+    }
 
+    /// Outlines the time block a task in the air would join, and shows the
+    /// row it would add after the block's other tasks.
+    fn draw_block_drop(
+        &self,
+        frame: &mut Frame,
+        theme: &Theme,
+        block: &Block,
+        label: &str,
+        minutes: u32,
+    ) {
+        let color = theme.extended_palette().primary.strong.color;
+        let bounds = self.block_rect(block, frame.width());
+        frame.stroke(
+            &Path::rounded_rectangle(
+                Point::new(bounds.x, bounds.y),
+                Size::new(bounds.width, bounds.height),
+                EVENT_RADIUS.into(),
+            ),
+            Stroke {
+                style: Style::Solid(color),
+                width: 2.0,
+                ..Stroke::default()
+            },
+        );
+        // A task already in the block only moves within it, so it gets no
+        // new row.
+        if block
+            .tasks
+            .iter()
+            .any(|task| Some(task.0.as_str()) == self.dragged_task.as_deref())
+        {
+            return;
+        }
+        let x = bounds.x + bounds.width + TIME_BLOCK_ROW_GAP;
+        let y = bounds.y + block.tasks.len() as f32 * TIME_BLOCK_ROW;
+        let row = Size::new(bounds.width, 19.0);
+        frame.fill(
+            &Path::rounded_rectangle(Point::new(x, y), row, 3.0.into()),
+            color,
+        );
+        let label = if minutes == 0 {
+            format!("○ {label}")
+        } else {
+            format!("○ {label} · {minutes}m")
+        };
+        fill_glyphs(
+            frame,
+            Text {
+                content: fit_lines(&label, 11.0, bounds.width - 6.0, 1)
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default(),
+                position: Point::new(x + 3.0, y + 2.0),
+                color: on_color(color),
+                size: Pixels(11.0),
+                ..Text::default()
+            },
+        );
+    }
+
+    /// Draws one event block with its label, actions and, for a time block,
+    /// its task rows.
+    pub(super) fn draw_block(&self, frame: &mut Frame, block: &Block) {
+        {
             let block_bounds = self.block_rect(block, frame.width());
             let shape = Path::rounded_rectangle(
                 Point::new(block_bounds.x, block_bounds.y),

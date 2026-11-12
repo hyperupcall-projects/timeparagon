@@ -218,6 +218,49 @@ pub(super) fn day_canvas<'a>(
             .then_some((start, end.max(start + 1)))
     });
 
+    // While a task is in the air, show it where letting go would put it.
+    let dragged = state
+        .timeblocking
+        .dragging
+        .as_deref()
+        .and_then(|id| state.calendar.event(id));
+    let drop_preview = crate::ui::drop_preview::timed(state).and_then(|event| {
+        let (start_min, end_min) = layout::clamp_day(
+            minutes_into_day(event.start, day, offset),
+            minutes_into_day(event.end, day, offset),
+        )?;
+        Some(Block {
+            id: event.id.clone(),
+            title: crate::timeblocking::task_label(&event),
+            when: calendar::time_format::event(&event, state.config.appearance.time_format),
+            start_min,
+            end_min,
+            column: 0,
+            columns: 1,
+            column_span: 1,
+            color: event.display_color(&state.config.calendar),
+            editable: false,
+            pending: false,
+            tasks: Vec::new(),
+            time_block: false,
+            habit: None,
+            completion: event_completion(state, &event),
+            sleep_timer: None,
+        })
+    });
+    let drop_block = crate::ui::drop_preview::block_or_row(state).and_then(|target| {
+        let task = dragged.filter(|task| task.id != target)?;
+        let block = blocks.iter().find(|block| {
+            block.time_block
+                && (block.id == target || block.tasks.iter().any(|row| row.0 == target))
+        })?;
+        Some((
+            block.id.clone(),
+            crate::timeblocking::task_label(task),
+            crate::timeblocking::metadata(task).minutes,
+        ))
+    });
+
     canvas_widget(DayCanvas {
         time_format: state.config.appearance.time_format,
         blocks,
@@ -234,6 +277,8 @@ pub(super) fn day_canvas<'a>(
         selection,
         external_drag: state.timeblocking.dragging.is_some(),
         dragged_task: state.timeblocking.dragging.clone(),
+        drop_preview,
+        drop_block,
     })
     .width(Fill)
     .height(Length::Fixed(height))

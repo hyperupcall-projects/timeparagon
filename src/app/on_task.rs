@@ -6,9 +6,26 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
     match message {
         TaskMessage::WeekDragScroll => ui::calendar::scroll_week_drag(state),
         TaskMessage::TaskDragMoved(window, position) => {
-            if state.timeblocking.dragging.is_some() {
-                state.timeblocking.drag_window = Some(window);
-                state.timeblocking.drag_pointer = Some(position);
+            if state.timeblocking.dragging.is_none() {
+                return Task::none();
+            }
+            state.timeblocking.drag_window = Some(window);
+            state.timeblocking.drag_pointer = Some(position);
+            ui::task_drop::probe_drag(state)
+        }
+        TaskMessage::TaskDragHovered(id, position, message) => {
+            // Moves queue up probes; only the answer for where the pointer is
+            // now still describes the drop.
+            let current = state.timeblocking.drag_pointer.and_then(|pointer| {
+                ui::task_drop::range_position(
+                    state,
+                    state.timeblocking.drag_window.or(state.main_window)?,
+                    pointer,
+                )
+            });
+            if state.timeblocking.dragging.as_deref() == Some(&id) && current == Some(position) {
+                state.timeblocking.drop_hover =
+                    message.as_deref().and_then(ui::task_drop::hover_of);
             }
             Task::none()
         }

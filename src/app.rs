@@ -708,6 +708,9 @@ pub enum TaskMessage {
     WeekDragScroll,
     TaskDragReleased(window::Id),
     TaskDragDropped(String, Option<Box<Message>>),
+    /// What dropping the task here would do: the task, the plan view point
+    /// that was asked about, and the drop it answered with.
+    TaskDragHovered(String, iced::Point, Option<Box<Message>>),
     /// Tick a Google Task off, or put it back.
     TaskToggled(String),
     /// Ignore a task, or restore an ignored task to active.

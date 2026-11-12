@@ -141,6 +141,13 @@ fn day_cell<'a>(
     body = body.push(date);
 
     let mut items = day_items(state, day, metrics);
+    // The task in the air goes first, so it stays in sight in a full cell.
+    if let Some(task) = crate::ui::drop_preview::on_day(state, day) {
+        items.insert(
+            0,
+            crate::ui::drop_preview::chip(state, &task, metrics.label()),
+        );
+    }
     let fit = rows_that_fit(cell.height, heading_height);
     if items.len() > fit {
         // The "N more" row takes the place of the last event that would fit.

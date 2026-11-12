@@ -52,6 +52,15 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
                 .calendar
                 .deadline_markers_on(day, &state.config.calendar);
             let mut events = column![].spacing(3).width(Fill);
+            // The task in the air goes first, so it stays in sight in a full
+            // cell.
+            if let Some(task) = crate::ui::drop_preview::on_day(state, day) {
+                events = events.push(crate::ui::drop_preview::chip(
+                    state,
+                    &task,
+                    cell_metrics.label(),
+                ));
+            }
             for event in state
                 .calendar
                 .all_day_events_on(day, &state.config.calendar)
